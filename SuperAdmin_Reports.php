@@ -859,7 +859,7 @@ $branches = getBranches();
     </nav>
 
     <div class="logout">
-        <a href="#"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
+        <a href="landing.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
     </div>
 </div>
 
