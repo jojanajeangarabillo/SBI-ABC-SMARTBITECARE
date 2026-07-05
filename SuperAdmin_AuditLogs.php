@@ -197,8 +197,6 @@ $stats = $stats_result->fetch_assoc();
 $module_breakdown_sql = "SELECT module, COUNT(*) as count FROM audit_logs GROUP BY module ORDER BY count DESC";
 $module_breakdown_result = $conn->query($module_breakdown_sql);
 
-// Log that Super Admin viewed audit logs
-addAuditLog($conn, $_SESSION['user_id'], "Viewed Audit Logs page - Module: " . ($module_filter ?: 'All') . ", User: " . ($user_filter ?: 'All') . ", Action: " . ($action_type ?: 'All'));
 ?>
 <!DOCTYPE html>
 <html lang="en">
