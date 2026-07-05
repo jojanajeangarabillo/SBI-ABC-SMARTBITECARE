@@ -1,22 +1,35 @@
 <?php
 session_start();
+require_once 'sources/db_connect.php';
 
 // ============================================
-// DATABASE CONNECTION (Direct Integration)
+// AUDIT LOG FUNCTION
 // ============================================
-function getConnection() {
-    $host = 'localhost';
-    $dbname = 'smartbitecare';
-    $username = 'root';
-    $password = '';
-    
-    try {
-        $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8", $username, $password);
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        return $pdo;
-    } catch(PDOException $e) {
-        die("Connection failed: " . $e->getMessage());
+function addAuditLog($conn, $user_id, $action, $module = 'Reports') {
+    // Get user's branch_id
+    $branch_id = null;
+    $user_sql = "SELECT branch_id FROM users WHERE user_id = ?";
+    $user_stmt = $conn->prepare($user_sql);
+    if ($user_stmt) {
+        $user_stmt->bind_param("i", $user_id);
+        $user_stmt->execute();
+        $user_result = $user_stmt->get_result();
+        if ($user_row = $user_result->fetch_assoc()) {
+            $branch_id = $user_row['branch_id'];
+        }
+        $user_stmt->close();
     }
+    
+    // Insert audit log
+    $log_sql = "INSERT INTO audit_logs (user_id, branch_id, action, module) VALUES (?, ?, ?, ?)";
+    $log_stmt = $conn->prepare($log_sql);
+    if ($log_stmt) {
+        $log_stmt->bind_param("isss", $user_id, $branch_id, $action, $module);
+        $result = $log_stmt->execute();
+        $log_stmt->close();
+        return $result;
+    }
+    return false;
 }
 
 // Check if user is logged in and is super admin
@@ -168,6 +181,24 @@ function getBranches() {
     $pdo = getConnection();
     $stmt = $pdo->query("SELECT branch_id, branch_name FROM branches WHERE status = 'Active' ORDER BY branch_name");
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+// ============================================
+// DATABASE CONNECTION (Direct Integration)
+// ============================================
+function getConnection() {
+    $host = 'localhost';
+    $dbname = 'smartbitecare';
+    $username = 'root';
+    $password = '';
+    
+    try {
+        $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8", $username, $password);
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        return $pdo;
+    } catch(PDOException $e) {
+        die("Connection failed: " . $e->getMessage());
+    }
 }
 
 // ============================================
@@ -468,6 +499,12 @@ if (isset($_GET['generate_report']) && isset($_GET['report_type'])) {
     $branchId = isset($_GET['branch_id']) && $_GET['branch_id'] ? $_GET['branch_id'] : null;
     $startDate = isset($_GET['start_date']) && $_GET['start_date'] ? $_GET['start_date'] : null;
     $endDate = isset($_GET['end_date']) && $_GET['end_date'] ? $_GET['end_date'] : null;
+    
+    // Log the report generation
+    $branchName = $branchId ? getBranchName($branchId) : 'All Branches';
+    $dateRange = ($startDate && $endDate) ? "$startDate to $endDate" : 'All Time';
+    $actionDetail = "Generated $reportType report - Branch: $branchName, Date Range: $dateRange";
+    addAuditLog($conn, $_SESSION['user_id'], $actionDetail, 'Reports');
     
     $pdf = null;
     $filename = '';
@@ -859,7 +896,7 @@ $branches = getBranches();
     </nav>
 
     <div class="logout">
-        <a href="landing.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
+        <a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
     </div>
 </div>
 

@@ -4,6 +4,52 @@ require_once 'sources/db_connect.php';
 
 $error = '';
 
+/**
+ * Log login attempts with detailed information
+ */
+function logLoginAttempt($conn, $user_id, $username, $status, $details = '') {
+    // Get IP address
+    $ip_address = $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
+    $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown';
+    
+    // Build action description
+    $action = "Login $status: User '$username'";
+    if (!empty($details)) {
+        $action .= " - $details";
+    }
+    $action .= " (IP: $ip_address)";
+    
+    // If user_id is provided, get branch_id
+    $branch_id = null;
+    if ($user_id) {
+        $user_sql = "SELECT branch_id FROM users WHERE user_id = ?";
+        $user_stmt = $conn->prepare($user_sql);
+        if ($user_stmt) {
+            $user_stmt->bind_param("i", $user_id);
+            $user_stmt->execute();
+            $user_result = $user_stmt->get_result();
+            if ($user_row = $user_result->fetch_assoc()) {
+                $branch_id = $user_row['branch_id'];
+            }
+            $user_stmt->close();
+        }
+    }
+    
+    // Insert audit log
+    $log_sql = "INSERT INTO audit_logs (user_id, branch_id, action, module) VALUES (?, ?, ?, ?)";
+    $log_stmt = $conn->prepare($log_sql);
+    if ($log_stmt) {
+        // If user_id is null, use 0 as placeholder
+        $log_user_id = $user_id ?? 0;
+        $module = 'Login System'; // Define the module variable
+        $log_stmt->bind_param("isss", $log_user_id, $branch_id, $action, $module);
+        $log_stmt->execute();
+        $log_stmt->close();
+        return true;
+    }
+    return false;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = trim($_POST['username']);
     $password = $_POST['password'];
@@ -14,7 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 FROM users u 
                                 LEFT JOIN roles r ON u.role_id = r.role_id 
                                 LEFT JOIN branches b ON u.branch_id = b.branch_id 
-                                WHERE u.username = ? AND u.status = 'Active'");
+                                WHERE u.username = ?");
         $stmt->bind_param("s", $username);
         $stmt->execute();
         $result = $stmt->get_result();
@@ -22,13 +68,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($result->num_rows === 1) {
             $user = $result->fetch_assoc();
             
+            // Check if user is active
+            if ($user['status'] !== 'Active') {
+                $error = 'Your account has been deactivated. Please contact your administrator.';
+                // Log failed login - inactive account
+                logLoginAttempt($conn, $user['user_id'], $username, 'Failed', 
+                    "Account is inactive");
+            }
             // Verify password
-            if (password_verify($password, $user['password'])) {
+            elseif (password_verify($password, $user['password'])) {
                 // Update last login
                 $updateStmt = $conn->prepare("UPDATE users SET last_login = NOW() WHERE user_id = ?");
                 $updateStmt->bind_param("i", $user['user_id']);
                 $updateStmt->execute();
                 $updateStmt->close();
+                
+                // Log successful login
+                logLoginAttempt($conn, $user['user_id'], $username, 'Success', 
+                    "Role: " . $user['role_name'] . ", Branch: " . ($user['branch_name'] ?? 'N/A'));
                 
                 // Set session variables
                 $_SESSION['user_id'] = $user['user_id'];
@@ -63,13 +120,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 exit();
             } else {
                 $error = 'Invalid username or password.';
+                // Log failed login - wrong password
+                logLoginAttempt($conn, $user['user_id'], $username, 'Failed', 
+                    "Incorrect password");
             }
         } else {
             $error = 'Invalid username or password.';
+            // Log failed login - user not found
+            logLoginAttempt($conn, null, $username, 'Failed', 
+                "Username not found");
         }
         $stmt->close();
     } else {
         $error = 'Please enter both username and password.';
+        // Log empty credentials attempt
+        logLoginAttempt($conn, null, 'Unknown', 'Failed', 
+            "Empty username or password");
     }
 }
 ?>

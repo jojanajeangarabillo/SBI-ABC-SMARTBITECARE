@@ -12,6 +12,33 @@ if (
     exit();
 }
 
+// ========== AUDIT LOG FUNCTION ==========
+function addAuditLog($conn, $user_id, $action, $module = 'Branch Admin Management') {
+    // Get user's branch_id
+    $branch_id = null;
+    $user_sql = "SELECT branch_id FROM users WHERE user_id = ?";
+    $user_stmt = $conn->prepare($user_sql);
+    if ($user_stmt) {
+        $user_stmt->bind_param("i", $user_id);
+        $user_stmt->execute();
+        $user_result = $user_stmt->get_result();
+        if ($user_row = $user_result->fetch_assoc()) {
+            $branch_id = $user_row['branch_id'];
+        }
+        $user_stmt->close();
+    }
+    
+    // Insert audit log
+    $log_sql = "INSERT INTO audit_logs (user_id, branch_id, action, module) VALUES (?, ?, ?, ?)";
+    $log_stmt = $conn->prepare($log_sql);
+    if ($log_stmt) {
+        $log_stmt->bind_param("isss", $user_id, $branch_id, $action, $module);
+        $result = $log_stmt->execute();
+        $log_stmt->close();
+        return $result;
+    }
+    return false;
+}
 
 // Handle Add Admin
 $add_error = '';
@@ -38,6 +65,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
         if ($check_result->num_rows > 0) {
             $add_error = 'Username or email already exists.';
+            // Log failed attempt
+            addAuditLog($conn, $_SESSION['user_id'], "Failed to create branch admin - Username or email already exists: $username, $email");
         } else {
             // Generate temporary password
             $temp_password = bin2hex(random_bytes(6)); // 12 characters
@@ -51,6 +80,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             
             if ($insert_stmt->execute()) {
                 $user_id = $conn->insert_id;
+                
+                // Log: Admin created
+                $action_detail = "Created new branch admin: $username (ID: $user_id) for branch ID: $branch_id";
+                addAuditLog($conn, $_SESSION['user_id'], $action_detail);
                 
                 // Generate password reset token (used for first-time login)
                 $token = bin2hex(random_bytes(32));
@@ -68,7 +101,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $host = $_SERVER['HTTP_HOST'];
                 
                 // Send email with credentials
-                $reset_link = $protocol . "://" . $host . "/change_password.php?token=" . $token . "&email=" . urlencode($email);
+                $reset_link = $protocol . "://" . $host . "/SBI-ABC-SMARTBITECARE/change_password.php?token=" . $token . "&email=" . urlencode($email);
                 
                 $email_body = "
                 <html>
@@ -122,11 +155,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 
                 if (send_email($email, 'Welcome to Smart Bite Care - Your Branch Admin Account', $email_body)) {
                     $add_success = 'Branch Admin created successfully! An email with credentials has been sent to ' . htmlspecialchars($email) . '.';
+                    // Log: Email sent successfully
+                    addAuditLog($conn, $_SESSION['user_id'], "Welcome email sent to new branch admin: $username (ID: $user_id, Email: $email)");
                 } else {
                     $add_error = 'Account created but failed to send email. Please reset password manually.';
+                    // Log: Email failed
+                    addAuditLog($conn, $_SESSION['user_id'], "Failed to send welcome email to new branch admin: $username (ID: $user_id, Email: $email)");
                 }
             } else {
                 $add_error = 'Failed to create admin account. Please try again.';
+                // Log: Creation failed
+                addAuditLog($conn, $_SESSION['user_id'], "Failed to create branch admin: $username - Database error: " . $conn->error);
             }
         }
     }
@@ -136,29 +175,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 if (isset($_GET['archive_id'])) {
     $archive_id = intval($_GET['archive_id']);
     
-    // Check if user exists and is branch admin
-    $check_sql = "SELECT user_id, role_id FROM users WHERE user_id = ? AND role_id = 2";
-    $check_stmt = $conn->prepare($check_sql);
-    $check_stmt->bind_param("i", $archive_id);
-    $check_stmt->execute();
-    $check_result = $check_stmt->get_result();
+    // Get admin details before archiving
+    $admin_sql = "SELECT username, email, branch_id FROM users WHERE user_id = ? AND role_id = 2";
+    $admin_stmt = $conn->prepare($admin_sql);
+    $admin_stmt->bind_param("i", $archive_id);
+    $admin_stmt->execute();
+    $admin_result = $admin_stmt->get_result();
+    $admin_details = $admin_result->fetch_assoc();
+    $admin_stmt->close();
     
-    if ($check_result->num_rows > 0) {
-        // Soft delete - update status to Inactive
-        $archive_sql = "UPDATE users SET status = 'Inactive' WHERE user_id = ?";
-        $archive_stmt = $conn->prepare($archive_sql);
-        $archive_stmt->bind_param("i", $archive_id);
-        $archive_stmt->execute();
+    if ($admin_details) {
+        // Check if user exists and is branch admin
+        $check_sql = "SELECT user_id, role_id FROM users WHERE user_id = ? AND role_id = 2";
+        $check_stmt = $conn->prepare($check_sql);
+        $check_stmt->bind_param("i", $archive_id);
+        $check_stmt->execute();
+        $check_result = $check_stmt->get_result();
         
-        // Delete associated tokens
-        $token_delete_sql = "DELETE FROM user_tokens WHERE user_id = ?";
-        $token_delete_stmt = $conn->prepare($token_delete_sql);
-        $token_delete_stmt->bind_param("i", $archive_id);
-        $token_delete_stmt->execute();
-        
-        $_SESSION['success'] = 'Admin has been archived successfully.';
+        if ($check_result->num_rows > 0) {
+            // Soft delete - update status to Inactive
+            $archive_sql = "UPDATE users SET status = 'Inactive' WHERE user_id = ?";
+            $archive_stmt = $conn->prepare($archive_sql);
+            $archive_stmt->bind_param("i", $archive_id);
+            
+            if ($archive_stmt->execute()) {
+                // Delete associated tokens
+                $token_delete_sql = "DELETE FROM user_tokens WHERE user_id = ?";
+                $token_delete_stmt = $conn->prepare($token_delete_sql);
+                $token_delete_stmt->bind_param("i", $archive_id);
+                $token_delete_stmt->execute();
+                
+                // Log: Admin archived
+                $action_detail = "Archived (deactivated) branch admin: " . $admin_details['username'] . 
+                                " (ID: $archive_id, Email: " . $admin_details['email'] . 
+                                ", Branch ID: " . $admin_details['branch_id'] . ")";
+                addAuditLog($conn, $_SESSION['user_id'], $action_detail);
+                
+                $_SESSION['success'] = 'Admin has been archived successfully.';
+            } else {
+                $_SESSION['error'] = 'Failed to archive admin.';
+                addAuditLog($conn, $_SESSION['user_id'], "Failed to archive branch admin: " . $admin_details['username'] . " (ID: $archive_id) - Database error");
+            }
+            $archive_stmt->close();
+        } else {
+            $_SESSION['error'] = 'Admin not found.';
+            addAuditLog($conn, $_SESSION['user_id'], "Failed to archive branch admin - User ID: $archive_id not found");
+        }
     } else {
         $_SESSION['error'] = 'Admin not found.';
+        addAuditLog($conn, $_SESSION['user_id'], "Failed to archive branch admin - User ID: $archive_id not found");
     }
     
     header('Location: SuperAdmin_BranchAdminManagement.php');
@@ -181,6 +246,8 @@ if (isset($_POST['send_email']) && isset($_POST['user_id'])) {
     if ($user_row = $user_result->fetch_assoc()) {
         if (empty($subject) || empty($message)) {
             $_SESSION['error'] = 'Please fill in both subject and message.';
+            // Log: Email attempt with missing fields
+            addAuditLog($conn, $_SESSION['user_id'], "Failed to send email to branch admin: " . $user_row['username'] . " - Missing subject or message");
         } else {
             // Send email
             $email_body = "
@@ -214,12 +281,20 @@ if (isset($_POST['send_email']) && isset($_POST['user_id'])) {
             
             if (send_email($user_row['email'], $subject, $email_body)) {
                 $_SESSION['success'] = 'Email sent successfully to ' . htmlspecialchars($user_row['email']) . '.';
+                // Log: Email sent
+                $action_detail = "Sent custom email to branch admin: " . $user_row['username'] . 
+                                " (ID: $user_id, Email: " . $user_row['email'] . 
+                                ") - Subject: " . $subject;
+                addAuditLog($conn, $_SESSION['user_id'], $action_detail);
             } else {
                 $_SESSION['error'] = 'Failed to send email. Please try again.';
+                // Log: Email failed
+                addAuditLog($conn, $_SESSION['user_id'], "Failed to send custom email to branch admin: " . $user_row['username'] . " (ID: $user_id)");
             }
         }
     } else {
         $_SESSION['error'] = 'Admin not found.';
+        addAuditLog($conn, $_SESSION['user_id'], "Failed to send email - Branch admin not found (ID: $user_id)");
     }
     
     header('Location: SuperAdmin_BranchAdminManagement.php');
@@ -633,7 +708,7 @@ while ($row = $branch_result->fetch_assoc()) {
     </nav>
 
     <div class="logout">
-        <a href="landing.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
+        <a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
     </div>
 </div>
 

@@ -2,7 +2,6 @@
 session_start();
 require_once 'sources/db_connect.php';
 
-
 // Check if user is logged in and is super admin
 if (
     !isset($_SESSION['user_id']) ||
@@ -11,6 +10,34 @@ if (
 ) {
     header("Location: login.php");
     exit();
+}
+
+// ========== AUDIT LOG FUNCTION ==========
+function addAuditLog($conn, $user_id, $action, $module = 'Branch Management') {
+    // Get user's branch_id
+    $branch_id = null;
+    $user_sql = "SELECT branch_id FROM users WHERE user_id = ?";
+    $user_stmt = $conn->prepare($user_sql);
+    if ($user_stmt) {
+        $user_stmt->bind_param("i", $user_id);
+        $user_stmt->execute();
+        $user_result = $user_stmt->get_result();
+        if ($user_row = $user_result->fetch_assoc()) {
+            $branch_id = $user_row['branch_id'];
+        }
+        $user_stmt->close();
+    }
+    
+    // Insert audit log
+    $log_sql = "INSERT INTO audit_logs (user_id, branch_id, action, module) VALUES (?, ?, ?, ?)";
+    $log_stmt = $conn->prepare($log_sql);
+    if ($log_stmt) {
+        $log_stmt->bind_param("isss", $user_id, $branch_id, $action, $module);
+        $result = $log_stmt->execute();
+        $log_stmt->close();
+        return $result;
+    }
+    return false;
 }
 
 // Handle Add Branch
@@ -26,9 +53,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_branch'])) {
             VALUES ('$branch_id', '$branch_name', '$branch_address', '$contact_number', '$email', '$status')";
 
     if ($conn->query($sql) === TRUE) {
+        // Log the action
+        $action_detail = "Added new branch: $branch_name (ID: $branch_id)";
+        addAuditLog($conn, $_SESSION['user_id'], $action_detail);
+        
         $success_msg = "Branch added successfully!";
     } else {
         $error_msg = "Error adding branch: " . $conn->error;
+        // Log the failure
+        addAuditLog($conn, $_SESSION['user_id'], "Failed to add branch: $branch_name (ID: $branch_id) - " . $conn->error);
     }
 }
 
@@ -41,6 +74,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_branch'])) {
     $email = $conn->real_escape_string($_POST['edit_email']);
     $status = $conn->real_escape_string($_POST['edit_status']);
 
+    // Get old data for audit log
+    $old_sql = "SELECT branch_name, branch_address, contact_number, email, status FROM branches WHERE branch_id = '$branch_id'";
+    $old_result = $conn->query($old_sql);
+    $old_data = $old_result->fetch_assoc();
+
     $sql = "UPDATE branches SET 
             branch_name = '$branch_name',
             branch_address = '$branch_address',
@@ -50,21 +88,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_branch'])) {
             WHERE branch_id = '$branch_id'";
 
     if ($conn->query($sql) === TRUE) {
+        // Build change description for audit log
+        $changes = [];
+        if ($old_data['branch_name'] != $branch_name) {
+            $changes[] = "Name: '{$old_data['branch_name']}' → '$branch_name'";
+        }
+        if ($old_data['branch_address'] != $branch_address) {
+            $changes[] = "Address: '{$old_data['branch_address']}' → '$branch_address'";
+        }
+        if ($old_data['contact_number'] != $contact_number) {
+            $changes[] = "Contact: '{$old_data['contact_number']}' → '$contact_number'";
+        }
+        if ($old_data['email'] != $email) {
+            $changes[] = "Email: '{$old_data['email']}' → '$email'";
+        }
+        if ($old_data['status'] != $status) {
+            $changes[] = "Status: '{$old_data['status']}' → '$status'";
+        }
+
+        if (!empty($changes)) {
+            $action_detail = "Updated branch: $branch_id ($branch_name) - Changes: " . implode(", ", $changes);
+        } else {
+            $action_detail = "Updated branch: $branch_id ($branch_name) - No changes made";
+        }
+        addAuditLog($conn, $_SESSION['user_id'], $action_detail);
+        
         $success_msg = "Branch updated successfully!";
     } else {
         $error_msg = "Error updating branch: " . $conn->error;
+        addAuditLog($conn, $_SESSION['user_id'], "Failed to update branch: $branch_id - " . $conn->error);
     }
 }
 
 // Handle Archive Branch (set status to Inactive)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['archive_branch'])) {
     $branch_id = $conn->real_escape_string($_POST['archive_branch_id']);
+    
+    // Get branch name for audit log
+    $name_sql = "SELECT branch_name FROM branches WHERE branch_id = '$branch_id'";
+    $name_result = $conn->query($name_sql);
+    $branch_data = $name_result->fetch_assoc();
+    $branch_name = $branch_data['branch_name'] ?? $branch_id;
+    
     $sql = "UPDATE branches SET status = 'Inactive' WHERE branch_id = '$branch_id'";
     
     if ($conn->query($sql) === TRUE) {
+        // Log the action
+        $action_detail = "Archived branch: $branch_name (ID: $branch_id)";
+        addAuditLog($conn, $_SESSION['user_id'], $action_detail);
+        
         $success_msg = "Branch archived successfully!";
     } else {
         $error_msg = "Error archiving branch: " . $conn->error;
+        addAuditLog($conn, $_SESSION['user_id'], "Failed to archive branch: $branch_id - " . $conn->error);
     }
 }
 
@@ -403,7 +479,7 @@ if (isset($_GET['archive_id'])) {
     </nav>
 
     <div class="logout">
-        <a href="landing.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
+        <a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
     </div>
 </div>
 

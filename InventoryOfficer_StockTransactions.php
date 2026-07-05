@@ -257,7 +257,7 @@ margin-left:90px;
 </nav>
 
 <div class="logout">
-<a href="#"> <i class="bi bi-box-arrow-right"></i>
+<a href="logout.php"> <i class="bi bi-box-arrow-right"></i>
 <span>Logout</span>
 </a>
 </div>

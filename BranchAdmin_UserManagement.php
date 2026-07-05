@@ -665,7 +665,7 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
             </ul>
         </nav>
         <div class="logout">
-            <a href="landing.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
+            <a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
         </div>
     </div>
 
