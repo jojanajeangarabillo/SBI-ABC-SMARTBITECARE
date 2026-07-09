@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Jul 09, 2026 at 08:19 AM
+-- Generation Time: Jul 09, 2026 at 05:17 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -250,7 +250,52 @@ INSERT INTO `audit_logs` (`log_id`, `user_id`, `branch_id`, `action`, `module`, 
 (191, 8, 'SBI-002', 'Deleted patient record: SHELLA MAE RUIZ (Case: 26-0010)', 'Patient Record', '2026-07-09 05:28:38'),
 (192, 8, 'SBI-002', 'Archived patient record: Antonio, Luiz (Case: 26-0012)', 'Patient Record', '2026-07-09 05:48:53'),
 (193, 8, 'SBI-002', 'Updated patient record: Antonio, Luiz (Case: 26-0005)', 'Patient Record', '2026-07-09 06:18:46'),
-(194, 8, 'SBI-002', 'Deleted patient record: Antonio, Luiz (Case: 26-0005)', 'Patient Record', '2026-07-09 06:18:55');
+(194, 8, 'SBI-002', 'Deleted patient record: Antonio, Luiz (Case: 26-0005)', 'Patient Record', '2026-07-09 06:18:55'),
+(195, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch (IP: ::1)', 'Login System', '2026-07-09 08:16:00'),
+(196, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-09 08:20:53'),
+(197, 6, 'SBI-002', 'Logout: User \'Jojana Garabillo\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-07-09 08:32:00'),
+(198, 15, 'SBI-003', 'Login Failed: User \'Mae Ben\' - Incorrect password (IP: ::1)', 'Login System', '2026-07-09 08:32:19'),
+(199, 15, 'SBI-003', 'Login Failed: User \'Mae Ben\' - Incorrect password (IP: ::1)', 'Login System', '2026-07-09 08:33:01'),
+(200, 15, 'SBI-003', 'Login Failed: User \'Mae Ben\' - Incorrect password (IP: ::1)', 'Login System', '2026-07-09 08:33:07'),
+(201, 15, 'SBI-003', 'Login Failed: User \'Mae Ben\' - Incorrect password (IP: ::1)', 'Login System', '2026-07-09 08:33:46'),
+(202, 16, 'SBI-002', 'Login Success: User \'Ella Franco\' - Role: Administrative Staff, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-09 08:34:19'),
+(203, 15, 'SBI-003', 'Login Failed: User \'Mae Ben\' - Incorrect password (IP: ::1)', 'Login System', '2026-07-09 08:37:00'),
+(204, 15, 'SBI-003', 'Login Failed: User \'Mae Ben\' - Incorrect password (IP: ::1)', 'Login System', '2026-07-09 08:37:10'),
+(205, 15, 'SBI-003', 'Login Success: User \'Mae Ben\' - Role: Branch Admin, Branch: Pasig Branch (IP: ::1)', 'Login System', '2026-07-09 08:37:18'),
+(206, 15, 'SBI-003', 'Logout: User \'Mae Ben\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-07-09 08:41:57'),
+(207, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-09 08:42:18'),
+(208, 6, 'SBI-002', 'Logout: User \'Jojana Garabillo\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-07-09 09:08:30'),
+(209, 15, 'SBI-003', 'Login Success: User \'Mae Ben\' - Role: Branch Admin, Branch: Pasig Branch (IP: ::1)', 'Login System', '2026-07-09 09:08:59'),
+(210, 15, 'SBI-003', 'Logout: User \'Mae Ben\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-07-09 09:09:21'),
+(211, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-09 09:12:45'),
+(212, 6, 'SBI-002', 'Generated case report - Branch: Cainta Branch, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 09:23:26'),
+(213, 6, 'SBI-002', 'Generated vaccination report - Branch: Cainta Branch, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 09:23:37'),
+(214, 6, 'SBI-002', 'Generated vaccination report - Branch: Cainta Branch, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 09:28:23'),
+(215, 6, 'SBI-002', 'Generated patient report - Branch: Cainta Branch, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 09:38:25'),
+(216, 6, 'SBI-002', 'Generated patient report - Branch: Cainta Branch, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 09:43:05'),
+(217, 1, 'SBI-001', 'Generated audit_logs report - Branch: All Branches, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 09:47:33'),
+(218, 1, 'SBI-001', 'Generated branch_admin report - Branch: All Branches, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 09:47:57'),
+(219, 1, 'SBI-001', 'Generated audit_logs report - Branch: All Branches, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 09:48:06'),
+(220, 1, 'SBI-001', 'Generated audit_logs report - Branch: All Branches, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 09:51:41'),
+(221, 1, 'SBI-001', 'Generated user report - Branch: All Branches, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 09:55:58'),
+(222, 1, 'SBI-001', 'Generated audit_logs report - Branch: All Branches, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 09:56:08'),
+(223, 1, 'SBI-001', 'Generated branch_admin report - Branch: All Branches, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 09:58:08'),
+(224, 1, 'SBI-001', 'Generated branch_performance report - Branch: All Branches, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 09:58:58'),
+(225, 1, 'SBI-001', 'Generated audit_logs report - Branch: All Branches, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 10:04:45'),
+(226, 1, 'SBI-001', 'Generated audit_logs report - Branch: All Branches, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 10:12:45'),
+(227, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-09 11:07:32'),
+(228, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-09 11:31:34'),
+(229, 6, 'SBI-002', 'Logout: User \'Jojana Garabillo\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-07-09 11:33:32'),
+(230, 15, 'SBI-003', 'Login Success: User \'Mae Ben\' - Role: Branch Admin, Branch: Pasig Branch (IP: ::1)', 'Login System', '2026-07-09 11:33:48'),
+(231, 15, 'SBI-003', 'Logout: User \'Mae Ben\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-07-09 11:34:21'),
+(232, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-09 11:34:34'),
+(233, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-09 11:43:31'),
+(234, 1, 'SBI-001', 'Generated user report (csv) - Branch: All Branches, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 12:03:39'),
+(235, 1, 'SBI-001', 'Generated branch_performance report (pdf) - Branch: All Branches, Date Range: 2026-06-09 to 2026-07-09', 'Reports', '2026-07-09 12:03:51'),
+(236, 9, 'SBI-002', 'Login Success: User \'Marc Beringuela\' - Role: Nurse, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-09 12:05:12'),
+(237, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-09 15:05:18'),
+(238, 16, 'SBI-002', 'Logout: User \'Ella Franco\' (Role: Administrative Staff) (IP: ::1)', 'Login System', '2026-07-09 15:10:57'),
+(239, 11, 'SBI-002', 'Login Success: User \'Jean Montero\' - Role: Inventory Officer, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-09 15:11:17');
 
 -- --------------------------------------------------------
 
@@ -399,7 +444,8 @@ CREATE TABLE `medical_documents` (
 
 INSERT INTO `medical_documents` (`document_id`, `branch_id`, `case_id`, `patient_id`, `document_type`, `document_name`, `file_name`, `file_path`, `file_type`, `file_size`, `description`, `uploaded_by`, `uploaded_at`, `updated_at`, `status`) VALUES
 (1, 'SBI-002', NULL, NULL, 'Medical Certificate', 'Group 1- Chat\'s Eatery', 'Group 1- Chat\'s Eatery.pdf', 'uploads/documents/1783483810_Group1-ChatsEatery.pdf', 'application/pdf', 530386, 'eme', 8, '2026-07-08 04:10:10', '2026-07-08 04:10:53', 'Active'),
-(2, 'SBI-002', NULL, NULL, 'Referral Letter', 'dd', 'MedCert-Cainta.pdf', 'uploads/documents/1783483920_MedCert-Cainta.pdf', 'application/pdf', 136030, '', 8, '2026-07-08 04:12:00', NULL, 'Active');
+(2, 'SBI-002', NULL, NULL, 'Referral Letter', 'dd', 'MedCert-Cainta.pdf', 'uploads/documents/1783483920_MedCert-Cainta.pdf', 'application/pdf', 136030, '', 8, '2026-07-08 04:12:00', NULL, 'Active'),
+(3, 'SBI-002', 13, 16, 'Medical Certificate', 'Medical Certificate_ddd_2026-07-09', 'Medical Certificate_ddd_2026-07-09.pdf', 'documents/Medical Certificate_ddd_2026-07-09.pdf', NULL, NULL, NULL, 9, '2026-07-09 14:34:53', NULL, 'Active');
 
 -- --------------------------------------------------------
 
@@ -441,10 +487,6 @@ CREATE TABLE `patients` (
   `birthday` date DEFAULT NULL,
   `gender` enum('Male','Female','Other') DEFAULT NULL,
   `address` text DEFAULT NULL,
-  `is_minor` tinyint(1) DEFAULT 0,
-  `guardian_name` varchar(255) DEFAULT NULL,
-  `guardian_relationship` varchar(100) DEFAULT NULL,
-  `guardian_contact_number` varchar(30) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `branch_id` varchar(10) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -453,28 +495,28 @@ CREATE TABLE `patients` (
 -- Dumping data for table `patients`
 --
 
-INSERT INTO `patients` (`patient_id`, `full_name`, `email`, `contact_number`, `birthday`, `gender`, `address`, `is_minor`, `guardian_name`, `guardian_relationship`, `guardian_contact_number`, `created_at`, `branch_id`) VALUES
-(1, 'Shane Ella Mae Franco Cacho', 'sheyn.cacho@gmail.com', '09993808837', '2005-10-03', 'Female', '14', 0, '0', 'mother', '09999', '2026-07-05 22:28:50', 'SBI-002'),
-(3, 'Michelle Batacan', 'michelle@gmail.com', '09942478935', '2004-02-09', 'Female', 'Brookside Cainta', 0, '0', '', '', '2026-07-05 22:45:48', 'SBI-002'),
-(6, 'Ken Allen Rosales', NULL, '0994 47186244', '2004-11-26', 'Male', 'Blk 123 Street', 0, NULL, NULL, NULL, '2026-07-06 12:09:16', 'SBI-002'),
-(7, 'sHANE CACHO', NULL, '', NULL, '', '', 0, NULL, NULL, NULL, '2026-07-07 08:30:41', 'SBI-002'),
-(9, 'sHANE CACHO', NULL, '', NULL, '', '', 0, NULL, NULL, NULL, '2026-07-07 08:42:25', 'SBI-002'),
-(10, 'sHANE CACHO', NULL, '', NULL, '', '', 0, NULL, NULL, NULL, '2026-07-07 08:42:26', 'SBI-002'),
-(11, 'ddd', NULL, '', NULL, '', 'dddd', 0, NULL, NULL, NULL, '2026-07-07 08:42:41', 'SBI-002'),
-(14, 'SHANE CACHO', NULL, '', '2005-10-03', 'Female', '14, Saint Catherine Street Rodfer 3 A-prime', 0, NULL, NULL, NULL, '2026-07-07 08:50:00', 'SBI-002'),
-(15, 'ELLA MAE', NULL, '', NULL, '', '3', 0, NULL, NULL, NULL, '2026-07-07 08:50:17', 'SBI-002'),
-(16, 'ddd', NULL, '', '2020-07-02', 'Female', '', 0, NULL, NULL, NULL, '2026-07-07 08:56:20', 'SBI-002'),
-(17, 'ddd', NULL, '', NULL, '', '', 0, NULL, NULL, NULL, '2026-07-07 08:56:55', 'SBI-002'),
-(18, 'ken', NULL, '0994146223', NULL, '', '', 0, NULL, NULL, NULL, '2026-07-07 09:17:21', 'SBI-002'),
-(19, 'sHANE CACHO', NULL, '', NULL, '', '', 0, NULL, NULL, NULL, '2026-07-07 09:24:08', 'SBI-002'),
-(23, 'sHANE CACHO', NULL, '', NULL, '', '', 0, NULL, NULL, NULL, '2026-07-08 03:45:33', 'SBI-002'),
-(24, 'SHANE CACHO', NULL, '', NULL, '', '', 0, NULL, NULL, NULL, '2026-07-08 07:40:22', 'SBI-002'),
-(31, 'SHANE CACHO', NULL, '', '2005-10-03', 'Female', '14, Saint Catherine Street Rodfer 3 A-prime', 0, NULL, NULL, NULL, '2026-07-08 22:22:53', 'SBI-002'),
-(32, 'SHELLA MAE RUIZ', NULL, '0994146223', '2020-07-09', 'Female', '14, Saint Catherine Street Rodfer 3 A-prime', 0, NULL, NULL, NULL, '2026-07-08 22:36:40', 'SBI-002'),
-(33, 'Antonio, Luiz', NULL, '0994146223', '2008-09-11', 'Female', '14, Saint Catherine Street Rodfer 3 A-prime', 0, NULL, NULL, NULL, '2026-07-09 02:23:52', 'SBI-002'),
-(34, 'Cruz, Ariane', NULL, '0994146223', '2004-05-05', 'Female', 'Cainta Rizal', 0, NULL, NULL, NULL, '2026-07-09 02:29:34', 'SBI-002'),
-(35, 'Lala, MoveAnne', NULL, '0993808837', '2025-07-08', 'Female', 'Pasig', 0, NULL, NULL, NULL, '2026-07-09 02:33:32', 'SBI-002'),
-(49, 'Antonio, Luiz', NULL, '0994146223', '2000-10-03', 'Female', '14Saint Catherine Street Rodfer 3 A-prime', 0, NULL, NULL, NULL, '2026-07-09 06:18:46', 'SBI-002');
+INSERT INTO `patients` (`patient_id`, `full_name`, `email`, `contact_number`, `birthday`, `gender`, `address`, `created_at`, `branch_id`) VALUES
+(1, 'Shane Ella Mae Franco Cacho', 'sheyn.cacho@gmail.com', '09993808837', '2005-10-03', 'Female', '14', '2026-07-05 22:28:50', 'SBI-002'),
+(3, 'Michelle Batacan', 'michelle@gmail.com', '09942478935', '2004-02-09', 'Female', 'Brookside Cainta', '2026-07-05 22:45:48', 'SBI-002'),
+(6, 'Ken Allen Rosales', NULL, '0994 47186244', '2004-11-26', 'Male', 'Blk 123 Street', '2026-07-06 12:09:16', 'SBI-002'),
+(7, 'sHANE CACHO', NULL, '', NULL, '', '', '2026-07-07 08:30:41', 'SBI-002'),
+(9, 'sHANE CACHO', NULL, '', NULL, '', '', '2026-07-07 08:42:25', 'SBI-002'),
+(10, 'sHANE CACHO', NULL, '', NULL, '', '', '2026-07-07 08:42:26', 'SBI-002'),
+(11, 'ddd', NULL, '', NULL, '', 'dddd', '2026-07-07 08:42:41', 'SBI-002'),
+(14, 'SHANE CACHO', NULL, '', '2005-10-03', 'Female', '14, Saint Catherine Street Rodfer 3 A-prime', '2026-07-07 08:50:00', 'SBI-002'),
+(15, 'ELLA MAE', NULL, '', NULL, '', '3', '2026-07-07 08:50:17', 'SBI-002'),
+(16, 'ddd', NULL, '', '2020-07-02', 'Female', '', '2026-07-07 08:56:20', 'SBI-002'),
+(17, 'ddd', NULL, '', NULL, '', '', '2026-07-07 08:56:55', 'SBI-002'),
+(18, 'ken', NULL, '0994146223', NULL, '', '', '2026-07-07 09:17:21', 'SBI-002'),
+(19, 'sHANE CACHO', NULL, '', NULL, '', '', '2026-07-07 09:24:08', 'SBI-002'),
+(23, 'sHANE CACHO', NULL, '', NULL, '', '', '2026-07-08 03:45:33', 'SBI-002'),
+(24, 'SHANE CACHO', NULL, '', NULL, '', '', '2026-07-08 07:40:22', 'SBI-002'),
+(31, 'SHANE CACHO', NULL, '', '2005-10-03', 'Female', '14, Saint Catherine Street Rodfer 3 A-prime', '2026-07-08 22:22:53', 'SBI-002'),
+(32, 'SHELLA MAE RUIZ', NULL, '0994146223', '2020-07-09', 'Female', '14, Saint Catherine Street Rodfer 3 A-prime', '2026-07-08 22:36:40', 'SBI-002'),
+(33, 'Antonio, Luiz', NULL, '0994146223', '2008-09-11', 'Female', '14, Saint Catherine Street Rodfer 3 A-prime', '2026-07-09 02:23:52', 'SBI-002'),
+(34, 'Cruz, Ariane', NULL, '0994146223', '2004-05-05', 'Female', 'Cainta Rizal', '2026-07-09 02:29:34', 'SBI-002'),
+(35, 'Lala, MoveAnne', NULL, '0993808837', '2025-07-08', 'Female', 'Pasig', '2026-07-09 02:33:32', 'SBI-002'),
+(49, 'Antonio, Luiz', NULL, '0994146223', '2000-10-03', 'Female', '14Saint Catherine Street Rodfer 3 A-prime', '2026-07-09 06:18:46', 'SBI-002');
 
 -- --------------------------------------------------------
 
@@ -667,14 +709,14 @@ CREATE TABLE `users` (
 --
 
 INSERT INTO `users` (`user_id`, `branch_id`, `role_id`, `username`, `email`, `password`, `status`, `created_at`, `last_login`) VALUES
-(1, 'SBI-001', 1, 'superadmin', 'garabillo_jojanajean@plpasig.edu.ph', '$2y$10$gTUuk2.GeUd5BNNryWGq8OhJWjQcdqk8rOMPUMJ1VkFaxc7eJajHe', 'Active', '2026-07-04 07:53:47', '2026-07-06 00:22:41'),
-(6, 'SBI-002', 2, 'Jojana Garabillo', 'jojanajeangarabillo@gmail.com', '$2y$10$Gundsv.vdvdqOT1M3VIcP.r/8y/MqzNxDPnxfh2qypFd44fL6xZta', 'Active', '2026-07-04 09:59:45', '2026-07-08 10:39:10'),
+(1, 'SBI-001', 1, 'superadmin', 'garabillo_jojanajean@plpasig.edu.ph', '$2y$10$gTUuk2.GeUd5BNNryWGq8OhJWjQcdqk8rOMPUMJ1VkFaxc7eJajHe', 'Active', '2026-07-04 07:53:47', '2026-07-09 16:16:00'),
+(6, 'SBI-002', 2, 'Jojana Garabillo', 'jojanajeangarabillo@gmail.com', '$2y$10$Gundsv.vdvdqOT1M3VIcP.r/8y/MqzNxDPnxfh2qypFd44fL6xZta', 'Active', '2026-07-04 09:59:45', '2026-07-09 19:34:34'),
 (8, 'SBI-002', 4, 'Shane Cacho', 'pam066198@gmail.com', '$2a$12$rfw67uNcLetmfn6M2Dv5e.ff49vAitKIHni3Q7iKV.zgMruHVfkIa', 'Active', '2026-07-04 14:41:02', '2026-07-09 10:09:42'),
-(9, 'SBI-002', 3, 'Marc Beringuela', 'ruberducky032518@gmail.com', '$2y$10$mRG5TnwyVCEkohLgsXiCe.INa226POltPF/0M4fYuXX8mq925V7kO', 'Active', '2026-07-04 14:55:07', '2026-07-05 22:02:08'),
-(11, 'SBI-002', 5, 'Jean Montero', 'joepatlacerna54@gmail.com', '$2y$10$ga5HM6WcD0wQSSvnpCAvue4UdqknCryN93mJVLatoI4GAiEDHctNO', 'Active', '2026-07-04 15:09:39', '2026-07-05 21:40:39'),
+(9, 'SBI-002', 3, 'Marc Beringuela', 'ruberducky032518@gmail.com', '$2y$10$mRG5TnwyVCEkohLgsXiCe.INa226POltPF/0M4fYuXX8mq925V7kO', 'Active', '2026-07-04 14:55:07', '2026-07-09 20:05:12'),
+(11, 'SBI-002', 5, 'Jean Montero', 'joepatlacerna54@gmail.com', '$2y$10$ga5HM6WcD0wQSSvnpCAvue4UdqknCryN93mJVLatoI4GAiEDHctNO', 'Active', '2026-07-04 15:09:39', '2026-07-09 23:11:17'),
 (14, 'SBI-003', 2, 'Joepat Lacerna', 'opat09252005@gmail.com', '$2y$10$JB4.S8HI8Zu.IbvLHuMhH.3mnmqmyWMdV4ID/nRxcotOs.tmdCasm', 'Active', '2026-07-05 11:56:22', '2026-07-05 20:04:06'),
-(15, 'SBI-003', 2, 'branchadmin', 'sheyn.cacho@gmail.com', '$2y$10$knOsicB5IV6qD4SqIaF3WOBBnyrFDJYTknP8yqBSXlo35gIp8mLim', 'Active', '2026-07-05 16:19:46', '2026-07-06 20:11:26'),
-(16, 'SBI-002', 4, 'cachosheyn', 'cachosheyn@gmail.com', '$2y$10$lLv3F5B3Yu1QGQU1GkAbq./clNj/7RMlMH1noMMwNAqv/45mymWfm', 'Active', '2026-07-07 06:24:22', '2026-07-07 17:51:56');
+(15, 'SBI-003', 2, 'Mae Ben', 'sheyn.cacho@gmail.com', '$2y$10$knOsicB5IV6qD4SqIaF3WOBBnyrFDJYTknP8yqBSXlo35gIp8mLim', 'Active', '2026-07-05 16:19:46', '2026-07-09 19:33:48'),
+(16, 'SBI-002', 4, 'Ella Franco', 'cachosheyn@gmail.com', '$2y$10$lLv3F5B3Yu1QGQU1GkAbq./clNj/7RMlMH1noMMwNAqv/45mymWfm', 'Active', '2026-07-07 06:24:22', '2026-07-09 16:34:19');
 
 -- --------------------------------------------------------
 
@@ -932,7 +974,7 @@ ALTER TABLE `animal_bite_cases`
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `log_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=195;
+  MODIFY `log_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=240;
 
 --
 -- AUTO_INCREMENT for table `document_tracking`
@@ -968,7 +1010,7 @@ ALTER TABLE `inventory_usage_history`
 -- AUTO_INCREMENT for table `medical_documents`
 --
 ALTER TABLE `medical_documents`
-  MODIFY `document_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `document_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT for table `notifications`
