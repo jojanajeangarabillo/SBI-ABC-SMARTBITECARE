@@ -17,6 +17,7 @@ $branch_id = null;
 $branch_name = '';
 $username = '';
 
+// Get user's branch info
 $userQuery = "SELECT u.branch_id, u.username, b.branch_name 
               FROM users u 
               LEFT JOIN branches b ON u.branch_id = b.branch_id 
@@ -912,7 +913,7 @@ while ($row = $recentResult->fetch_assoc()) {
     <!-- Main Content -->
     <div class="main">
         <div class="topbar">
-            <h3>Medical Documents</h3>
+            <h3>Medical Documents <span style="font-size:16px; color:#6c757d; font-weight:400; margin-left:8px;"> <?php echo htmlspecialchars($branch_name); ?> </span> </h3>
             <div class="profile">
                 <?php echo htmlspecialchars($username); ?>
                 <i class="bi bi-caret-down-fill"></i>

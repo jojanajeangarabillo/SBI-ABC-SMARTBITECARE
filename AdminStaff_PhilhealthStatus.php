@@ -918,7 +918,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
     <div class="main">
         <!-- Top Header -->
         <div class="topbar">
-            <h3>PhilHealth Patient Status</h3>
+            <h3>PhilHealth Patient Status <span style="font-size:16px; color:#6c757d; font-weight:400; margin-left:8px;"> <?php echo htmlspecialchars($branch_name); ?> </span> </h3>
             <div class="profile">
                 <?php echo htmlspecialchars($username); ?>
                 <i class="bi bi-caret-down-fill"></i>

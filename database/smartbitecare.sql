@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Jul 08, 2026 at 12:13 AM
+-- Generation Time: Jul 09, 2026 at 08:19 AM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -50,7 +50,10 @@ INSERT INTO `animal_bite_cases` (`case_id`, `patient_id`, `branch_id`, `animal_t
 (11, 14, 'SBI-002', 'Dog', '', NULL, 'Alive/Healthy', NULL, 'Ongoing', '', 16, '2026-07-07 08:50:00'),
 (12, 15, 'SBI-002', 'Dog', '', NULL, 'Alive/Healthy', NULL, 'Ongoing', '', 16, '2026-07-07 08:50:17'),
 (13, 16, 'SBI-002', 'Dog', '', NULL, 'Alive/Healthy', '2026-07-07', 'Ongoing', '', 16, '2026-07-07 08:56:20'),
-(15, 18, 'SBI-002', 'Dog', '', NULL, 'Alive/Healthy', NULL, 'Ongoing', '', 16, '2026-07-07 09:17:21');
+(15, 18, 'SBI-002', 'Dog', '', NULL, 'Alive/Healthy', NULL, 'Ongoing', '', 16, '2026-07-07 09:17:21'),
+(18, 24, 'SBI-002', 'Dog', '', NULL, 'Alive/Healthy', NULL, 'Ongoing', '', 8, '2026-07-08 07:40:22'),
+(25, 31, 'SBI-002', 'Cat', 'RIGHT LEG', NULL, 'Alive/Healthy', '2026-07-09', 'Ongoing', NULL, 8, '2026-07-08 22:22:55'),
+(27, 33, 'SBI-002', 'Cat', 'RIGHT LEG', NULL, 'Alive/Healthy', '2026-07-08', 'Ongoing', NULL, 8, '2026-07-09 02:23:52');
 
 -- --------------------------------------------------------
 
@@ -216,7 +219,38 @@ INSERT INTO `audit_logs` (`log_id`, `user_id`, `branch_id`, `action`, `module`, 
 (160, 16, 'SBI-002', 'Deleted patient record: sHANE CACHO (Case: 26-0005)', 'Patient Record', '2026-07-07 09:24:29'),
 (161, 16, 'SBI-002', 'Logout: User \'cachosheyn\' (Role: Administrative Staff) (IP: ::1)', 'Login System', '2026-07-07 09:51:39'),
 (162, 16, 'SBI-002', 'Login Success: User \'cachosheyn\' - Role: Administrative Staff, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-07 09:51:56'),
-(163, 16, 'SBI-002', 'Logout: User \'cachosheyn\' (Role: Administrative Staff) (IP: ::1)', 'Login System', '2026-07-07 10:12:01');
+(163, 16, 'SBI-002', 'Logout: User \'cachosheyn\' (Role: Administrative Staff) (IP: ::1)', 'Login System', '2026-07-07 10:12:01'),
+(164, 8, 'SBI-002', 'Login Failed: User \'Shane Cacho\' - Incorrect password (IP: ::1)', 'Login System', '2026-07-08 02:22:43'),
+(165, 8, 'SBI-002', 'Login Failed: User \'Shane Cacho\' - Incorrect password (IP: ::1)', 'Login System', '2026-07-08 02:22:49'),
+(166, 8, 'SBI-002', 'Login Failed: User \'Shane Cacho\' - Incorrect password (IP: ::1)', 'Login System', '2026-07-08 02:22:52'),
+(167, 8, 'SBI-002', 'Login Failed: User \'Shane Cacho\' - Incorrect password (IP: ::1)', 'Login System', '2026-07-08 02:22:56'),
+(168, 8, 'SBI-002', 'Login Failed: User \'Shane Cacho\' - Incorrect password (IP: ::1)', 'Login System', '2026-07-08 02:22:56'),
+(169, 8, 'SBI-002', 'Login Failed: User \'Shane Cacho\' - Incorrect password (IP: ::1)', 'Login System', '2026-07-08 02:23:24'),
+(170, 8, 'SBI-002', 'Login Failed: User \'Shane Cacho\' - Incorrect password (IP: ::1)', 'Login System', '2026-07-08 02:23:31'),
+(171, 8, 'SBI-002', 'Login Failed: User \'Shane Cacho\' - Incorrect password (IP: ::1)', 'Login System', '2026-07-08 02:24:21'),
+(172, 8, 'SBI-002', 'Login Success: User \'Shane Cacho\' - Role: Administrative Staff, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-08 02:24:39'),
+(173, 8, 'SBI-002', 'Logout: User \'Shane Cacho\' (Role: Administrative Staff) (IP: ::1)', 'Login System', '2026-07-08 02:39:03'),
+(174, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-08 02:39:11'),
+(175, 6, 'SBI-002', 'Logout: User \'Jojana Garabillo\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-07-08 02:41:33'),
+(176, 8, 'SBI-002', 'Login Success: User \'Shane Cacho\' - Role: Administrative Staff, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-08 02:41:45'),
+(177, 8, 'SBI-002', 'Updated patient record: sHANE CACHO (Case: 26-0005)', 'Patient Record', '2026-07-08 03:45:34'),
+(178, 8, 'SBI-002', 'Updated patient record: SHANE CACHO (Case: 26-0006)', 'Patient Record', '2026-07-08 07:40:22'),
+(179, 8, 'SBI-002', 'Deleted patient record: sHANE CACHO (Case: 26-0005)', 'Patient Record', '2026-07-08 07:40:27'),
+(180, 8, 'SBI-002', 'Updated patient record: SHANE CACHO (Case: 26-0007)', 'Patient Record', '2026-07-08 22:22:55'),
+(181, 8, 'SBI-002', 'Updated patient record: SHANE CACHO (Case: 26-0007)', 'Patient Record', '2026-07-08 22:23:31'),
+(182, 8, 'SBI-002', 'Updated patient record: SHELLA MAE RUIZ (Case: 26-0010)', 'Patient Record', '2026-07-08 22:36:42'),
+(183, 8, 'SBI-002', 'Login Success: User \'Shane Cacho\' - Role: Administrative Staff, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-09 02:09:42'),
+(184, 8, 'SBI-002', 'Updated patient record: Antonio, Luiz (Case: 26-0012)', 'Patient Record', '2026-07-09 02:23:52'),
+(185, 8, 'SBI-002', 'Updated patient record: Cruz, Ariane (Case: 26-0013)', 'Patient Record', '2026-07-09 02:29:36'),
+(186, 8, 'SBI-002', 'Updated patient record: Lala, MoveAnne (Case: 23-0015)', 'Patient Record', '2026-07-09 02:33:32'),
+(187, 8, 'SBI-002', 'Updated patient record: Lala, MoveAnne (Case: 23-0015)', 'Patient Record', '2026-07-09 02:40:47'),
+(188, 8, 'SBI-002', 'Updated patient record: Cruz, Ariane (Case: 26-0013)', 'Patient Record', '2026-07-09 02:44:51'),
+(189, 8, 'SBI-002', 'Deleted patient record: Lala, MoveAnne (Case: 23-0015)', 'Patient Record', '2026-07-09 04:03:35'),
+(190, 8, 'SBI-002', 'Deleted patient record: Cruz, Ariane (Case: 26-0013)', 'Patient Record', '2026-07-09 05:25:45'),
+(191, 8, 'SBI-002', 'Deleted patient record: SHELLA MAE RUIZ (Case: 26-0010)', 'Patient Record', '2026-07-09 05:28:38'),
+(192, 8, 'SBI-002', 'Archived patient record: Antonio, Luiz (Case: 26-0012)', 'Patient Record', '2026-07-09 05:48:53'),
+(193, 8, 'SBI-002', 'Updated patient record: Antonio, Luiz (Case: 26-0005)', 'Patient Record', '2026-07-09 06:18:46'),
+(194, 8, 'SBI-002', 'Deleted patient record: Antonio, Luiz (Case: 26-0005)', 'Patient Record', '2026-07-09 06:18:55');
 
 -- --------------------------------------------------------
 
@@ -359,6 +393,14 @@ CREATE TABLE `medical_documents` (
   `status` enum('Active','Archived') DEFAULT 'Active'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+--
+-- Dumping data for table `medical_documents`
+--
+
+INSERT INTO `medical_documents` (`document_id`, `branch_id`, `case_id`, `patient_id`, `document_type`, `document_name`, `file_name`, `file_path`, `file_type`, `file_size`, `description`, `uploaded_by`, `uploaded_at`, `updated_at`, `status`) VALUES
+(1, 'SBI-002', NULL, NULL, 'Medical Certificate', 'Group 1- Chat\'s Eatery', 'Group 1- Chat\'s Eatery.pdf', 'uploads/documents/1783483810_Group1-ChatsEatery.pdf', 'application/pdf', 530386, 'eme', 8, '2026-07-08 04:10:10', '2026-07-08 04:10:53', 'Active'),
+(2, 'SBI-002', NULL, NULL, 'Referral Letter', 'dd', 'MedCert-Cainta.pdf', 'uploads/documents/1783483920_MedCert-Cainta.pdf', 'application/pdf', 136030, '', 8, '2026-07-08 04:12:00', NULL, 'Active');
+
 -- --------------------------------------------------------
 
 --
@@ -424,7 +466,15 @@ INSERT INTO `patients` (`patient_id`, `full_name`, `email`, `contact_number`, `b
 (16, 'ddd', NULL, '', '2020-07-02', 'Female', '', 0, NULL, NULL, NULL, '2026-07-07 08:56:20', 'SBI-002'),
 (17, 'ddd', NULL, '', NULL, '', '', 0, NULL, NULL, NULL, '2026-07-07 08:56:55', 'SBI-002'),
 (18, 'ken', NULL, '0994146223', NULL, '', '', 0, NULL, NULL, NULL, '2026-07-07 09:17:21', 'SBI-002'),
-(19, 'sHANE CACHO', NULL, '', NULL, '', '', 0, NULL, NULL, NULL, '2026-07-07 09:24:08', 'SBI-002');
+(19, 'sHANE CACHO', NULL, '', NULL, '', '', 0, NULL, NULL, NULL, '2026-07-07 09:24:08', 'SBI-002'),
+(23, 'sHANE CACHO', NULL, '', NULL, '', '', 0, NULL, NULL, NULL, '2026-07-08 03:45:33', 'SBI-002'),
+(24, 'SHANE CACHO', NULL, '', NULL, '', '', 0, NULL, NULL, NULL, '2026-07-08 07:40:22', 'SBI-002'),
+(31, 'SHANE CACHO', NULL, '', '2005-10-03', 'Female', '14, Saint Catherine Street Rodfer 3 A-prime', 0, NULL, NULL, NULL, '2026-07-08 22:22:53', 'SBI-002'),
+(32, 'SHELLA MAE RUIZ', NULL, '0994146223', '2020-07-09', 'Female', '14, Saint Catherine Street Rodfer 3 A-prime', 0, NULL, NULL, NULL, '2026-07-08 22:36:40', 'SBI-002'),
+(33, 'Antonio, Luiz', NULL, '0994146223', '2008-09-11', 'Female', '14, Saint Catherine Street Rodfer 3 A-prime', 0, NULL, NULL, NULL, '2026-07-09 02:23:52', 'SBI-002'),
+(34, 'Cruz, Ariane', NULL, '0994146223', '2004-05-05', 'Female', 'Cainta Rizal', 0, NULL, NULL, NULL, '2026-07-09 02:29:34', 'SBI-002'),
+(35, 'Lala, MoveAnne', NULL, '0993808837', '2025-07-08', 'Female', 'Pasig', 0, NULL, NULL, NULL, '2026-07-09 02:33:32', 'SBI-002'),
+(49, 'Antonio, Luiz', NULL, '0994146223', '2000-10-03', 'Female', '14Saint Catherine Street Rodfer 3 A-prime', 0, NULL, NULL, NULL, '2026-07-09 06:18:46', 'SBI-002');
 
 -- --------------------------------------------------------
 
@@ -435,8 +485,9 @@ INSERT INTO `patients` (`patient_id`, `full_name`, `email`, `contact_number`, `b
 CREATE TABLE `philhealth_records` (
   `philhealth_record_id` int(11) NOT NULL,
   `case_id` int(11) NOT NULL,
-  `philhealth_number` varchar(50) DEFAULT NULL,
-  `status` enum('For Writing','For Screening','For Signing','For Transmittal','Completed') DEFAULT NULL,
+  `has_philhealth` enum('Yes','No') DEFAULT 'No',
+  `philhealth_membership` varchar(50) DEFAULT NULL,
+  `status` enum('For Writing','For Screening','For Signing/Transmittal','Completed') DEFAULT NULL,
   `remarks` text DEFAULT NULL,
   `updated_by` int(11) DEFAULT NULL,
   `updated_at` datetime DEFAULT NULL
@@ -446,11 +497,14 @@ CREATE TABLE `philhealth_records` (
 -- Dumping data for table `philhealth_records`
 --
 
-INSERT INTO `philhealth_records` (`philhealth_record_id`, `case_id`, `philhealth_number`, `status`, `remarks`, `updated_by`, `updated_at`) VALUES
-(11, 11, NULL, 'For Writing', '', 16, '2026-07-07 16:50:01'),
-(12, 12, NULL, 'For Writing', '', 16, '2026-07-07 16:50:17'),
-(13, 13, NULL, 'For Writing', '', 16, '2026-07-07 16:56:20'),
-(15, 15, NULL, 'For Writing', '', 16, '2026-07-07 17:17:21');
+INSERT INTO `philhealth_records` (`philhealth_record_id`, `case_id`, `has_philhealth`, `philhealth_membership`, `status`, `remarks`, `updated_by`, `updated_at`) VALUES
+(11, 11, 'No', NULL, 'For Writing', '', 16, '2026-07-07 16:50:01'),
+(12, 12, 'No', NULL, 'For Writing', '', 16, '2026-07-07 16:50:17'),
+(13, 13, 'No', NULL, 'For Writing', '', 16, '2026-07-07 16:56:20'),
+(15, 15, 'No', NULL, 'For Writing', '', 16, '2026-07-07 17:17:21'),
+(18, 18, 'No', NULL, 'For Writing', '', 8, '2026-07-08 15:40:22'),
+(25, 25, 'No', NULL, 'For Writing', NULL, 8, '2026-07-09 06:23:30'),
+(27, 27, 'No', 'Sponsored', '', NULL, 8, '2026-07-09 10:23:52');
 
 -- --------------------------------------------------------
 
@@ -490,6 +544,7 @@ CREATE TABLE `registry_records` (
   `dose_d3` tinyint(1) DEFAULT 0,
   `dose_d7` tinyint(1) DEFAULT 0,
   `dose_d14` tinyint(1) DEFAULT 0,
+  `dose_d21` tinyint(1) DEFAULT 0,
   `dose_d28_30` tinyint(1) DEFAULT 0,
   `booster` tinyint(1) DEFAULT 0,
   `contact_number` varchar(30) DEFAULT NULL,
@@ -502,11 +557,14 @@ CREATE TABLE `registry_records` (
 -- Dumping data for table `registry_records`
 --
 
-INSERT INTO `registry_records` (`registry_id`, `case_id`, `registry_number`, `status_of_biting_animal`, `erig`, `ats`, `tt`, `active_regimen`, `dose_d0`, `dose_d3`, `dose_d7`, `dose_d14`, `dose_d28_30`, `booster`, `contact_number`, `remarks`, `updated_by`, `updated_at`) VALUES
-(11, 11, '26-0001', 'Alive/Healthy', 0, 0, 0, 'PVRV TRC SPEEDA', 0, 0, 0, 0, 0, 0, '', '', 16, '2026-07-07 16:50:01'),
-(12, 12, '26-0002', 'Alive/Healthy', 0, 0, 0, 'PVRV TRC SPEEDA', 0, 0, 0, 0, 0, 0, '', '', 16, '2026-07-07 16:50:17'),
-(13, 13, '26-0003', 'Alive/Healthy', 0, 0, 0, 'PVRV TRC SPEEDA', 0, 0, 0, 0, 0, 0, '', '', 16, '2026-07-07 16:56:20'),
-(15, 15, '26-0004', 'Alive/Healthy', 0, 0, 0, 'PVRV TRC SPEEDA', 1, 1, 0, 0, 0, 0, '0994146223', '', 16, '2026-07-07 17:17:21');
+INSERT INTO `registry_records` (`registry_id`, `case_id`, `registry_number`, `status_of_biting_animal`, `erig`, `ats`, `tt`, `active_regimen`, `dose_d0`, `dose_d3`, `dose_d7`, `dose_d14`, `dose_d21`, `dose_d28_30`, `booster`, `contact_number`, `remarks`, `updated_by`, `updated_at`) VALUES
+(11, 11, '26-0001', 'Alive/Healthy', 0, 0, 0, 'PVRV TRC SPEEDA', 0, 0, 0, 0, 0, 0, 0, '', '', 16, '2026-07-07 16:50:01'),
+(12, 12, '26-0002', 'Alive/Healthy', 0, 0, 0, 'PVRV TRC SPEEDA', 0, 0, 0, 0, 0, 0, 0, '', '', 16, '2026-07-07 16:50:17'),
+(13, 13, '26-0003', 'Alive/Healthy', 0, 0, 0, 'PVRV TRC SPEEDA', 0, 0, 0, 0, 0, 0, 0, '', '', 16, '2026-07-07 16:56:20'),
+(15, 15, '26-0004', 'Alive/Healthy', 0, 0, 0, 'PVRV TRC SPEEDA', 1, 1, 0, 0, 0, 0, 0, '0994146223', '', 16, '2026-07-07 17:17:21'),
+(18, 18, '26-0006', 'Alive/Healthy', 0, 0, 0, 'PVRV TRC SPEEDA', 0, 0, 0, 0, 0, 0, 0, '', '', 8, '2026-07-08 15:40:22'),
+(25, 25, '26-0007', 'Alive/Healthy', 0, 0, 1, 'PVRV TRC SPEEDA', 1, 1, 1, 1, 0, 1, 0, '', NULL, 8, '2026-07-09 06:23:30'),
+(27, 27, '26-0012', 'Alive/Healthy', 0, 0, 0, 'PVRV TRC SPEEDA', 1, 0, 0, 0, 0, 0, 0, '0994146223', NULL, 8, '2026-07-09 10:23:52');
 
 -- --------------------------------------------------------
 
@@ -610,8 +668,8 @@ CREATE TABLE `users` (
 
 INSERT INTO `users` (`user_id`, `branch_id`, `role_id`, `username`, `email`, `password`, `status`, `created_at`, `last_login`) VALUES
 (1, 'SBI-001', 1, 'superadmin', 'garabillo_jojanajean@plpasig.edu.ph', '$2y$10$gTUuk2.GeUd5BNNryWGq8OhJWjQcdqk8rOMPUMJ1VkFaxc7eJajHe', 'Active', '2026-07-04 07:53:47', '2026-07-06 00:22:41'),
-(6, 'SBI-002', 2, 'Jojana Garabillo', 'jojanajeangarabillo@gmail.com', '$2y$10$Gundsv.vdvdqOT1M3VIcP.r/8y/MqzNxDPnxfh2qypFd44fL6xZta', 'Active', '2026-07-04 09:59:45', '2026-07-07 14:27:54'),
-(8, 'SBI-002', 4, 'Shane Cacho', 'pam066198@gmail.com', '$2a$12$rfw67uNcLetmfn6M2Dv5e.ff49vAitKIHni3Q7iKV.zgMruHVfkIa', 'Active', '2026-07-04 14:41:02', '2026-07-06 20:35:24'),
+(6, 'SBI-002', 2, 'Jojana Garabillo', 'jojanajeangarabillo@gmail.com', '$2y$10$Gundsv.vdvdqOT1M3VIcP.r/8y/MqzNxDPnxfh2qypFd44fL6xZta', 'Active', '2026-07-04 09:59:45', '2026-07-08 10:39:10'),
+(8, 'SBI-002', 4, 'Shane Cacho', 'pam066198@gmail.com', '$2a$12$rfw67uNcLetmfn6M2Dv5e.ff49vAitKIHni3Q7iKV.zgMruHVfkIa', 'Active', '2026-07-04 14:41:02', '2026-07-09 10:09:42'),
 (9, 'SBI-002', 3, 'Marc Beringuela', 'ruberducky032518@gmail.com', '$2y$10$mRG5TnwyVCEkohLgsXiCe.INa226POltPF/0M4fYuXX8mq925V7kO', 'Active', '2026-07-04 14:55:07', '2026-07-05 22:02:08'),
 (11, 'SBI-002', 5, 'Jean Montero', 'joepatlacerna54@gmail.com', '$2y$10$ga5HM6WcD0wQSSvnpCAvue4UdqknCryN93mJVLatoI4GAiEDHctNO', 'Active', '2026-07-04 15:09:39', '2026-07-05 21:40:39'),
 (14, 'SBI-003', 2, 'Joepat Lacerna', 'opat09252005@gmail.com', '$2y$10$JB4.S8HI8Zu.IbvLHuMhH.3mnmqmyWMdV4ID/nRxcotOs.tmdCasm', 'Active', '2026-07-05 11:56:22', '2026-07-05 20:04:06'),
@@ -661,6 +719,8 @@ CREATE TABLE `vaccination_records` (
   `branch_id` varchar(10) NOT NULL,
   `dose_number` int(11) NOT NULL,
   `date_administered` date DEFAULT NULL,
+  `scheduled_date` date DEFAULT NULL,
+  `administered_at` varchar(100) DEFAULT NULL,
   `next_schedule` date DEFAULT NULL,
   `vaccination_status` enum('Scheduled','Completed','Missed') DEFAULT 'Scheduled',
   `is_final_dose` tinyint(1) DEFAULT 0,
@@ -673,9 +733,19 @@ CREATE TABLE `vaccination_records` (
 -- Dumping data for table `vaccination_records`
 --
 
-INSERT INTO `vaccination_records` (`vaccination_id`, `patient_id`, `case_id`, `item_id`, `branch_id`, `dose_number`, `date_administered`, `next_schedule`, `vaccination_status`, `is_final_dose`, `remarks`, `nurse_id`, `created_at`) VALUES
-(4, 18, 15, 1, 'SBI-002', 1, '2026-07-07', NULL, 'Completed', 0, NULL, 16, '2026-07-07 09:17:21'),
-(5, 18, 15, 1, 'SBI-002', 2, '2026-07-10', NULL, 'Completed', 0, NULL, 16, '2026-07-07 09:17:21');
+INSERT INTO `vaccination_records` (`vaccination_id`, `patient_id`, `case_id`, `item_id`, `branch_id`, `dose_number`, `date_administered`, `scheduled_date`, `administered_at`, `next_schedule`, `vaccination_status`, `is_final_dose`, `remarks`, `nurse_id`, `created_at`) VALUES
+(4, 18, 15, 1, 'SBI-002', 1, '2026-07-07', NULL, NULL, NULL, 'Completed', 0, NULL, 16, '2026-07-07 09:17:21'),
+(5, 18, 15, 1, 'SBI-002', 2, '2026-07-10', NULL, NULL, NULL, 'Completed', 0, NULL, 16, '2026-07-07 09:17:21'),
+(14, 31, 25, 1, 'SBI-002', 1, '2026-07-09', '2026-07-09', NULL, NULL, 'Completed', 0, '', 8, '2026-07-08 22:23:31'),
+(15, 31, 25, 1, 'SBI-002', 2, '2026-07-09', '2026-07-12', NULL, NULL, 'Completed', 0, '', 8, '2026-07-08 22:23:31'),
+(16, 31, 25, 1, 'SBI-002', 3, '2026-07-09', NULL, NULL, NULL, 'Completed', 0, '', 8, '2026-07-08 22:23:31'),
+(17, 31, 25, 1, 'SBI-002', 4, '2026-07-09', NULL, NULL, NULL, 'Completed', 0, '', 8, '2026-07-08 22:23:31'),
+(18, 31, 25, 1, 'SBI-002', 5, '2026-07-09', NULL, NULL, NULL, 'Completed', 0, '', 8, '2026-07-08 22:23:31'),
+(19, 31, 25, 1, 'SBI-002', 6, '2026-07-09', NULL, NULL, NULL, 'Completed', 0, '', 8, '2026-07-08 22:23:31'),
+(25, 33, 27, 1, 'SBI-002', 1, '2026-07-09', '2026-07-09', NULL, NULL, 'Completed', 0, '', 8, '2026-07-09 02:23:52'),
+(26, 33, 27, 1, 'SBI-002', 2, NULL, '2026-07-12', NULL, NULL, 'Scheduled', 0, '', 8, '2026-07-09 02:23:52'),
+(27, 33, 27, 1, 'SBI-002', 3, NULL, '2026-07-16', NULL, NULL, 'Scheduled', 0, '', 8, '2026-07-09 02:23:52'),
+(28, 33, 27, 1, 'SBI-002', 6, NULL, '2026-08-06', NULL, NULL, 'Scheduled', 0, '', 8, '2026-07-09 02:23:52');
 
 --
 -- Indexes for dumped tables
@@ -856,13 +926,13 @@ ALTER TABLE `vaccination_records`
 -- AUTO_INCREMENT for table `animal_bite_cases`
 --
 ALTER TABLE `animal_bite_cases`
-  MODIFY `case_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=17;
+  MODIFY `case_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=44;
 
 --
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `log_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=164;
+  MODIFY `log_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=195;
 
 --
 -- AUTO_INCREMENT for table `document_tracking`
@@ -898,7 +968,7 @@ ALTER TABLE `inventory_usage_history`
 -- AUTO_INCREMENT for table `medical_documents`
 --
 ALTER TABLE `medical_documents`
-  MODIFY `document_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `document_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT for table `notifications`
@@ -910,13 +980,13 @@ ALTER TABLE `notifications`
 -- AUTO_INCREMENT for table `patients`
 --
 ALTER TABLE `patients`
-  MODIFY `patient_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=20;
+  MODIFY `patient_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=50;
 
 --
 -- AUTO_INCREMENT for table `philhealth_records`
 --
 ALTER TABLE `philhealth_records`
-  MODIFY `philhealth_record_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=17;
+  MODIFY `philhealth_record_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=31;
 
 --
 -- AUTO_INCREMENT for table `prediction_results`
@@ -928,7 +998,7 @@ ALTER TABLE `prediction_results`
 -- AUTO_INCREMENT for table `registry_records`
 --
 ALTER TABLE `registry_records`
-  MODIFY `registry_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=17;
+  MODIFY `registry_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=31;
 
 --
 -- AUTO_INCREMENT for table `stock_transactions`
@@ -964,7 +1034,7 @@ ALTER TABLE `user_tokens`
 -- AUTO_INCREMENT for table `vaccination_records`
 --
 ALTER TABLE `vaccination_records`
-  MODIFY `vaccination_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
+  MODIFY `vaccination_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=45;
 
 --
 -- Constraints for dumped tables
