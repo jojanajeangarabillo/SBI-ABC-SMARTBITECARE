@@ -666,11 +666,11 @@ while ($row = $recentResult->fetch_assoc()) {
         }
 
         .action-btn.view { color: var(--primary); }
-        .action-btn.view:hover { background: #EEF2FF; }
-        .action-btn.download { color: #7C4DFF; }
-        .action-btn.download:hover { background: #F1EEFF; }
-        .action-btn.delete { color: var(--danger); }
-        .action-btn.delete:hover { background: #fdecec; }
+        .action-btn.view:hover { background: #bbffbf; }
+        .action-btn.download { color: var(--primary); }
+        .action-btn.download:hover { background: #55dc30; }
+        .action-btn.delete { color: var(--primary); }
+        .action-btn.delete:hover { background: #de5e5e; }
 
         /* Pagination */
         .pagination-area {

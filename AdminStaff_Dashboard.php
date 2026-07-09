@@ -76,14 +76,13 @@ $stmt->execute();
 $newPatientsResult = $stmt->get_result();
 $newPatientsCount = $newPatientsResult->fetch_assoc()['count'] ?? 0;
 
-// 3. Get PhilHealth Patients
+// 3. Get PhilHealth Patients - FIXED: Use has_philhealth instead of philhealth_number
 $philhealthQuery = "
     SELECT COUNT(DISTINCT c.case_id) as count
     FROM animal_bite_cases c
     INNER JOIN philhealth_records ph ON c.case_id = ph.case_id
     WHERE c.branch_id = ?
-    AND ph.philhealth_number IS NOT NULL 
-    AND ph.philhealth_number != ''
+    AND ph.has_philhealth = 'Yes'
 ";
 $stmt = $conn->prepare($philhealthQuery);
 $stmt->bind_param("s", $branch_id);
@@ -95,15 +94,15 @@ $philhealthCount = $philhealthResult->fetch_assoc()['count'] ?? 0;
 $calendarData = [];
 $followUpCalendarQuery = "
     SELECT 
-        DATE(v.next_schedule) as schedule_date,
+        DATE(v.scheduled_date) as schedule_date,
         COUNT(DISTINCT c.case_id) as count
     FROM animal_bite_cases c
     INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
     WHERE c.branch_id = ?
-    AND v.next_schedule IS NOT NULL
-    AND v.next_schedule BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
+    AND v.scheduled_date IS NOT NULL
+    AND v.scheduled_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
     AND v.vaccination_status = 'Scheduled'
-    GROUP BY DATE(v.next_schedule)
+    GROUP BY DATE(v.scheduled_date)
     ORDER BY schedule_date
 ";
 $stmt = $conn->prepare($followUpCalendarQuery);

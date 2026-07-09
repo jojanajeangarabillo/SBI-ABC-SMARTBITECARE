@@ -64,15 +64,14 @@ $statusResult = $stmt->get_result();
 $philhealthStatus = [
     'For Writing' => 0,
     'For Screening' => 0,
-    'For Signing' => 0,
-    'For Transmittal' => 0,
+    'For Signing/Transmittal' => 0,
     'Completed' => 0
 ];
 
 while ($row = $statusResult->fetch_assoc()) {
     $status = $row['status'] ?? 'For Writing';
-    if ($status == 'For Signing' || $status == 'For Transmittal') {
-        $philhealthStatus['For Signing'] += (int)$row['count'];
+    if ($status == 'For Signing/Transmittal' || $status == 'For Transmittal') {
+        $philhealthStatus['For Signing/Transmittal'] += (int)$row['count'];
     } else {
         $philhealthStatus[$status] = (int)$row['count'];
     }
@@ -99,12 +98,11 @@ $params = [$branch_id];
 $types = "s";
 
 if (!empty($search)) {
-    $whereClauses[] = "(p.full_name LIKE ? OR r.registry_number LIKE ? OR ph.philhealth_number LIKE ?)";
+    $whereClauses[] = "(p.full_name LIKE ? OR r.registry_number LIKE ?)";
     $searchParam = "%$search%";
     $params[] = $searchParam;
     $params[] = $searchParam;
-    $params[] = $searchParam;
-    $types .= "sss";
+    $types .= "ss";
 }
 
 if (!empty($statusFilter)) {
@@ -143,7 +141,7 @@ $countResult = $stmt->get_result();
 $totalRecords = $countResult->fetch_assoc()['total'] ?? 0;
 $totalPages = ceil($totalRecords / $limit);
 
-// Get records for current page
+// Get records for current page with discharge date from vaccination schedule
 $recordsQuery = "
     SELECT 
         c.case_id,
@@ -157,10 +155,18 @@ $recordsQuery = "
         r.registry_number as case_no,
         r.remarks as registry_remarks,
         ph.philhealth_record_id,
-        ph.philhealth_number,
+        ph.has_philhealth,
+        ph.philhealth_membership,
         ph.status as philhealth_status,
         ph.remarks as philhealth_remarks,
-        ph.updated_at
+        ph.updated_at,
+        (
+            SELECT MAX(date_administered) 
+            FROM vaccination_records v 
+            WHERE v.case_id = c.case_id 
+            AND v.branch_id = c.branch_id
+            AND v.vaccination_status = 'Completed'
+        ) as discharge_date
     FROM animal_bite_cases c
     INNER JOIN philhealth_records ph ON c.case_id = ph.case_id
     INNER JOIN patients p ON c.patient_id = p.patient_id
@@ -189,6 +195,58 @@ while ($row = $recordsResult->fetch_assoc()) {
 if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
     header('Content-Type: application/json');
     
+    // Check if this is an export request
+    if (isset($_GET['export']) && $_GET['export'] == 'true') {
+        // Generate CSV export
+        $exportQuery = "
+            SELECT 
+                p.full_name as patient_name,
+                r.registry_number as case_no,
+                DATE(COALESCE(c.date_of_bite, c.created_at)) as admission_date,
+                ph.status as philhealth_status,
+                ph.remarks as philhealth_remarks,
+                ph.philhealth_membership,
+                (
+                    SELECT MAX(date_administered) 
+                    FROM vaccination_records v 
+                    WHERE v.case_id = c.case_id 
+                    AND v.branch_id = c.branch_id
+                    AND v.vaccination_status = 'Completed'
+                ) as discharge_date
+            FROM animal_bite_cases c
+            INNER JOIN philhealth_records ph ON c.case_id = ph.case_id
+            INNER JOIN patients p ON c.patient_id = p.patient_id
+            LEFT JOIN registry_records r ON c.case_id = r.case_id
+            WHERE c.branch_id = ?
+            ORDER BY c.created_at DESC
+        ";
+        $stmt = $conn->prepare($exportQuery);
+        $stmt->bind_param("s", $branch_id);
+        $stmt->execute();
+        $exportResult = $stmt->get_result();
+        
+        $filename = 'philhealth_records_' . date('Y-m-d') . '.csv';
+        header('Content-Type: text/csv');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        
+        $output = fopen('php://output', 'w');
+        fputcsv($output, ['Patient Name', 'Case No.', 'Admission Date', 'Discharge Date', 'Status', 'Remarks', 'PhilHealth Type']);
+        
+        while ($row = $exportResult->fetch_assoc()) {
+            fputcsv($output, [
+                $row['patient_name'],
+                $row['case_no'] ?? 'N/A',
+                $row['admission_date'] ?? '',
+                $row['discharge_date'] ?? '',
+                $row['philhealth_status'] ?? 'N/A',
+                $row['philhealth_remarks'] ?? '',
+                $row['philhealth_membership'] ?? ''
+            ]);
+        }
+        fclose($output);
+        exit();
+    }
+    
     // Get updated stats
     $statusQuery = "
         SELECT 
@@ -207,21 +265,20 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
     $updatedStatus = [
         'For Writing' => 0,
         'For Screening' => 0,
-        'For Signing' => 0,
-        'For Transmittal' => 0,
+        'For Signing/Transmittal' => 0,
         'Completed' => 0
     ];
     
     while ($row = $statusResult->fetch_assoc()) {
         $status = $row['status'] ?? 'For Writing';
-        if ($status == 'For Signing' || $status == 'For Transmittal') {
-            $updatedStatus['For Signing'] += (int)$row['count'];
+        if ($status == 'For Signing/Transmittal' || $status == 'For Transmittal') {
+            $updatedStatus['For Signing/Transmittal'] += (int)$row['count'];
         } else {
             $updatedStatus[$status] = (int)$row['count'];
         }
     }
     
-    // Get updated records (without pagination for simplicity)
+    // Get updated records with discharge date
     $recordsQuery = "
         SELECT 
             c.case_id,
@@ -230,7 +287,14 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             DATE(c.created_at) as date_of_confinement,
             r.registry_number as case_no,
             ph.status as philhealth_status,
-            ph.remarks as philhealth_remarks
+            ph.remarks as philhealth_remarks,
+            (
+                SELECT MAX(date_administered) 
+                FROM vaccination_records v 
+                WHERE v.case_id = c.case_id 
+                AND v.branch_id = c.branch_id
+                AND v.vaccination_status = 'Completed'
+            ) as discharge_date
         FROM animal_bite_cases c
         INNER JOIN philhealth_records ph ON c.case_id = ph.case_id
         INNER JOIN patients p ON c.patient_id = p.patient_id
@@ -598,25 +662,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             background: var(--gray-100);
         }
 
-        .table td .action-link {
-            color: var(--primary);
-            margin: 0 4px;
-            text-decoration: none;
-            font-size: 16px;
-            padding: 4px 6px;
-            border-radius: 4px;
-            transition: var(--transition);
-        }
-
-        .table td .action-link:hover {
-            background: rgba(43,58,140,0.08);
-        }
-
-        .table td .action-link.delete:hover {
-            color: var(--danger);
-            background: rgba(220,53,69,0.08);
-        }
-
         .no-records {
             text-align: center;
             padding: 40px 20px;
@@ -667,6 +712,16 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         .status-badge.ongoing {
             background: #fff3cd;
             color: #856404;
+        }
+
+        .discharge-date {
+            font-size: 13px;
+            color: var(--gray-600);
+        }
+
+        .discharge-date.pending {
+            color: #856404;
+            font-style: italic;
         }
 
         /* Pagination */
@@ -878,13 +933,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             border-radius: 20px;
             display: inline-block;
         }
-
-        .action-group {
-            display: flex;
-            justify-content: center;
-            gap: 4px;
-            flex-wrap: wrap;
-        }
     </style>
 </head>
 
@@ -941,7 +989,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 </div>
 
                 <div class="stat-box signing">
-                    <h1 id="signingCount"><?php echo $philhealthStatus['For Signing']; ?></h1>
+                    <h1 id="signingCount"><?php echo $philhealthStatus['For Signing/Transmittal']; ?></h1>
                     <h6>For Signing/Transmittal</h6>
                     <p>Ready for approval</p>
                 </div>
@@ -974,7 +1022,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     <button class="status-filter-btn <?php echo empty($statusFilter) ? 'active' : ''; ?>" data-status="">All</button>
                     <button class="status-filter-btn writing <?php echo $statusFilter == 'For Writing' ? 'active' : ''; ?>" data-status="For Writing">Writing</button>
                     <button class="status-filter-btn screening <?php echo $statusFilter == 'For Screening' ? 'active' : ''; ?>" data-status="For Screening">Screening</button>
-                    <button class="status-filter-btn signing <?php echo $statusFilter == 'For Signing' ? 'active' : ''; ?>" data-status="For Signing">Signing</button>
+                    <button class="status-filter-btn signing <?php echo $statusFilter == 'For Signing/Transmittal' ? 'active' : ''; ?>" data-status="For Signing/Transmittal">Signing</button>
                     <button class="status-filter-btn completed <?php echo $statusFilter == 'Completed' ? 'active' : ''; ?>" data-status="Completed">Completed</button>
                 </div>
             </div>
@@ -990,13 +1038,12 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                             <th>Date of Discharge</th>
                             <th>Status</th>
                             <th>Remarks</th>
-                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody id="recordsBody">
                         <?php if (empty($philhealthRecords)): ?>
                         <tr>
-                            <td colspan="7">
+                            <td colspan="6">
                                 <div class="no-records">
                                     <i class="bi bi-inbox"></i>
                                     <p>No PhilHealth records found.</p>
@@ -1006,30 +1053,22 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                         </tr>
                         <?php else: ?>
                         <?php foreach ($philhealthRecords as $record): ?>
+                        <?php 
+                            // Format discharge date
+                            $dischargeDate = !empty($record['discharge_date']) ? date('Y-m-d', strtotime($record['discharge_date'])) : '';
+                            $dischargeDisplay = !empty($dischargeDate) ? $dischargeDate : '<span class="discharge-date pending">Pending</span>';
+                        ?>
                         <tr>
                             <td><strong><?php echo htmlspecialchars($record['case_no'] ?? 'N/A'); ?></strong></td>
                             <td><?php echo htmlspecialchars($record['patient_name']); ?></td>
                             <td><?php echo htmlspecialchars($record['date_of_confinement'] ?? ''); ?></td>
-                            <td><?php echo htmlspecialchars($record['admission_date'] ?? ''); ?></td>
+                            <td class="discharge-date"><?php echo $dischargeDisplay; ?></td>
                             <td>
                                 <span class="status-badge <?php echo strtolower(str_replace(' ', '-', $record['philhealth_status'] ?? 'for-writing')); ?>">
                                     <?php echo htmlspecialchars($record['philhealth_status'] ?? 'N/A'); ?>
                                 </span>
                             </td>
                             <td><?php echo htmlspecialchars($record['philhealth_remarks'] ?? $record['case_remarks'] ?? 'N/A'); ?></td>
-                            <td>
-                                <div class="action-group">
-                                    <a href="AdminStaff_PatientRecord.php?action=view&case_id=<?php echo $record['case_id']; ?>" class="action-link" title="View">
-                                        <i class="bi bi-eye"></i>
-                                    </a>
-                                    <a href="AdminStaff_PatientRecord.php?action=edit&case_id=<?php echo $record['case_id']; ?>" class="action-link" title="Edit">
-                                        <i class="bi bi-pencil"></i>
-                                    </a>
-                                    <a href="#" class="action-link delete" data-case-id="<?php echo $record['case_id']; ?>" title="Delete">
-                                        <i class="bi bi-trash"></i>
-                                    </a>
-                                </div>
-                            </td>
                         </tr>
                         <?php endforeach; ?>
                         <?php endif; ?>
@@ -1119,7 +1158,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             const search = document.getElementById('searchInput').value.trim();
             const status = document.querySelector('.status-filter-btn.active')?.dataset.status || '';
             
-            // Build URL with parameters
             let url = window.location.pathname + '?';
             if (search) url += 'search=' + encodeURIComponent(search) + '&';
             if (status) url += 'status=' + encodeURIComponent(status) + '&';
@@ -1128,13 +1166,11 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             window.location.href = url;
         }
 
-        // Search with debounce
         document.getElementById('searchInput').addEventListener('input', function() {
             clearTimeout(searchTimeout);
             searchTimeout = setTimeout(applyFilters, 500);
         });
 
-        // Enter key in search
         document.getElementById('searchInput').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 clearTimeout(searchTimeout);
@@ -1142,7 +1178,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             }
         });
 
-        // Status filter buttons
         document.querySelectorAll('.status-filter-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 document.querySelectorAll('.status-filter-btn').forEach(b => b.classList.remove('active'));
@@ -1151,7 +1186,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             });
         });
 
-        // Clear filters
         document.getElementById('clearFiltersBtn').addEventListener('click', function() {
             document.getElementById('searchInput').value = '';
             document.querySelectorAll('.status-filter-btn').forEach(b => b.classList.remove('active'));
@@ -1180,7 +1214,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         document.getElementById('exportBtn').addEventListener('click', function() {
             showLoading();
             
-            // Get current URL parameters
             const params = new URLSearchParams(window.location.search);
             const exportUrl = window.location.pathname + '?export=true&' + params.toString();
             
@@ -1209,45 +1242,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         });
 
         // ----------------------------------------------------------------
-        // DELETE PATIENT RECORD
-        // ----------------------------------------------------------------
-        document.querySelectorAll('.action-link.delete').forEach(link => {
-            link.addEventListener('click', function(e) {
-                e.preventDefault();
-                const caseId = this.dataset.caseId;
-                if (confirm('Are you sure you want to delete this patient record? This action cannot be undone.')) {
-                    showLoading();
-                    
-                    // Delete via AJAX to PatientRecord.php
-                    fetch('AdminStaff_PatientRecord.php', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded',
-                            'X-Requested-With': 'XMLHttpRequest'
-                        },
-                        body: 'action=delete&case_id=' + caseId
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        hideLoading();
-                        if (data.success) {
-                            showToast('Record deleted successfully');
-                            // Reload the page to refresh the list
-                            setTimeout(() => window.location.reload(), 1000);
-                        } else {
-                            showToast('Delete failed', data.error || 'Unknown error', true);
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Delete error:', error);
-                        hideLoading();
-                        showToast('Delete failed', error.message, true);
-                    });
-                }
-            });
-        });
-
-        // ----------------------------------------------------------------
         // AUTO-REFRESH (every 30 seconds)
         // ----------------------------------------------------------------
         function refreshData() {
@@ -1261,22 +1255,20 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    // Update stats
                     if (data.status) {
                         document.getElementById('writingCount').textContent = data.status['For Writing'] || 0;
                         document.getElementById('screeningCount').textContent = data.status['For Screening'] || 0;
-                        document.getElementById('signingCount').textContent = data.status['For Signing'] || 0;
+                        document.getElementById('signingCount').textContent = data.status['For Signing/Transmittal'] || 0;
                         document.getElementById('completedCount').textContent = data.status['Completed'] || 0;
                     }
 
-                    // Update records table (only if no search/filter is active)
                     if (data.records && !document.getElementById('searchInput').value.trim()) {
                         const tbody = document.getElementById('recordsBody');
                         let html = '';
                         if (data.records.length === 0) {
                             html = `
                                 <tr>
-                                    <td colspan="7">
+                                    <td colspan="6">
                                         <div class="no-records">
                                             <i class="bi bi-inbox"></i>
                                             <p>No PhilHealth records found.</p>
@@ -1287,86 +1279,39 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                         } else {
                             data.records.forEach(record => {
                                 const statusClass = (record.philhealth_status || 'for-writing').toLowerCase().replace(/\s+/g, '-');
+                                const dischargeDate = record.discharge_date || '';
+                                const dischargeDisplay = dischargeDate ? dischargeDate : '<span class="discharge-date pending">Pending</span>';
                                 html += `
                                     <tr>
                                         <td><strong>${record.case_no || 'N/A'}</strong></td>
                                         <td>${record.patient_name}</td>
                                         <td>${record.date_of_confinement || ''}</td>
-                                        <td>${record.admission_date || ''}</td>
+                                        <td class="discharge-date">${dischargeDisplay}</td>
                                         <td>
                                             <span class="status-badge ${statusClass}">
                                                 ${record.philhealth_status || 'N/A'}
                                             </span>
                                         </td>
                                         <td>${record.philhealth_remarks || 'N/A'}</td>
-                                        <td>
-                                            <div class="action-group">
-                                                <a href="AdminStaff_PatientRecord.php?action=view&case_id=${record.case_id}" class="action-link" title="View">
-                                                    <i class="bi bi-eye"></i>
-                                                </a>
-                                                <a href="AdminStaff_PatientRecord.php?action=edit&case_id=${record.case_id}" class="action-link" title="Edit">
-                                                    <i class="bi bi-pencil"></i>
-                                                </a>
-                                                <a href="#" class="action-link delete" data-case-id="${record.case_id}" title="Delete">
-                                                    <i class="bi bi-trash"></i>
-                                                </a>
-                                            </div>
-                                        </td>
                                     </tr>
                                 `;
                             });
                         }
                         tbody.innerHTML = html;
-
-                        // Re-bind delete events
-                        document.querySelectorAll('.action-link.delete').forEach(link => {
-                            link.addEventListener('click', function(e) {
-                                e.preventDefault();
-                                const caseId = this.dataset.caseId;
-                                if (confirm('Are you sure you want to delete this patient record?')) {
-                                    // Trigger delete via AJAX
-                                    fetch('AdminStaff_PatientRecord.php', {
-                                        method: 'POST',
-                                        headers: {
-                                            'Content-Type': 'application/x-www-form-urlencoded',
-                                            'X-Requested-With': 'XMLHttpRequest'
-                                        },
-                                        body: 'action=delete&case_id=' + caseId
-                                    })
-                                    .then(response => response.json())
-                                    .then(data => {
-                                        if (data.success) {
-                                            showToast('Record deleted successfully');
-                                            refreshData();
-                                        } else {
-                                            showToast('Delete failed', data.error || 'Unknown error', true);
-                                        }
-                                    })
-                                    .catch(error => {
-                                        showToast('Delete failed', error.message, true);
-                                    });
-                                }
-                            });
-                        });
                     }
                 }
             })
             .catch(error => console.error('Refresh error:', error));
         }
 
-        // Auto-refresh every 30 seconds
         setInterval(refreshData, 30000);
 
-        // Refresh when tab becomes visible
         document.addEventListener('visibilitychange', function() {
             if (!document.hidden) {
                 refreshData();
             }
         });
 
-        // ----------------------------------------------------------------
-        // INITIAL PAGE LOAD
-        // ----------------------------------------------------------------
         console.log('PhilHealth Patient Status page loaded successfully');
         console.log('Branch: <?php echo htmlspecialchars($branch_name); ?>');
         console.log('Total records: <?php echo $totalRecords; ?>');

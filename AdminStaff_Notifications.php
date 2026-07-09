@@ -75,7 +75,7 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             TIMESTAMPDIFF(YEAR, p.birthday, CURDATE()) as age,
             r.registry_number as case_no,
             v.dose_number,
-            v.next_schedule,
+            v.scheduled_date as next_schedule,
             v.vaccination_status,
             CASE 
                 WHEN v.dose_number = 1 THEN 'Day 0 (1st Dose)'
@@ -91,10 +91,10 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
         INNER JOIN patients p ON c.patient_id = p.patient_id
         LEFT JOIN registry_records r ON c.case_id = r.case_id
         WHERE c.branch_id = ?
-        AND v.next_schedule IS NOT NULL
+        AND v.scheduled_date IS NOT NULL
         AND v.vaccination_status = 'Scheduled'
-        AND v.next_schedule BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY)
-        ORDER BY v.next_schedule ASC
+        AND v.scheduled_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY)
+        ORDER BY v.scheduled_date ASC
     ";
     $stmt = $conn->prepare($upcomingQuery);
     $stmt->bind_param("s", $branch_id);
@@ -112,16 +112,22 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             $type = 'urgent';
             $icon = 'bi-calendar-check';
             $iconClass = 'warning';
+            $badge = 'Today';
+            $badgeClass = 'danger';
         } elseif ($daysUntil == 1) {
             $message = "📅 <strong>{$patientInfo}</strong> has a vaccination scheduled for TOMORROW - {$row['dose_label']} (Case: {$row['case_no']})";
             $type = 'upcoming';
             $icon = 'bi-calendar-event';
             $iconClass = 'warning';
+            $badge = 'Tomorrow';
+            $badgeClass = 'warning';
         } else {
             $message = "📅 <strong>{$patientInfo}</strong> has an upcoming vaccination in {$daysUntil} days - {$row['dose_label']} (Case: {$row['case_no']})";
             $type = 'upcoming';
             $icon = 'bi-calendar-event';
             $iconClass = 'warning';
+            $badge = 'Upcoming';
+            $badgeClass = 'warning';
         }
 
         $notifications[] = [
@@ -136,8 +142,10 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             'link' => 'AdminStaff_PatientRecord.php?action=view&case_id=' . $row['case_id'],
             'link_text' => 'View Patient',
             'read' => false,
-            'badge' => 'Upcoming',
-            'badge_class' => 'warning'
+            'badge' => $badge,
+            'badge_class' => $badgeClass,
+            'action' => 'view_patient',
+            'case_id' => $row['case_id']
         ];
     }
 
@@ -152,9 +160,9 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             TIMESTAMPDIFF(YEAR, p.birthday, CURDATE()) as age,
             r.registry_number as case_no,
             v.dose_number,
-            v.next_schedule,
+            v.scheduled_date as next_schedule,
             v.vaccination_status,
-            DATEDIFF(CURDATE(), v.next_schedule) as days_overdue,
+            DATEDIFF(CURDATE(), v.scheduled_date) as days_overdue,
             CASE 
                 WHEN v.dose_number = 1 THEN 'Day 0 (1st Dose)'
                 WHEN v.dose_number = 2 THEN 'Day 3 (2nd Dose)'
@@ -169,10 +177,10 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
         INNER JOIN patients p ON c.patient_id = p.patient_id
         LEFT JOIN registry_records r ON c.case_id = r.case_id
         WHERE c.branch_id = ?
-        AND v.next_schedule IS NOT NULL
+        AND v.scheduled_date IS NOT NULL
         AND v.vaccination_status = 'Scheduled'
-        AND v.next_schedule < CURDATE()
-        ORDER BY v.next_schedule ASC
+        AND v.scheduled_date < CURDATE()
+        ORDER BY v.scheduled_date ASC
     ";
     $stmt = $conn->prepare($overdueQuery);
     $stmt->bind_param("s", $branch_id);
@@ -201,7 +209,9 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             'link_text' => 'View Patient',
             'read' => false,
             'badge' => 'Overdue',
-            'badge_class' => 'danger'
+            'badge_class' => 'danger',
+            'action' => 'view_patient',
+            'case_id' => $row['case_id']
         ];
     }
 
@@ -271,7 +281,9 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             'link_text' => 'Update Record',
             'read' => false,
             'badge' => 'Incomplete',
-            'badge_class' => 'warning'
+            'badge_class' => 'warning',
+            'action' => 'edit_patient',
+            'case_id' => $row['case_id']
         ];
     }
 
@@ -306,10 +318,13 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
         
         if ($daysAgo == 0) {
             $timeLabel = 'Today';
+            $badgeClass = 'danger';
         } elseif ($daysAgo == 1) {
             $timeLabel = 'Yesterday';
+            $badgeClass = 'warning';
         } else {
             $timeLabel = $daysAgo . ' days ago';
+            $badgeClass = 'info';
         }
         
         $message = "🆕 <strong>{$patientInfo}</strong> was registered as a new patient - {$row['animal_type']} bite (Case: {$row['case_no']})";
@@ -329,8 +344,10 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             'link' => 'AdminStaff_PatientRecord.php?action=view&case_id=' . $row['case_id'],
             'link_text' => 'View Patient',
             'read' => false,
-            'badge' => 'New',
-            'badge_class' => 'info'
+            'badge' => $timeLabel,
+            'badge_class' => $badgeClass,
+            'action' => 'view_patient',
+            'case_id' => $row['case_id']
         ];
     }
 
@@ -384,7 +401,9 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             'link_text' => 'Add Schedule',
             'read' => false,
             'badge' => 'Action Needed',
-            'badge_class' => 'warning'
+            'badge_class' => 'warning',
+            'action' => 'edit_patient',
+            'case_id' => $row['case_id']
         ];
     }
 
@@ -433,7 +452,9 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             'link_text' => 'View Status',
             'read' => false,
             'badge' => $statusLabel,
-            'badge_class' => 'warning'
+            'badge_class' => 'warning',
+            'action' => 'view_philhealth',
+            'case_id' => $row['case_id']
         ];
     }
 
@@ -459,7 +480,7 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
         return strtotime($b['date']) - strtotime($a['date']);
     });
 
-    return $notifications;
+    return array_values($notifications);
 }
 
 // ----------------------------------------------------------------------
@@ -472,11 +493,8 @@ $totalNotifications = count($allNotifications);
 $totalPages = ceil($totalNotifications / $limit);
 $paginatedNotifications = array_slice($allNotifications, $offset, $limit);
 
-// Count unread notifications
-$unreadCount = 0;
-foreach ($allNotifications as $n) {
-    if (!$n['read']) $unreadCount++;
-}
+// Count unread notifications (all are considered unread since we're generating them dynamically)
+$unreadCount = count($allNotifications);
 
 // ----------------------------------------------------------------------
 // HANDLE AJAX REQUESTS FOR REAL-TIME UPDATES
@@ -500,10 +518,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             $paginated = array_slice($notifs, $notifOffset, $notifLimit);
             
             // Count unread
-            $unread = 0;
-            foreach ($notifs as $n) {
-                if (!$n['read']) $unread++;
-            }
+            $unread = count($notifs);
             
             echo json_encode([
                 'success' => true,
@@ -516,9 +531,20 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             break;
             
         case 'mark_all_read':
-            // In a real implementation, you would update a notifications table
-            // For now, we just return success
+            // Since notifications are generated dynamically, we just return success
             echo json_encode(['success' => true, 'message' => 'All notifications marked as read']);
+            break;
+            
+        case 'mark_read':
+            // Mark a single notification as read (for dynamic notifications, we just track in session)
+            $notifId = isset($_GET['id']) ? $_GET['id'] : '';
+            if (!isset($_SESSION['read_notifications'])) {
+                $_SESSION['read_notifications'] = [];
+            }
+            if (!in_array($notifId, $_SESSION['read_notifications'])) {
+                $_SESSION['read_notifications'][] = $notifId;
+            }
+            echo json_encode(['success' => true, 'message' => 'Notification marked as read']);
             break;
             
         default:
@@ -811,11 +837,35 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             font-size: 14px;
             font-weight: 600;
             transition: .2s;
+            text-decoration: none;
         }
 
         .btn-view:hover {
             background: #1f2d6e;
             color: #fff;
+        }
+
+        .btn-mark-read {
+            background: transparent;
+            color: var(--gray-600);
+            border: 1px solid #ddd;
+            padding: 6px 14px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            transition: .2s;
+            cursor: pointer;
+        }
+
+        .btn-mark-read:hover {
+            background: var(--gray-100);
+            border-color: var(--gray-500);
+        }
+
+        .btn-mark-read.marked {
+            background: var(--success);
+            color: white;
+            border-color: var(--success);
         }
 
         .badge-status {
@@ -1003,6 +1053,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 margin-left: 0;
                 margin-top: 10px;
                 justify-content: space-between;
+                flex-wrap: wrap;
             }
 
             .pagination-wrap .page-link {
@@ -1141,6 +1192,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 <?php else: ?>
                 <?php 
                 $currentDate = '';
+                $readNotifications = isset($_SESSION['read_notifications']) ? $_SESSION['read_notifications'] : [];
                 foreach ($paginatedNotifications as $notification):
                     $notifDate = date('Y-m-d', strtotime($notification['date']));
                     $displayDate = '';
@@ -1155,8 +1207,9 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                         }
                         echo '<div class="notification-day"><h5>' . $displayDate . '</h5></div>';
                     }
+                    $isRead = in_array($notification['id'], $readNotifications);
                 ?>
-                <div class="notification-card <?php echo $notification['read'] ? 'read' : 'unread'; ?>" data-id="<?php echo $notification['id']; ?>">
+                <div class="notification-card <?php echo $isRead ? 'read' : 'unread'; ?>" data-id="<?php echo $notification['id']; ?>">
                     <div class="notification-icon <?php echo $notification['icon_class']; ?>">
                         <i class="bi <?php echo $notification['icon']; ?>"></i>
                     </div>
@@ -1171,9 +1224,15 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                         <span class="badge-status <?php echo $notification['badge_class']; ?>">
                             <?php echo $notification['badge']; ?>
                         </span>
-                        <a href="<?php echo $notification['link']; ?>" class="btn-view">
-                            <?php echo $notification['link_text']; ?>
-                        </a>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                            <a href="<?php echo $notification['link']; ?>" class="btn-view" target="_blank">
+                                <?php echo $notification['link_text']; ?>
+                            </a>
+                            <button class="btn-mark-read <?php echo $isRead ? 'marked' : ''; ?>" data-id="<?php echo $notification['id']; ?>">
+                                <i class="bi <?php echo $isRead ? 'bi-check-circle-fill' : 'bi-circle'; ?>"></i>
+                                <?php echo $isRead ? 'Read' : 'Mark Read'; ?>
+                            </button>
+                        </div>
                     </div>
                 </div>
                 <?php endforeach; ?>
@@ -1241,6 +1300,83 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
     }
 
     // ----------------------------------------------------------------
+    // MARK SINGLE NOTIFICATION AS READ
+    // ----------------------------------------------------------------
+    document.querySelectorAll('.btn-mark-read').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const notifId = this.dataset.id;
+            const card = this.closest('.notification-card');
+            
+            fetch(window.location.pathname + '?ajax_action=mark_read&id=' + encodeURIComponent(notifId), {
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    if (card) {
+                        card.classList.remove('unread');
+                        card.classList.add('read');
+                    }
+                    this.classList.add('marked');
+                    this.innerHTML = '<i class="bi bi-check-circle-fill"></i> Read';
+                    
+                    // Update badge count
+                    const badge = document.getElementById('unreadBadge');
+                    let currentCount = parseInt(badge.textContent) || 0;
+                    if (currentCount > 0) {
+                        currentCount--;
+                        badge.textContent = currentCount;
+                        if (currentCount === 0) {
+                            badge.style.display = 'none';
+                        }
+                    }
+                    showToast('Notification marked as read');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                showToast('Failed to mark as read', error.message, true);
+            });
+        });
+    });
+
+    // ----------------------------------------------------------------
+    // MARK ALL AS READ
+    // ----------------------------------------------------------------
+    document.getElementById('markAllReadBtn').addEventListener('click', function() {
+        fetch(window.location.pathname + '?ajax_action=mark_all_read', {
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showToast('All notifications marked as read');
+                // Update UI - remove unread styling
+                document.querySelectorAll('.notification-card.unread').forEach(card => {
+                    card.classList.remove('unread');
+                    card.classList.add('read');
+                    const btn = card.querySelector('.btn-mark-read');
+                    if (btn) {
+                        btn.classList.add('marked');
+                        btn.innerHTML = '<i class="bi bi-check-circle-fill"></i> Read';
+                    }
+                });
+                document.getElementById('unreadBadge').textContent = '0';
+                document.getElementById('unreadBadge').style.display = 'none';
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showToast('Failed to mark all as read', error.message, true);
+        });
+    });
+
+    // ----------------------------------------------------------------
     // SEARCH
     // ----------------------------------------------------------------
     let searchTimeout = null;
@@ -1293,39 +1429,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
     });
 
     // ----------------------------------------------------------------
-    // MARK ALL AS READ
-    // ----------------------------------------------------------------
-    document.getElementById('markAllReadBtn').addEventListener('click', function() {
-        fetch(window.location.pathname + '?ajax_action=mark_all_read', {
-            headers: {
-                'X-Requested-With': 'XMLHttpRequest'
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                showToast('All notifications marked as read');
-                // Update UI - remove unread styling
-                document.querySelectorAll('.notification-card.unread').forEach(card => {
-                    card.classList.remove('unread');
-                    card.classList.add('read');
-                    const badge = card.querySelector('.badge-status');
-                    if (badge) {
-                        badge.textContent = 'Read';
-                        badge.className = 'badge-status success';
-                    }
-                });
-                document.getElementById('unreadBadge').textContent = '0';
-                document.getElementById('unreadBadge').style.display = 'none';
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            showToast('Failed to mark all as read', error.message, true);
-        });
-    });
-
-    // ----------------------------------------------------------------
     // AUTO-REFRESH (every 30 seconds)
     // ----------------------------------------------------------------
     let currentFilter = '<?php echo $filter; ?>';
@@ -1356,6 +1459,8 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 if (data.notifications && data.notifications.length > 0) {
                     let html = '';
                     let currentDate = '';
+                    const readNotifications = <?php echo json_encode(isset($_SESSION['read_notifications']) ? $_SESSION['read_notifications'] : []); ?>;
+                    
                     data.notifications.forEach(notif => {
                         const notifDate = notif.date ? new Date(notif.date).toLocaleDateString() : '';
                         if (notifDate !== currentDate) {
@@ -1365,7 +1470,12 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                                                new Date(notif.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
                             html += `<div class="notification-day"><h5>${displayDate}</h5></div>`;
                         }
-                        const cardClass = notif.read ? 'read' : 'unread';
+                        const isRead = readNotifications.includes(notif.id);
+                        const cardClass = isRead ? 'read' : 'unread';
+                        const btnClass = isRead ? 'marked' : '';
+                        const btnText = isRead ? 'Read' : 'Mark Read';
+                        const btnIcon = isRead ? 'bi-check-circle-fill' : 'bi-circle';
+                        
                         html += `
                             <div class="notification-card ${cardClass}" data-id="${notif.id}">
                                 <div class="notification-icon ${notif.icon_class}">
@@ -1378,12 +1488,59 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                                 </div>
                                 <div class="notification-right">
                                     <span class="badge-status ${notif.badge_class}">${notif.badge}</span>
-                                    <a href="${notif.link}" class="btn-view">${notif.link_text}</a>
+                                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                                        <a href="${notif.link}" class="btn-view" target="_blank">${notif.link_text}</a>
+                                        <button class="btn-mark-read ${btnClass}" data-id="${notif.id}">
+                                            <i class="bi ${btnIcon}"></i>
+                                            ${btnText}
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         `;
                     });
                     section.innerHTML = html;
+
+                    // Re-bind mark read events
+                    document.querySelectorAll('.btn-mark-read').forEach(btn => {
+                        btn.addEventListener('click', function(e) {
+                            e.stopPropagation();
+                            const notifId = this.dataset.id;
+                            const card = this.closest('.notification-card');
+                            
+                            fetch(window.location.pathname + '?ajax_action=mark_read&id=' + encodeURIComponent(notifId), {
+                                headers: {
+                                    'X-Requested-With': 'XMLHttpRequest'
+                                }
+                            })
+                            .then(response => response.json())
+                            .then(data => {
+                                if (data.success) {
+                                    if (card) {
+                                        card.classList.remove('unread');
+                                        card.classList.add('read');
+                                    }
+                                    this.classList.add('marked');
+                                    this.innerHTML = '<i class="bi bi-check-circle-fill"></i> Read';
+                                    
+                                    const badge = document.getElementById('unreadBadge');
+                                    let currentCount = parseInt(badge.textContent) || 0;
+                                    if (currentCount > 0) {
+                                        currentCount--;
+                                        badge.textContent = currentCount;
+                                        if (currentCount === 0) {
+                                            badge.style.display = 'none';
+                                        }
+                                    }
+                                    showToast('Notification marked as read');
+                                }
+                            })
+                            .catch(error => {
+                                console.error('Error:', error);
+                                showToast('Failed to mark as read', error.message, true);
+                            });
+                        });
+                    });
                 } else {
                     section.innerHTML = `
                         <div class="no-notifications">
