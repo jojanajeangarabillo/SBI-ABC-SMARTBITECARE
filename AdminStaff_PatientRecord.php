@@ -148,6 +148,7 @@ function validatePatientData(array $data): array {
     return $errors;
 }
 
+// THIS FUNCTION MUST BE DEFINED HERE BEFORE AJAX HANDLERS
 function getDosesForCategory(string $category, string $route): array {
     switch ($category) {
         case 'Pre-Exposure Prophylaxis (PrEP)':
@@ -167,174 +168,6 @@ function getDosesForCategory(string $category, string $route): array {
     }
 }
 
-// ============================================
-// STOCK DEDUCTION FOR VACCINATION (FIFO)
-// ============================================
-
-function deductVaccineStock($conn, $item_id, $branch_id, $quantity, $user_id, $case_id, $dose_number, $remarks = '') {
-    // Check if quantity is valid
-    if ($quantity <= 0) {
-        return ['success' => false, 'error' => 'Quantity must be greater than 0.'];
-    }
-    
-    // Get total available stock
-    $total_sql = "SELECT COALESCE(SUM(quantity_available), 0) as total FROM inventory_stocks 
-                  WHERE item_id = ? AND branch_id = ? AND is_active = 1 AND quantity_available > 0";
-    $total_stmt = $conn->prepare($total_sql);
-    if (!$total_stmt) {
-        return ['success' => false, 'error' => 'Database error.'];
-    }
-    $total_stmt->bind_param("is", $item_id, $branch_id);
-    $total_stmt->execute();
-    $total_result = $total_stmt->get_result();
-    $total_data = $total_result->fetch_assoc();
-    $total_stmt->close();
-    
-    if ($total_data['total'] < $quantity) {
-        return ['success' => false, 'error' => 'Insufficient stock. Available: ' . $total_data['total'] . ', Requested: ' . $quantity];
-    }
-    
-    // Get batches ordered by expiration date (FIFO)
-    $batch_sql = "SELECT stock_id, quantity_available, expiration_date, batch_number 
-                  FROM inventory_stocks 
-                  WHERE item_id = ? AND branch_id = ? AND is_active = 1 AND quantity_available > 0
-                  ORDER BY expiration_date ASC, stock_id ASC";
-    $batch_stmt = $conn->prepare($batch_sql);
-    if (!$batch_stmt) {
-        return ['success' => false, 'error' => 'Database error.'];
-    }
-    $batch_stmt->bind_param("is", $item_id, $branch_id);
-    $batch_stmt->execute();
-    $batch_result = $batch_stmt->get_result();
-    
-    $remaining = $quantity;
-    $deducted_batches = [];
-    $last_stock_id = null;
-    
-    // Start transaction
-    $conn->begin_transaction();
-    
-    try {
-        while ($batch = $batch_result->fetch_assoc()) {
-            if ($remaining <= 0) break;
-            
-            $stock_id = (int)$batch['stock_id'];
-            $available = (int)$batch['quantity_available'];
-            
-            if ($available <= 0) continue;
-            
-            $deduct_amount = min($remaining, $available);
-            $new_quantity = $available - $deduct_amount;
-            
-            // Update stock
-            $update_sql = "UPDATE inventory_stocks SET quantity_available = ? WHERE stock_id = ?";
-            $update_stmt = $conn->prepare($update_sql);
-            if (!$update_stmt) {
-                throw new Exception('Database error during update.');
-            }
-            $update_stmt->bind_param("ii", $new_quantity, $stock_id);
-            $update_stmt->execute();
-            $update_stmt->close();
-            
-            $deducted_batches[] = [
-                'stock_id' => $stock_id,
-                'batch_number' => $batch['batch_number'] ?? 'N/A',
-                'deducted' => $deduct_amount,
-                'new_quantity' => $new_quantity
-            ];
-            
-            $last_stock_id = $stock_id;
-            $remaining -= $deduct_amount;
-        }
-        
-        if ($remaining > 0) {
-            throw new Exception('Could not deduct full quantity. Remaining: ' . $remaining);
-        }
-        
-        // Create stock transaction
-        $trx_sql = "INSERT INTO stock_transactions 
-                     (item_id, stock_id, user_id, branch_id, transaction_type, quantity, remarks, vaccination_id) 
-                     VALUES (?, ?, ?, ?, 'OUT', ?, ?, ?)";
-        $trx_stmt = $conn->prepare($trx_sql);
-        if (!$trx_stmt) {
-            throw new Exception('Database error.');
-        }
-        $full_remarks = "Vaccination Dose #$dose_number - Case ID: $case_id" . ($remarks ? " - $remarks" : "");
-        $trx_stmt->bind_param("iiisssi", $item_id, $last_stock_id, $user_id, $branch_id, $quantity, $full_remarks, $case_id);
-        $trx_stmt->execute();
-        $trx_stmt->close();
-        
-        // Record in usage history
-        $usage_sql = "INSERT INTO inventory_usage_history (item_id, branch_id, usage_date, quantity_used, patient_count) 
-                      VALUES (?, ?, CURDATE(), ?, 1)";
-        $usage_stmt = $conn->prepare($usage_sql);
-        if ($usage_stmt) {
-            $usage_stmt->bind_param("isi", $item_id, $branch_id, $quantity);
-            $usage_stmt->execute();
-            $usage_stmt->close();
-        }
-        
-        // Log the action
-        $batch_details = array_map(function($b) {
-            return "Batch " . ($b['batch_number'] ?? 'N/A') . ": -" . $b['deducted'];
-        }, $deducted_batches);
-        $action = "Vaccination Stock Deduction: Item ID $item_id, Qty $quantity, Dose #$dose_number, Case ID: $case_id, " . implode(', ', $batch_details);
-        auditLog($conn, $user_id, $action, 'Vaccination Stock');
-        
-        $conn->commit();
-        return ['success' => true, 'deducted_batches' => $deducted_batches];
-        
-    } catch (Exception $e) {
-        $conn->rollback();
-        return ['success' => false, 'error' => $e->getMessage()];
-    }
-}
-
-// ============================================
-// GET ITEM ID FOR VACCINE
-// ============================================
-
-function getVaccineItemId($conn, $vaccine_name, $branch_id = null) {
-    // Try to find by exact name match first
-    $sql = "SELECT item_id, item_name FROM inventory_items WHERE item_name LIKE ? AND is_predictable = 1";
-    $stmt = $conn->prepare($sql);
-    if (!$stmt) return null;
-    $search = "%" . $vaccine_name . "%";
-    $stmt->bind_param("s", $search);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    $row = $result->fetch_assoc();
-    $stmt->close();
-    if ($row) {
-        return (int)$row['item_id'];
-    }
-    return null;
-}
-
-// ============================================
-// GET AVAILABLE VACCINE STOCK
-// ============================================
-
-function getVaccineStock($conn, $item_id, $branch_id) {
-    $sql = "SELECT COALESCE(SUM(quantity_available), 0) as total, 
-                    COUNT(*) as batch_count,
-                    MIN(expiration_date) as earliest_expiry
-             FROM inventory_stocks 
-             WHERE item_id = ? AND branch_id = ? AND is_active = 1 AND quantity_available > 0";
-    $stmt = $conn->prepare($sql);
-    if (!$stmt) return ['total' => 0, 'batch_count' => 0];
-    $stmt->bind_param("is", $item_id, $branch_id);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    $data = $result->fetch_assoc();
-    $stmt->close();
-    return [
-        'total' => (int)($data['total'] ?? 0),
-        'batch_count' => (int)($data['batch_count'] ?? 0),
-        'earliest_expiry' => $data['earliest_expiry'] ?? null
-    ];
-}
-
 // ----------------------------------------------------------------------
 // AJAX HANDLERS
 // ----------------------------------------------------------------------
@@ -346,11 +179,33 @@ if ($action) {
             try {
                 $date = $_GET['date'] ?? null;
                 $search = trim($_GET['search'] ?? '');
+                $filter = $_GET['filter'] ?? 'all';
+                $sort = $_GET['sort'] ?? 'desc';
+                
+                // Check if filter is 'all' - this means show ALL patients regardless of date
+                $isFilterAll = ($filter === 'all');
+                $isFilterPending = ($filter === 'pending');
+                $isFilterCompleted = ($filter === 'completed');
+                
                 $where = "WHERE c.branch_id = ?";
                 $params = [$logged_branch_id];
                 $types = "s";
                 
-                if (!empty($date)) {
+                // IMPORTANT: For 'all' filter, DO NOT add date condition - show ALL records
+                // For 'pending' and 'completed' filters, also show ALL records (no date filter)
+                // Only apply date filter when NO filter is active (i.e., when not using filter dropdown)
+                // The frontend sends filter='all' when "All Patients" is selected
+                // We should treat filter='all' as "show all patients without date restriction"
+                if ($filter === 'all' && !empty($date)) {
+                    // When 'all' filter is selected, we ignore the date parameter
+                    // to show ALL patients across all dates
+                    // Do NOT add date condition
+                } else if ($filter === 'all' && empty($date)) {
+                    // Also show ALL patients when no date is provided
+                    // Do NOT add date condition
+                } else if ($filter !== 'all' && !empty($date)) {
+                    // Only apply date filter when NOT using the filter dropdown
+                    // This is for the default view (no filter selected)
                     $where .= " AND DATE(c.created_at) = ?";
                     $params[] = $date;
                     $types .= "s";
@@ -362,6 +217,9 @@ if ($action) {
                     $params[] = "%$search%";
                     $types .= "ss";
                 }
+
+                // Determine order by based on sort parameter
+                $orderBy = ($sort === 'asc') ? 'ASC' : 'DESC';
 
                 $sql = "
                     SELECT 
@@ -393,7 +251,7 @@ if ($action) {
                     LEFT JOIN registry_records r ON c.case_id = r.case_id
                     LEFT JOIN philhealth_records ph ON c.case_id = ph.case_id
                     $where
-                    ORDER BY c.created_at DESC
+                    ORDER BY c.created_at $orderBy
                 ";
 
                 $stmt = $conn->prepare($sql);
@@ -437,10 +295,20 @@ if ($action) {
                         }
                     }
 
+                    // Determine vaccination status
                     $vaccStatus = 'Pending';
-                    if (!empty($schedule['d0']) && !empty($schedule['d3']) && 
-                        !empty($schedule['d7']) && !empty($schedule['d14'])) {
+                    // Check if all doses are completed (at least d0, d3, d7, d14)
+                    $hasD0 = !empty($schedule['d0']);
+                    $hasD3 = !empty($schedule['d3']);
+                    $hasD7 = !empty($schedule['d7']);
+                    $hasD14 = !empty($schedule['d14']);
+                    
+                    if ($hasD0 && $hasD3 && $hasD7 && $hasD14) {
                         $vaccStatus = 'Completed';
+                    } else if ($hasD0) {
+                        $vaccStatus = 'In Progress';
+                    } else {
+                        $vaccStatus = 'Pending';
                     }
 
                     $hasPhilhealth = $row['has_philhealth'] ?? 'No';
@@ -473,8 +341,25 @@ if ($action) {
                         'philhealth_type' => $row['philhealth_membership'] ?? '',
                         'status' => $row['philhealth_status'] ?? 'For Writing',
                         'remarks' => $row['case_remarks'] ?? $row['registry_remarks'] ?? '',
+                        'created_at' => $row['created_at'],
                     ];
                 }
+
+                // Apply filter on the result array (pending/completed)
+                if ($filter === 'pending') {
+                    $resultArray = array_filter($resultArray, function($item) {
+                        return $item['vaccination_status'] === 'Pending' || $item['vaccination_status'] === 'In Progress';
+                    });
+                } elseif ($filter === 'completed') {
+                    $resultArray = array_filter($resultArray, function($item) {
+                        return $item['vaccination_status'] === 'Completed';
+                    });
+                }
+                // 'all' filter - return all results (no filtering)
+
+                // Re-index array after filtering
+                $resultArray = array_values($resultArray);
+                
                 jsonResponse($resultArray);
             } catch (Exception $e) {
                 jsonResponse(['error' => 'Failed to fetch patients: ' . $e->getMessage()], 500);
@@ -756,7 +641,7 @@ if ($action) {
                     $insReg->execute();
                 }
 
-                // 4) Handle philhealth_records
+                // 4) Handle philhealth_records - FIXED to match database schema
                 $phExists = $conn->prepare("SELECT philhealth_record_id FROM philhealth_records WHERE case_id=?");
                 $phExists->bind_param("i", $caseId);
                 $phExists->execute();
@@ -788,42 +673,22 @@ if ($action) {
                     $insPh->execute();
                 }
 
-                // 5) Handle vaccination_records with stock deduction
+                // 5) Handle vaccination_records - FIXED to include scheduled_date
                 $delVacc = $conn->prepare("DELETE FROM vaccination_records WHERE case_id=? AND branch_id=?");
                 $delVacc->bind_param("is", $caseId, $logged_branch_id);
                 $delVacc->execute();
-
-                // Map vaccine names to items
-                $vaccineItemMap = [
-                    'PVRV TRC SPEEDA' => 'SPEEDA',
-                    'PVRV TRC ABHAYRAB' => 'ABHAYRAB',
-                    'PVRV TRC ERIG' => 'ERIG',
-                    'ERIG' => 'ERIG',
-                    'ATS' => 'ATS',
-                    'BETT' => 'BETT',
-                    'ABHAYTOX' => 'ABHAYTOX'
-                ];
-
-                // Determine which vaccine is being used based on regimen
-                $vaccine_name = $vaccineItemMap[$regimen] ?? null;
-
-                // If regimen contains SPEEDA, use SPEEDA
-                if (stripos($regimen, 'SPEEDA') !== false) {
-                    $vaccine_name = 'SPEEDA';
-                } elseif (stripos($regimen, 'ABHAYRAB') !== false) {
-                    $vaccine_name = 'ABHAYRAB';
-                }
-
+                
+                $vaccineItemId = getDefaultVaccineItemId($conn);
+                
                 $insertVacc = $conn->prepare("
                     INSERT INTO vaccination_records 
                     (patient_id, case_id, item_id, branch_id, dose_number, 
                      scheduled_date, date_administered, vaccination_status, remarks, nurse_id) 
                     VALUES (?,?,?,?,?,?,?,?,?,?)
                 ");
-
+                
                 $dosesToSave = getDosesForCategory($vaccCat, $route);
-                $stock_deduction_errors = [];
-
+                
                 foreach ($dosesToSave as $key) {
                     $doseNum = $doseMap[$key];
                     $doseData = $vaccinationDoses[$key] ?? ['scheduled_date' => '', 'administered_date' => '', 'status' => 'Pending'];
@@ -831,45 +696,11 @@ if ($action) {
                     $scheduledDate = !empty($doseData['scheduled_date']) ? frontToDbDate($doseData['scheduled_date']) : null;
                     $administeredDate = !empty($doseData['administered_date']) ? frontToDbDate($doseData['administered_date']) : null;
                     
+                    if ($doseData['status'] === 'Administered' && empty($administeredDate)) {
+                        $administeredDate = date('Y-m-d');
+                    }
+                    
                     $vaccStatus = $doseData['status'] === 'Administered' ? 'Completed' : 'Scheduled';
-                    
-                    // Get item_id for this vaccination
-                    $vaccineItemId = null;
-                    
-                    // If dose is administered, try to deduct stock
-                    if ($vaccStatus === 'Completed' && $vaccine_name) {
-                        // Try to find the vaccine in inventory
-                        $vaccineItemId = getVaccineItemId($conn, $vaccine_name);
-                        
-                        // If found, deduct stock (1 vial per dose)
-                        if ($vaccineItemId) {
-                            $deductResult = deductVaccineStock(
-                                $conn, 
-                                $vaccineItemId, 
-                                $logged_branch_id, 
-                                1, // 1 vial per dose
-                                $logged_user_id, 
-                                $caseId, 
-                                $doseNum,
-                                $vaccine_name . " Dose #$doseNum"
-                            );
-                            
-                            if (!$deductResult['success']) {
-                                // Log the error but don't block vaccination recording
-                                $stock_deduction_errors[] = $vaccine_name . " Dose #$doseNum: " . $deductResult['error'];
-                                error_log("Stock deduction failed for vaccine $vaccine_name: " . $deductResult['error']);
-                                auditLog($conn, $logged_user_id, "WARNING: Stock deduction failed for $vaccine_name - " . $deductResult['error'], 'Vaccination Stock');
-                            }
-                        } else {
-                            $stock_deduction_errors[] = $vaccine_name . " not found in inventory system";
-                            auditLog($conn, $logged_user_id, "WARNING: Vaccine $vaccine_name not found in inventory", 'Vaccination Stock');
-                        }
-                    }
-                    
-                    // If vaccine item not found or not administered, use default
-                    if (!$vaccineItemId) {
-                        $vaccineItemId = 1; // Default fallback
-                    }
                     
                     $insertVacc->bind_param(
                         "iiisississ",
@@ -887,23 +718,12 @@ if ($action) {
                     $insertVacc->execute();
                 }
 
-                // Log stock deduction errors if any
-                if (!empty($stock_deduction_errors)) {
-                    $error_summary = "Stock deduction warnings: " . implode("; ", $stock_deduction_errors);
-                    auditLog($conn, $logged_user_id, $error_summary, 'Vaccination Stock Warnings');
-                }
-
                 $actionText = $caseId ? "Updated patient record: {$fullName} (Case: {$caseNo})" 
                                       : "Created new patient record: {$fullName} (Case: {$caseNo})";
                 auditLog($conn, $logged_user_id, $logged_branch_id, $actionText, 'Patient Record');
 
                 $conn->commit();
-                
-                $response = ['success' => true, 'case_id' => $caseId, 'case_no' => $caseNo];
-                if (!empty($stock_deduction_errors)) {
-                    $response['stock_warnings'] = $stock_deduction_errors;
-                }
-                jsonResponse($response);
+                jsonResponse(['success' => true, 'case_id' => $caseId, 'case_no' => $caseNo]);
 
             } catch (Exception $e) {
                 $conn->rollback();
@@ -1011,76 +831,6 @@ if ($action) {
                 jsonResponse($rows);
             } catch (Exception $e) {
                 jsonResponse(['error' => 'Failed to fetch history: ' . $e->getMessage()], 500);
-            }
-            break;
-
-        case 'check_vaccine_stock':
-            try {
-                $vaccine_name = trim($_GET['vaccine_name'] ?? '');
-                $dose_count = (int)($_GET['dose_count'] ?? 1);
-                
-                if (empty($vaccine_name)) {
-                    jsonResponse(['error' => 'Vaccine name is required'], 400);
-                }
-                
-                // Map vaccine names
-                $vaccineMap = [
-                    'SPEEDA' => 'SPEEDA',
-                    'ABHAYRAB' => 'ABHAYRAB',
-                    'ERIG' => 'ERIG',
-                    'ATS' => 'ATS',
-                    'BETT' => 'BETT',
-                    'ABHAYTOX' => 'ABHAYTOX'
-                ];
-                
-                $search_name = $vaccineMap[$vaccine_name] ?? $vaccine_name;
-                
-                // Find the item
-                $item_sql = "SELECT item_id, item_name, minimum_stock FROM inventory_items WHERE item_name LIKE ? AND is_predictable = 1";
-                $item_stmt = $conn->prepare($item_sql);
-                $search_param = "%" . $search_name . "%";
-                $item_stmt->bind_param("s", $search_param);
-                $item_stmt->execute();
-                $item_result = $item_stmt->get_result();
-                $item = $item_result->fetch_assoc();
-                $item_stmt->close();
-                
-                if (!$item) {
-                    jsonResponse(['success' => false, 'error' => 'Vaccine not found in inventory', 'available_stock' => 0]);
-                }
-                
-                // Get total stock
-                $stock_sql = "SELECT COALESCE(SUM(quantity_available), 0) as total, 
-                                     COUNT(*) as batch_count,
-                                     MIN(expiration_date) as earliest_expiry
-                              FROM inventory_stocks 
-                              WHERE item_id = ? AND branch_id = ? AND is_active = 1 AND quantity_available > 0";
-                $stock_stmt = $conn->prepare($stock_sql);
-                $stock_stmt->bind_param("is", $item['item_id'], $logged_branch_id);
-                $stock_stmt->execute();
-                $stock_result = $stock_stmt->get_result();
-                $stock_data = $stock_result->fetch_assoc();
-                $stock_stmt->close();
-                
-                $available = (int)($stock_data['total'] ?? 0);
-                $batch_count = (int)($stock_data['batch_count'] ?? 0);
-                $needed = $dose_count;
-                $min_stock = (int)($item['minimum_stock'] ?? 0);
-                
-                jsonResponse([
-                    'success' => true,
-                    'item_id' => $item['item_id'],
-                    'item_name' => $item['item_name'],
-                    'available_stock' => $available,
-                    'batch_count' => $batch_count,
-                    'needed' => $needed,
-                    'minimum_stock' => $min_stock,
-                    'has_sufficient_stock' => $available >= $needed,
-                    'is_low_stock' => $available > 0 && $available <= $min_stock,
-                    'earliest_expiry' => $stock_data['earliest_expiry'] ?? null
-                ]);
-            } catch (Exception $e) {
-                jsonResponse(['error' => 'Failed to check stock: ' . $e->getMessage()], 500);
             }
             break;
 
@@ -1255,15 +1005,53 @@ if ($action) {
         }
         .btn-success:hover { background: #1e7e34; }
 
+        /* Sort buttons styles */
+        .sort-area {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+
+        .sort-btn {
+            background: transparent;
+            border: 2px solid var(--gray-300);
+            color: var(--gray-600);
+            padding: 6px 14px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .sort-btn:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            background: rgba(43,58,140,0.05);
+        }
+
+        .sort-btn.active {
+            border-color: var(--primary);
+            background: var(--primary);
+            color: white;
+        }
+
+        .sort-btn .sort-icon {
+            font-size: 14px;
+        }
+
         .record-container {
             display: grid;
-            grid-template-columns: 280px 1fr;
+            grid-template-columns: 320px 1fr;
             gap: 24px;
         }
 
         @media (max-width: 992px) {
             .record-container {
-                grid-template-columns: 1fr;
+                grid-template-columns: 320px 1fr;
                 gap: 20px;
             }
         }
@@ -1311,11 +1099,12 @@ if ($action) {
         .calendar-panel .flatpickr-calendar.inline .flatpickr-day.selected {
             background: var(--primary);
             border-color: var(--primary);
+            color: #fff;
         }
 
         .calendar-panel .flatpickr-calendar.inline .flatpickr-day.today {
             border-color: var(--primary);
-            color: var(--primary);
+            color: #fff;
         }
 
         .calendar-panel .flatpickr-calendar.inline .flatpickr-day:hover {
@@ -1329,7 +1118,7 @@ if ($action) {
             justify-content: space-between;
             align-items: center;
             font-size: 14px;
-            color: var(--gray-600);
+            color: var(--gray-700);
         }
 
         .calendar-panel .date-stats .stat-badge {
@@ -1343,7 +1132,7 @@ if ($action) {
 
         .calendar-panel .date-stats .stat-badge.empty {
             background: var(--gray-300);
-            color: var(--gray-600);
+            color: var(--gray-700);
         }
 
         .table-panel {
@@ -1881,84 +1670,77 @@ if ($action) {
             resize: vertical;
         }
 
-        .stock-status-badge {
-            display: inline-block;
-            padding: 2px 10px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 600;
-            margin-left: 6px;
-        }
-
-        .stock-status-badge.available {
-            background: #d4edda;
-            color: #155724;
-        }
-
-        .stock-status-badge.low {
-            background: #fff3cd;
-            color: #856404;
-        }
-
-        .stock-status-badge.out-of-stock {
-            background: #f8d7da;
-            color: #721c24;
-        }
-
         #customVaccCategoryContainer {
             margin-top: 8px;
         }
 
-        .stock-warning-box {
-            background: #fff3cd;
-            border: 1px solid #ffc107;
-            border-radius: 8px;
-            padding: 12px 16px;
-            margin-bottom: 16px;
-            display: none;
+        /* Filter Dropdown Styles */
+        .filter-dropdown-container {
+            position: relative;
+            display: inline-block;
         }
 
-        .stock-warning-box.show {
+        .filter-dropdown-menu {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: white;
+            min-width: 200px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+            border-radius: 8px;
+            padding: 8px 0;
+            z-index: 1000;
+            margin-top: 4px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .filter-dropdown-menu.show {
             display: block;
         }
 
-        .stock-warning-box .warning-title {
-            font-weight: 700;
-            color: #856404;
-            font-size: 14px;
-        }
-
-        .stock-warning-box .warning-detail {
-            font-size: 13px;
-            color: #856404;
-            margin-top: 4px;
-        }
-
-        .stock-check-btn {
-            font-size: 12px;
-            padding: 2px 10px;
-            border-radius: 12px;
-            background: var(--gray-100);
-            border: 1px solid var(--gray-300);
-            color: var(--gray-700);
+        .filter-dropdown-menu .filter-item {
+            padding: 10px 20px;
             cursor: pointer;
-            transition: var(--transition);
+            transition: background 0.15s;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+            color: var(--gray-700);
         }
 
-        .stock-check-btn:hover {
-            background: var(--gray-200);
+        .filter-dropdown-menu .filter-item:hover {
+            background: var(--gray-100);
         }
 
-        .stock-check-btn.has-stock {
-            background: #d4edda;
-            border-color: #28a745;
-            color: #155724;
+        .filter-dropdown-menu .filter-item.active {
+            background: var(--primary);
+            color: white;
         }
 
-        .stock-check-btn.no-stock {
-            background: #f8d7da;
-            border-color: #dc3545;
-            color: #721c24;
+        .filter-dropdown-menu .filter-item .filter-icon {
+            font-size: 16px;
+        }
+
+        .filter-dropdown-menu .filter-item .filter-check {
+            margin-left: auto;
+            color: var(--primary);
+        }
+
+        .filter-dropdown-menu .filter-item.active .filter-check {
+            color: white;
+        }
+
+        .filter-badge {
+            display: inline-block;
+            background: var(--primary);
+            color: white;
+            border-radius: 20px;
+            padding: 2px 10px;
+            font-size: 11px;
+            font-weight: 700;
+            margin-left: 6px;
         }
 
         @media (max-width: 768px) {
@@ -2009,6 +1791,16 @@ if ($action) {
             .view-detail-label {
                 width: 100%;
             }
+            
+            .filter-dropdown-menu {
+                min-width: 160px;
+                right: 0;
+                left: auto;
+            }
+            
+            .sort-area {
+                flex-wrap: wrap;
+            }
         }
     </style>
 </head>
@@ -2052,9 +1844,38 @@ if ($action) {
                     <i class="bi bi-search"></i>
                     <input type="text" id="searchInput" placeholder="Search by Case No. or Patient Name...">
                 </div>
-                <button class="btn btn-outline" id="clearSearchBtn">
-                    <i class="bi bi-x-circle"></i> Clear
-                </button>
+                <!-- Filter Button with Dropdown -->
+                <div class="filter-dropdown-container">
+                    <button class="btn btn-outline" id="FilterBtn">
+                        <i class="bi bi-funnel-fill"></i> Filter <span id="filterBadge" class="filter-badge">All</span>
+                    </button>
+                    <div class="filter-dropdown-menu" id="filterDropdown">
+                        <div class="filter-item active" data-filter="all">
+                            <span class="filter-icon"><i class="bi bi-list-ul"></i></span>
+                            All Patients
+                            <span class="filter-check"><i class="bi bi-check-lg"></i></span>
+                        </div>
+                        <div class="filter-item" data-filter="pending">
+                            <span class="filter-icon"><i class="bi bi-clock-history"></i></span>
+                            Pending Vaccination
+                            <span class="filter-check"><i class="bi bi-check-lg"></i></span>
+                        </div>
+                        <div class="filter-item" data-filter="completed">
+                            <span class="filter-icon"><i class="bi bi-check-circle"></i></span>
+                            Completed Vaccination
+                            <span class="filter-check"><i class="bi bi-check-lg"></i></span>
+                        </div>
+                    </div>
+                </div>
+                <!-- Sort Buttons -->
+                <div class="sort-area">
+                    <button class="sort-btn active" id="sortDesc" data-sort="desc">
+                        <span class="sort-icon"><i class="bi bi-sort-down"></i></span> Newest First
+                    </button>
+                    <button class="sort-btn" id="sortAsc" data-sort="asc">
+                        <span class="sort-icon"><i class="bi bi-sort-up"></i></span> Oldest First
+                    </button>
+                </div>
             </div>
             <button class="btn" id="addPatientBtn">
                 <i class="bi bi-plus-circle"></i> Add New Patient
@@ -2065,7 +1886,7 @@ if ($action) {
             <!-- Calendar Panel -->
             <div class="calendar-panel">
                 <div class="panel-header">
-                    Admission Calendar 
+                    Follow-Up Calendar
                     <i class="bi bi-calendar3"></i>
                 </div>
                 <div id="calendarInline" style="padding: 8px 12px 4px;"></div>
@@ -2138,14 +1959,6 @@ if ($action) {
                         <div style="margin-top:8px;font-size:13px;color:var(--gray-600);">
                             <i class="bi bi-info-circle"></i> Adding a new case will create a new record for this patient.
                         </div>
-                    </div>
-
-                    <!-- Stock Warning Box -->
-                    <div id="stockWarningBox" class="stock-warning-box">
-                        <div class="warning-title">
-                            <i class="bi bi-exclamation-triangle-fill"></i> Stock Warning
-                        </div>
-                        <div class="warning-detail" id="stockWarningDetail"></div>
                     </div>
 
                     <form id="patientForm">
@@ -2309,13 +2122,7 @@ if ($action) {
 
                         <!-- Vaccination Schedule Section -->
                         <div id="scheduleSection">
-                            <div class="section-title">
-                                Vaccination Schedule
-                                <button type="button" class="btn btn-sm btn-outline-primary ms-2 stock-check-btn" id="checkStockBtn" title="Check vaccine stock availability">
-                                    <i class="bi bi-box-seam"></i> Check Stock
-                                </button>
-                                <span id="stockStatusBadge" style="display:none;"></span>
-                            </div>
+                            <div class="section-title">Vaccination Schedule</div>
                             
                             <div class="schedule-table-wrapper">
                                 <table class="schedule-table">
@@ -2435,7 +2242,8 @@ if ($action) {
     let deleteTargetCaseId = null;
     let allPatients = [];
     let isCheckingCaseNo = false;
-    let currentStockCheck = null;
+    let currentFilter = 'all';
+    let currentSort = 'desc';
 
     // Flatpickr instances
     let flatpickrInstances = [];
@@ -2499,60 +2307,6 @@ if ($action) {
         const parts = dateStr.split('-');
         if (parts.length !== 3) return '';
         return `${parts[1]}/${parts[2]}/${parts[0]}`;
-    }
-
-    // ============================================================
-    // STOCK CHECK FUNCTION
-    // ============================================================
-
-    async function checkVaccineStock(vaccineName, doseCount = 1) {
-        if (!vaccineName) return null;
-        try {
-            const url = `${apiBase}?action=check_vaccine_stock&vaccine_name=${encodeURIComponent(vaccineName)}&dose_count=${doseCount}`;
-            const res = await fetch(url);
-            const data = await res.json();
-            return data;
-        } catch (e) {
-            console.error('Error checking stock:', e);
-            return null;
-        }
-    }
-
-    function updateStockStatusDisplay(stockData) {
-        const badge = document.getElementById('stockStatusBadge');
-        const warningBox = document.getElementById('stockWarningBox');
-        const warningDetail = document.getElementById('stockWarningDetail');
-        
-        if (!stockData || !stockData.success) {
-            badge.style.display = 'none';
-            warningBox.classList.remove('show');
-            return;
-        }
-        
-        badge.style.display = 'inline-block';
-        
-        if (stockData.has_sufficient_stock) {
-            if (stockData.is_low_stock) {
-                badge.innerHTML = `<span class="stock-status-badge low">⚠️ Low Stock (${stockData.available_stock} left)</span>`;
-                warningBox.classList.add('show');
-                warningDetail.innerHTML = `
-                    <strong>Low Stock Warning:</strong> ${stockData.item_name} has only ${stockData.available_stock} units available. 
-                    Minimum threshold is ${stockData.minimum_stock}. Please reorder soon.
-                    ${stockData.earliest_expiry ? ` Earliest expiry: ${apiToFront(stockData.earliest_expiry)}` : ''}
-                `;
-            } else {
-                badge.innerHTML = `<span class="stock-status-badge available">✅ In Stock (${stockData.available_stock} available)</span>`;
-                warningBox.classList.remove('show');
-            }
-        } else {
-            badge.innerHTML = `<span class="stock-status-badge out-of-stock">❌ Out of Stock</span>`;
-            warningBox.classList.add('show');
-            warningDetail.innerHTML = `
-                <strong>Out of Stock Warning:</strong> ${stockData.item_name} has only ${stockData.available_stock} units available. 
-                You need ${stockData.needed} units for the administered doses.
-                ${stockData.earliest_expiry ? ` Earliest expiry: ${apiToFront(stockData.earliest_expiry)}` : ''}
-            `;
-        }
     }
 
     // ============================================================
@@ -2633,11 +2387,6 @@ if ($action) {
         } else {
             scheduleSection.style.display = 'block';
         }
-        
-        // Clear stock status when category changes
-        currentStockCheck = null;
-        document.getElementById('stockStatusBadge').style.display = 'none';
-        document.getElementById('stockWarningBox').classList.remove('show');
     }
 
     function renderScheduleTable(doseData = null) {
@@ -2709,8 +2458,6 @@ if ($action) {
                 }
                 this.className = `form-select form-select-sm status-select ${isAdministered ? 'status-administered' : 'status-pending'}`;
                 updateVaccinationSummary();
-                // Re-check stock when status changes
-                checkStockForCurrentRegimen();
             });
         });
         
@@ -2826,42 +2573,6 @@ if ($action) {
         } else {
             scheduleSection.style.display = 'block';
         }
-        currentStockCheck = null;
-        document.getElementById('stockStatusBadge').style.display = 'none';
-        document.getElementById('stockWarningBox').classList.remove('show');
-    }
-
-    // ============================================================
-    // STOCK CHECK FOR CURRENT REGIMEN
-    // ============================================================
-
-    async function checkStockForCurrentRegimen() {
-        const regimen = document.getElementById('activeRegimen').value;
-        const vaccineMap = {
-            'PVRV TRC SPEEDA': 'SPEEDA',
-            'PVRV TRC ABHAYRAB': 'ABHAYRAB'
-        };
-        const vaccineName = vaccineMap[regimen] || null;
-        
-        if (!vaccineName) {
-            document.getElementById('stockStatusBadge').style.display = 'none';
-            document.getElementById('stockWarningBox').classList.remove('show');
-            return;
-        }
-        
-        // Count administered doses
-        const doseData = getCurrentDoseData();
-        const administeredDoses = Object.values(doseData).filter(d => d.status === 'Administered').length;
-        
-        if (administeredDoses === 0) {
-            document.getElementById('stockStatusBadge').style.display = 'none';
-            document.getElementById('stockWarningBox').classList.remove('show');
-            return;
-        }
-        
-        const stockData = await checkVaccineStock(vaccineName, administeredDoses);
-        currentStockCheck = stockData;
-        updateStockStatusDisplay(stockData);
     }
 
     // ============================================================
@@ -2909,6 +2620,8 @@ if ($action) {
         let url = `${apiBase}?action=fetch`;
         if (dateApi) url += `&date=${encodeURIComponent(dateApi)}`;
         if (search) url += `&search=${encodeURIComponent(search)}`;
+        url += `&filter=${encodeURIComponent(currentFilter)}`;
+        url += `&sort=${encodeURIComponent(currentSort)}`;
         const res = await fetch(url);
         if (!res.ok) {
             const data = await res.json();
@@ -2919,10 +2632,23 @@ if ($action) {
 
     async function renderTable() {
         try {
+            // For 'all' filter, we want to show ALL patients - don't send date parameter
+            // For 'pending' and 'completed' filters, also show ALL patients
             let dateApi = '';
-            if (!searchTerm.trim()) {
-                dateApi = frontToApi(currentAdmissionDate);
+            
+            // Only send date when NOT using a filter (default view)
+            // When filter is 'all', we show ALL patients regardless of date
+            if (currentFilter === 'all' && !searchTerm.trim()) {
+                // Don't send date - show ALL patients
+                dateApi = '';
+            } else if (currentFilter !== 'all' && !searchTerm.trim()) {
+                // Don't send date for pending/completed filters - show ALL patients
+                dateApi = '';
+            } else if (currentFilter === 'all' && searchTerm.trim()) {
+                // Search with 'all' filter - search ALL patients
+                dateApi = '';
             }
+            
             allPatients = await fetchPatients(dateApi, searchTerm.trim());
 
             const total = allPatients.length;
@@ -2934,19 +2660,32 @@ if ($action) {
             document.getElementById('dateCountBadge').textContent = total + ' patient' + (total !== 1 ? 's' : '');
             document.getElementById('patientCountBadge').textContent = total;
             
-            const displayDate = dateApi ? new Date(dateApi + 'T00:00:00') : new Date();
-            const dateStr = displayDate.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' });
-            document.getElementById('selectedDateDisplay').textContent = dateStr || 'Select a date';
-            document.getElementById('selectedDateDisplay2').textContent = dateStr || 'Today';
+            // Update date display based on filter
+            let displayText = '';
+            if (currentFilter === 'all') {
+                displayText = 'All Patients';
+            } else if (currentFilter === 'pending') {
+                displayText = 'Pending Vaccination';
+            } else if (currentFilter === 'completed') {
+                displayText = 'Completed Vaccination';
+            } else {
+                displayText = 'All Patients';
+            }
+            
+            document.getElementById('selectedDateDisplay').textContent = displayText;
+            document.getElementById('selectedDateDisplay2').textContent = displayText;
 
             const tbody = document.getElementById('patientTableBody');
             if (items.length === 0) {
+                let message = 'No records found.';
+                if (currentFilter === 'pending') message = 'No patients with pending vaccination.';
+                if (currentFilter === 'completed') message = 'No patients with completed vaccination.';
                 tbody.innerHTML = `
                     <tr>
                         <td colspan="10">
                             <div class="no-records-msg">
                                 <i class="bi bi-inbox"></i>
-                                <p>No records found for this date.</p>
+                                <p>${message}</p>
                             </div>
                         </td>
                     </tr>
@@ -3020,10 +2759,15 @@ if ($action) {
             dateFormat: 'm/d/Y',
             defaultDate: currentAdmissionDate,
             onChange: function(selectedDates, dateStr) {
-                if (dateStr) {
+                if (dateStr && currentFilter === 'all') {
+                    // When 'all' filter is active, date selection shows ALL patients
+                    // We ignore the date for 'all' filter
                     currentAdmissionDate = dateStr;
                     currentPage = 1;
                     renderTable();
+                } else if (dateStr && currentFilter !== 'all') {
+                    // If filter is active, ignore calendar selection
+                    showToast('Filter is active. Click "All Patients" to view by date.', '', true);
                 }
             },
             monthSelectorType: 'dropdown',
@@ -3157,9 +2901,6 @@ if ($action) {
                     document.getElementById('historyPanel').style.display = 'none';
                 }
             }
-
-            // Check stock when editing
-            setTimeout(() => checkStockForCurrentRegimen(), 500);
 
             new bootstrap.Modal(document.getElementById('patientModal')).show();
         } catch (e) {
@@ -3321,48 +3062,6 @@ if ($action) {
             return;
         }
 
-        // Check stock before saving
-        const vaccineMap = {
-            'PVRV TRC SPEEDA': 'SPEEDA',
-            'PVRV TRC ABHAYRAB': 'ABHAYRAB'
-        };
-        const vaccineName = vaccineMap[formData.active_regimen] || null;
-        
-        // Count administered doses
-        const doseData = formData.vaccination_doses || {};
-        const administeredDoses = Object.values(doseData).filter(d => d.status === 'Administered').length;
-        
-        if (vaccineName && administeredDoses > 0) {
-            const stockCheck = await checkVaccineStock(vaccineName, administeredDoses);
-            if (stockCheck && stockCheck.success) {
-                if (!stockCheck.has_sufficient_stock) {
-                    const confirmSave = confirm(
-                        `⚠️ INSUFFICIENT STOCK!\n\n` +
-                        `Vaccine: ${vaccineName}\n` +
-                        `Available: ${stockCheck.available_stock} units\n` +
-                        `Needed: ${administeredDoses} doses\n` +
-                        `\nDo you want to continue saving the record anyway?\n` +
-                        `(Stock will NOT be deducted if insufficient)`
-                    );
-                    if (!confirmSave) {
-                        return;
-                    }
-                } else if (stockCheck.is_low_stock) {
-                    const confirmSave = confirm(
-                        `⚠️ LOW STOCK WARNING!\n\n` +
-                        `Vaccine: ${vaccineName}\n` +
-                        `Available: ${stockCheck.available_stock} units\n` +
-                        `Needed: ${administeredDoses} doses\n` +
-                        `Minimum threshold: ${stockCheck.minimum_stock}\n` +
-                        `\nDo you want to continue?`
-                    );
-                    if (!confirmSave) {
-                        return;
-                    }
-                }
-            }
-        }
-
         const saveBtn = this;
         const originalText = saveBtn.innerHTML;
         saveBtn.disabled = true;
@@ -3377,11 +3076,7 @@ if ($action) {
             const data = await res.json();
             if (data.success) {
                 bootstrap.Modal.getInstance(document.getElementById('patientModal')).hide();
-                let message = `Record saved successfully - Case #${data.case_no}`;
-                if (data.stock_warnings && data.stock_warnings.length > 0) {
-                    message += ' (⚠️ Stock warnings: ' + data.stock_warnings.join('; ') + ')';
-                }
-                showToast(message);
+                showToast('Record saved successfully', `Case #${data.case_no}`);
                 renderTable();
             } else {
                 throw new Error(data.error || 'Save failed');
@@ -3424,32 +3119,7 @@ if ($action) {
             scheduleSection.style.display = 'block';
         }
         
-        currentStockCheck = null;
-        document.getElementById('stockStatusBadge').style.display = 'none';
-        document.getElementById('stockWarningBox').classList.remove('show');
-        
         new bootstrap.Modal(document.getElementById('patientModal')).show();
-    });
-
-    // Stock check button
-    document.getElementById('checkStockBtn').addEventListener('click', async function() {
-        const btn = this;
-        const originalHtml = btn.innerHTML;
-        btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Checking...';
-        btn.disabled = true;
-        
-        await checkStockForCurrentRegimen();
-        
-        btn.innerHTML = originalHtml;
-        btn.disabled = false;
-        
-        if (currentStockCheck) {
-            if (currentStockCheck.has_sufficient_stock) {
-                showToast('Stock check complete', `${currentStockCheck.available_stock} units available`);
-            } else {
-                showToast('⚠️ Insufficient stock!', `${currentStockCheck.available_stock} units available, ${currentStockCheck.needed} needed`, true);
-            }
-        }
     });
 
     document.getElementById('searchInput').addEventListener('input', function() {
@@ -3458,11 +3128,96 @@ if ($action) {
         renderTable();
     });
 
-    document.getElementById('clearSearchBtn').addEventListener('click', () => {
-        document.getElementById('searchInput').value = '';
-        searchTerm = '';
+    // ----------------------------------------------------------------
+    // FILTER BUTTON FUNCTIONALITY
+    // ----------------------------------------------------------------
+    const filterBtn = document.getElementById('FilterBtn');
+    const filterDropdown = document.getElementById('filterDropdown');
+    const filterBadge = document.getElementById('filterBadge');
+    
+    // Toggle dropdown on button click
+    filterBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        filterDropdown.classList.toggle('show');
+    });
+    
+    // Close dropdown when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!filterBtn.contains(e.target) && !filterDropdown.contains(e.target)) {
+            filterDropdown.classList.remove('show');
+        }
+    });
+    
+    // Handle filter item selection
+    document.querySelectorAll('.filter-item').forEach(item => {
+        item.addEventListener('click', function() {
+            const filterValue = this.dataset.filter;
+            
+            // Update active state
+            document.querySelectorAll('.filter-item').forEach(el => {
+                el.classList.remove('active');
+            });
+            this.classList.add('active');
+            
+            // Update filter badge text
+            const filterText = this.textContent.trim();
+            filterBadge.textContent = filterText;
+            
+            // Store current filter
+            currentFilter = filterValue;
+            
+            // Close dropdown
+            filterDropdown.classList.remove('show');
+            
+            // Reset to page 1 and reload data
+            currentPage = 1;
+            renderTable();
+            
+            // Show toast notification
+            const statusMap = {
+                'all': 'Showing all patients (all dates)',
+                'pending': 'Showing pending vaccination patients (all dates)',
+                'completed': 'Showing completed vaccination patients (all dates)'
+            };
+            showToast(statusMap[filterValue] || filterValue);
+        });
+    });
+
+    // ----------------------------------------------------------------
+    // SORT BUTTON FUNCTIONALITY
+    // ----------------------------------------------------------------
+    const sortAscBtn = document.getElementById('sortAsc');
+    const sortDescBtn = document.getElementById('sortDesc');
+
+    function updateSortButtons(sortValue) {
+        // Remove active class from both
+        sortAscBtn.classList.remove('active');
+        sortDescBtn.classList.remove('active');
+        
+        // Add active class to the selected one
+        if (sortValue === 'asc') {
+            sortAscBtn.classList.add('active');
+        } else {
+            sortDescBtn.classList.add('active');
+        }
+    }
+
+    sortAscBtn.addEventListener('click', function() {
+        if (currentSort === 'asc') return; // Already active
+        currentSort = 'asc';
+        updateSortButtons('asc');
         currentPage = 1;
         renderTable();
+        showToast('Sorting: Oldest First');
+    });
+
+    sortDescBtn.addEventListener('click', function() {
+        if (currentSort === 'desc') return; // Already active
+        currentSort = 'desc';
+        updateSortButtons('desc');
+        currentPage = 1;
+        renderTable();
+        showToast('Sorting: Newest First');
     });
 
     document.getElementById('exportBtn').addEventListener('click', async function() {
@@ -3559,11 +3314,6 @@ if ($action) {
         updateScheduleBasedOnCategory();
     });
 
-    document.getElementById('activeRegimen').addEventListener('change', function() {
-        // Check stock when regimen changes
-        setTimeout(() => checkStockForCurrentRegimen(), 300);
-    });
-
     document.addEventListener('DOMContentLoaded', () => {
         initFlatpickrs();
         initCalendar();
@@ -3585,9 +3335,6 @@ if ($action) {
             document.getElementById('customVaccCategory').removeAttribute('required');
             document.getElementById('scheduleSection').style.display = 'block';
         }
-        
-        // Initial stock check
-        setTimeout(() => checkStockForCurrentRegimen(), 1000);
     });
     </script>
 </body>
