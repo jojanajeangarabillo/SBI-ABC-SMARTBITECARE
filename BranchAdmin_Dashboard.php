@@ -666,13 +666,7 @@ $username = $userInfo['username'] ?? 'Admin';
                     </div>
                 </div>
 
-                <div class="col-lg-4 col-md-6">
-                    <div class="stat-card" style="border-left: 4px solid #17a2b8;">
-                        <div class="stat-number info"><?php echo number_format($stats['total_vaccinations']); ?></div>
-                        <div class="stat-label">Total Vaccinations</div>
-                        <div class="stat-description">All vaccination records</div>
-                    </div>
-                </div>
+                
             </div>
 
             <!-- Charts Row -->

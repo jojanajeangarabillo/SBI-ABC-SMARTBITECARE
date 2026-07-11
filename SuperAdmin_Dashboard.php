@@ -517,18 +517,6 @@ $today_data = $today_result->fetch_assoc();
                 </div>
             </div>
 
-            <!-- Total Vaccinations -->
-            <div class="col-lg-4 col-md-6">
-                <div class="stat-card">
-                    <div class="stat-title"><i class="bi bi-syringe me-2"></i>Total Vaccinations</div>
-                    <div class="stat-number"><?php echo number_format($vaccinations_data['total_vaccinations'] ?? 0); ?></div>
-                    <div class="stat-sub">
-                        <span class="text-success"><?php echo $vaccinations_data['completed_vaccinations'] ?? 0; ?> Completed</span> | 
-                        <span class="text-warning"><?php echo $vaccinations_data['scheduled_vaccinations'] ?? 0; ?> Scheduled</span>
-                    </div>
-                </div>
-            </div>
-
             <!-- Total Inventory Items -->
             <div class="col-lg-4 col-md-6">
                 <div class="stat-card">

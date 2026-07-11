@@ -101,6 +101,7 @@ $limit = 10;
 $offset = ($page - 1) * $limit;
 
 // Build the query for patients with their cases
+// Always show all patients from the branch, regardless of case status
 $whereConditions = "p.branch_id = ?";
 $params = [$branchId];
 $types = "s";
@@ -115,16 +116,17 @@ if (!empty($search)) {
     $types .= "ssss";
 }
 
+// Apply status filter only if a specific status is selected (not "All")
 if (!empty($statusFilter)) {
     $whereConditions .= " AND ac.case_status = ?";
     $params[] = $statusFilter;
     $types .= "s";
 }
 
-// Get total count for pagination
+// Get total count for pagination - Count ALL patients from the branch
 $countQuery = "SELECT COUNT(DISTINCT p.patient_id) as total 
                FROM patients p 
-               LEFT JOIN animal_bite_cases ac ON p.patient_id = ac.patient_id 
+               LEFT JOIN animal_bite_cases ac ON p.patient_id = ac.patient_id AND ac.branch_id = p.branch_id
                WHERE $whereConditions";
 $stmt = $conn->prepare($countQuery);
 $stmt->bind_param($types, ...$params);
@@ -133,7 +135,7 @@ $countResult = $stmt->get_result();
 $totalRecords = $countResult->fetch_assoc()['total'];
 $totalPages = ceil($totalRecords / $limit);
 
-// Get patients data with their latest case
+// Get patients data with their latest case - Show ALL patients from branch
 $query = "SELECT 
             p.patient_id,
             p.full_name,
@@ -156,7 +158,7 @@ $query = "SELECT
             ac.admin_staff_id
           FROM patients p
           LEFT JOIN branches b ON p.branch_id = b.branch_id
-          LEFT JOIN animal_bite_cases ac ON p.patient_id = ac.patient_id 
+          LEFT JOIN animal_bite_cases ac ON p.patient_id = ac.patient_id AND ac.branch_id = p.branch_id
           WHERE $whereConditions
           GROUP BY p.patient_id
           ORDER BY p.created_at DESC
@@ -171,9 +173,16 @@ $stmt->bind_param($types, ...$params);
 $stmt->execute();
 $patients = $stmt->get_result();
 
-// Get all distinct statuses for filter
-$statusQuery = "SELECT DISTINCT case_status FROM animal_bite_cases WHERE case_status IS NOT NULL";
-$statusResult = $conn->query($statusQuery);
+// Get all distinct statuses for filter (from the branch's cases)
+$statusQuery = "SELECT DISTINCT ac.case_status 
+                FROM animal_bite_cases ac 
+                INNER JOIN patients p ON ac.patient_id = p.patient_id 
+                WHERE p.branch_id = ? AND ac.case_status IS NOT NULL
+                ORDER BY ac.case_status";
+$stmt = $conn->prepare($statusQuery);
+$stmt->bind_param("s", $branchId);
+$stmt->execute();
+$statusResult = $stmt->get_result();
 
 // Get branch name
 $branchQuery = "SELECT branch_name FROM branches WHERE branch_id = ?";
@@ -780,6 +789,26 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
         .modal-loading .spinner-border {
             color: var(--primary);
         }
+
+        /* Filter info badge */
+        .filter-info {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: #f1f4f9;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            color: #1e293b;
+        }
+
+        .filter-info .badge {
+            background: var(--primary);
+            color: white;
+            font-size: 11px;
+            padding: 3px 10px;
+            border-radius: 12px;
+        }
     </style>
 </head>
 <body>
@@ -827,7 +856,26 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
         </div>
 
         <div class="content-wrapper">
-            
+            <!-- Branch Info & Stats -->
+            <div class="branch-info">
+                
+                <span class="total-patients">
+                    <i class="bi bi-people me-1"></i> 
+                    Total Patients: <strong><?php echo $totalRecords; ?></strong>
+                </span>
+                <?php if (!empty($statusFilter)): ?>
+                    <span class="filter-info">
+                        <i class="bi bi-funnel"></i> 
+                        Filtered by: <span class="badge"><?php echo htmlspecialchars($statusFilter); ?></span>
+                    </span>
+                <?php endif; ?>
+                <?php if (!empty($search)): ?>
+                    <span class="filter-info">
+                        <i class="bi bi-search"></i> 
+                        Searching: <span class="badge"><?php echo htmlspecialchars($search); ?></span>
+                    </span>
+                <?php endif; ?>
+            </div>
 
             <!-- Filter Section -->
             <div class="page-header">
@@ -850,16 +898,20 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
                         <?php endif; ?>
                         <select name="status" onchange="this.form.submit()">
                             <option value="">All Statuses</option>
-                            <?php while ($status = $statusResult->fetch_assoc()): ?>
+                            <?php 
+                            // Reset the status result pointer for display
+                            $statusResult->data_seek(0);
+                            while ($status = $statusResult->fetch_assoc()): 
+                            ?>
                                 <option value="<?php echo htmlspecialchars($status['case_status']); ?>" 
                                     <?php echo $statusFilter == $status['case_status'] ? 'selected' : ''; ?>>
-                                    <?php echo htmlspecialchars($status['case_status'] ?: 'No Status'); ?>
+                                    <?php echo htmlspecialchars($status['case_status']); ?>
                                 </option>
                             <?php endwhile; ?>
                         </select>
                         <?php if (!empty($search) || !empty($statusFilter)): ?>
                             <a href="BranchAdmin_PatientMonitoring.php" class="btn-clear">
-                                <i class="bi bi-x-circle"></i> Clear
+                                <i class="bi bi-x-circle"></i> Clear All
                             </a>
                         <?php endif; ?>
                         <a href="BranchAdmin_PatientMonitoring.php" class="btn-refresh">

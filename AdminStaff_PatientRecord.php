@@ -103,14 +103,12 @@ function jsonResponse($data, int $code = 200) {
 }
 
 function caseNoExists(mysqli $conn, string $caseNo, ?int $excludeCaseId = null): bool {
-    $sql = "SELECT r.registry_id FROM registry_records r 
-            JOIN animal_bite_cases c ON r.case_id = c.case_id
-            WHERE r.registry_number = ?";
+    $sql = "SELECT case_id FROM animal_bite_cases WHERE case_number = ? AND is_archived = 0";
     $params = [$caseNo];
     $types = "s";
     
     if ($excludeCaseId) {
-        $sql .= " AND c.case_id != ?";
+        $sql .= " AND case_id != ?";
         $params[] = $excludeCaseId;
         $types .= "i";
     }
@@ -148,7 +146,6 @@ function validatePatientData(array $data): array {
     return $errors;
 }
 
-// THIS FUNCTION MUST BE DEFINED HERE BEFORE AJAX HANDLERS
 function getDosesForCategory(string $category, string $route): array {
     switch ($category) {
         case 'Pre-Exposure Prophylaxis (PrEP)':
@@ -168,6 +165,210 @@ function getDosesForCategory(string $category, string $route): array {
     }
 }
 
+// Function to archive a case with all related records
+function archiveCase(mysqli $conn, int $caseId, int $userId, string $branchId, string $archiveReason = 'Archived by user'): bool {
+    try {
+        $conn->begin_transaction();
+        
+        // 1. Archive animal_bite_cases
+        $stmt = $conn->prepare("
+            INSERT INTO animal_bite_cases_archive 
+            (case_id, case_number, patient_id, branch_id, animal_type, bite_location, bite_category, 
+             animal_status, date_of_bite, case_status, remarks, admin_staff_id, created_at, 
+             archived_at, archived_by, archive_reason, original_case_id)
+            SELECT case_id, case_number, patient_id, branch_id, animal_type, bite_location, bite_category,
+                   animal_status, date_of_bite, case_status, remarks, admin_staff_id, created_at,
+                   NOW(), ?, ?, ?
+            FROM animal_bite_cases 
+            WHERE case_id = ? AND branch_id = ?
+        ");
+        $stmt->bind_param("iiss", $userId, $archiveReason, $caseId, $branchId);
+        $stmt->execute();
+        
+        // 2. Archive registry_records
+        $stmt = $conn->prepare("
+            INSERT INTO registry_records_archive 
+            (registry_id, case_id, branch_id, created_by, created_at, registry_number, status_of_biting_animal,
+             erig, ats, tt, active_regimen, vaccine_item_id, vaccine_unit_id, dose_d0, dose_d3, dose_d7,
+             dose_d14, dose_d21, dose_d28_30, booster, contact_number, remarks, updated_by, updated_at,
+             archived_at, archived_by, archive_reason, original_registry_id)
+            SELECT registry_id, case_id, branch_id, created_by, created_at, registry_number, status_of_biting_animal,
+                   erig, ats, tt, active_regimen, vaccine_item_id, vaccine_unit_id, dose_d0, dose_d3, dose_d7,
+                   dose_d14, dose_d21, dose_d28_30, booster, contact_number, remarks, updated_by, updated_at,
+                   NOW(), ?, ?, ?
+            FROM registry_records 
+            WHERE case_id = ?
+        ");
+        $stmt->bind_param("isi", $userId, $archiveReason, $caseId);
+        $stmt->execute();
+        
+        // 3. Archive vaccination_records
+        $stmt = $conn->prepare("
+            INSERT INTO vaccination_records_archive 
+            (vaccination_id, patient_id, case_id, item_id, vaccine_name, unit_id, branch_id,
+             dose_number, date_administered, scheduled_date, administered_at, next_schedule,
+             vaccination_status, is_final_dose, remarks, nurse_id, created_at,
+             archived_at, archived_by, archive_reason, original_vaccination_id)
+            SELECT vaccination_id, patient_id, case_id, item_id, vaccine_name, unit_id, branch_id,
+                   dose_number, date_administered, scheduled_date, administered_at, next_schedule,
+                   vaccination_status, is_final_dose, remarks, nurse_id, created_at,
+                   NOW(), ?, ?, ?
+            FROM vaccination_records 
+            WHERE case_id = ? AND branch_id = ?
+        ");
+        $stmt->bind_param("iss", $userId, $archiveReason, $caseId, $branchId);
+        $stmt->execute();
+        
+        // 4. Archive philhealth_records
+        $stmt = $conn->prepare("
+            INSERT INTO philhealth_records_archive 
+            (philhealth_record_id, case_id, has_philhealth, philhealth_membership, status,
+             remarks, updated_by, updated_at, archived_at, archived_by, archive_reason,
+             original_philhealth_record_id)
+            SELECT philhealth_record_id, case_id, has_philhealth, philhealth_membership, status,
+                   remarks, updated_by, updated_at, NOW(), ?, ?, ?
+            FROM philhealth_records 
+            WHERE case_id = ?
+        ");
+        $stmt->bind_param("isi", $userId, $archiveReason, $caseId);
+        $stmt->execute();
+        
+        // 5. Archive registry_patients
+        $stmt = $conn->prepare("
+            INSERT INTO registry_patients_archive 
+            (registry_patient_id, registry_id, patient_id, case_id, relationship_type,
+             created_at, archived_at, archived_by, archive_reason, original_registry_patient_id)
+            SELECT registry_patient_id, registry_id, patient_id, case_id, relationship_type,
+                   created_at, NOW(), ?, ?, ?
+            FROM registry_patients 
+            WHERE case_id = ?
+        ");
+        $stmt->bind_param("isi", $userId, $archiveReason, $caseId);
+        $stmt->execute();
+        
+        // 6. Archive registry_vaccination_doses
+        $stmt = $conn->prepare("
+            INSERT INTO registry_vaccination_doses_archive 
+            (dose_id, registry_id, patient_id, vaccination_id, dose_number, vaccine_name,
+             vaccine_item_id, unit_id, scheduled_date, date_administered, administered_by,
+             status, remarks, created_at, updated_at, archived_at, archived_by, archive_reason,
+             original_dose_id)
+            SELECT dose_id, registry_id, patient_id, vaccination_id, dose_number, vaccine_name,
+                   vaccine_item_id, unit_id, scheduled_date, date_administered, administered_by,
+                   status, remarks, created_at, updated_at, NOW(), ?, ?, ?
+            FROM registry_vaccination_doses 
+            WHERE registry_id IN (SELECT registry_id FROM registry_records WHERE case_id = ?)
+        ");
+        $stmt->bind_param("isi", $userId, $archiveReason, $caseId);
+        $stmt->execute();
+        
+        // 7. Archive patients (if not already archived)
+        // First get the patient_id from the case
+        $patientStmt = $conn->prepare("SELECT patient_id FROM animal_bite_cases WHERE case_id = ?");
+        $patientStmt->bind_param("i", $caseId);
+        $patientStmt->execute();
+        $patientResult = $patientStmt->get_result();
+        $patientRow = $patientResult->fetch_assoc();
+        $patientId = $patientRow['patient_id'] ?? 0;
+        
+        if ($patientId > 0) {
+            // Check if patient is already archived
+            $checkStmt = $conn->prepare("SELECT is_archived FROM patients WHERE patient_id = ?");
+            $checkStmt->bind_param("i", $patientId);
+            $checkStmt->execute();
+            $checkResult = $checkStmt->get_result();
+            $checkRow = $checkResult->fetch_assoc();
+            
+            if ($checkRow && $checkRow['is_archived'] == 0) {
+                // Archive the patient
+                $stmt = $conn->prepare("
+                    INSERT INTO patients_archive 
+                    (patient_id, full_name, email, contact_number, birthday, gender, address,
+                     branch_id, created_at, archived_at, archived_by, archive_reason,
+                     original_patient_id)
+                    SELECT patient_id, full_name, email, contact_number, birthday, gender, address,
+                           branch_id, created_at, NOW(), ?, ?, ?
+                    FROM patients 
+                    WHERE patient_id = ?
+                ");
+                $stmt->bind_param("isi", $userId, $archiveReason, $patientId);
+                $stmt->execute();
+                
+                // Mark patient as archived
+                $updateStmt = $conn->prepare("
+                    UPDATE patients 
+                    SET is_archived = 1, archived_at = NOW(), archived_by = ? 
+                    WHERE patient_id = ?
+                ");
+                $updateStmt->bind_param("ii", $userId, $patientId);
+                $updateStmt->execute();
+            }
+        }
+        
+        // 8. Mark all related records as archived in the main tables
+        // Update animal_bite_cases
+        $updateStmt = $conn->prepare("
+            UPDATE animal_bite_cases 
+            SET is_archived = 1, archived_at = NOW(), archived_by = ? 
+            WHERE case_id = ? AND branch_id = ?
+        ");
+        $updateStmt->bind_param("iis", $userId, $caseId, $branchId);
+        $updateStmt->execute();
+        
+        // Update registry_records
+        $updateStmt = $conn->prepare("
+            UPDATE registry_records 
+            SET is_archived = 1, archived_at = NOW(), archived_by = ? 
+            WHERE case_id = ?
+        ");
+        $updateStmt->bind_param("ii", $userId, $caseId);
+        $updateStmt->execute();
+        
+        // Update vaccination_records
+        $updateStmt = $conn->prepare("
+            UPDATE vaccination_records 
+            SET is_archived = 1, archived_at = NOW(), archived_by = ? 
+            WHERE case_id = ? AND branch_id = ?
+        ");
+        $updateStmt->bind_param("iis", $userId, $caseId, $branchId);
+        $updateStmt->execute();
+        
+        // Update philhealth_records
+        $updateStmt = $conn->prepare("
+            UPDATE philhealth_records 
+            SET is_archived = 1, archived_at = NOW(), archived_by = ? 
+            WHERE case_id = ?
+        ");
+        $updateStmt->bind_param("ii", $userId, $caseId);
+        $updateStmt->execute();
+        
+        // Update registry_patients
+        $updateStmt = $conn->prepare("
+            UPDATE registry_patients 
+            SET is_archived = 1, archived_at = NOW(), archived_by = ? 
+            WHERE case_id = ?
+        ");
+        $updateStmt->bind_param("ii", $userId, $caseId);
+        $updateStmt->execute();
+        
+        // Update registry_vaccination_doses
+        $updateStmt = $conn->prepare("
+            UPDATE registry_vaccination_doses 
+            SET is_archived = 1, archived_at = NOW(), archived_by = ? 
+            WHERE registry_id IN (SELECT registry_id FROM registry_records WHERE case_id = ?)
+        ");
+        $updateStmt->bind_param("ii", $userId, $caseId);
+        $updateStmt->execute();
+        
+        $conn->commit();
+        return true;
+        
+    } catch (Exception $e) {
+        $conn->rollback();
+        throw $e;
+    }
+}
+
 // ----------------------------------------------------------------------
 // AJAX HANDLERS
 // ----------------------------------------------------------------------
@@ -182,48 +383,34 @@ if ($action) {
                 $filter = $_GET['filter'] ?? 'all';
                 $sort = $_GET['sort'] ?? 'desc';
                 
-                // Check if filter is 'all' - this means show ALL patients regardless of date
-                $isFilterAll = ($filter === 'all');
-                $isFilterPending = ($filter === 'pending');
-                $isFilterCompleted = ($filter === 'completed');
-                
-                $where = "WHERE c.branch_id = ?";
+                $where = "WHERE c.branch_id = ? AND c.is_archived = 0";
                 $params = [$logged_branch_id];
                 $types = "s";
                 
-                // IMPORTANT: For 'all' filter, DO NOT add date condition - show ALL records
-                // For 'pending' and 'completed' filters, also show ALL records (no date filter)
-                // Only apply date filter when NO filter is active (i.e., when not using filter dropdown)
-                // The frontend sends filter='all' when "All Patients" is selected
-                // We should treat filter='all' as "show all patients without date restriction"
-                if ($filter === 'all' && !empty($date)) {
-                    // When 'all' filter is selected, we ignore the date parameter
-                    // to show ALL patients across all dates
-                    // Do NOT add date condition
-                } else if ($filter === 'all' && empty($date)) {
-                    // Also show ALL patients when no date is provided
-                    // Do NOT add date condition
-                } else if ($filter !== 'all' && !empty($date)) {
+                // For 'all' filter, show ALL patients regardless of date
+                $isFilterAll = ($filter === 'all');
+                
+                if (!$isFilterAll && !empty($date)) {
                     // Only apply date filter when NOT using the filter dropdown
-                    // This is for the default view (no filter selected)
                     $where .= " AND DATE(c.created_at) = ?";
                     $params[] = $date;
                     $types .= "s";
                 }
                 
                 if ($search !== '') {
-                    $where .= " AND (p.full_name LIKE ? OR r.registry_number LIKE ?)";
+                    $where .= " AND (p.full_name LIKE ? OR c.case_number LIKE ? OR r.registry_number LIKE ?)";
                     $params[] = "%$search%";
                     $params[] = "%$search%";
-                    $types .= "ss";
+                    $params[] = "%$search%";
+                    $types .= "sss";
                 }
 
-                // Determine order by based on sort parameter
                 $orderBy = ($sort === 'asc') ? 'ASC' : 'DESC';
 
                 $sql = "
                     SELECT 
                         c.case_id,
+                        c.case_number,
                         p.patient_id,
                         p.full_name AS patient_name,
                         p.contact_number,
@@ -268,7 +455,7 @@ if ($action) {
                     $doseStmt = $conn->prepare("
                         SELECT dose_number, date_administered, vaccination_status
                         FROM vaccination_records
-                        WHERE case_id = ? AND branch_id = ?
+                        WHERE case_id = ? AND branch_id = ? AND is_archived = 0
                         ORDER BY dose_number
                     ");
                     $doseStmt->bind_param("is", $row['case_id'], $logged_branch_id);
@@ -295,9 +482,7 @@ if ($action) {
                         }
                     }
 
-                    // Determine vaccination status
                     $vaccStatus = 'Pending';
-                    // Check if all doses are completed (at least d0, d3, d7, d14)
                     $hasD0 = !empty($schedule['d0']);
                     $hasD3 = !empty($schedule['d3']);
                     $hasD7 = !empty($schedule['d7']);
@@ -317,7 +502,7 @@ if ($action) {
                     $resultArray[] = [
                         'case_id' => $row['case_id'],
                         'patient_id' => $row['patient_id'],
-                        'case_no' => $row['registry_number'] ?? '',
+                        'case_no' => $row['case_number'] ?? $row['registry_number'] ?? '',
                         'patient_name' => $row['patient_name'],
                         'contact_number' => $row['contact_number'] ?? '',
                         'dob' => dbToFrontDate($row['birthday']),
@@ -345,7 +530,6 @@ if ($action) {
                     ];
                 }
 
-                // Apply filter on the result array (pending/completed)
                 if ($filter === 'pending') {
                     $resultArray = array_filter($resultArray, function($item) {
                         return $item['vaccination_status'] === 'Pending' || $item['vaccination_status'] === 'In Progress';
@@ -355,11 +539,8 @@ if ($action) {
                         return $item['vaccination_status'] === 'Completed';
                     });
                 }
-                // 'all' filter - return all results (no filtering)
 
-                // Re-index array after filtering
                 $resultArray = array_values($resultArray);
-                
                 jsonResponse($resultArray);
             } catch (Exception $e) {
                 jsonResponse(['error' => 'Failed to fetch patients: ' . $e->getMessage()], 500);
@@ -386,7 +567,7 @@ if ($action) {
                     JOIN patients p ON c.patient_id = p.patient_id
                     LEFT JOIN registry_records r ON c.case_id = r.case_id
                     LEFT JOIN philhealth_records ph ON c.case_id = ph.case_id
-                    WHERE c.case_id = ? AND c.branch_id = ?
+                    WHERE c.case_id = ? AND c.branch_id = ? AND c.is_archived = 0
                 ");
                 $stmt->bind_param("is", $caseId, $logged_branch_id);
                 $stmt->execute();
@@ -400,7 +581,7 @@ if ($action) {
                 $doseStmt = $conn->prepare("
                     SELECT dose_number, scheduled_date, date_administered, vaccination_status 
                     FROM vaccination_records 
-                    WHERE case_id = ? AND branch_id = ?
+                    WHERE case_id = ? AND branch_id = ? AND is_archived = 0
                     ORDER BY dose_number
                 ");
                 $doseStmt->bind_param("is", $caseId, $logged_branch_id);
@@ -433,11 +614,11 @@ if ($action) {
                 $vaccStatus = $completedDoses >= 6 ? 'Completed' : 'In Progress';
 
                 $historyStmt = $conn->prepare("
-                    SELECT c.case_id, r.registry_number AS case_no, c.created_at, 
+                    SELECT c.case_id, c.case_number, r.registry_number AS case_no, c.created_at, 
                            DATE(c.created_at) AS admit_date, c.case_status
                     FROM animal_bite_cases c
                     LEFT JOIN registry_records r ON c.case_id = r.case_id
-                    WHERE c.patient_id = ? AND c.case_id != ?
+                    WHERE c.patient_id = ? AND c.case_id != ? AND c.is_archived = 0
                     ORDER BY c.created_at DESC
                 ");
                 $historyStmt->bind_param("ii", $row['patient_id'], $caseId);
@@ -453,7 +634,7 @@ if ($action) {
                 $details = [
                     'case_id' => $row['case_id'],
                     'patient_id' => $row['patient_id'],
-                    'case_no' => $row['registry_number'] ?? '',
+                    'case_no' => $row['case_number'] ?? $row['registry_number'] ?? '',
                     'patient_name' => $row['full_name'],
                     'address' => $row['address'] ?? '',
                     'dob' => dbToFrontDate($row['birthday']),
@@ -508,7 +689,6 @@ if ($action) {
                 $gender = $input['gender'] ?? '';
                 $address = trim($input['address'] ?? '');
                 $contact = trim($input['contact_number'] ?? '');
-                $admitDate = frontToDbDate($input['admission_date'] ?? '');
                 $biteDate = frontToDbDate($input['date_of_bite'] ?? '');
                 $siteBite = trim($input['site_of_bite'] ?? '');
                 $animal = trim($input['biting_animal'] ?? '');
@@ -535,7 +715,7 @@ if ($action) {
 
                 // 1) Handle patient
                 if ($patientId) {
-                    $checkStmt = $conn->prepare("SELECT patient_id FROM patients WHERE patient_id = ? AND branch_id = ?");
+                    $checkStmt = $conn->prepare("SELECT patient_id FROM patients WHERE patient_id = ? AND branch_id = ? AND is_archived = 0");
                     $checkStmt->bind_param("is", $patientId, $logged_branch_id);
                     $checkStmt->execute();
                     $checkResult = $checkStmt->get_result();
@@ -546,7 +726,7 @@ if ($action) {
                     $upd = $conn->prepare("
                         UPDATE patients 
                         SET full_name=?, contact_number=?, birthday=?, gender=?, address=? 
-                        WHERE patient_id=? AND branch_id=?
+                        WHERE patient_id=? AND branch_id=? AND is_archived = 0
                     ");
                     $upd->bind_param("sssssis", $fullName, $contact, $dob, $gender, $address, $patientId, $logged_branch_id);
                     $upd->execute();
@@ -562,7 +742,7 @@ if ($action) {
 
                 // 2) Handle animal_bite_cases
                 if ($caseId) {
-                    $checkCase = $conn->prepare("SELECT case_id FROM animal_bite_cases WHERE case_id = ? AND branch_id = ?");
+                    $checkCase = $conn->prepare("SELECT case_id FROM animal_bite_cases WHERE case_id = ? AND branch_id = ? AND is_archived = 0");
                     $checkCase->bind_param("is", $caseId, $logged_branch_id);
                     $checkCase->execute();
                     $checkCaseResult = $checkCase->get_result();
@@ -572,30 +752,30 @@ if ($action) {
                     
                     $updCase = $conn->prepare("
                         UPDATE animal_bite_cases 
-                        SET animal_type=?, bite_location=?, animal_status=?, date_of_bite=?,
+                        SET case_number=?, animal_type=?, bite_location=?, animal_status=?, date_of_bite=?,
                             admin_staff_id=?
-                        WHERE case_id=? AND branch_id=?
+                        WHERE case_id=? AND branch_id=? AND is_archived = 0
                     ");
-                    $updCase->bind_param("sssssis", $animal, $siteBite, $animalStat, $biteDate, 
+                    $updCase->bind_param("ssssssis", $caseNo, $animal, $siteBite, $animalStat, $biteDate, 
                         $logged_user_id, $caseId, $logged_branch_id);
                     $updCase->execute();
                 } else {
                     $insCase = $conn->prepare("
                         INSERT INTO animal_bite_cases 
-                        (patient_id, branch_id, animal_type, bite_location, animal_status, date_of_bite, 
+                        (case_number, patient_id, branch_id, animal_type, bite_location, animal_status, date_of_bite, 
                          case_status, admin_staff_id) 
-                        VALUES (?,?,?,?,?,?,?,?)
+                        VALUES (?,?,?,?,?,?,?,?,?)
                     ");
                     $caseStatus = 'Ongoing';
-                    $insCase->bind_param("issssssi", 
-                        $patientId, $logged_branch_id, $animal, $siteBite, $animalStat, 
+                    $insCase->bind_param("sissssssi", 
+                        $caseNo, $patientId, $logged_branch_id, $animal, $siteBite, $animalStat, 
                         $biteDate, $caseStatus, $logged_user_id);
                     $insCase->execute();
                     $caseId = (int) $conn->insert_id;
                 }
 
                 // 3) Handle registry_records
-                $regExists = $conn->prepare("SELECT registry_id FROM registry_records WHERE case_id=?");
+                $regExists = $conn->prepare("SELECT registry_id FROM registry_records WHERE case_id=? AND is_archived = 0");
                 $regExists->bind_param("i", $caseId);
                 $regExists->execute();
                 $regResult = $regExists->get_result();
@@ -618,7 +798,7 @@ if ($action) {
                             active_regimen=?, dose_d0=?, dose_d3=?, dose_d7=?, dose_d14=?, 
                             dose_d21=?, dose_d28_30=?, booster=?, contact_number=?, 
                             updated_by=?, updated_at=NOW() 
-                        WHERE registry_id=?
+                        WHERE registry_id=? AND is_archived = 0
                     ");
                     $updReg->bind_param("ssdiisiiiiiiissi", 
                         $caseNo, $animalStat, $erigMl, $ats, $tt, $regimen, 
@@ -641,8 +821,8 @@ if ($action) {
                     $insReg->execute();
                 }
 
-                // 4) Handle philhealth_records - FIXED to match database schema
-                $phExists = $conn->prepare("SELECT philhealth_record_id FROM philhealth_records WHERE case_id=?");
+                // 4) Handle philhealth_records
+                $phExists = $conn->prepare("SELECT philhealth_record_id FROM philhealth_records WHERE case_id=? AND is_archived = 0");
                 $phExists->bind_param("i", $caseId);
                 $phExists->execute();
                 $phResult = $phExists->get_result();
@@ -657,7 +837,7 @@ if ($action) {
                         UPDATE philhealth_records 
                         SET has_philhealth=?, philhealth_membership=?, status=?, 
                             updated_by=?, updated_at=NOW() 
-                        WHERE philhealth_record_id=?
+                        WHERE philhealth_record_id=? AND is_archived = 0
                     ");
                     $updPh->bind_param("sssii", $dbHasPhilhealth, $dbPhilhealthMembership, $status, 
                         $logged_user_id, $phRecId);
@@ -673,8 +853,8 @@ if ($action) {
                     $insPh->execute();
                 }
 
-                // 5) Handle vaccination_records - FIXED to include scheduled_date
-                $delVacc = $conn->prepare("DELETE FROM vaccination_records WHERE case_id=? AND branch_id=?");
+                // 5) Handle vaccination_records
+                $delVacc = $conn->prepare("DELETE FROM vaccination_records WHERE case_id=? AND branch_id=? AND is_archived = 0");
                 $delVacc->bind_param("is", $caseId, $logged_branch_id);
                 $delVacc->execute();
                 
@@ -731,62 +911,46 @@ if ($action) {
             }
             break;
 
-        case 'delete':
-            try {
-                $caseId = (int) ($_GET['case_id'] ?? 0);
-                if ($caseId <= 0) {
-                    jsonResponse(['error' => 'Invalid case ID'], 400);
-                }
+        case 'archive':
+    try {
+        $caseId = (int) ($_GET['case_id'] ?? 0);
+        $archiveReason = trim($_GET['reason'] ?? 'Archived by user');
+        
+        if ($caseId <= 0) {
+            jsonResponse(['error' => 'Invalid case ID'], 400);
+        }
 
-                $conn->begin_transaction();
+        // Check if the case exists and is not archived
+        $caseStmt = $conn->prepare("
+            SELECT c.case_id, p.full_name, c.case_number, r.registry_number 
+            FROM animal_bite_cases c
+            JOIN patients p ON c.patient_id = p.patient_id
+            LEFT JOIN registry_records r ON c.case_id = r.case_id
+            WHERE c.case_id = ? AND c.branch_id = ? AND c.is_archived = 0
+        ");
+        $caseStmt->bind_param("is", $caseId, $logged_branch_id);
+        $caseStmt->execute();
+        $caseResult = $caseStmt->get_result();
+        $caseData = $caseResult->fetch_assoc();
+        
+        if (!$caseData) {
+            throw new Exception("Record not found or already archived.");
+        }
 
-                $caseStmt = $conn->prepare("
-                    SELECT c.case_id, p.full_name, r.registry_number 
-                    FROM animal_bite_cases c
-                    JOIN patients p ON c.patient_id = p.patient_id
-                    LEFT JOIN registry_records r ON c.case_id = r.case_id
-                    WHERE c.case_id = ? AND c.branch_id = ?
-                ");
-                $caseStmt->bind_param("is", $caseId, $logged_branch_id);
-                $caseStmt->execute();
-                $caseResult = $caseStmt->get_result();
-                $caseData = $caseResult->fetch_assoc();
-                
-                if (!$caseData) {
-                    throw new Exception("Record not found or access denied.");
-                }
+        // Archive the case
+        archiveCase($conn, $caseId, $logged_user_id, $logged_branch_id, $archiveReason);
 
-                $delDoc = $conn->prepare("DELETE FROM document_tracking WHERE case_id=?");
-                $delDoc->bind_param("i", $caseId);
-                $delDoc->execute();
+        // Get the case number from the data, fallback to registry_number if case_number is empty
+        $caseNumber = !empty($caseData['case_number']) ? $caseData['case_number'] : ($caseData['registry_number'] ?? '');
+        $actionText = "Archived patient record: {$caseData['full_name']} (Case: {$caseNumber})";
+        auditLog($conn, $logged_user_id, $logged_branch_id, $actionText, 'Patient Record');
 
-                $delVacc = $conn->prepare("DELETE FROM vaccination_records WHERE case_id=? AND branch_id=?");
-                $delVacc->bind_param("is", $caseId, $logged_branch_id);
-                $delVacc->execute();
+        jsonResponse(['success' => true]);
 
-                $delPhil = $conn->prepare("DELETE FROM philhealth_records WHERE case_id=?");
-                $delPhil->bind_param("i", $caseId);
-                $delPhil->execute();
-
-                $delReg = $conn->prepare("DELETE FROM registry_records WHERE case_id=?");
-                $delReg->bind_param("i", $caseId);
-                $delReg->execute();
-
-                $delCase = $conn->prepare("DELETE FROM animal_bite_cases WHERE case_id=? AND branch_id=?");
-                $delCase->bind_param("is", $caseId, $logged_branch_id);
-                $delCase->execute();
-
-                $actionText = "Deleted patient record: {$caseData['full_name']} (Case: {$caseData['registry_number']})";
-                auditLog($conn, $logged_user_id, $logged_branch_id, $actionText, 'Patient Record');
-
-                $conn->commit();
-                jsonResponse(['success' => true]);
-
-            } catch (Exception $e) {
-                $conn->rollback();
-                jsonResponse(['error' => $e->getMessage()], 500);
-            }
-            break;
+    } catch (Exception $e) {
+        jsonResponse(['error' => $e->getMessage()], 500);
+    }
+    break;
 
         case 'check_case_no':
             try {
@@ -809,11 +973,11 @@ if ($action) {
                     jsonResponse([]);
                 }
                 $stmt = $conn->prepare("
-                    SELECT c.case_id, r.registry_number AS case_no, 
+                    SELECT c.case_id, c.case_number, r.registry_number AS case_no, 
                            DATE(c.created_at) AS admit_date, c.case_status
                     FROM animal_bite_cases c
                     LEFT JOIN registry_records r ON c.case_id = r.case_id
-                    WHERE c.patient_id = ? AND c.branch_id = ?
+                    WHERE c.patient_id = ? AND c.branch_id = ? AND c.is_archived = 0
                     ORDER BY c.created_at DESC
                 ");
                 $stmt->bind_param("is", $patientId, $logged_branch_id);
@@ -823,7 +987,7 @@ if ($action) {
                 while ($row = $result->fetch_assoc()) {
                     $rows[] = [
                         'case_id' => $row['case_id'],
-                        'case_no' => $row['case_no'] ?? '',
+                        'case_no' => $row['case_number'] ?? $row['case_no'] ?? '',
                         'admit_date' => dbToFrontDate($row['admit_date']),
                         'status' => $row['case_status'] ?? 'Ongoing',
                     ];
@@ -1005,7 +1169,11 @@ if ($action) {
         }
         .btn-success:hover { background: #1e7e34; }
 
-        /* Sort buttons styles */
+        .btn-danger {
+            background: #dc3545;
+        }
+        .btn-danger:hover { background: #b02a37; }
+
         .sort-area {
             display: flex;
             gap: 6px;
@@ -1280,6 +1448,11 @@ if ($action) {
             background: rgba(255,193,7,0.12);
         }
 
+        .action-icons i.bi-archive:hover {
+            color: #6c757d;
+            background: rgba(108,117,125,0.12);
+        }
+
         .pagination {
             display: flex;
             justify-content: center;
@@ -1311,7 +1484,6 @@ if ($action) {
             border-color: var(--primary);
         }
 
-        /* Modal Styles */
         .modal-content {
             border-radius: var(--radius);
             border: none;
@@ -1486,7 +1658,6 @@ if ($action) {
             color: var(--gray-900);
         }
 
-        /* Vaccination Schedule Styles */
         .schedule-table-wrapper {
             background: #fff;
             border: 1px solid #e0e0e0;
@@ -1674,7 +1845,6 @@ if ($action) {
             margin-top: 8px;
         }
 
-        /* Filter Dropdown Styles */
         .filter-dropdown-container {
             position: relative;
             display: inline-block;
@@ -2202,22 +2372,26 @@ if ($action) {
         </div>
     </div>
 
-    <!-- Delete Confirmation Modal -->
-    <div class="modal fade" id="deleteModal" tabindex="-1" aria-hidden="true">
+    <!-- Archive Confirmation Modal -->
+    <div class="modal fade" id="archiveModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-sm">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">Confirm Delete</h5>
+                    <h5 class="modal-title">Confirm Archive</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
-                    <p>Are you sure you want to delete this record?</p>
-                    <p class="text-danger" id="deletePatientName"></p>
-                    <p class="text-warning"><small>This action cannot be undone.</small></p>
+                    <p>Are you sure you want to archive this record?</p>
+                    <p class="text-danger" id="archivePatientName"></p>
+                    <div class="mb-3">
+                        <label class="form-label">Archive Reason</label>
+                        <input type="text" class="form-control" id="archiveReason" placeholder="Optional reason for archiving" value="Archived by user">
+                    </div>
+                    <p class="text-warning"><small>This record will be moved to archive and can be restored later if needed.</small></p>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-danger" id="confirmDeleteBtn">Delete</button>
+                    <button type="button" class="btn btn-warning" id="confirmArchiveBtn">Archive</button>
                 </div>
             </div>
         </div>
@@ -2239,7 +2413,7 @@ if ($action) {
     let currentPage = 1;
     const pageSize = 8;
     let searchTerm = '';
-    let deleteTargetCaseId = null;
+    let archiveTargetCaseId = null;
     let allPatients = [];
     let isCheckingCaseNo = false;
     let currentFilter = 'all';
@@ -2258,7 +2432,6 @@ if ($action) {
         { key: 'd28', label: 'D28/30', doseNum: 6 }
     ];
 
-    // Store dose data for current patient
     let currentDoseData = {};
     let currentDoseKeys = [];
 
@@ -2275,7 +2448,6 @@ if ($action) {
         });
     }
 
-    // Toast notification
     function showToast(msg, sub = '', isError = false) {
         const container = document.getElementById('toastContainer');
         const toast = document.createElement('div');
@@ -2293,7 +2465,6 @@ if ($action) {
         }, 3500);
     }
 
-    // Convert frontend date (m/d/Y) to Y-m-d for API
     function frontToApi(dateStr) {
         if (!dateStr) return '';
         const parts = dateStr.split('/');
@@ -2301,17 +2472,12 @@ if ($action) {
         return `${parts[2]}-${parts[0].padStart(2,'0')}-${parts[1].padStart(2,'0')}`;
     }
 
-    // Convert Y-m-d to m/d/Y
     function apiToFront(dateStr) {
         if (!dateStr) return '';
         const parts = dateStr.split('-');
         if (parts.length !== 3) return '';
         return `${parts[1]}/${parts[2]}/${parts[0]}`;
     }
-
-    // ============================================================
-    // VACCINATION SCHEDULE FUNCTIONS
-    // ============================================================
 
     function getDoseKeysForCategory(category, route) {
         switch (category) {
@@ -2575,10 +2741,6 @@ if ($action) {
         }
     }
 
-    // ============================================================
-    // END VACCINATION SCHEDULE FUNCTIONS
-    // ============================================================
-
     async function checkCaseNo(caseNo, excludeId = null) {
         if (!caseNo || caseNo.trim() === '') return false;
         let url = `${apiBase}?action=check_case_no&case_no=${encodeURIComponent(caseNo.trim())}`;
@@ -2632,20 +2794,13 @@ if ($action) {
 
     async function renderTable() {
         try {
-            // For 'all' filter, we want to show ALL patients - don't send date parameter
-            // For 'pending' and 'completed' filters, also show ALL patients
             let dateApi = '';
             
-            // Only send date when NOT using a filter (default view)
-            // When filter is 'all', we show ALL patients regardless of date
             if (currentFilter === 'all' && !searchTerm.trim()) {
-                // Don't send date - show ALL patients
                 dateApi = '';
             } else if (currentFilter !== 'all' && !searchTerm.trim()) {
-                // Don't send date for pending/completed filters - show ALL patients
                 dateApi = '';
             } else if (currentFilter === 'all' && searchTerm.trim()) {
-                // Search with 'all' filter - search ALL patients
                 dateApi = '';
             }
             
@@ -2660,7 +2815,6 @@ if ($action) {
             document.getElementById('dateCountBadge').textContent = total + ' patient' + (total !== 1 ? 's' : '');
             document.getElementById('patientCountBadge').textContent = total;
             
-            // Update date display based on filter
             let displayText = '';
             if (currentFilter === 'all') {
                 displayText = 'All Patients';
@@ -2714,7 +2868,7 @@ if ($action) {
                                 <div class="action-icons">
                                     <i class="bi bi-eye" data-action="view" data-case="${p.case_id}" title="View"></i>
                                     <i class="bi bi-pencil" data-action="edit" data-case="${p.case_id}" title="Edit"></i>
-                                    <i class="bi bi-trash" data-action="delete" data-case="${p.case_id}" title="Delete"></i>
+                                    <i class="bi bi-archive" data-action="archive" data-case="${p.case_id}" title="Archive"></i>
                                 </div>
                             </td>
                         </tr>
@@ -2728,7 +2882,7 @@ if ($action) {
                         const caseId = parseInt(this.dataset.case);
                         if (action === 'view') viewPatient(caseId);
                         else if (action === 'edit') editPatient(caseId);
-                        else if (action === 'delete') confirmDelete(caseId);
+                        else if (action === 'archive') confirmArchive(caseId);
                     });
                 });
             }
@@ -2760,13 +2914,10 @@ if ($action) {
             defaultDate: currentAdmissionDate,
             onChange: function(selectedDates, dateStr) {
                 if (dateStr && currentFilter === 'all') {
-                    // When 'all' filter is active, date selection shows ALL patients
-                    // We ignore the date for 'all' filter
                     currentAdmissionDate = dateStr;
                     currentPage = 1;
                     renderTable();
                 } else if (dateStr && currentFilter !== 'all') {
-                    // If filter is active, ignore calendar selection
                     showToast('Filter is active. Click "All Patients" to view by date.', '', true);
                 }
             },
@@ -2908,31 +3059,35 @@ if ($action) {
         }
     }
 
-    function confirmDelete(caseId) {
-        deleteTargetCaseId = caseId;
+    function confirmArchive(caseId) {
+        archiveTargetCaseId = caseId;
         const patient = allPatients.find(p => p.case_id === caseId);
-        document.getElementById('deletePatientName').textContent = patient ? 
+        document.getElementById('archivePatientName').textContent = patient ? 
             `Patient: ${patient.patient_name} (Case: ${patient.case_no})` : 
             `Case ID: ${caseId}`;
-        new bootstrap.Modal(document.getElementById('deleteModal')).show();
+        document.getElementById('archiveReason').value = 'Archived by user';
+        new bootstrap.Modal(document.getElementById('archiveModal')).show();
     }
 
-    document.getElementById('confirmDeleteBtn').addEventListener('click', async function() {
-        if (!deleteTargetCaseId) return;
+    document.getElementById('confirmArchiveBtn').addEventListener('click', async function() {
+        if (!archiveTargetCaseId) return;
+        
+        const reason = document.getElementById('archiveReason').value.trim() || 'Archived by user';
+        
         try {
-            const res = await fetch(`${apiBase}?action=delete&case_id=${deleteTargetCaseId}`, { method: 'POST' });
+            const res = await fetch(`${apiBase}?action=archive&case_id=${archiveTargetCaseId}&reason=${encodeURIComponent(reason)}`, { method: 'POST' });
             const data = await res.json();
             if (data.success) {
-                bootstrap.Modal.getInstance(document.getElementById('deleteModal')).hide();
-                showToast('Record deleted successfully');
+                bootstrap.Modal.getInstance(document.getElementById('archiveModal')).hide();
+                showToast('Record archived successfully');
                 renderTable();
             } else {
-                throw new Error(data.error || 'Delete failed');
+                throw new Error(data.error || 'Archive failed');
             }
         } catch (e) {
-            showToast('Error deleting record', e.message, true);
+            showToast('Error archiving record', e.message, true);
         } finally {
-            deleteTargetCaseId = null;
+            archiveTargetCaseId = null;
         }
     });
 
@@ -3128,52 +3283,41 @@ if ($action) {
         renderTable();
     });
 
-    // ----------------------------------------------------------------
-    // FILTER BUTTON FUNCTIONALITY
-    // ----------------------------------------------------------------
+    // Filter Button Functionality
     const filterBtn = document.getElementById('FilterBtn');
     const filterDropdown = document.getElementById('filterDropdown');
     const filterBadge = document.getElementById('filterBadge');
     
-    // Toggle dropdown on button click
     filterBtn.addEventListener('click', function(e) {
         e.stopPropagation();
         filterDropdown.classList.toggle('show');
     });
     
-    // Close dropdown when clicking outside
     document.addEventListener('click', function(e) {
         if (!filterBtn.contains(e.target) && !filterDropdown.contains(e.target)) {
             filterDropdown.classList.remove('show');
         }
     });
     
-    // Handle filter item selection
     document.querySelectorAll('.filter-item').forEach(item => {
         item.addEventListener('click', function() {
             const filterValue = this.dataset.filter;
             
-            // Update active state
             document.querySelectorAll('.filter-item').forEach(el => {
                 el.classList.remove('active');
             });
             this.classList.add('active');
             
-            // Update filter badge text
             const filterText = this.textContent.trim();
             filterBadge.textContent = filterText;
             
-            // Store current filter
             currentFilter = filterValue;
             
-            // Close dropdown
             filterDropdown.classList.remove('show');
             
-            // Reset to page 1 and reload data
             currentPage = 1;
             renderTable();
             
-            // Show toast notification
             const statusMap = {
                 'all': 'Showing all patients (all dates)',
                 'pending': 'Showing pending vaccination patients (all dates)',
@@ -3183,18 +3327,14 @@ if ($action) {
         });
     });
 
-    // ----------------------------------------------------------------
-    // SORT BUTTON FUNCTIONALITY
-    // ----------------------------------------------------------------
+    // Sort Button Functionality
     const sortAscBtn = document.getElementById('sortAsc');
     const sortDescBtn = document.getElementById('sortDesc');
 
     function updateSortButtons(sortValue) {
-        // Remove active class from both
         sortAscBtn.classList.remove('active');
         sortDescBtn.classList.remove('active');
         
-        // Add active class to the selected one
         if (sortValue === 'asc') {
             sortAscBtn.classList.add('active');
         } else {
@@ -3203,7 +3343,7 @@ if ($action) {
     }
 
     sortAscBtn.addEventListener('click', function() {
-        if (currentSort === 'asc') return; // Already active
+        if (currentSort === 'asc') return;
         currentSort = 'asc';
         updateSortButtons('asc');
         currentPage = 1;
@@ -3212,7 +3352,7 @@ if ($action) {
     });
 
     sortDescBtn.addEventListener('click', function() {
-        if (currentSort === 'desc') return; // Already active
+        if (currentSort === 'desc') return;
         currentSort = 'desc';
         updateSortButtons('desc');
         currentPage = 1;
