@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Jul 11, 2026 at 04:20 PM
+-- Generation Time: Jul 17, 2026 at 12:21 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -342,7 +342,65 @@ INSERT INTO `audit_logs` (`log_id`, `user_id`, `branch_id`, `action`, `module`, 
 (247, 16, 'SBI-002', 'Updated patient record: Jean Lacerna (Case: 26-0018)', 'Patient Record', '2026-07-11 13:55:33'),
 (248, 16, 'SBI-002', 'Updated patient record: Coco (Case: 26-0017)', 'Patient Record', '2026-07-11 13:56:00'),
 (249, 16, 'SBI-002', 'Updated patient record: Coco (Case: 26-0017)', 'Patient Record', '2026-07-11 13:56:51'),
-(250, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch (IP: ::1)', 'Login System', '2026-07-11 14:05:15');
+(250, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch (IP: ::1)', 'Login System', '2026-07-11 14:05:15'),
+(251, 16, 'SBI-002', 'Logout: User \'Ella Franco\' (Role: Administrative Staff) (IP: ::1)', 'Login System', '2026-07-11 14:21:01'),
+(252, 16, 'SBI-002', 'Login Success: User \'Ella Franco\' - Role: Administrative Staff, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-11 14:21:12'),
+(253, 6, 'SBI-002', 'Logout: User \'Jojana Garabillo\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-07-11 14:21:19'),
+(254, 9, 'SBI-002', 'Logout: User \'Marc Beringuela\' (Role: Nurse) (IP: ::1)', 'Login System', '2026-07-11 14:21:23'),
+(255, 11, 'SBI-002', 'Logout: User \'Jean Montero\' (Role: Inventory Officer) (IP: ::1)', 'Login System', '2026-07-11 14:21:38'),
+(256, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-11 14:21:56'),
+(257, 6, 'SBI-002', 'Logout: User \'Jojana Garabillo\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-07-11 14:22:02'),
+(258, 1, 'SBI-001', 'Logout: User \'superadmin\' (Role: Super Admin) (IP: ::1)', 'Login System', '2026-07-11 14:22:11'),
+(259, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch (IP: ::1)', 'Login System', '2026-07-11 23:44:04'),
+(260, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-11 23:45:26'),
+(261, 1, 'SBI-001', 'Logout: User \'superadmin\' (Role: Super Admin) (IP: ::1)', 'Login System', '2026-07-11 23:58:10'),
+(262, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-11 23:58:34'),
+(263, 16, 'SBI-002', 'Login Success: User \'Ella Franco\' - Role: Administrative Staff, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-11 23:59:16'),
+(264, 11, 'SBI-002', 'Login Success: User \'Jean Montero\' - Role: Inventory Officer, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-11 23:59:52'),
+(265, 9, 'SBI-002', 'Login Success: User \'Marc Beringuela\' - Role: Nurse, Branch: Cainta Branch (IP: ::1)', 'Login System', '2026-07-12 00:00:39'),
+(266, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch (IP: ::1)', 'Login System', '2026-07-12 00:02:08'),
+(267, 1, 'SBI-001', 'Logout: User \'superadmin\' (Role: Super Admin) (IP: ::1)', 'Login System', '2026-07-12 00:02:20'),
+(268, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch (IP: ::1)', 'Login System', '2026-07-12 00:10:12'),
+(269, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-12 00:11:18'),
+(270, 6, 'SBI-002', 'Logout: User \'Jojana Garabillo\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-07-12 00:15:55'),
+(271, 16, 'SBI-002', 'Login Success: User \'Ella Franco\' - Role: Administrative Staff, Branch: Cainta Branch (IP: 127.0.0.1)', 'Login System', '2026-07-12 06:07:07'),
+(272, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch (IP: ::1)', 'Login System', '2026-07-15 14:10:52'),
+(273, 16, 'SBI-002', 'Logout: User \'Ella Franco\' (Role: Administrative Staff) (IP: ::1)', 'Login System', '2026-07-15 14:13:38'),
+(274, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-07-15 14:13:54'),
+(275, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-15 14:14:15'),
+(276, 9, 'SBI-002', 'Login Success: User \'Marc Beringuela\' - Role: Nurse, Branch: Cainta Branch', 'Login System', '2026-07-16 02:33:04'),
+(277, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 | Patient ID: 73 | Case ID: 67 | Quantity: 1 | Vaccination ID: 76', 'Vaccination', '2026-07-16 03:13:50'),
+(278, 16, 'SBI-002', 'Login Success: User \'Ella Franco\' - Role: Administrative Staff, Branch: Cainta Branch', 'Login System', '2026-07-16 03:17:39'),
+(279, 16, 'SBI-002', 'Updated patient record: Jean Lacerna (Case: 26-0018)', 'Patient Record', '2026-07-16 03:33:00'),
+(280, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 | Patient ID: 73 | Case ID: 67 | Quantity: 1 | Vaccination ID: 81', 'Vaccination', '2026-07-16 03:33:31'),
+(281, 9, 'SBI-002', 'Logout: User \'Marc Beringuela\' (Role: Nurse) (IP: ::1)', 'Login System', '2026-07-16 06:26:49'),
+(282, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-07-16 06:29:40'),
+(283, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-07-16 06:31:09'),
+(284, 9, 'SBI-002', 'Login Success: User \'Marc Beringuela\' - Role: Nurse, Branch: Cainta Branch', 'Login System', '2026-07-16 06:32:03'),
+(285, 11, 'SBI-002', 'Login Success: User \'Jean Montero\' - Role: Inventory Officer, Branch: Cainta Branch', 'Login System', '2026-07-16 06:32:55'),
+(286, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-16 06:40:26'),
+(287, 1, 'SBI-001', 'Logout: User \'superadmin\' (Role: Super Admin) (IP: ::1)', 'Login System', '2026-07-16 06:49:13'),
+(288, 9, 'SBI-002', 'Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 | Patient ID: 72 | Case ID: 66 | Quantity: 1 | Vaccination ID: 82', 'Vaccination', '2026-07-16 07:31:57'),
+(289, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-07-16 07:41:25'),
+(290, 16, 'SBI-002', 'Login Failed: User \'Ella Franco\' - Incorrect password', 'Login System', '2026-07-16 07:41:44'),
+(291, 16, 'SBI-002', 'Login Failed: User \'Ella Franco\' - Incorrect password', 'Login System', '2026-07-16 07:41:53'),
+(292, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-16 07:43:35'),
+(293, 1, 'SBI-001', 'Generated branch_admin report (pdf) - Branch: Cainta Branch, Date Range: 2026-06-16 to 2026-07-16', 'Reports', '2026-07-16 07:44:53'),
+(294, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-07-16 07:45:44'),
+(295, 6, 'SBI-002', 'Generated patient report - Branch: Cainta Branch, Date Range: 2026-06-16 to 2026-07-16', 'Reports', '2026-07-16 07:52:49'),
+(296, 1, 'SBI-001', 'Logout: User \'superadmin\' (Role: Super Admin) (IP: ::1)', 'Login System', '2026-07-16 08:31:16'),
+(297, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-07-17 07:18:28'),
+(298, 6, 'SBI-002', 'Login Failed: User \'Jojana Garabillo\' - Incorrect password', 'Login System', '2026-07-17 07:21:30'),
+(299, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-07-17 07:21:37'),
+(300, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-17 07:35:36'),
+(301, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-17 07:35:38'),
+(302, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Patients, Date: Last Month', 'Performance Monitoring', '2026-07-17 07:35:52'),
+(303, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-17 07:36:03'),
+(304, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-17 10:05:20'),
+(305, 16, 'SBI-002', 'Login Success: User \'Ella Franco\' - Role: Administrative Staff, Branch: Cainta Branch', 'Login System', '2026-07-17 10:19:18'),
+(306, 11, 'SBI-002', 'Login Failed: User \'Jean Montero\' - Incorrect password', 'Login System', '2026-07-17 10:19:53'),
+(307, 11, 'SBI-002', 'Login Success: User \'Jean Montero\' - Role: Inventory Officer, Branch: Cainta Branch', 'Login System', '2026-07-17 10:20:00'),
+(308, 9, 'SBI-002', 'Login Success: User \'Marc Beringuela\' - Role: Nurse, Branch: Cainta Branch', 'Login System', '2026-07-17 10:20:28');
 
 -- --------------------------------------------------------
 
@@ -456,8 +514,8 @@ CREATE TABLE `inventory_stocks` (
 --
 
 INSERT INTO `inventory_stocks` (`stock_id`, `item_id`, `branch_id`, `quantity_available`, `expiration_date`, `last_updated`) VALUES
-(1, 2, 'SBI-002', 20, '2027-07-11', '2026-07-11 12:16:00'),
-(2, 3, 'SBI-002', 30, '2028-01-11', '2026-07-11 12:16:00'),
+(1, 2, 'SBI-002', 17, '2027-07-11', '2026-07-16 03:33:31'),
+(2, 3, 'SBI-002', 29, '2028-01-11', '2026-07-16 07:31:57'),
 (3, 4, 'SBI-002', 50, '2028-07-11', '2026-07-11 12:16:00'),
 (4, 5, 'SBI-002', 100, '2027-07-11', '2026-07-11 12:16:00'),
 (5, 2, 'SBI-003', 15, '2027-07-11', '2026-07-11 12:16:00'),
@@ -488,6 +546,16 @@ CREATE TABLE `inventory_usage_history` (
   `patient_count` int(11) NOT NULL,
   `stock_received` int(11) DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `inventory_usage_history`
+--
+
+INSERT INTO `inventory_usage_history` (`usage_id`, `item_id`, `branch_id`, `usage_date`, `quantity_used`, `patient_count`, `stock_received`) VALUES
+(1, 2, 'SBI-002', '2026-07-16', 1, 1, 0),
+(3, 2, 'SBI-002', '2026-07-16', 1, 1, 0),
+(4, 2, 'SBI-002', '2026-07-16', 1, 1, 0),
+(5, 3, 'SBI-002', '2026-07-16', 1, 1, 0);
 
 -- --------------------------------------------------------
 
@@ -646,7 +714,7 @@ INSERT INTO `philhealth_records` (`philhealth_record_id`, `case_id`, `has_philhe
 (32, 64, 'No', NULL, '', NULL, 16, '2026-07-11 21:18:54', 0, NULL, NULL),
 (33, 65, 'No', NULL, '', NULL, 16, '2026-07-11 21:31:15', 0, NULL, NULL),
 (34, 66, 'No', NULL, '', NULL, 16, '2026-07-11 21:56:51', 0, NULL, NULL),
-(35, 67, 'No', NULL, '', NULL, 16, '2026-07-11 21:55:33', 0, NULL, NULL);
+(35, 67, 'No', NULL, '', NULL, 16, '2026-07-16 11:33:00', 0, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -779,7 +847,7 @@ INSERT INTO `registry_records` (`registry_id`, `case_id`, `branch_id`, `created_
 (32, 64, NULL, NULL, '2026-07-11 13:18:54', '26-0015', 'Alive/Healthy', 0.00, 0, 1, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '0942358332', NULL, 16, '2026-07-11 21:18:54', 0, NULL, NULL),
 (33, 65, NULL, NULL, '2026-07-11 13:31:15', '26-0016', 'Alive/Healthy', 5.00, 1, 1, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '0942312345', NULL, 16, '2026-07-11 21:31:15', 0, NULL, NULL),
 (34, 66, NULL, NULL, '2026-07-11 13:46:48', '26-0017', 'Alive/Healthy', 1.00, 1, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 1, 0, 0, 1, 1, '094235123456', NULL, 16, '2026-07-11 21:56:51', 0, NULL, NULL),
-(35, 67, NULL, NULL, '2026-07-11 13:55:33', '26-0018', 'Alive/Healthy', 0.00, 0, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '0942358234', NULL, 16, '2026-07-11 21:55:33', 0, NULL, NULL);
+(35, 67, NULL, NULL, '2026-07-11 13:55:33', '26-0018', 'Alive/Healthy', 0.00, 0, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '0942358234', NULL, 16, '2026-07-16 11:33:00', 0, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -915,6 +983,16 @@ CREATE TABLE `stock_transactions` (
   `transaction_date` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+--
+-- Dumping data for table `stock_transactions`
+--
+
+INSERT INTO `stock_transactions` (`transaction_id`, `item_id`, `user_id`, `vaccination_id`, `branch_id`, `transaction_type`, `quantity`, `remarks`, `transaction_date`) VALUES
+(1, 2, 9, 74, 'SBI-002', 'OUT', 1, 'Vaccination administered - Dose 1', '2026-07-16 02:57:38'),
+(3, 2, 9, 76, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 73 | Case ID: 67 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-16', '2026-07-16 03:13:50'),
+(4, 2, 9, 81, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 73 | Case ID: 67 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-16', '2026-07-16 03:33:31'),
+(5, 3, 9, 82, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-16', '2026-07-16 07:31:57');
+
 -- --------------------------------------------------------
 
 --
@@ -979,14 +1057,14 @@ CREATE TABLE `users` (
 --
 
 INSERT INTO `users` (`user_id`, `branch_id`, `role_id`, `username`, `email`, `password`, `status`, `created_at`, `last_login`) VALUES
-(1, 'SBI-001', 1, 'superadmin', 'garabillo_jojanajean@plpasig.edu.ph', '$2y$10$gTUuk2.GeUd5BNNryWGq8OhJWjQcdqk8rOMPUMJ1VkFaxc7eJajHe', 'Active', '2026-07-04 07:53:47', '2026-07-11 22:05:15'),
-(6, 'SBI-002', 2, 'Jojana Garabillo', 'jojanajeangarabillo@gmail.com', '$2y$10$Gundsv.vdvdqOT1M3VIcP.r/8y/MqzNxDPnxfh2qypFd44fL6xZta', 'Active', '2026-07-04 09:59:45', '2026-07-09 19:34:34'),
+(1, 'SBI-001', 1, 'superadmin', 'garabillo_jojanajean@plpasig.edu.ph', '$2y$10$gTUuk2.GeUd5BNNryWGq8OhJWjQcdqk8rOMPUMJ1VkFaxc7eJajHe', 'Active', '2026-07-04 07:53:47', '2026-07-17 15:18:28'),
+(6, 'SBI-002', 2, 'Jojana Garabillo', 'jojanajeangarabillo@gmail.com', '$2y$10$Gundsv.vdvdqOT1M3VIcP.r/8y/MqzNxDPnxfh2qypFd44fL6xZta', 'Active', '2026-07-04 09:59:45', '2026-07-17 15:21:37'),
 (8, 'SBI-002', 4, 'Shane Cacho', 'pam066198@gmail.com', '$2a$12$rfw67uNcLetmfn6M2Dv5e.ff49vAitKIHni3Q7iKV.zgMruHVfkIa', 'Active', '2026-07-04 14:41:02', '2026-07-09 10:09:42'),
-(9, 'SBI-002', 3, 'Marc Beringuela', 'ruberducky032518@gmail.com', '$2y$10$mRG5TnwyVCEkohLgsXiCe.INa226POltPF/0M4fYuXX8mq925V7kO', 'Active', '2026-07-04 14:55:07', '2026-07-09 20:05:12'),
-(11, 'SBI-002', 5, 'Jean Montero', 'joepatlacerna54@gmail.com', '$2y$10$ga5HM6WcD0wQSSvnpCAvue4UdqknCryN93mJVLatoI4GAiEDHctNO', 'Active', '2026-07-04 15:09:39', '2026-07-09 23:11:17'),
+(9, 'SBI-002', 3, 'Marc Beringuela', 'ruberducky032518@gmail.com', '$2y$10$mRG5TnwyVCEkohLgsXiCe.INa226POltPF/0M4fYuXX8mq925V7kO', 'Active', '2026-07-04 14:55:07', '2026-07-17 18:20:28'),
+(11, 'SBI-002', 5, 'Jean Montero', 'joepatlacerna54@gmail.com', '$2y$10$ga5HM6WcD0wQSSvnpCAvue4UdqknCryN93mJVLatoI4GAiEDHctNO', 'Active', '2026-07-04 15:09:39', '2026-07-17 18:20:00'),
 (14, 'SBI-003', 2, 'Joepat Lacerna', 'opat09252005@gmail.com', '$2y$10$JB4.S8HI8Zu.IbvLHuMhH.3mnmqmyWMdV4ID/nRxcotOs.tmdCasm', 'Active', '2026-07-05 11:56:22', '2026-07-05 20:04:06'),
 (15, 'SBI-003', 2, 'Mae Ben', 'sheyn.cacho@gmail.com', '$2y$10$knOsicB5IV6qD4SqIaF3WOBBnyrFDJYTknP8yqBSXlo35gIp8mLim', 'Active', '2026-07-05 16:19:46', '2026-07-09 19:33:48'),
-(16, 'SBI-002', 4, 'Ella Franco', 'cachosheyn@gmail.com', '$2y$10$lLv3F5B3Yu1QGQU1GkAbq./clNj/7RMlMH1noMMwNAqv/45mymWfm', 'Active', '2026-07-07 06:24:22', '2026-07-11 19:05:11');
+(16, 'SBI-002', 4, 'Ella Franco', 'cachosheyn@gmail.com', '$2y$10$lLv3F5B3Yu1QGQU1GkAbq./clNj/7RMlMH1noMMwNAqv/45mymWfm', 'Active', '2026-07-07 06:24:22', '2026-07-17 18:19:18');
 
 -- --------------------------------------------------------
 
@@ -1076,14 +1154,15 @@ INSERT INTO `vaccination_records` (`vaccination_id`, `patient_id`, `case_id`, `i
 (55, 71, 65, 1, NULL, NULL, 'SBI-002', 3, NULL, '2026-07-18', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
 (56, 71, 65, 1, NULL, NULL, 'SBI-002', 4, NULL, '2026-07-25', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
 (57, 71, 65, 1, NULL, NULL, 'SBI-002', 6, NULL, '2026-08-08', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
-(62, 73, 67, 1, NULL, NULL, 'SBI-002', 1, '2026-07-11', '2026-07-11', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:55:33'),
-(63, 73, 67, 1, NULL, NULL, 'SBI-002', 2, NULL, '2026-07-14', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:55:33'),
-(64, 73, 67, 1, NULL, NULL, 'SBI-002', 3, NULL, '2026-07-18', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:55:33'),
-(65, 73, 67, 1, NULL, NULL, 'SBI-002', 6, NULL, '2026-08-08', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:55:33'),
-(70, 72, 66, 1, NULL, NULL, 'SBI-002', 1, '2026-07-11', '2026-07-11', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:56:51'),
 (71, 72, 66, 1, NULL, NULL, 'SBI-002', 2, '2026-07-14', '2026-07-14', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:56:51'),
 (72, 72, 66, 1, NULL, NULL, 'SBI-002', 3, '2026-07-18', '2026-07-18', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:56:51'),
-(73, 72, 66, 1, NULL, NULL, 'SBI-002', 6, '2026-08-08', '2026-08-08', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:56:51');
+(73, 72, 66, 1, NULL, NULL, 'SBI-002', 6, '2026-08-08', '2026-08-08', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:56:51'),
+(77, 73, 67, 1, NULL, NULL, 'SBI-002', 1, '2026-07-16', '2026-07-16', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-16 03:33:00'),
+(78, 73, 67, 1, NULL, NULL, 'SBI-002', 2, NULL, '2026-07-19', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-16 03:33:00'),
+(79, 73, 67, 1, NULL, NULL, 'SBI-002', 3, NULL, '2026-07-23', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-16 03:33:00'),
+(80, 73, 67, 1, NULL, NULL, 'SBI-002', 6, NULL, '2026-08-13', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-16 03:33:00'),
+(81, 73, 67, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 1, '2026-07-16', NULL, 'Cainta Branch', NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-07-16 03:33:31'),
+(82, 72, 66, 3, 'ATS (Anti-Tetanus Serum)', 5, 'SBI-002', 1, '2026-07-16', NULL, 'Cainta Branch', NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-07-16 07:31:56');
 
 -- --------------------------------------------------------
 
@@ -1114,6 +1193,36 @@ CREATE TABLE `vaccination_records_archive` (
   `archived_by` int(11) NOT NULL,
   `archive_reason` varchar(255) DEFAULT NULL,
   `original_vaccination_id` int(11) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `vaccination_sessions`
+--
+
+CREATE TABLE `vaccination_sessions` (
+  `session_id` int(11) NOT NULL,
+  `patient_id` int(11) NOT NULL,
+  `case_id` int(11) NOT NULL,
+  `dose_number` int(11) NOT NULL,
+  `administration_date` date NOT NULL,
+  `nurse_id` int(11) NOT NULL,
+  `remarks` text DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `vaccination_session_items`
+--
+
+CREATE TABLE `vaccination_session_items` (
+  `item_id_pk` int(11) NOT NULL,
+  `session_id` int(11) NOT NULL,
+  `inventory_item_id` int(11) NOT NULL,
+  `quantity` int(11) NOT NULL DEFAULT 1
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -1400,6 +1509,18 @@ ALTER TABLE `vaccination_records_archive`
   ADD KEY `archived_by` (`archived_by`);
 
 --
+-- Indexes for table `vaccination_sessions`
+--
+ALTER TABLE `vaccination_sessions`
+  ADD PRIMARY KEY (`session_id`);
+
+--
+-- Indexes for table `vaccination_session_items`
+--
+ALTER TABLE `vaccination_session_items`
+  ADD PRIMARY KEY (`item_id_pk`);
+
+--
 -- AUTO_INCREMENT for dumped tables
 --
 
@@ -1419,7 +1540,7 @@ ALTER TABLE `animal_bite_cases_archive`
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `log_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=251;
+  MODIFY `log_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=309;
 
 --
 -- AUTO_INCREMENT for table `document_tracking`
@@ -1449,7 +1570,7 @@ ALTER TABLE `inventory_stocks`
 -- AUTO_INCREMENT for table `inventory_usage_history`
 --
 ALTER TABLE `inventory_usage_history`
-  MODIFY `usage_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `usage_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
 
 --
 -- AUTO_INCREMENT for table `medical_documents`
@@ -1533,7 +1654,7 @@ ALTER TABLE `registry_vaccination_doses_archive`
 -- AUTO_INCREMENT for table `stock_transactions`
 --
 ALTER TABLE `stock_transactions`
-  MODIFY `transaction_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `transaction_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
 
 --
 -- AUTO_INCREMENT for table `training_dataset`
@@ -1563,13 +1684,25 @@ ALTER TABLE `user_tokens`
 -- AUTO_INCREMENT for table `vaccination_records`
 --
 ALTER TABLE `vaccination_records`
-  MODIFY `vaccination_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=74;
+  MODIFY `vaccination_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=83;
 
 --
 -- AUTO_INCREMENT for table `vaccination_records_archive`
 --
 ALTER TABLE `vaccination_records_archive`
   MODIFY `archive_id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `vaccination_sessions`
+--
+ALTER TABLE `vaccination_sessions`
+  MODIFY `session_id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `vaccination_session_items`
+--
+ALTER TABLE `vaccination_session_items`
+  MODIFY `item_id_pk` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- Constraints for dumped tables

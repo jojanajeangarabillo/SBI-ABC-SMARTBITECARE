@@ -8,17 +8,12 @@ $error = '';
  * Log login attempts with detailed information
  */
 function logLoginAttempt($conn, $user_id, $username, $status, $details = '') {
-    // Get IP address
-    $ip_address = $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
-    $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown';
-    
-    // Build action description
-    $action = "Login $status: User '$username'";
-    if (!empty($details)) {
-        $action .= " - $details";
-    }
-    $action .= " (IP: $ip_address)";
-    
+
+// Build action description
+$action = "Login $status: User '$username'";
+if (!empty($details)) {
+    $action .= " - $details";
+}
     // If user_id is provided, get branch_id
     $branch_id = null;
     if ($user_id) {
