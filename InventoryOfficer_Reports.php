@@ -59,7 +59,7 @@ href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.m
 }
 
 body{
-background:white;
+background: #f0f2f5;
 font-family:'Segoe UI',sans-serif;
 }
 
@@ -147,7 +147,7 @@ color:white;
 }
 
 .large-card{
-background:#ECEEF7;
+background:white;
 border-radius:18px;
 padding:24px;
 box-shadow:0 3px 8px rgba(0,0,0,.08);

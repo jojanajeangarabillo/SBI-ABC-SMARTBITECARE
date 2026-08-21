@@ -52,7 +52,7 @@ href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.m
 }
 
 body{
-background:white;
+background:#f0f2f5;
 font-family:'Segoe UI',sans-serif;
 }
 
@@ -116,14 +116,14 @@ width:100%;
 padding:10px 14px 10px 38px;
 border-radius:10px;
 border:1px solid #dcdee8;
-background:#F7F8FC;
+background:white;
 font-size:14px;
 }
 
 .search-box input:focus{
-outline:none;
-border-color:var(--primary);
-background:white;
+border-color: var(--primary);
+box-shadow: 0 0 0 3px rgba(43,58,140,0.12);
+outline: none;
 }
 
 .filter-select{
@@ -192,32 +192,6 @@ color:var(--accent);
 .badge-adjust{
 background:#EDEFFA;
 color:var(--primary);
-}
-
-.pagination-custom{
-display:flex;
-justify-content:center;
-align-items:center;
-gap:8px;
-margin-top:24px;
-}
-
-.pagination-custom a{
-color:var(--primary);
-font-weight:600;
-font-size:14px;
-text-decoration:none;
-padding:6px 10px;
-border-radius:6px;
-}
-
-.pagination-custom a.active{
-background:var(--accent);
-color:white;
-}
-
-.pagination-custom a:hover:not(.active){
-background:#eef0f7;
 }
 
 @media(max-width:991px){
@@ -316,17 +290,7 @@ margin-left:90px;
 </table>
 </div>
 
-<div class="pagination-custom">
-<a href="#"><i class="bi bi-chevron-left"></i></a>
-<a href="#" class="active">1</a>
-<a href="#">2</a>
-<a href="#">3</a>
-<a href="#">4</a>
-<a href="#">...</a>
-<a href="#">7</a>
-<a href="#">8</a>
-<a href="#"><i class="bi bi-chevron-right"></i></a>
-</div>
+
 
 </div>
 

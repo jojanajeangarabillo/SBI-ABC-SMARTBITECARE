@@ -496,11 +496,12 @@ addAuditLog($conn, $_SESSION['user_id'], 'Viewed Branch Performance Monitoring -
         .chart-area {
             position: relative;
         }
-        .y-axis-labels {
+     .y-axis-labels {
             position: absolute;
-            left: -36px;
+            left: 0;
             top: 0;
             height: 100%;
+            width: 35px;
             display: flex;
             flex-direction: column;
             justify-content: space-between;
@@ -508,7 +509,8 @@ addAuditLog($conn, $_SESSION['user_id'], 'Viewed Branch Performance Monitoring -
             font-weight: 600;
             font-size: 13px;
             color: #5a6a8c;
-        }
+            text-align: left;
+}
         .y-axis-labels span {
             display: block;
         }
@@ -564,29 +566,6 @@ addAuditLog($conn, $_SESSION['user_id'], 'Viewed Branch Performance Monitoring -
             .main {
                 margin-left: 90px;
             }
-            .sidebar {
-                width: 90px;
-                padding: 16px 10px;
-            }
-            .system-name,
-            .nav-menu span,
-            .logout span {
-                display: none;
-            }
-            .logo-area {
-                justify-content: center;
-            }
-            .nav-menu a {
-                justify-content: center;
-                padding: 12px 8px;
-            }
-            .nav-menu a i {
-                font-size: 26px;
-                margin: 0;
-            }
-            .logout a {
-                justify-content: center;
-            }
         }
 
         @media (max-width: 768px) {
@@ -635,11 +614,12 @@ addAuditLog($conn, $_SESSION['user_id'], 'Viewed Branch Performance Monitoring -
                 padding: 16px;
             }
             .y-axis-labels {
-                font-size: 11px;
-                left: -28px;
+                 font-size: 11px;
+                left: 0;
+                width: 28px;
             }
             .chart-wrap {
-                padding-left: 28px;
+                padding-left:32px;
             }
         }
     </style>

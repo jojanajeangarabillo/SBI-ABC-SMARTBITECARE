@@ -648,34 +648,60 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             flex-wrap: wrap;
         }
 
-        .search-box {
-            display: flex;
-            align-items: center;
-            background: white;
-            border: 1px solid var(--primary);
-            border-radius: 50px;
-            padding: 8px 18px;
-            width: 300px;
-        }
+       .search-box {
+    position: relative;
+    width: 400px;
+    max-width: 100%;
+}
 
-        .search-box i {
-            color: var(--primary);
-            font-size: 18px;
-            margin-right: 10px;
-        }
+.search-box form {
+    width: 100%;
+}
 
-        .search-box input {
-            border: none;
-            outline: none;
-            background: transparent;
-            color: black;
-            width: 100%;
-            font-size: 14px;
-        }
+.search-box > i {
+    position: absolute;
+    left: 16px;
+    top: 50%;
+    transform: translateY(-50%);
 
-        .search-box input::placeholder {
-            color: rgba(0, 0, 0, 0.85);
-        }
+    color: #7180a8;
+    font-size: 18px;
+
+    z-index: 2;
+    pointer-events: none;
+}
+
+.search-box input {
+    width: 100%;
+    height: 48px;
+
+    padding: 0 18px 0 45px;
+
+    background: #ffffff;
+
+    border: 1px solid #d0d7e8;
+    border-radius: 10px;
+
+    font-size: 14px;
+    color: #1f2a4a;
+
+    outline: none;
+
+    box-sizing: border-box;
+
+    transition: 0.2s ease;
+}
+
+.search-box input::placeholder {
+    color: #7a85a8;
+}
+
+.search-box input:focus {
+    border-color: var(--primary);
+
+    box-shadow:
+        0 0 0 3px rgba(43, 58, 140, 0.10);
+}
 
         .btn-filter {
             background: var(--primary);

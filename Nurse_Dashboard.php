@@ -326,7 +326,7 @@ while ($row = $caseStatusResult->fetch_assoc()) {
         }
 
         body {
-            background: white;
+            background:#f0f2f5;
             font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
             margin: 0;
             padding: 0;
@@ -375,48 +375,121 @@ while ($row = $caseStatusResult->fetch_assoc()) {
         }
 
         /* ALL STAT CARDS - UNIFORM SIZE */
-        .stat-card {
-            background: var(--card-bg);
-            border-radius: 18px;
-            padding: 20px 24px;
-            height: 120px;
-            box-shadow: 0 3px 8px rgba(0, 0, 0, 0.06);
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            transition: transform 0.2s;
-            position: relative;
-            overflow: hidden;
-        }
-        .stat-card:hover {
-            transform: translateY(-3px);
-        }
-        .stat-card .stat-title {
-            font-weight: 600;
-            color: var(--primary);
-            font-size: 16px;
-            letter-spacing: 0.2px;
-            margin-bottom: 2px;
-        }
-        .stat-card .stat-number {
-            font-size: 42px;
-            font-weight: 700;
-            color: var(--primary);
-            line-height: 1.1;
-        }
-        .stat-card .stat-icon {
-            position: absolute;
-            right: 18px;
-            top: 50%;
-            transform: translateY(-50%);
-            font-size: 48px;
-            opacity: 0.15;
-            color: var(--primary);
-        }
+   .stat-card {
+    background: #ffffff;
+    border-radius: 16px;
+    padding: 18px 22px;
+    height: 120px;
+
+    display: grid;
+    grid-template-columns: 42px 1fr;
+    grid-template-rows: auto auto;
+    column-gap: 12px;
+    align-items: center;
+
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+
+    position: relative;
+    overflow: hidden;
+
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+/* Colored left border */
+.stat-card {
+    border-left: 5px solid var(--primary);
+}
+
+.stat-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.10);
+}
+
+/* ICON */
+.stat-card .stat-icon {
+    position: static;
+    grid-column: 1;
+    grid-row: 1 / 3;
+
+    transform: none;
+
+    font-size: 30px;
+    opacity: 1;
+    color: var(--primary);
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* TITLE */
+.stat-card .stat-title {
+    grid-column: 2;
+    grid-row: 1;
+
+    font-weight: 500;
+    color: #2f3b4d;
+    font-size: 14px;
+    letter-spacing: 0;
+    margin: 0;
+}
+
+/* NUMBER */
+.stat-card .stat-number {
+    grid-column: 2;
+    grid-row: 2;
+
+    font-size: 28px;
+    font-weight: 700;
+    color: #111827;
+    line-height: 1.1;
+}
+
+.stat-danger {
+    border-left-color: #F21D2F;
+}
+
+.stat-warning {
+    border-left-color: #ffc107;
+}
+
+.stat-success {
+    border-left-color: #28a745;
+}
+
+.stat-info {
+    border-left-color: #17a2b8;
+}
+
+.stat-primary {
+    border-left-color: #2B3A8C;
+}
+
+/* Match icon color with card border */
+.stat-danger .stat-icon {
+    color: #F21D2F;
+}
+
+.stat-warning .stat-icon {
+    color: #ffc107;
+}
+
+.stat-success .stat-icon {
+    color: #28a745;
+}
+
+.stat-info .stat-icon {
+    color: #17a2b8;
+}
+
+.stat-primary .stat-icon {
+    color: #2B3A8C;
+}
+
 
         /* Large Cards */
         .large-card {
-            background: var(--card-bg);
+            background: white;
             border-radius: 18px;
             padding: 22px 24px;
             box-shadow: 0 3px 8px rgba(0, 0, 0, 0.06);
@@ -570,31 +643,7 @@ while ($row = $caseStatusResult->fetch_assoc()) {
             .main {
                 margin-left: 90px;
             }
-            .sidebar {
-                width: 90px;
-                padding: 16px 10px;
-            }
-            .system-name,
-            .nav-menu span,
-            .logout span {
-                display: none;
-            }
-            .logo-area {
-                justify-content: center;
-            }
-            .nav-menu a {
-                justify-content: center;
-                padding: 12px 8px;
-            }
-            .nav-menu a i {
-                font-size: 26px;
-                margin: 0;
-            }
-            .logout a {
-                justify-content: center;
-            }
-        }
-
+}
         @media (max-width: 576px) {
             .topbar {
                 padding: 0 16px;
@@ -678,7 +727,7 @@ while ($row = $caseStatusResult->fetch_assoc()) {
         <div class="row g-4">
             <!-- Patient Waiting -->
             <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stat-card">
+                <div class="stat-card stat-danger">
                     <span class="stat-icon"><i class="bi bi-person"></i></span>
                     <div class="stat-title">Patient Waiting</div>
                     <div class="stat-number"><?php echo number_format($stats['patient_waiting']); ?></div>
@@ -686,7 +735,7 @@ while ($row = $caseStatusResult->fetch_assoc()) {
             </div>
             <!-- Ongoing Cases -->
             <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stat-card">
+                <div class="stat-card stat-warning">
                     <span class="stat-icon"><i class="bi bi-activity"></i></span>
                     <div class="stat-title">Ongoing Cases</div>
                     <div class="stat-number"><?php echo number_format($stats['ongoing_cases']); ?></div>
@@ -694,7 +743,7 @@ while ($row = $caseStatusResult->fetch_assoc()) {
             </div>
             <!-- Completed Cases -->
             <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stat-card">
+                <div class="stat-card stat-success">
                     <span class="stat-icon"><i class="bi bi-check-circle"></i></span>
                     <div class="stat-title">Completed Cases</div>
                     <div class="stat-number"><?php echo number_format($stats['completed_cases']); ?></div>
@@ -702,8 +751,8 @@ while ($row = $caseStatusResult->fetch_assoc()) {
             </div>
             <!-- Vaccinations Today -->
             <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stat-card">
-                    <span class="stat-icon"><i class="bi bi-syringe"></i></span>
+                <div class="stat-card stat-info">
+                    <span class="stat-icon"><i class="bi bi-shield-plus"></i></span>
                     <div class="stat-title">Vaccinations Today</div>
                     <div class="stat-number"><?php echo number_format($stats['today_vaccinations']); ?></div>
                 </div>

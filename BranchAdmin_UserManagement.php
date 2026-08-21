@@ -356,7 +356,7 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
             --bg: #F2F2F2;
         }
         body {
-            background: white;
+            background: #f9faff;
             font-family: 'Segoe UI', sans-serif;
         }
         .main {
@@ -535,7 +535,7 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
             gap: 12px;
         }
         .qa-btn-group .btn-qa {
-            background: #F21D2F;
+            background: var(--primary);
             border: none;
             padding: 9px 22px;
             border-radius: 30px;

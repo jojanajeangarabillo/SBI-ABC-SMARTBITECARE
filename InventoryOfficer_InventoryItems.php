@@ -52,7 +52,7 @@ href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.m
 }
 
 body{
-background:white;
+background:#f0f2f5;
 font-family:'Segoe UI',sans-serif;
 }
 
@@ -97,35 +97,34 @@ margin-bottom:22px;
 flex-wrap:wrap;
 }
 
-.search-box{
-position:relative;
-flex:1;
-max-width:340px;
-}
+ .search-box {
+            position: relative;
+            flex: 1;
+            max-width: 340px;
+        }
 
-.search-box i{
-position:absolute;
-left:14px;
-top:50%;
-transform:translateY(-50%);
-color:#9aa0c3;
-}
+        .search-box i {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #9aa0c3;
+        }
 
-.search-box input{
-width:100%;
-padding:10px 14px 10px 38px;
-border-radius:10px;
-border:1px solid #dcdee8;
-background:#F7F8FC;
-font-size:14px;
-}
+        .search-box input {
+            width: 100%;
+            padding: 10px 14px 10px 38px;
+            border-radius: 10px;
+            border: 1px solid #dcdee8;
+            background:white;
+            font-size: 14px;
+        }
 
-.search-box input:focus{
-outline:none;
-border-color:var(--primary);
-background:white;
-}
-
+        .search-box input:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(43,58,140,0.12);
+        outline: none;
+        }
 .btn-custom{
 background:var(--primary);
 color:white;
@@ -235,31 +234,7 @@ color:white;
 border-color:var(--primary);
 }
 
-.pagination-custom{
-display:flex;
-justify-content:center;
-align-items:center;
-gap:8px;
-margin-top:24px;
-}
 
-.pagination-custom a{
-color:var(--primary);
-font-weight:600;
-font-size:14px;
-text-decoration:none;
-padding:6px 10px;
-border-radius:6px;
-}
-
-.pagination-custom a.active{
-background:var(--accent);
-color:white;
-}
-
-.pagination-custom a:hover:not(.active){
-background:#eef0f7;
-}
 
 @media(max-width:991px){
 .main{
@@ -319,7 +294,7 @@ margin-left:90px;
 
 <div class="search-box">
 <i class="bi bi-search"></i>
-<input type="text" placeholder="Search Items">
+<input type="text" placeholder="Search Item...">
 </div>
 
 <button class="btn-custom" data-bs-toggle="modal" data-bs-target="#addItemModal">
@@ -355,28 +330,18 @@ margin-left:90px;
 </table>
 </div>
 
-<div class="pagination-custom">
-<a href="#"><i class="bi bi-chevron-left"></i></a>
-<a href="#" class="active">1</a>
-<a href="#">2</a>
-<a href="#">3</a>
-<a href="#">4</a>
-<a href="#">...</a>
-<a href="#">7</a>
-<a href="#">8</a>
-<a href="#"><i class="bi bi-chevron-right"></i></a>
-</div>
+
 
 </div>
-
+ 
 </div>
 
 <!-- Add Item Modal -->
 <div class="modal fade" id="addItemModal" tabindex="-1">
 <div class="modal-dialog">
 <div class="modal-content" style="border-radius:16px;">
-<div class="modal-header">
-<h5 class="modal-title" style="color:var(--primary); font-weight:700;">Add Inventory Item</h5>
+<div class="modal-header" style="background:var(--primary);">
+<h5 class="modal-title" style="color:white; font-weight:700;">Add Inventory Item</h5>
 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
 </div>
 <div class="modal-body">

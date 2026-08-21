@@ -874,27 +874,221 @@ $stats['low_stock'] = $result->fetch_assoc()['count'] ?? 0;
             margin-bottom: 25px;
         }
 
-        .stat-card {
-            background: var(--card-bg);
-            border-radius: 14px;
-            padding: 18px 20px;
-            text-align: center;
-            box-shadow: 0 2px 8px rgba(0,0,0,.05);
-        }
-        .stat-card .number {
-            font-size: 32px;
-            font-weight: 700;
-            color: var(--primary);
-        }
-        .stat-card .label {
-            font-size: 13px;
-            color: #666;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-top: 5px;
-        }
+/* =====================================================
+   STATISTICS CARDS
+   ===================================================== */
 
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 18px;
+    margin-bottom: 25px;
+}
+
+
+/* =====================================================
+   STAT CARD
+   ===================================================== */
+
+.stat-card {
+    background: #ffffff;
+
+    border-radius: 14px;
+
+    min-height: 110px;
+
+    padding: 18px 20px;
+
+    display: flex;
+    align-items: center;
+
+    gap: 15px;
+
+    /* Default left border */
+    border-left: 5px solid var(--primary);
+
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+
+    transition:
+        transform 0.2s ease,
+        box-shadow 0.2s ease;
+}
+
+
+/* =====================================================
+   HOVER EFFECT
+   ===================================================== */
+
+.stat-card:hover {
+    transform: translateY(-3px);
+
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.10);
+}
+
+
+/* =====================================================
+   ICON
+   ===================================================== */
+
+.stat-icon {
+    width: 42px;
+    min-width: 42px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    font-size: 24px;
+
+    /* No background */
+    background: transparent;
+}
+
+
+/* =====================================================
+   CONTENT
+   ===================================================== */
+
+.stat-content {
+    flex: 1;
+    min-width: 0;
+}
+
+
+/* =====================================================
+   NUMBER
+   ===================================================== */
+
+.stat-card .number {
+    font-size: 30px;
+
+    font-weight: 700;
+
+    line-height: 1.1;
+
+    margin-bottom: 5px;
+
+    /* BLACK NUMBER */
+    color: #222222;
+}
+
+
+/* =====================================================
+   LABEL
+   ===================================================== */
+
+.stat-card .label {
+    font-size: 13px;
+
+    color: #666666;
+
+    font-weight: 600;
+
+    line-height: 1.3;
+}
+
+
+/* =====================================================
+   PRIMARY / BLUE
+   ===================================================== */
+
+.stat-primary {
+    border-left-color: #2B3A8C;
+}
+
+.stat-primary .stat-icon {
+    color: #2B3A8C;
+}
+
+
+/* =====================================================
+   INFO / LIGHT BLUE
+   ===================================================== */
+
+.stat-info {
+    border-left-color: #2196F3;
+}
+
+.stat-info .stat-icon {
+    color: #2196F3;
+}
+
+
+/* =====================================================
+   SUCCESS / GREEN
+   ===================================================== */
+
+.stat-success {
+    border-left-color: #28A745;
+}
+
+.stat-success .stat-icon {
+    color: #28A745;
+}
+
+
+/* =====================================================
+   DANGER / RED
+   ===================================================== */
+
+.stat-danger {
+    border-left-color: #DC3545;
+}
+
+.stat-danger .stat-icon {
+    color: #DC3545;
+}
+
+
+/* =====================================================
+   RESPONSIVE - TABLET
+   ===================================================== */
+
+@media (max-width: 1100px) {
+
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+}
+
+
+/* =====================================================
+   RESPONSIVE - MOBILE
+   ===================================================== */
+
+@media (max-width: 576px) {
+
+    .stats-grid {
+        grid-template-columns: 1fr;
+
+        gap: 14px;
+    }
+
+    .stat-card {
+        min-height: 100px;
+
+        padding: 16px 18px;
+
+        gap: 12px;
+    }
+
+    .stat-card .number {
+        font-size: 26px;
+    }
+
+    .stat-card .label {
+        font-size: 12px;
+    }
+
+    .stat-icon {
+        width: 38px;
+        min-width: 38px;
+
+        font-size: 22px;
+    }
+
+}
         .report-card {
             background: white;
             border-radius: 18px;
@@ -987,7 +1181,6 @@ $stats['low_stock'] = $result->fetch_assoc()['count'] ?? 0;
             border-radius: 18px;
             box-shadow: 0 3px 12px rgba(0, 0, 0, 0.05);
             overflow: hidden;
-            padding: 6px 0;
         }
         .table {
             margin-bottom: 0;
@@ -995,8 +1188,8 @@ $stats['low_stock'] = $result->fetch_assoc()['count'] ?? 0;
             border-spacing: 0;
         }
         .table thead th {
-            background: #f0f3fc;
-            color: var(--primary);
+            background:var(--primary);
+            color: #fff;
             font-weight: 700;
             font-size: 15px;
             padding: 16px 20px;
@@ -1149,32 +1342,75 @@ $stats['low_stock'] = $result->fetch_assoc()['count'] ?? 0;
     </div>
 
     <div class="content">
-        <!-- Statistics Cards -->
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="number"><?php echo number_format($stats['total_patients']); ?></div>
-                <div class="label">Total Patients</div>
-            </div>
-            <div class="stat-card">
-                <div class="number"><?php echo number_format($stats['total_cases']); ?></div>
-                <div class="label">Total Cases</div>
-            </div>
-            <div class="stat-card">
-                <div class="number"><?php echo number_format($stats['total_inventory']); ?></div>
-                <div class="label">Inventory Items</div>
-            </div>
-            <div class="stat-card">
-                <div class="number"><?php echo number_format($stats['total_vaccinations']); ?></div>
-                <div class="label">Vaccinations</div>
-            </div>
-            <div class="stat-card">
-                <div class="number" style="color: <?php echo $stats['low_stock'] > 0 ? '#dc3545' : '#28a745'; ?>;">
-                    <?php echo number_format($stats['low_stock']); ?>
-                </div>
-                <div class="label">Low Stock Items</div>
-            </div>
-        </div>
+ <!-- Statistics Cards -->
+<div class="stats-grid">
 
+    <!-- Total Patients -->
+    <div class="stat-card stat-primary">
+        <div class="stat-icon">
+            <i class="bi bi-people-fill"></i>
+        </div>
+        <div class="stat-content">
+            <div class="number">
+                <?php echo number_format($stats['total_patients']); ?>
+            </div>
+            <div class="label">Total Patients</div>
+        </div>
+    </div>
+
+    <!-- Total Cases -->
+    <div class="stat-card stat-primary">
+        <div class="stat-icon">
+            <i class="bi bi-clipboard2-pulse-fill"></i>
+        </div>
+        <div class="stat-content">
+            <div class="number">
+                <?php echo number_format($stats['total_cases']); ?>
+            </div>
+            <div class="label">Total Cases</div>
+        </div>
+    </div>
+
+    <!-- Inventory Items -->
+    <div class="stat-card stat-info">
+        <div class="stat-icon">
+            <i class="bi bi-box-seam-fill"></i>
+        </div>
+        <div class="stat-content">
+            <div class="number">
+                <?php echo number_format($stats['total_inventory']); ?>
+            </div>
+            <div class="label">Inventory Items</div>
+        </div>
+    </div>
+
+    <!-- Vaccinations -->
+    <div class="stat-card stat-success">
+        <div class="stat-icon">
+            <i class="bi bi-eyedropper"></i>
+        </div>
+        <div class="stat-content">
+            <div class="number">
+                <?php echo number_format($stats['total_vaccinations']); ?>
+            </div>
+            <div class="label">Vaccinations</div>
+        </div>
+    </div>
+
+    <!-- Low Stock -->
+    <div class="stat-card <?php echo $stats['low_stock'] > 0 ? 'stat-danger' : 'stat-success'; ?>">
+        <div class="stat-icon">
+            <i class="bi bi-exclamation-triangle-fill"></i>
+        </div>
+        <div class="stat-content">
+            <div class="number">
+                <?php echo number_format($stats['low_stock']); ?>
+            </div>
+            <div class="label">Low Stock Items</div>
+        </div>
+    </div>
+
+</div>
         <!-- Report Generator Card -->
         <div class="report-card">
             <form id="reportForm" method="GET" action="<?php echo $_SERVER['PHP_SELF']; ?>">

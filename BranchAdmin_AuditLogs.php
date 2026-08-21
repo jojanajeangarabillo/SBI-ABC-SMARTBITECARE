@@ -807,40 +807,197 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
             padding: 28px 35px 40px 35px;
         }
 
-        .summary-cards {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 25px;
-        }
+        /* =====================================================
+   SUMMARY CARDS
+   ===================================================== */
 
-        .summary-card {
-            background: #ECEEF7;
-            border-radius: 14px;
-            padding: 18px 22px;
-            box-shadow: 0 2px 8px rgba(0,0,0,.06);
-        }
+.summary-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 18px;
+    margin-bottom: 25px;
+}
 
-        .summary-card .label {
-            font-size: 13px;
-            color: #666;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
 
-        .summary-card .value {
-            font-size: 28px;
-            font-weight: 700;
-            color: var(--primary);
-            margin-top: 5px;
-        }
+/* =====================================================
+   SUMMARY CARD
+   ===================================================== */
 
-        .summary-card .sub {
-            font-size: 12px;
-            color: #888;
-            margin-top: 3px;
-        }
+.summary-card {
+    background: #ffffff;
+
+    border-radius: 14px;
+
+    min-height: 105px;
+
+    padding: 18px 20px;
+
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+
+    border-left: 5px solid var(--primary);
+
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+
+    transition: all 0.2s ease;
+}
+
+
+/* =====================================================
+   HOVER EFFECT
+   ===================================================== */
+
+.summary-card:hover {
+    transform: translateY(-3px);
+
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.10);
+}
+
+
+/* =====================================================
+   LABEL
+   ===================================================== */
+
+.summary-card .label {
+    font-size: 13px;
+
+    color: #666666;
+
+    font-weight: 600;
+
+    text-transform: uppercase;
+
+    letter-spacing: 0.5px;
+
+    margin: 0;
+}
+
+
+/* =====================================================
+   VALUE
+   ===================================================== */
+
+.summary-card .value {
+    font-size: 30px;
+
+    font-weight: 700;
+
+    color: #222222;
+
+    line-height: 1.1;
+
+    margin-top: 6px;
+}
+
+
+/* =====================================================
+   SUBTEXT
+   ===================================================== */
+
+.summary-card .sub {
+    font-size: 12px;
+
+    color: #888888;
+
+    margin-top: 4px;
+}
+
+
+/* =====================================================
+   CARD COLORS
+   ===================================================== */
+
+/* Blue */
+.summary-card:nth-child(1) {
+    border-left-color: #2B3A8C;
+}
+
+
+/* Light Blue */
+.summary-card:nth-child(2) {
+    border-left-color: #2196F3;
+}
+
+
+/* Green */
+.summary-card:nth-child(3) {
+    border-left-color: #28A745;
+}
+
+
+/* Orange */
+.summary-card:nth-child(4) {
+    border-left-color: #F0AD4E;
+}
+
+
+/* =====================================================
+   OPTIONAL: ICON SUPPORT
+   ===================================================== */
+
+.summary-card .icon {
+    font-size: 23px;
+
+    margin-bottom: 8px;
+}
+
+
+/* Icon colors */
+
+.summary-card:nth-child(1) .icon {
+    color: #2B3A8C;
+}
+
+.summary-card:nth-child(2) .icon {
+    color: #2196F3;
+}
+
+.summary-card:nth-child(3) .icon {
+    color: #28A745;
+}
+
+.summary-card:nth-child(4) .icon {
+    color: #F0AD4E;
+}
+
+
+/* =====================================================
+   TABLET
+   ===================================================== */
+
+@media (max-width: 1100px) {
+
+    .summary-cards {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+}
+
+
+/* =====================================================
+   MOBILE
+   ===================================================== */
+
+@media (max-width: 576px) {
+
+    .summary-cards {
+        grid-template-columns: 1fr;
+
+        gap: 14px;
+    }
+
+    .summary-card {
+        min-height: 95px;
+
+        padding: 16px 18px;
+    }
+
+    .summary-card .value {
+        font-size: 26px;
+    }
+
+}
 
         .page-header {
             display: flex;
@@ -858,35 +1015,61 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
             flex-wrap: wrap;
         }
 
-        .search-box {
-            display: flex;
-            align-items: center;
-            background: white;
-            border: 2px solid var(--primary);
-            border-radius: 50px;
-            padding: 6px 18px;
-            min-width: 250px;
-        }
+       
+.search-box {
+    position: relative;
+    width: 400px;
+    max-width: 100%;
+}
 
-        .search-box i {
-            color: var(--primary);
-            font-size: 18px;
-            margin-right: 10px;
-        }
+.search-box form {
+    width: 100%;
+}
 
-        .search-box input {
-            border: none;
-            outline: none;
-            background: transparent;
-            color: black;
-            width: 100%;
-            font-size: 14px;
-        }
+.search-box > i {
+    position: absolute;
+    left: 16px;
+    top: 50%;
+    transform: translateY(-50%);
 
-        .search-box input::placeholder {
-            color: rgba(0, 0, 0, 0.5);
-        }
+    color: #7180a8;
+    font-size: 18px;
 
+    z-index: 2;
+    pointer-events: none;
+}
+
+.search-box input {
+    width: 100%;
+    height: 48px;
+
+    padding: 0 18px 0 45px;
+
+    background: #ffffff;
+
+    border: 1px solid #d0d7e8;
+    border-radius: 10px;
+
+    font-size: 14px;
+    color: #1f2a4a;
+
+    outline: none;
+
+    box-sizing: border-box;
+
+    transition: 0.2s ease;
+}
+
+.search-box input::placeholder {
+    color: #7a85a8;
+}
+
+.search-box input:focus {
+    border-color: var(--primary);
+
+    box-shadow:
+        0 0 0 3px rgba(43, 58, 140, 0.10);
+}
         .btn-filter {
             background: var(--primary);
             color: #fff;
@@ -1168,7 +1351,7 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
             font-weight: 700;
         }
 
-        @media (max-width: 768px) {
+        @media (max-width: 991px) {
             .main {
                 margin-left: 90px;
             }

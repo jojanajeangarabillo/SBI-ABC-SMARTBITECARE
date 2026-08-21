@@ -317,7 +317,7 @@ $userData = getUserData($conn, $_SESSION['user_id']);
         }
 
         body {
-            background: white;
+            background: #f0f2f5;
             font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
             margin: 0;
             padding: 0;
@@ -408,7 +408,7 @@ $userData = getUserData($conn, $_SESSION['user_id']);
             width: 100%;
             padding: 12px 12px 12px 44px;
             border: 1px solid #d0d7e8;
-            border-radius: 40px;
+            border-radius: 10px;
             font-size: 15px;
             background: white;
             outline: none;
@@ -425,7 +425,7 @@ $userData = getUserData($conn, $_SESSION['user_id']);
             border-radius: 18px;
             box-shadow: 0 3px 12px rgba(0, 0, 0, 0.05);
             overflow: hidden;
-            padding: 6px 0 6px 0;
+            padding: 0;
             margin-bottom: 20px;
         }
         .table {
@@ -434,8 +434,8 @@ $userData = getUserData($conn, $_SESSION['user_id']);
             border-spacing: 0;
         }
         .table thead th {
-            background: #f0f3fc;
-            color: var(--primary);
+            background: var(--primary);
+            color: #fff;
             font-weight: 700;
             font-size: 15px;
             padding: 16px 20px;

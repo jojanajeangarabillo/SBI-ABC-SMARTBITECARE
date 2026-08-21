@@ -114,7 +114,6 @@
             border-radius: 18px;
             box-shadow: 0 3px 12px rgba(0, 0, 0, 0.05);
             overflow: hidden;
-            padding: 6px 0 6px 0;
             margin-bottom: 20px;
         }
         .table {
@@ -123,8 +122,8 @@
             border-spacing: 0;
         }
         .table thead th {
-            background: #f0f3fc;
-            color: var(--primary);
+            background: var(--primary);
+            color: white;
             font-weight: 700;
             font-size: 15px;
             padding: 16px 20px;

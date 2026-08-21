@@ -1040,6 +1040,18 @@ if ($action) {
             --radius: 12px;
             --transition: all 0.25s ease;
         }
+    * {
+        box-sizing: border-box;
+    }
+
+    html,
+    body {
+        width: 100%;
+        max-width: 100%;
+        margin: 0;
+        padding: 0;
+        overflow-x: hidden;
+    }
 
         body { 
             background: #f0f2f5; 
@@ -1048,9 +1060,12 @@ if ($action) {
 
         .main {
             margin-left: 260px;
+            width: calc(100% - 260px);
             min-height: 100vh;
             padding: 0 30px 30px 30px;
             background: #f0f2f5;
+            box-sizing: border-box;
+            overflow-x: hidden;;
         }
 
         .topbar {
@@ -1213,14 +1228,85 @@ if ($action) {
 
         .record-container {
             display: grid;
-            grid-template-columns: 320px 1fr;
-            gap: 24px;
+            grid-template-columns: 260px minmax(0, 1fr);
+            gap: 20px;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
         }
 
-        @media (max-width: 992px) {
+      @media (max-width: 1200px) {
             .record-container {
-                grid-template-columns: 320px 1fr;
-                gap: 20px;
+                grid-template-columns: 280px minmax(0, 1fr);
+                gap: 16px;
+            }
+            .search-area .search-wrapper input {
+                width: 280px;
+            }
+            .topbar h3 {
+                margin-left: 0;
+                font-size: 24px;
+            }
+        }
+        @media (max-width: 900px) {
+            .record-container {
+                grid-template-columns: 1fr;
+            }
+
+            .calendar-panel {
+                width: 100%;
+            }
+
+            .table-panel {
+                width: 100%;
+                min-width: 0;
+            }
+
+            .toolbar {
+                display: flex;
+                flex-wrap: wrap;
+            }
+
+            .search-area {
+                width: 100%;
+            }
+
+            .search-area .search-wrapper {
+                flex: 1;
+                min-width: 0;
+            }
+
+            .search-area .search-wrapper input {
+                width: 100%;
+            }
+
+            .sort-area {
+                width: 100%;
+            }
+
+            .sort-btn {
+                flex: 1;
+            }
+
+            .toolbar > .btn {
+                width: 100%;
+                justify-content: center;
+            }
+}
+        @media (max-width: 991px) {
+            .main {
+                margin-left: 112px;
+                width: calc(100% - 112px);
+                padding: 0 18px 30px 18px;
+            }
+
+            .topbar {
+                padding: 0 20px;
+            }
+
+            .topbar h3 {
+                margin-left: 0;
+                font-size: 20px;
             }
         }
 
@@ -1372,12 +1458,17 @@ if ($action) {
         }
 
         .table-responsive-custom {
+            width: 100%;
+            max-width: 100%;
             overflow-x: auto;
+            overflow-y: hidden;
             padding: 0 4px;
+            box-sizing: border-box;
         }
 
         table {
             width: 100%;
+            min-width: 950px;
             border-collapse: collapse;
             font-size: 13px;
         }

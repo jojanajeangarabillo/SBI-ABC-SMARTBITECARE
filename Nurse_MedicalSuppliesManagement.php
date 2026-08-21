@@ -368,27 +368,123 @@ foreach ($items as $item) {
         }
 
         .stat-card {
-            background: var(--card-bg);
-            border-radius: 18px;
-            padding: 18px 20px;
-            height: 100px;
-            box-shadow: 0 3px 8px rgba(0, 0, 0, 0.06);
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-        }
-        .stat-title {
-            font-weight: 600;
-            color: var(--primary);
-            font-size: 14px;
-            letter-spacing: 0.2px;
-        }
-        .stat-number {
-            font-size: 34px;
-            font-weight: 700;
-            color: var(--primary);
-            line-height: 1.1;
-        }
+    background: #ffffff;
+    border-radius: 16px;
+    padding: 16px 20px;
+    height: 100px;
+
+    display: grid;
+    grid-template-columns: 42px 1fr;
+    grid-template-rows: auto auto;
+    column-gap: 12px;
+    align-items: center;
+
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+
+    position: relative;
+    overflow: hidden;
+
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* LEFT COLOR BORDER */
+.stat-card.total {
+    border-left: 5px solid #28a745;
+}
+
+.stat-card.low {
+    border-left: 5px solid #F21D2F;
+}
+
+.stat-card.out {
+    border-left: 5px solid #F21D2F;
+}
+
+.stat-card.expiring {
+    border-left: 5px solid #17a2b8;
+}
+
+.stat-card.usage {
+    border-left: 5px solid #2B3A8C;
+}
+
+.stat-card.patients {
+    border-left: 5px solid #2B3A8C;
+}
+
+.stat-card.restock {
+    border-left: 5px solid #ffc107;
+}
+
+/* ICON */
+.stat-card .stat-icon {
+    grid-column: 1;
+    grid-row: 1 / 3;
+
+    font-size: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    color: var(--primary);
+}
+
+/* TITLE */
+.stat-card .stat-title {
+    grid-column: 2;
+    grid-row: 1;
+
+    font-weight: 500;
+    color: #536174;
+    font-size: 13px;
+    letter-spacing: 0.2px;
+    margin: 0;
+}
+
+/* NUMBER */
+.stat-card .stat-number {
+    grid-column: 2;
+    grid-row: 2;
+
+    font-size: 28px;
+    font-weight: 700;
+    color: #1f2937;
+    line-height: 1.1;
+    margin: 0;
+}
+
+.stat-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.10);
+}
+
+.stat-card.total .stat-icon {
+    color: #28a745;
+}
+
+.stat-card.low .stat-icon {
+    color: #F21D2F;
+}
+
+.stat-card.out .stat-icon {
+    color: #F21D2F;
+}
+
+.stat-card.expiring .stat-icon {
+    color: #17a2b8;
+}
+
+.stat-card.usage .stat-icon {
+    color: #2B3A8C;
+}
+
+.stat-card.patients .stat-icon {
+    color: #2B3A8C;
+}
+
+.stat-card.restock .stat-icon {
+    color: #ffc107;
+}
 
         .function-buttons {
             display: flex;
@@ -418,7 +514,7 @@ foreach ($items as $item) {
             border-radius: 18px;
             box-shadow: 0 3px 12px rgba(0, 0, 0, 0.05);
             overflow: hidden;
-            padding: 6px 0;
+            padding:0;
         }
         .table {
             margin-bottom: 0;
@@ -426,8 +522,8 @@ foreach ($items as $item) {
             border-spacing: 0;
         }
         .table thead th {
-            background: #f0f3fc;
-            color: var(--primary);
+            background:var(--primary);
+            color: white;
             font-weight: 700;
             font-size: 15px;
             padding: 16px 20px;
@@ -495,7 +591,7 @@ foreach ($items as $item) {
             width: 100%;
             padding: 10px 12px 10px 44px;
             border: 1px solid #d0d7e8;
-            border-radius: 40px;
+            border-radius: 10px;
             font-size: 15px;
             background: white;
             outline: none;
@@ -512,12 +608,13 @@ foreach ($items as $item) {
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
         }
         .modal-header {
+            background: var(--primary);
             border-bottom: 1px solid #edf1f8;
             padding: 20px 28px;
         }
         .modal-header .modal-title {
             font-weight: 700;
-            color: var(--primary);
+            color: white;
             font-size: 20px;
         }
         .modal-body {
@@ -752,52 +849,103 @@ foreach ($items as $item) {
 
         <!-- Stats -->
         <div class="row g-4 mb-4">
-            <div class="col-md-3 col-6">
-                <div class="stat-card">
-                    <div class="stat-title">Total Supplies</div>
-                    <div class="stat-number"><?php echo $stats['total_supplies'] ?? 0; ?></div>
-                </div>
+
+    <!-- Total Supplies -->
+    <div class="col-md-3 col-6">
+        <div class="stat-card total">
+            <div class="stat-icon">
+                <i class="bi bi-box-seam"></i>
             </div>
-            <div class="col-md-3 col-6">
-                <div class="stat-card">
-                    <div class="stat-title">Low Stocks</div>
-                    <div class="stat-number" style="color: #8a6d00;"><?php echo $stats['low_stock'] ?? 0; ?></div>
-                </div>
-            </div>
-            <div class="col-md-3 col-6">
-                <div class="stat-card">
-                    <div class="stat-title">Out of Stock</div>
-                    <div class="stat-number" style="color: var(--accent);"><?php echo $stats['out_of_stock'] ?? 0; ?></div>
-                </div>
-            </div>
-            <div class="col-md-3 col-6">
-                <div class="stat-card">
-                    <div class="stat-title">Expiring Soon</div>
-                    <div class="stat-number" style="color: #e65100;"><?php echo $stats['expiring_soon'] ?? 0; ?></div>
-                </div>
+            <div class="stat-title">Total Supplies</div>
+            <div class="stat-number">
+                <?php echo $stats['total_supplies'] ?? 0; ?>
             </div>
         </div>
+    </div>
+
+    <!-- Low Stocks -->
+    <div class="col-md-3 col-6">
+        <div class="stat-card low">
+            <div class="stat-icon">
+                <i class="bi bi-exclamation-triangle-fill"></i>
+            </div>
+            <div class="stat-title">Low Stocks</div>
+            <div class="stat-number">
+                <?php echo $stats['low_stock'] ?? 0; ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- Out of Stock -->
+    <div class="col-md-3 col-6">
+        <div class="stat-card out">
+            <div class="stat-icon">
+                <i class="bi bi-box-seam"></i>
+            </div>
+            <div class="stat-title">Out of Stock</div>
+            <div class="stat-number">
+                <?php echo $stats['out_of_stock'] ?? 0; ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- Expiring Soon -->
+    <div class="col-md-3 col-6">
+        <div class="stat-card expiring">
+            <div class="stat-icon">
+                <i class="bi bi-clock"></i>
+            </div>
+            <div class="stat-title">Expiring Stocks</div>
+            <div class="stat-number">
+                <?php echo $stats['expiring_soon'] ?? 0; ?>
+            </div>
+        </div>
+    </div>
+
+</div>
 
         <div class="row g-4 mb-4">
-            <div class="col-md-4 col-6">
-                <div class="stat-card">
-                    <div class="stat-title">Today's Usage</div>
-                    <div class="stat-number"><?php echo $today_stats['total_used'] ?? 0; ?></div>
-                </div>
+
+    <!-- Today's Usage -->
+    <div class="col-md-4 col-6">
+        <div class="stat-card usage">
+            <div class="stat-icon">
+                <i class="bi bi-bar-chart"></i>
             </div>
-            <div class="col-md-4 col-6">
-                <div class="stat-card">
-                    <div class="stat-title">Today's Patients</div>
-                    <div class="stat-number"><?php echo $today_stats['patients_served'] ?? 0; ?></div>
-                </div>
-            </div>
-            <div class="col-md-4 col-6">
-                <div class="stat-card">
-                    <div class="stat-title">Restock Requests</div>
-                    <div class="stat-number" style="color: #0d47a1;"><?php echo $restock_data['requests'] ?? 0; ?></div>
-                </div>
+            <div class="stat-title">Today's Usage</div>
+            <div class="stat-number">
+                <?php echo $today_stats['total_used'] ?? 0; ?>
             </div>
         </div>
+    </div>
+
+    <!-- Today's Patients -->
+    <div class="col-md-4 col-6">
+        <div class="stat-card patients">
+            <div class="stat-icon">
+                <i class="bi bi-people"></i>
+            </div>
+            <div class="stat-title">Today's Patients</div>
+            <div class="stat-number">
+                <?php echo $today_stats['patients_served'] ?? 0; ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- Restock Requests -->
+    <div class="col-md-4 col-6">
+        <div class="stat-card restock">
+            <div class="stat-icon">
+                <i class="bi bi-arrow-repeat"></i>
+            </div>
+            <div class="stat-title">Restock Requests</div>
+            <div class="stat-number">
+                <?php echo $restock_data['requests'] ?? 0; ?>
+            </div>
+        </div>
+    </div>
+
+</div>
 
         <!-- Search -->
         <div class="search-wrap">

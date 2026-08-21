@@ -539,30 +539,60 @@ while ($row = $recentResult->fetch_assoc()) {
             flex-wrap: wrap;
         }
 
-        .search-box {
-            width: 280px;
-            height: 42px;
-            border: 1px solid var(--primary);
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            padding: 0 14px;
-            background: #fff;
-        }
+       .search-box {
+    position: relative;
+    width: 400px;
+    max-width: 100%;
+}
 
-        .search-box i {
-            color: var(--primary);
-            margin-right: 10px;
-        }
+.search-box form {
+    width: 100%;
+}
 
-        .search-box input {
-            width: 100%;
-            border: none;
-            outline: none;
-            font-size: 13px;
-            background: transparent;
-        }
+.search-box > i {
+    position: absolute;
+    left: 16px;
+    top: 50%;
+    transform: translateY(-50%);
 
+    color: #7180a8;
+    font-size: 18px;
+
+    z-index: 2;
+    pointer-events: none;
+}
+
+.search-box input {
+    width: 100%;
+    height: 48px;
+
+    padding: 0 18px 0 45px;
+
+    background: #ffffff;
+
+    border: 1px solid #d0d7e8;
+    border-radius: 10px;
+
+    font-size: 14px;
+    color: #1f2a4a;
+
+    outline: none;
+
+    box-sizing: border-box;
+
+    transition: 0.2s ease;
+}
+
+.search-box input::placeholder {
+    color: #7a85a8;
+}
+
+.search-box input:focus {
+    border-color: var(--primary);
+
+    box-shadow:
+        0 0 0 3px rgba(43, 58, 140, 0.10);
+}
         .toolbar-btn {
             background: var(--primary);
             color: #fff;
@@ -606,10 +636,6 @@ while ($row = $recentResult->fetch_assoc()) {
             border-collapse: collapse;
         }
 
-        .table thead {
-            background: var(--primary);
-            color: #fff;
-        }
 
         .table thead th {
             border: none !important;
@@ -617,6 +643,8 @@ while ($row = $recentResult->fetch_assoc()) {
             text-align: center;
             font-size: 13px;
             font-weight: 600;
+            background: var(--primary);
+            color: #fff;
         }
 
         .table tbody td {

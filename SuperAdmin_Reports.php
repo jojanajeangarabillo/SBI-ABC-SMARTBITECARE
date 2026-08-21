@@ -1001,7 +1001,6 @@ $branches = getBranches();
             border-radius: 18px;
             box-shadow: 0 3px 12px rgba(0, 0, 0, 0.05);
             overflow: hidden;
-            padding: 6px 0;
         }
         .table {
             margin-bottom: 0;
@@ -1009,8 +1008,8 @@ $branches = getBranches();
             border-spacing: 0;
         }
         .table thead th {
-            background: #f0f3fc;
-            color: var(--primary);
+            background: var(--primary);
+            color: white;
             font-weight: 700;
             font-size: 15px;
             padding: 16px 20px;
@@ -1099,29 +1098,6 @@ $branches = getBranches();
         @media (max-width: 991px) {
             .main {
                 margin-left: 90px;
-            }
-            .sidebar {
-                width: 90px;
-                padding: 16px 10px;
-            }
-            .system-name,
-            .nav-menu span,
-            .logout span {
-                display: none;
-            }
-            .logo-area {
-                justify-content: center;
-            }
-            .nav-menu a {
-                justify-content: center;
-                padding: 12px 8px;
-            }
-            .nav-menu a i {
-                font-size: 26px;
-                margin: 0;
-            }
-            .logout a {
-                justify-content: center;
             }
         }
 

@@ -296,7 +296,9 @@ if (!empty($branch_filter)) {
             gap: 10px;
             margin-left: auto;
         }
-        .filter-group select {
+       .filter-group select {
+            width: 180px;
+            height: 42px;
             border-radius: 20px;
             border: 1px solid #d0d7e8;
             padding: 6px 16px;
@@ -305,7 +307,14 @@ if (!empty($branch_filter)) {
             color: var(--primary);
             font-weight: 500;
             cursor: pointer;
-        }
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%232B3A8C' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 5.5 8 12l6.5-6.5'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 18px center;
+            background-size: 10px;
+}
         .filter-group select:focus {
             border-color: var(--primary);
             box-shadow: 0 0 0 3px rgba(43, 58, 140, 0.12);
@@ -332,7 +341,6 @@ if (!empty($branch_filter)) {
             border-radius: 18px;
             box-shadow: 0 3px 12px rgba(0, 0, 0, 0.05);
             overflow: hidden;
-            padding: 6px 0 6px 0;
         }
         .table {
             margin-bottom: 0;
@@ -340,8 +348,8 @@ if (!empty($branch_filter)) {
             border-spacing: 0;
         }
         .table thead th {
-            background: #f0f3fc;
-            color: var(--primary);
+            background: var(--primary);
+            color: white;
             font-weight: 700;
             font-size: 15px;
             padding: 16px 20px;
@@ -359,7 +367,7 @@ if (!empty($branch_filter)) {
             border-bottom: none;
         }
         .table tbody tr.total-row td {
-            background: #f0f3fc;
+            background: white;
             font-weight: 700;
             color: var(--primary);
             border-top: 2px solid #d7def0;
@@ -395,37 +403,6 @@ if (!empty($branch_filter)) {
         @media (max-width: 991px) {
             .main {
                 margin-left: 90px;
-            }
-            .sidebar {
-                width: 90px;
-                padding: 16px 10px;
-            }
-            .system-name,
-            .nav-menu span,
-            .logout span {
-                display: none;
-            }
-            .logo-area {
-                justify-content: center;
-            }
-            .nav-menu a {
-                justify-content: center;
-                padding: 12px 8px;
-            }
-            .nav-menu a i {
-                font-size: 26px;
-                margin: 0;
-            }
-            .logout a {
-                justify-content: center;
-            }
-            .filter-group {
-                margin-left: 0;
-                width: 100%;
-                margin-top: 8px;
-            }
-            .filter-group select {
-                flex: 1;
             }
         }
 

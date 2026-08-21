@@ -724,41 +724,173 @@ $pdf_url = '?' . http_build_query($filter_params);
             padding: 35px 35px 40px;
         }
 
-        .stats-row {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 16px;
-            margin-bottom: 28px;
-        }
-        .stat-card {
-            background: white;
-            padding: 16px 20px;
-            border-radius: 14px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-            border-left: 4px solid var(--primary);
-        }
-        .stat-card h6 {
-            color: #7a85a8;
-            font-weight: 600;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 2px;
-        }
-        .stat-card h2 {
-            color: var(--primary);
-            font-weight: 700;
-            margin: 0;
-            font-size: 26px;
-        }
-        .stat-card .stat-sub {
-            font-size: 11px;
-            color: #8a96b8;
-        }
-        .stat-card .text-success { border-left-color: #28a745; }
-        .stat-card .text-info { border-left-color: #17a2b8; }
-        .stat-card .text-warning { border-left-color: #ffc107; }
+        /* =========================
+   STAT CARDS
+   ========================= */
 
+.stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 18px;
+    margin-bottom: 28px;
+}
+
+.stat-card {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+
+    min-height: 125px;
+    padding: 18px 20px;
+
+    background: #ffffff;
+    border-radius: 16px;
+    border-left: 5px solid var(--primary);
+
+    box-shadow: 0 4px 14px rgba(43, 58, 140, 0.08);
+
+    transition: transform 0.2s ease,
+                box-shadow 0.2s ease;
+}
+
+.stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 7px 18px rgba(43, 58, 140, 0.12);
+}
+
+/* Icon */
+.stat-icon {
+    width: 48px;
+    height: 48px;
+    min-width: 48px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    border-radius: 12px;
+
+    background: rgba(43, 58, 140, 0.10);
+    color: var(--primary);
+
+    font-size: 23px;
+}
+
+/* Content */
+.stat-content {
+    min-width: 0;
+}
+
+.stat-card h6 {
+    margin: 0 0 3px;
+
+    color: #667394;
+    font-size: 12px;
+    font-weight: 600;
+
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.stat-card h2 {
+    margin: 0;
+
+    color: var(--primary);
+    font-size: 27px;
+    font-weight: 700;
+    line-height: 1.15;
+}
+
+.stat-card .stat-sub {
+    margin-top: 4px;
+
+    color: #8a96b8;
+    font-size: 11px;
+}
+
+
+/* =========================
+   CARD COLORS
+   ========================= */
+
+.stat-card.card-green {
+    border-left-color: #28a745;
+}
+
+.stat-card.card-green .stat-icon {
+    color: #28a745;
+    background: rgba(40, 167, 69, 0.10);
+}
+
+.stat-card.card-green h2 {
+    color: #28a745;
+}
+
+
+.stat-card.card-cyan {
+    border-left-color: #17a2b8;
+}
+
+.stat-card.card-cyan .stat-icon {
+    color: #17a2b8;
+    background: rgba(23, 162, 184, 0.10);
+}
+
+.stat-card.card-cyan h2 {
+    color: #17a2b8;
+}
+
+
+.stat-card.card-orange {
+    border-left-color: #ffc107;
+}
+
+.stat-card.card-orange .stat-icon {
+    color: #e0a800;
+    background: rgba(255, 193, 7, 0.12);
+}
+
+.stat-card.card-orange h2 {
+    color: #e0a800;
+}
+
+
+/* Responsive */
+
+@media (max-width: 991px) {
+            .main {
+                margin-left: 90px;
+            }
+        }
+@media (max-width: 1100px) {
+    .stats-row {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 576px) {
+    .stats-row {
+        grid-template-columns: 1fr;
+        gap: 12px;
+    }
+
+    .stat-card {
+        min-height: 105px;
+        padding: 15px 17px;
+    }
+
+    .stat-icon {
+        width: 44px;
+        height: 44px;
+        min-width: 44px;
+        font-size: 20px;
+    }
+
+    .stat-card h2 {
+        font-size: 23px;
+    }
+}
         .filter-section {
             background: white;
             padding: 20px 24px;
@@ -915,8 +1047,8 @@ $pdf_url = '?' . http_build_query($filter_params);
             margin-bottom: 0;
         }
         .table thead th {
-            background: #f0f3fc;
-            color: var(--primary);
+            background: var(--primary);
+            color: white;
             font-weight: 700;
             font-size: 12px;
             padding: 12px 16px;
@@ -979,48 +1111,88 @@ $pdf_url = '?' . http_build_query($filter_params);
             display: inline-block;
         }
 
-        .pagination-wrap {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding-top: 16px;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
-        .pagination-info {
-            color: #6c7a9a;
-            font-size: 13px;
-        }
-        .pagination-info strong {
-            color: var(--primary);
-        }
-        .pagination-wrap .pagination {
-            margin: 0;
-        }
-        .pagination-wrap .page-item .page-link {
-            color: var(--primary);
-            border: 1px solid #d7def0;
-            border-radius: 8px;
-            padding: 6px 12px;
-            font-weight: 600;
-            background: white;
-            margin: 0 2px;
-            transition: 0.1s;
-            font-size: 13px;
-        }
-        .pagination-wrap .page-item.active .page-link {
-            background: var(--primary);
-            border-color: var(--primary);
-            color: white;
-        }
-        .pagination-wrap .page-item .page-link:hover {
-            background: #e7ecfc;
-            border-color: var(--primary);
-        }
-        .pagination-wrap .page-item.disabled .page-link {
-            color: #b0bcd6;
-            background: #f5f7fc;
-        }
+    /* =========================
+   PAGINATION
+   ========================= */
+
+.pagination-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    padding-top: 20px;
+}
+
+.pagination-wrap nav {
+    display: flex;
+    justify-content: center;
+}
+
+.pagination-wrap .pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin: 0;
+}
+
+/* Pagination buttons */
+.pagination-wrap .page-item {
+    margin: 0;
+}
+
+.pagination-wrap .page-link {
+    width: 40px;
+    height: 40px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    padding: 0;
+
+    color: var(--primary);
+    background: #fff;
+
+    border: 1px solid #d7def0;
+    border-radius: 10px;
+
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.pagination-wrap .page-item.active .page-link {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+.pagination-wrap .page-item.disabled .page-link {
+    background: #eef1f6;
+    color: #b5bdcc;
+    border-color: #dbe2f0;
+}
+
+.pagination-wrap .page-link:hover:not(.disabled) {
+    background: #f1f4ff;
+    color: var(--primary);
+}
+
+/* Showing entries */
+.pagination-info {
+    display: block;
+    margin-top: 10px;
+
+    color: #667394;
+    font-size: 13px;
+    text-align: center;
+}
+
+.pagination-info strong {
+    color: var(--primary);
+    font-weight: 600;
+}
 
         .no-results {
             padding: 40px 20px;
@@ -1039,6 +1211,11 @@ $pdf_url = '?' . http_build_query($filter_params);
             gap: 10px;
             align-items: center;
             margin-bottom: 16px;
+        }
+         @media (max-width: 991px) {
+            .main {
+                margin-left: 90px;
+            }
         }
 
         @media (max-width: 1200px) {
@@ -1148,28 +1325,68 @@ $pdf_url = '?' . http_build_query($filter_params);
 
     <div class="content">
         <!-- Stats -->
-        <div class="stats-row">
-            <div class="stat-card">
-                <h6>Total Logs</h6>
-                <h2><?php echo number_format($stats['total_logs']); ?></h2>
-                <div class="stat-sub">All time</div>
-            </div>
-            <div class="stat-card text-success">
-                <h6>Unique Users</h6>
-                <h2><?php echo $stats['unique_users']; ?></h2>
-                <div class="stat-sub">Who performed actions</div>
-            </div>
-            <div class="stat-card text-info">
-                <h6>Modules</h6>
-                <h2><?php echo $stats['unique_modules']; ?></h2>
-                <div class="stat-sub">System modules</div>
-            </div>
-            <div class="stat-card text-warning">
-                <h6>Earliest Activity</h6>
-                <h2 style="font-size:18px;"><?php echo $stats['earliest_activity'] ? date('M d, Y', strtotime($stats['earliest_activity'])) : 'N/A'; ?></h2>
-                <div class="stat-sub">First recorded log</div>
-            </div>
+<div class="stats-row">
+
+    <!-- Total Logs -->
+    <div class="stat-card">
+        <div class="stat-icon">
+            <i class="bi bi-journal-text"></i>
         </div>
+
+        <div class="stat-content">
+            <h6>Total Logs</h6>
+            <h2><?php echo number_format($stats['total_logs']); ?></h2>
+            <div class="stat-sub">All time</div>
+        </div>
+    </div>
+
+
+    <!-- Unique Users -->
+    <div class="stat-card card-green">
+        <div class="stat-icon">
+            <i class="bi bi-people"></i>
+        </div>
+
+        <div class="stat-content">
+            <h6>Unique Users</h6>
+            <h2><?php echo $stats['unique_users']; ?></h2>
+            <div class="stat-sub">Who performed actions</div>
+        </div>
+    </div>
+
+
+    <!-- Modules -->
+    <div class="stat-card card-cyan">
+        <div class="stat-icon">
+            <i class="bi bi-grid"></i>
+        </div>
+
+        <div class="stat-content">
+            <h6>Modules</h6>
+            <h2><?php echo $stats['unique_modules']; ?></h2>
+            <div class="stat-sub">System modules</div>
+        </div>
+    </div>
+
+
+    <!-- Earliest Activity -->
+    <div class="stat-card card-orange">
+        <div class="stat-icon">
+            <i class="bi bi-clock-history"></i>
+        </div>
+
+        <div class="stat-content">
+            <h6>Earliest Activity</h6>
+            <h2 style="font-size:18px;">
+                <?php echo $stats['earliest_activity']
+                    ? date('M d, Y', strtotime($stats['earliest_activity']))
+                    : 'N/A'; ?>
+            </h2>
+            <div class="stat-sub">First recorded log</div>
+        </div>
+    </div>
+
+</div>
 
         <!-- Module Breakdown -->
         <?php if ($module_breakdown_result && $module_breakdown_result->num_rows > 0): ?>
@@ -1355,86 +1572,122 @@ $pdf_url = '?' . http_build_query($filter_params);
         </div>
 
         <!-- Pagination -->
-        <?php if ($total_pages > 1): ?>
-            <div class="pagination-wrap">
-                <div class="pagination-info">
-                    Showing <strong><?php echo ($offset + 1); ?></strong> to 
-                    <strong><?php echo min($offset + $per_page, $total_rows); ?></strong> 
-                    of <strong><?php echo number_format($total_rows); ?></strong> entries
-                </div>
-                <nav aria-label="Audit logs pagination">
-                    <ul class="pagination">
-                        <?php if ($page > 1): ?>
-                            <li class="page-item">
-                                <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page - 1])); ?>">
-                                    <i class="bi bi-chevron-left"></i>
-                                </a>
-                            </li>
-                        <?php else: ?>
-                            <li class="page-item disabled">
-                                <span class="page-link"><i class="bi bi-chevron-left"></i></span>
-                            </li>
-                        <?php endif; ?>
+<?php if ($total_pages > 1): ?>
+    <div class="pagination-wrap">
 
-                        <?php
-                        $start_page = max(1, $page - 2);
-                        $end_page = min($total_pages, $page + 2);
-                        
-                        if ($start_page > 1): ?>
-                            <li class="page-item">
-                                <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => 1])); ?>">1</a>
-                            </li>
-                            <?php if ($start_page > 2): ?>
-                                <li class="page-item disabled"><span class="page-link">…</span></li>
-                            <?php endif; ?>
-                        <?php endif; ?>
+        <!-- Pagination buttons FIRST -->
+        <nav aria-label="Audit logs pagination">
+            <ul class="pagination">
 
-                        <?php for ($i = $start_page; $i <= $end_page; $i++): ?>
-                            <li class="page-item <?php echo $i == $page ? 'active' : ''; ?>">
-                                <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $i])); ?>">
-                                    <?php echo $i; ?>
-                                </a>
-                            </li>
-                        <?php endfor; ?>
+                <?php if ($page > 1): ?>
+                    <li class="page-item">
+                        <a class="page-link"
+                           href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page - 1])); ?>">
+                            <i class="bi bi-chevron-left"></i>
+                        </a>
+                    </li>
+                <?php else: ?>
+                    <li class="page-item disabled">
+                        <span class="page-link">
+                            <i class="bi bi-chevron-left"></i>
+                        </span>
+                    </li>
+                <?php endif; ?>
 
-                        <?php if ($end_page < $total_pages): ?>
-                            <?php if ($end_page < $total_pages - 1): ?>
-                                <li class="page-item disabled"><span class="page-link">…</span></li>
-                            <?php endif; ?>
-                            <li class="page-item">
-                                <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $total_pages])); ?>">
-                                    <?php echo $total_pages; ?>
-                                </a>
-                            </li>
-                        <?php endif; ?>
 
-                        <?php if ($page < $total_pages): ?>
-                            <li class="page-item">
-                                <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page + 1])); ?>">
-                                    <i class="bi bi-chevron-right"></i>
-                                </a>
-                            </li>
-                        <?php else: ?>
-                            <li class="page-item disabled">
-                                <span class="page-link"><i class="bi bi-chevron-right"></i></span>
-                            </li>
-                        <?php endif; ?>
-                    </ul>
-                </nav>
-            </div>
-        <?php else: ?>
-            <?php if ($total_rows > 0): ?>
-                <div class="pagination-wrap">
-                    <div class="pagination-info">
-                        Showing <strong>1</strong> to <strong><?php echo $total_rows; ?></strong> 
-                        of <strong><?php echo number_format($total_rows); ?></strong> entries
-                    </div>
-                </div>
-            <?php endif; ?>
-        <?php endif; ?>
+                <?php
+                $start_page = max(1, $page - 2);
+                $end_page = min($total_pages, $page + 2);
+
+                if ($start_page > 1):
+                ?>
+                    <li class="page-item">
+                        <a class="page-link"
+                           href="?<?php echo http_build_query(array_merge($_GET, ['page' => 1])); ?>">
+                            1
+                        </a>
+                    </li>
+
+                    <?php if ($start_page > 2): ?>
+                        <li class="page-item disabled">
+                            <span class="page-link">…</span>
+                        </li>
+                    <?php endif; ?>
+
+                <?php endif; ?>
+
+
+                <?php for ($i = $start_page; $i <= $end_page; $i++): ?>
+                    <li class="page-item <?php echo $i == $page ? 'active' : ''; ?>">
+                        <a class="page-link"
+                           href="?<?php echo http_build_query(array_merge($_GET, ['page' => $i])); ?>">
+                            <?php echo $i; ?>
+                        </a>
+                    </li>
+                <?php endfor; ?>
+
+
+                <?php if ($end_page < $total_pages): ?>
+
+                    <?php if ($end_page < $total_pages - 1): ?>
+                        <li class="page-item disabled">
+                            <span class="page-link">…</span>
+                        </li>
+                    <?php endif; ?>
+
+                    <li class="page-item">
+                        <a class="page-link"
+                           href="?<?php echo http_build_query(array_merge($_GET, ['page' => $total_pages])); ?>">
+                            <?php echo $total_pages; ?>
+                        </a>
+                    </li>
+
+                <?php endif; ?>
+
+
+                <?php if ($page < $total_pages): ?>
+                    <li class="page-item">
+                        <a class="page-link"
+                           href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page + 1])); ?>">
+                            <i class="bi bi-chevron-right"></i>
+                        </a>
+                    </li>
+                <?php else: ?>
+                    <li class="page-item disabled">
+                        <span class="page-link">
+                            <i class="bi bi-chevron-right"></i>
+                        </span>
+                    </li>
+                <?php endif; ?>
+
+            </ul>
+        </nav>
+
+
+        <!-- Showing entries BELOW -->
+        <div class="pagination-info">
+            Showing <strong><?php echo ($offset + 1); ?></strong> to
+            <strong><?php echo min($offset + $per_page, $total_rows); ?></strong>
+            of <strong><?php echo number_format($total_rows); ?></strong> entries
+        </div>
 
     </div>
-</div>
+
+<?php else: ?>
+
+    <?php if ($total_rows > 0): ?>
+        <div class="pagination-wrap">
+
+            <div class="pagination-info">
+                Showing <strong>1</strong> to
+                <strong><?php echo $total_rows; ?></strong>
+                of <strong><?php echo number_format($total_rows); ?></strong> entries
+            </div>
+
+        </div>
+    <?php endif; ?>
+
+<?php endif; ?>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>

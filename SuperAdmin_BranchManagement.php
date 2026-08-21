@@ -247,14 +247,16 @@ if (isset($_GET['archive_id'])) {
 
         .toolbar {
             display: flex;
-            flex-wrap: wrap;
-            gap: 16px;
             align-items: center;
+            justify-content: space-between;
             margin-bottom: 24px;
+            width: 100%;
         }
+        
         .search-wrap {
             position: relative;
-            flex: 1 1 280px;
+            width: 100%;
+            max-width: 400px;
         }
         .search-wrap i {
             position: absolute;
@@ -268,7 +270,7 @@ if (isset($_GET['archive_id'])) {
             width: 100%;
             padding: 12px 12px 12px 44px;
             border: 1px solid #d0d7e8;
-            border-radius: 40px;
+            border-radius: 10px;
             font-size: 15px;
             background: white;
             outline: none;
@@ -280,6 +282,7 @@ if (isset($_GET['archive_id'])) {
         }
         .btn-add {
             background: var(--primary);
+            margin-left: auto;
             color: white;
             border: none;
             border-radius: 40px;
@@ -301,7 +304,7 @@ if (isset($_GET['archive_id'])) {
             border-radius: 18px;
             box-shadow: 0 3px 12px rgba(0, 0, 0, 0.05);
             overflow: hidden;
-            padding: 6px 0 6px 0;
+            padding: 0
         }
         .table {
             margin-bottom: 0;
@@ -309,8 +312,8 @@ if (isset($_GET['archive_id'])) {
             border-spacing: 0;
         }
         .table thead th {
-            background: #f0f3fc;
-            color: var(--primary);
+            background: var(--primary);
+            color: white;
             font-weight: 700;
             font-size: 15px;
             padding: 16px 20px;
@@ -356,32 +359,82 @@ if (isset($_GET['archive_id'])) {
             margin-right: 0;
         }
 
-        .pagination-wrap {
-            display: flex;
-            justify-content: flex-end;
-            padding-top: 24px;
-            align-items: center;
-            gap: 6px;
-        }
-        .pagination-wrap .page-item .page-link {
-            color: var(--primary);
-            border: 1px solid #d7def0;
-            border-radius: 8px;
-            padding: 8px 16px;
-            font-weight: 600;
-            background: white;
-            margin: 0 2px;
-            transition: 0.1s;
-        }
-        .pagination-wrap .page-item.active .page-link {
-            background: var(--primary);
-            border-color: var(--primary);
-            color: white;
-        }
-        .pagination-wrap .page-item .page-link:hover {
-            background: #e7ecfc;
-            border-color: var(--primary);
-        }
+     /* ---- pagination ---- */
+.pagination-wrap {
+    display: flex;
+    justify-content:center;
+    align-items: center;
+    padding-top: 24px;
+}
+
+.pagination-wrap .pagination {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin: 0;
+}
+
+.pagination-wrap .page-item {
+    margin: 0;
+}
+
+.pagination-wrap .page-link {
+    width: 40px;
+    height: 40px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    padding: 0;
+    margin: 0 3px;
+
+    border: 1px solid #dbe2f0;
+    border-radius: 10px !important;
+
+    background: #fff;
+    color: var(--primary);
+
+    font-size: 15px;
+    font-weight: 500;
+}
+
+/* First button */
+.pagination-wrap .page-item:first-child .page-link {
+    border-radius: 9px 0 0 9px;
+}
+
+/* Last button */
+.pagination-wrap .page-item:last-child .page-link {
+    border-radius: 0 9px 9px 0;
+}
+
+/* Active page */
+.pagination-wrap .page-item.active .page-link {
+    background: var(--primary);
+    color: #ffffff;
+    border-color: var(--primary);
+    border-radius: 10px !important;
+}
+
+/* Previous disabled */
+.pagination-wrap .page-item.disabled .page-link {
+    background: #eef1f6;
+    color: #aeb8ca;
+    border-color: #dbe2f0;
+    border-radius: 10px !important;
+}
+
+/* Hover */
+.pagination-wrap .page-item:not(.active):not(.disabled) .page-link:hover {
+    background: #f4f6fb;
+    color: var(--primary);
+}
+
+/* Remove Bootstrap focus */
+.pagination-wrap .page-link:focus {
+    box-shadow: none;
+}
 
         /* Toast / Alert styling */
         .toast-container {
@@ -435,14 +488,8 @@ if (isset($_GET['archive_id'])) {
 
         @media (max-width: 991px) {
             .main { margin-left: 90px; }
-            .sidebar { width: 90px; padding: 16px 10px; }
-            .system-name, .nav-menu span, .logout span { display: none; }
-            .logo-area { justify-content: center; }
-            .nav-menu a { justify-content: center; padding: 12px 8px; }
-            .nav-menu a i { font-size: 26px; margin: 0; }
-            .logout a { justify-content: center; }
+            
         }
-
         @media (max-width: 576px) {
             .topbar { padding: 0 16px; height: 70px; }
             .content { padding: 20px 16px; }
@@ -547,17 +594,32 @@ if (isset($_GET['archive_id'])) {
         </div>
 
         <!-- pagination -->
-        <div class="pagination-wrap">
-            <nav aria-label="Branch pagination">
-                <ul class="pagination">
-                    <li class="page-item active"><a class="page-link" href="#">1</a></li>
-                    <li class="page-item"><a class="page-link" href="#">2</a></li>
-                    <li class="page-item"><a class="page-link" href="#">3</a></li>
-                    <li class="page-item"><a class="page-link" href="#">4</a></li>
-                    <li class="page-item"><a class="page-link" href="#">5</a></li>
-                </ul>
-            </nav>
-        </div>
+      <div class="pagination-wrap">
+    <nav aria-label="Branch pagination">
+        <ul class="pagination">
+
+            <!-- Previous -->
+            <li class="page-item disabled">
+                <a class="page-link" href="#" aria-label="Previous">
+                    <i class="bi bi-chevron-left"></i>
+                </a>
+            </li>
+
+            <!-- Current -->
+            <li class="page-item active">
+                <a class="page-link" href="#">1</a>
+            </li>
+
+            <!-- Next -->
+            <li class="page-item">
+                <a class="page-link" href="#" aria-label="Next">
+                    <i class="bi bi-chevron-right"></i>
+                </a>
+            </li>
+
+        </ul>
+    </nav>
+</div>
 
     </div> <!-- /content -->
 </div> <!-- /main -->

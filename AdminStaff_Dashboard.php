@@ -341,6 +341,7 @@ while ($row = $trendResult->fetch_assoc()) {
                 grid-template-columns: 1fr;
             }
         }
+        
 
         /* Dashboard Grid */
         .dashboard-grid {

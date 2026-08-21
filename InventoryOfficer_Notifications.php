@@ -18,6 +18,24 @@ $notifications = [
     ['type' => 'low_stock',  'icon' => 'bi-exclamation-triangle-fill', 'title' => 'Low Stock Alert',        'message' => 'Mefenamic 500mg is below minimum stock — 18 pcs remaining.',        'time' => '4 days ago',  'unread' => false],
 ];
 
+// UI Logic: Group notifications by relative date without altering the data strings
+$groupedItems = [];
+foreach ($notifications as $n) {
+    $timeString = $n['time'];
+    if (strpos($timeString, 'hours') !== false) {
+        $groupKey = 'Today';
+    } elseif (strpos($timeString, 'day') !== false) {
+        $groupKey = 'Yesterday';
+    } else {
+        $groupKey = 'Earlier';
+    }
+    $groupedItems[$groupKey][] = $n;
+}
+$orderedGroups = [];
+if (isset($groupedItems['Today'])) $orderedGroups['Today'] = $groupedItems['Today'];
+if (isset($groupedItems['Yesterday'])) $orderedGroups['Yesterday'] = $groupedItems['Yesterday'];
+if (isset($groupedItems['Earlier'])) $orderedGroups['Earlier'] = $groupedItems['Earlier'];
+
 function notifIconClass($type) {
     switch ($type) {
         case 'low_stock':  return 'icon-low';
@@ -53,8 +71,9 @@ href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.m
 }
 
 body{
-background:white;
-font-family:'Segoe UI',sans-serif;
+background:#f0f2f5; 
+font-family:'Segoe UI', Roboto, system-ui, sans-serif;
+color:#1e293b;
 }
 
 .main{
@@ -69,11 +88,11 @@ display:flex;
 align-items:center;
 justify-content:space-between;
 padding:0 35px;
-box-shadow:0 2px 8px rgba(0,0,0,.08);
+box-shadow:0 2px 12px rgba(0,0,0,0.04);
 }
 
 .topbar h3{
-font-size:28px;
+font-size:26px;
 font-weight:700;
 color:var(--primary);
 margin:0;
@@ -83,146 +102,262 @@ margin:0;
 font-weight:600;
 color:var(--primary);
 cursor:pointer;
+display:flex;
+align-items:center;
+gap:4px;
 }
 
 .page-body{
 padding:35px;
 }
 
+/* --- UPDATED TOOLBAR (Matching Reference Image) --- */
 .toolbar{
 display:flex;
 align-items:center;
 justify-content:space-between;
-gap:16px;
-margin-bottom:22px;
+margin-bottom:28px;
 flex-wrap:wrap;
+gap:12px;
 }
 
-.filter-tabs{
+.toolbar-left{
 display:flex;
-gap:10px;
+align-items:center;
+gap:14px;
 flex-wrap:wrap;
 }
 
-.filter-tab{
+.search-box{
+display:flex;
+align-items:center;
 background:white;
-border:1px solid #dcdee8;
-color:var(--primary);
-font-weight:600;
-font-size:13px;
-padding:8px 16px;
-border-radius:20px;
+border:1.5px solid #64748b; /* Darker border matching the image */
+border-radius:30px;
+padding:0 16px;
+height:42px;
+width:320px;
+transition:border 0.2s;
 }
 
-.filter-tab.active{
+.search-box:focus-within{
+border:1.5px solid var(--primary);
+box-shadow:0 0 0 2px rgba(43,58,140,0.1);
+}
+
+.search-box i{
+color:#94a3b8;
+font-size:1.1rem;
+margin-right:8px;
+}
+
+.search-box input{
+border:none;
+outline:none;
+width:100%;
+font-size:14px;
+background:transparent;
+color:#334155;
+}
+
+.search-box input::placeholder{
+color:#94a3b8;
+font-weight:500;
+}
+
+.btn-filter{
 background:var(--primary);
 color:white;
-border-color:var(--primary);
-}
-
-.mark-read{
-background:none;
 border:none;
-color:var(--primary);
+padding:0 18px;
+height:42px;
+border-radius:8px;
+display:flex;
+align-items:center;
+gap:8px;
 font-weight:600;
 font-size:14px;
 }
 
-.mark-read:hover{
-text-decoration:underline;
+.btn-filter i{
+font-size:0.9rem;
 }
 
-.notif-list{
-background:white;
-border-radius:12px;
-border:1px solid #dfe1ee;
-overflow:hidden;
+.branch-text{
+color:#64748b;
+font-size:14px;
+font-weight:500;
 }
 
+.btn-mark-all{
+background:#22c55e; /* Reference Green */
+color:white;
+border:none;
+padding:0 22px;
+height:42px;
+border-radius:8px;
+display:flex;
+align-items:center;
+gap:8px;
+font-weight:600;
+font-size:14px;
+transition:background 0.2s;
+}
+
+.btn-mark-all:hover{
+background:#16a34a;
+}
+
+/* --- DATE GROUP HEADER --- */
+.date-header{
+color:var(--primary);
+font-size:18px;
+font-weight:700;
+margin:24px 0 16px 0;
+}
+.date-header:first-of-type{
+margin-top:0;
+}
+
+/* --- NOTIFICATION CARD (Exact Layout) --- */
 .notif-item{
 display:flex;
-gap:16px;
-padding:18px 22px;
-border-bottom:1px solid #eef0f7;
+background:white;
+border-radius:12px;
+margin-bottom:18px;
+padding:18px 20px;
+border:1px solid #e2e8f0;
 position:relative;
+box-shadow:0 1px 2px rgba(0,0,0,0.04);
+transition:box-shadow 0.2s, border-color 0.2s;
 }
 
-.notif-item:last-child{
-border-bottom:none;
+.notif-item:hover{
+box-shadow:0 4px 12px rgba(0,0,0,0.05);
 }
 
-.notif-item.unread{
-background:#F7F8FF;
+/* Left Accent Borders Based on Type */
+.border-low_stock{ border-left: 6px solid #ef4444; }
+.border-expiring{ border-left: 6px solid #eab308; }
+.border-prediction{ border-left: 6px solid #3b82f6; }
+.border-stock_in{ border-left: 6px solid #22c55e; }
+
+.notif-icon-wrap{
+display:flex;
+align-items:flex-start;
+padding-right:16px;
 }
 
 .notif-icon{
-width:44px;
-height:44px;
-border-radius:12px;
+width:48px;
+height:48px;
+border-radius:12px; /* Rounded box */
 display:flex;
 align-items:center;
 justify-content:center;
-font-size:18px;
+font-size:1.4rem;
 flex-shrink:0;
 }
 
-.icon-low{
-background:#FFEAEA;
-color:var(--accent);
-}
+.icon-low{ background:#fee2e2; color:#dc2626; }
+.icon-expiring{ background:#fef9c3; color:#ca8a04; }
+.icon-prediction{ background:#dbeafe; color:#2563eb; }
+.icon-in{ background:#dcfce7; color:#16a34a; }
 
-.icon-expiring{
-background:#FFF4E5;
-color:#C97A1A;
-}
-
-.icon-prediction{
-background:#EDEFFA;
-color:var(--primary);
-}
-
-.icon-in{
-background:#E6F4EA;
-color:#1E7B34;
-}
-
-.notif-body{
+.notif-content{
 flex:1;
+padding:2px 0;
+display:flex;
+flex-direction:column;
+justify-content:center;
 }
 
 .notif-title{
 font-weight:700;
-color:var(--primary);
+color:#0f172a;
 font-size:15px;
-margin-bottom:2px;
+margin-bottom:4px;
 }
 
 .notif-message{
 font-size:14px;
-color:#555;
-margin-bottom:4px;
+color:#475569;
+margin-bottom:6px;
+line-height:1.4;
 }
 
 .notif-time{
 font-size:12px;
-color:#9aa0c3;
+color:#94a3b8;
 }
 
-.unread-dot{
-width:9px;
-height:9px;
+.notif-actions{
+display:flex;
+flex-direction:column;
+align-items:flex-end;
+justify-content:center;
+padding-left:16px;
+gap:8px;
+}
+
+/* Badge Pill */
+.badge-status-pill{
+padding:4px 14px;
+border-radius:30px;
+font-size:12px;
+font-weight:600;
+display:inline-block;
+}
+.badge-low_stock{ background:#fee2e2; color:#dc2626; }
+.badge-expiring{ background:#fef9c3; color:#ca8a04; }
+.badge-prediction{ background:#dbeafe; color:#2563eb; }
+.badge-stock_in{ background:#dcfce7; color:#16a34a; }
+
+/* Action Button */
+.notif-action-btn{
+background:var(--primary);
+color:white;
+border:none;
+border-radius:8px;
+padding:6px 16px;
+font-size:13px;
+font-weight:500;
+transition:background 0.2s;
+}
+.notif-action-btn:hover{
+background:#1d2863;
+}
+
+/* Mark Read Toggle */
+.mark-read-row{
+display:flex;
+align-items:center;
+gap:6px;
+font-size:13px;
+color:#64748b;
+cursor:pointer;
+margin-top:2px;
+}
+
+.mark-read-row .circle-icon{
+width:14px;
+height:14px;
 border-radius:50%;
-background:var(--accent);
-flex-shrink:0;
-margin-top:6px;
+border:2px solid #cbd5e1;
+display:inline-block;
+transition:border-color 0.2s;
+}
+
+.mark-read-row:hover .circle-icon{
+border-color:var(--primary);
 }
 
 @media(max-width:991px){
-.main{
-margin-left:90px;
+.main{ margin-left:90px; }
+.search-box{ width:100%; max-width:300px; }
+.toolbar-left{ width:100%; }
+.btn-mark-all{ width:100%; justify-content:center; }
 }
-}
-
 </style>
 
 </head>
@@ -270,37 +405,60 @@ margin-left:90px;
 
 <div class="page-body">
 
+<!-- Enhanced Toolbar -->
 <div class="toolbar">
-
-<div class="filter-tabs">
-<button class="filter-tab active">All</button>
-<button class="filter-tab">Unread</button>
-<button class="filter-tab">Low Stock</button>
-<button class="filter-tab">Expiring</button>
-<button class="filter-tab">Predictions</button>
+    <div class="toolbar-left">
+        <div class="search-box">
+            <i class="bi bi-search"></i>
+            <input type="text" placeholder="Search Notifications...">
+        </div>
+        <button class="btn-filter">
+            <i class="bi bi-funnel-fill"></i> Filters <i class="bi bi-caret-down-fill" style="font-size: 10px;"></i>
+        </button>
+        <span class="branch-text">Cainta Branch</span>
+    </div>
+    <button class="btn-mark-all">
+        <i class="bi bi-check-lg"></i> Mark All as Read
+    </button>
 </div>
 
-<button class="mark-read"><i class="bi bi-check2-all me-1"></i>Mark all as read</button>
-
-</div>
-
-<div class="notif-list">
-<?php foreach ($notifications as $n): ?>
-<div class="notif-item <?php echo $n['unread'] ? 'unread' : ''; ?>">
-<div class="notif-icon <?php echo notifIconClass($n['type']); ?>">
-<i class="bi <?php echo $n['icon']; ?>"></i>
-</div>
-<div class="notif-body">
-<div class="notif-title"><?php echo htmlspecialchars($n['title']); ?></div>
-<div class="notif-message"><?php echo htmlspecialchars($n['message']); ?></div>
-<div class="notif-time"><?php echo htmlspecialchars($n['time']); ?></div>
-</div>
-<?php if ($n['unread']): ?>
-<div class="unread-dot"></div>
-<?php endif; ?>
-</div>
+<!-- Grouped Notifications -->
+<?php foreach ($orderedGroups as $groupLabel => $items): ?>
+    <div class="date-header"><?php echo htmlspecialchars($groupLabel); ?></div>
+    
+    <?php foreach ($items as $n): 
+        // Mapping type to badge text (UI only)
+        $badgeText = match($n['type']) {
+            'low_stock' => 'Low Stock',
+            'expiring' => 'Expiring',
+            'prediction' => 'Alert',
+            'stock_in' => 'Restocked',
+            default => 'Update',
+        };
+    ?>
+    <div class="notif-item border-<?php echo $n['type']; ?>">
+        <div class="notif-icon-wrap">
+            <div class="notif-icon <?php echo notifIconClass($n['type']); ?>">
+                <i class="bi <?php echo $n['icon']; ?>"></i>
+            </div>
+        </div>
+        
+        <div class="notif-content">
+            <div class="notif-title"><?php echo htmlspecialchars($n['title']); ?></div>
+            <div class="notif-message"><?php echo htmlspecialchars($n['message']); ?></div>
+            <div class="notif-time"><?php echo htmlspecialchars($n['time']); ?></div>
+        </div>
+        
+        <div class="notif-actions">
+            <span class="badge-status-pill badge-<?php echo $n['type']; ?>"><?php echo htmlspecialchars($badgeText); ?></span>
+            <button class="notif-action-btn">View Details</button>
+            <div class="mark-read-row">
+                <span class="circle-icon"></span> Mark Read
+            </div>
+        </div>
+    </div>
+    <?php endforeach; ?>
 <?php endforeach; ?>
-</div>
 
 </div>
 

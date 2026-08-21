@@ -1,5 +1,45 @@
 <?php
+session_start();
+require_once 'sources/db_connect.php';
+
+// Check if user is logged in and is an admin staff
+if (
+    !isset($_SESSION['user_id']) ||
+    !isset($_SESSION['role_id']) ||
+    $_SESSION['role_id'] != 2 // role_id 2 is for Branch Admin
+) {
+    header("Location: login.php");
+    exit();
+}
+
+$user_id = $_SESSION['user_id'];
+$branch_id = null;
+$branch_name = '';
+$username = '';
+
+// Get user's branch info
+$userQuery = "SELECT u.branch_id, u.username, b.branch_name 
+              FROM users u 
+              LEFT JOIN branches b ON u.branch_id = b.branch_id 
+              WHERE u.user_id = ?";
+$stmt = $conn->prepare($userQuery);
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$userResult = $stmt->get_result();
+
+if ($userResult->num_rows > 0) {
+    $userData = $userResult->fetch_assoc();
+    $branch_id = $userData['branch_id'];
+    $branch_name = $userData['branch_name'] ?? 'Unknown Branch';
+    $username = $userData['username'] ?? 'Branch Admin';
+}
+
+// If no branch assigned
+if (!$branch_id) {
+    $branch_name = 'No Branch Assigned';
+}
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -33,7 +73,7 @@
 
         body{
 
-            background:white;
+            background: #f9faff;
 
             font-family:'Segoe UI',sans-serif;
 
@@ -154,33 +194,186 @@
             background: #f8faff;
         }
 
-        /* ===============================
-        SUMMARY CARDS
-        ================================= */
+/* =========================================
+   SUMMARY T CARDS
+========================================= */
 
-        .summary-cards{
-            display:grid;
-            grid-template-columns:repeat(4,1fr);
-            gap:20px;
-            margin-bottom:30px;
-        }
+.summary-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 20px;
+    margin-bottom: 30px;
+}
 
-        .summary-card{
-            background:#fff;
-            border:2px solid var(--primary);
-            border-radius:12px;
-            padding:18px;
-            display:flex;
-            align-items:center;
-            gap:16px;
-            transition:.2s;
-        }
+.summary-card {
+    position: relative;
 
-        .summary-card:hover{
-            transform:translateY(-3px);
-            box-shadow:0 8px 18px rgba(0,0,0,.08);
-        }
+    background: #ffffff;
 
+    min-height: 145px;
+
+    border: none;
+    border-radius: 16px;
+
+    padding: 22px 24px;
+
+    display: flex;
+    align-items: center;
+
+    gap: 20px;
+
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+
+    overflow: hidden;
+
+    transition:
+        transform 0.2s ease,
+        box-shadow 0.2s ease;
+}
+
+
+/* LEFT COLORED BORDER */
+
+.summary-card::before {
+    content: "";
+
+    position: absolute;
+
+    left: 0;
+    top: 0;
+    bottom: 0;
+
+    width: 5px;
+}
+
+
+/* ICON */
+
+.summary-card .card-icon {
+    width: 48px;
+    min-width: 48px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    font-size: 32px;
+}
+
+
+/* CONTENT */
+
+.summary-card .card-content {
+    flex: 1;
+}
+
+.summary-card .card-content h6 {
+    margin: 0 0 4px;
+
+    font-size: 15px;
+    font-weight: 600;
+
+    color: #17233f;
+}
+
+.summary-card .card-content h2 {
+    margin: 0 0 5px;
+
+    font-size: 32px;
+    font-weight: 700;
+
+    line-height: 1.1;
+
+    color: #111827;
+}
+
+.summary-card .card-content span {
+    font-size: 13px;
+
+    color: #71809d;
+
+    font-weight: 400;
+}
+
+
+/* =========================================
+   CARD COLORS
+========================================= */
+
+/* Total Supplies - BLUE */
+
+.summary-card:nth-child(1)::before {
+    background: #2B3A8C;
+}
+
+.summary-card:nth-child(1) .card-icon {
+    color: #2B3A8C;
+}
+
+
+/* Low Stocks - YELLOW */
+
+.summary-card:nth-child(2)::before {
+    background: #FFB800;
+}
+
+.summary-card:nth-child(2) .card-icon {
+    color: #FFB800;
+}
+
+
+/* Expiring Stocks - RED */
+
+.summary-card:nth-child(3)::before {
+    background: #DC3545;
+}
+
+.summary-card:nth-child(3) .card-icon {
+    color: #DC3545;
+}
+
+
+/* Total Usage - GREEN */
+
+.summary-card:nth-child(4)::before {
+    background: #28A745;
+}
+
+.summary-card:nth-child(4) .card-icon {
+    color: #28A745;
+}
+
+
+/* =========================================
+   HOVER
+========================================= */
+
+.summary-card:hover {
+    transform: translateY(-3px);
+
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.10);
+}
+
+
+/* =========================================
+   RESPONSIVE
+========================================= */
+
+@media (max-width: 1200px) {
+
+    .summary-cards {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+}
+
+@media (max-width: 768px) {
+
+    .summary-cards {
+        grid-template-columns: 1fr;
+    }
+
+}
         .card-icon{
             font-size:52px;
             color:var(--accent);
@@ -466,7 +659,10 @@
 
         <div class="topbar">
             <h3>Medical Supplies</h3>
-            <div class="profile"> ADMIN <i class="bi bi-caret-down-fill"></i> </div>
+            <div class="profile">
+                <?php echo htmlspecialchars($username); ?>
+                <i class="bi bi-caret-down-fill"></i>
+</div>
         </div>
 
         <div class="content-wrapper">

@@ -200,7 +200,7 @@ $today_data = $today_result->fetch_assoc();
         }
 
         body {
-            background: white;
+            background:  #f0f2f5;
             font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
             margin: 0;
             padding: 0;
@@ -242,49 +242,136 @@ $today_data = $today_result->fetch_assoc();
             padding: 35px 35px 40px;
         }
 
-        /* ---- stat cards ---- */
-        .stat-card {
-            background: var(--card-bg);
-            border-radius: 18px;
-            padding: 20px 22px;
-            height: 140px;
-            box-shadow: 0 3px 8px rgba(0, 0, 0, 0.06);
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            transition: transform 0.2s;
-        }
-        .stat-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.1);
-        }
-        .stat-title {
-            font-weight: 600;
-            color: var(--primary);
-            font-size: 17px;
-            letter-spacing: 0.2px;
-        }
-        .stat-number {
-            margin-top: 8px;
-            font-size: 44px;
-            font-weight: 700;
-            color: var(--primary);
-            line-height: 1.1;
-        }
-        .stat-sub {
-            font-size: 14px;
-            font-weight: 400;
-            color: #4a5a8c;
-            margin-top: 2px;
-        }
-        .stat-sub .highlight {
-            color: var(--accent);
-            font-weight: 600;
-        }
+        /* ---- STAT CARDS ---- */
+.stat-card {
+    background: #ffffff;
+    border-radius: 16px;
+    padding: 16px 20px;
+    height: 120px;
+
+    display: grid;
+    grid-template-columns: 42px 1fr;
+    grid-template-rows: auto auto auto;
+    column-gap: 12px;
+    align-items: center;
+
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+
+    position: relative;
+    overflow: hidden;
+
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* LEFT BORDER + ICON COLORS */
+
+/* Green */
+.stat-card.stat-success {
+    border-left: 5px solid #28a745;
+}
+
+.stat-card.stat-success .stat-icon {
+    color: #28a745;
+}
+
+/* Red */
+.stat-card.stat-danger {
+    border-left: 5px solid #F21D2F;
+}
+
+.stat-card.stat-danger .stat-icon {
+    color: #F21D2F;
+}
+
+/* Yellow */
+.stat-card.stat-warning {
+    border-left: 5px solid #ffc107;
+}
+
+.stat-card.stat-warning .stat-icon {
+    color: #ffc107;
+}
+
+/* Blue */
+.stat-card.stat-primary {
+    border-left: 5px solid #2B3A8C;
+}
+
+.stat-card.stat-primary .stat-icon {
+    color: #2B3A8C;
+}
+
+/* Cyan */
+.stat-card.stat-info {
+    border-left: 5px solid #17a2b8;
+}
+
+.stat-card.stat-info .stat-icon {
+    color: #17a2b8;
+}
+
+/* ICON */
+.stat-card .stat-icon {
+    grid-column: 1;
+    grid-row: 1 / 4;
+
+    font-size: 30px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* TITLE */
+.stat-card .stat-title {
+    grid-column: 2;
+    grid-row: 1;
+
+    font-weight: 500;
+    color: #2f3b4d;
+    font-size: 14px;
+    letter-spacing: 0;
+    margin: 0;
+}
+
+/* NUMBER */
+.stat-card .stat-number {
+    grid-column: 2;
+    grid-row: 2;
+
+    margin-top: 0;
+    font-size: 28px;
+    font-weight: 700;
+    color: #111827;
+    line-height: 1.1;
+}
+
+/* DESCRIPTION */
+.stat-card .stat-sub {
+    grid-column: 2;
+    grid-row: 3;
+
+    font-size: 12px;
+    font-weight: 400;
+    color: #6c7a8f;
+    margin-top: 0;
+}
+
+/* Keep highlighted text */
+.stat-card .stat-sub .highlight {
+    color: #F21D2F;
+    font-weight: 600;
+}
+
+/* HOVER */
+.stat-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.10);
+}
 
         /* ---- large cards ---- */
         .large-card {
-            background: var(--card-bg);
+            background: white;
             border-radius: 18px;
             padding: 22px 24px;
             margin-top: 25px;
@@ -380,49 +467,8 @@ $today_data = $today_result->fetch_assoc();
             .main {
                 margin-left: 90px;
             }
-            .sidebar {
-                width: 90px;
-                padding: 16px 10px;
-            }
-            .system-name,
-            .nav-menu span,
-            .logout span {
-                display: none;
-            }
-            .logo-area {
-                justify-content: center;
-            }
-            .nav-menu a {
-                justify-content: center;
-                padding: 12px 8px;
-            }
-            .nav-menu a i {
-                font-size: 26px;
-                margin: 0;
-            }
-            .logout a {
-                justify-content: center;
-            }
         }
-
-        @media (max-width: 576px) {
-            .topbar {
-                padding: 0 16px;
-                height: 70px;
-            }
-            .topbar h3 {
-                font-size: 20px;
-            }
-            .dashboard {
-                padding: 20px 16px;
-            }
-            .stat-number {
-                font-size: 34px;
-            }
-            .stat-card {
-                height: 120px;
-            }
-        }
+            
     </style>
 </head>
 <body>
@@ -472,62 +518,126 @@ $today_data = $today_result->fetch_assoc();
         <!-- FIRST ROW: 6 Stat Cards -->
         <div class="row g-4">
 
-            <!-- Total Branches -->
-            <div class="col-lg-4 col-md-6">
-                <div class="stat-card">
-                    <div class="stat-title"><i class="bi bi-building me-2"></i>Total Branches</div>
-                    <div class="stat-number"><?php echo number_format($branches_data['total_branches'] ?? 0); ?></div>
-                    <div class="stat-sub">
-                        <span class="text-success"><?php echo $branches_data['active_branches'] ?? 0; ?> Active</span> | 
-                        <span class="text-danger"><?php echo $branches_data['inactive_branches'] ?? 0; ?> Inactive</span>
-                    </div>
-                </div>
+    <!-- Total Branches -->
+    <div class="col-lg-4 col-md-6">
+        <div class="stat-card stat-success">
+            <div class="stat-icon">
+                <i class="bi bi-building"></i>
             </div>
 
-            <!-- Total Patients -->
-            <div class="col-lg-4 col-md-6">
-                <div class="stat-card">
-                    <div class="stat-title"><i class="bi bi-person me-2"></i>Total Patients</div>
-                    <div class="stat-number"><?php echo number_format($patients_data['total_patients'] ?? 0); ?></div>
-                    <div class="stat-sub">All Time Total</div>
-                </div>
+            <div class="stat-title">Total Branches</div>
+
+            <div class="stat-number">
+                <?php echo number_format($branches_data['total_branches'] ?? 0); ?>
             </div>
 
-            <!-- Total Users -->
-            <div class="col-lg-4 col-md-6">
-                <div class="stat-card">
-                    <div class="stat-title"><i class="bi bi-people me-2"></i>Total Users</div>
-                    <div class="stat-number"><?php echo number_format($users_data['total_users'] ?? 0); ?></div>
-                    <div class="stat-sub">
-                        <span class="highlight"><?php echo $users_data['super_admins'] ?? 0; ?></span> Super Admins | 
-                        <span class="highlight"><?php echo $users_data['branch_admins'] ?? 0; ?></span> Branch Admins
-                    </div>
-                </div>
-            </div>
-
-            <!-- Total Cases -->
-            <div class="col-lg-4 col-md-6">
-                <div class="stat-card">
-                    <div class="stat-title"><i class="bi bi-clipboard2-pulse me-2"></i>Total Cases</div>
-                    <div class="stat-number"><?php echo number_format($cases_data['total_cases'] ?? 0); ?></div>
-                    <div class="stat-sub">
-                        <span class="text-warning"><?php echo $cases_data['ongoing_cases'] ?? 0; ?> Ongoing</span> | 
-                        <span class="text-success"><?php echo $cases_data['completed_cases'] ?? 0; ?> Completed</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Total Inventory Items -->
-            <div class="col-lg-4 col-md-6">
-                <div class="stat-card">
-                    <div class="stat-title"><i class="bi bi-boxes me-2"></i>Total Inventory Items</div>
-                    <div class="stat-number"><?php echo number_format($inventory_data['total_items'] ?? 0); ?></div>
-                    <div class="stat-sub">
-                        <?php echo number_format($stock_data['total_quantity_available'] ?? 0); ?> Total Stock Available
-                    </div>
-                </div>
+            <div class="stat-sub">
+                <span class="text-success">
+                    <?php echo $branches_data['active_branches'] ?? 0; ?> Active
+                </span>
+                |
+                <span class="text-danger">
+                    <?php echo $branches_data['inactive_branches'] ?? 0; ?> Inactive
+                </span>
             </div>
         </div>
+    </div>
+
+
+    <!-- Total Patients -->
+    <div class="col-lg-4 col-md-6">
+        <div class="stat-card stat-primary">
+            <div class="stat-icon">
+                <i class="bi bi-person"></i>
+            </div>
+
+            <div class="stat-title">Total Patients</div>
+
+            <div class="stat-number">
+                <?php echo number_format($patients_data['total_patients'] ?? 0); ?>
+            </div>
+
+            <div class="stat-sub">
+                All Time Total
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Total Users -->
+    <div class="col-lg-4 col-md-6">
+        <div class="stat-card stat-info">
+            <div class="stat-icon">
+                <i class="bi bi-people"></i>
+            </div>
+
+            <div class="stat-title">Total Users</div>
+
+            <div class="stat-number">
+                <?php echo number_format($users_data['total_users'] ?? 0); ?>
+            </div>
+
+            <div class="stat-sub">
+                <span class="highlight">
+                    <?php echo $users_data['super_admins'] ?? 0; ?>
+                </span>
+                Super Admins |
+                <span class="highlight">
+                    <?php echo $users_data['branch_admins'] ?? 0; ?>
+                </span>
+                Branch Admins
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Total Cases -->
+    <div class="col-lg-4 col-md-6">
+        <div class="stat-card stat-warning">
+            <div class="stat-icon">
+                <i class="bi bi-clipboard2-pulse"></i>
+            </div>
+
+            <div class="stat-title">Total Cases</div>
+
+            <div class="stat-number">
+                <?php echo number_format($cases_data['total_cases'] ?? 0); ?>
+            </div>
+
+            <div class="stat-sub">
+                <span class="text-warning">
+                    <?php echo $cases_data['ongoing_cases'] ?? 0; ?> Ongoing
+                </span>
+                |
+                <span class="text-success">
+                    <?php echo $cases_data['completed_cases'] ?? 0; ?> Completed
+                </span>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Total Inventory Items -->
+    <div class="col-lg-4 col-md-6">
+        <div class="stat-card stat-primary">
+            <div class="stat-icon">
+                <i class="bi bi-boxes"></i>
+            </div>
+
+            <div class="stat-title">Total Inventory Items</div>
+
+            <div class="stat-number">
+                <?php echo number_format($inventory_data['total_items'] ?? 0); ?>
+            </div>
+
+            <div class="stat-sub">
+                <?php echo number_format($stock_data['total_quantity_available'] ?? 0); ?>
+                Total Stock Available
+            </div>
+        </div>
+    </div>
+
+</div>
 
         <!-- SECOND ROW: Recent Activities & System Alerts -->
         <div class="row g-4 mt-2">

@@ -287,7 +287,7 @@ $username = $userInfo['username'] ?? 'Admin';
         }
 
         body {
-            background: white;
+            background: #f9faff;
             font-family: 'Segoe UI', sans-serif;
         }
 
@@ -333,77 +333,163 @@ $username = $userInfo['username'] ?? 'Admin';
             padding: 35px;
         }
 
-        /* New stat card design based on the image */
-        .stat-card {
-            background: #ECEEF7;
-            border-radius: 12px;
-            padding: 24px 28px;
-            box-shadow: 0 2px 8px rgba(0,0,0,.06);
-            transition: transform 0.2s, box-shadow 0.2s;
-            height: 100%;
-            min-height: 120px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-        }
+/* ================================
+   STAT CARDS
+================================ */
 
-        .stat-card:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 6px 20px rgba(0,0,0,.10);
-        }
+.stat-card {
+    position: relative;
+    background: #ffffff;
+    border-radius: 16px;
 
-        .stat-number {
-            font-size: 42px;
-            font-weight: 700;
-            color: var(--primary);
-            line-height: 1.1;
-            margin-bottom: 4px;
-        }
+    min-height: 150px;
+    padding: 25px 28px;
 
-        .stat-number.success {
-            color: #28a745;
-        }
+    display: flex;
+    align-items: center;
+    gap: 24px;
 
-        .stat-number.warning {
-            color: #dc3545;
-        }
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.06);
 
-        .stat-number.info {
-            color: #17a2b8;
-        }
+    overflow: hidden;
+      transition:
+        transform 0.2s ease,
+        box-shadow 0.2s ease;
+}
 
-        .stat-number.primary {
-            color: var(--primary);
-        }
 
-        .stat-label {
-            font-size: 16px;
-            font-weight: 600;
-            color: #2B3A8C;
-            margin-bottom: 2px;
-        }
+/* LEFT COLORED BORDER */
 
-        .stat-description {
-            font-size: 13px;
-            color: #888;
-            font-weight: 400;
-            margin-top: 2px;
-        }
+.stat-card::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 5px;
+    border-radius: 16px 0 0 16px;
+}
 
-        .stat-card .stat-icon {
-            font-size: 28px;
-            opacity: 0.2;
-            position: absolute;
-            right: 20px;
-            top: 20px;
-        }
 
-        .stat-card {
-            position: relative;
-        }
+/* ================================
+   ICON
+================================ */
+
+.stat-icon {
+    width: 48px;
+    height: 48px;
+
+    flex-shrink: 0;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    font-size: 30px;
+
+    background: transparent;
+}
+
+
+/* ================================
+   CONTENT
+================================ */
+
+.stat-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #18233f;
+
+    margin-bottom: 4px;
+}
+
+.stat-number {
+    font-size: 34px;
+    font-weight: 700;
+    line-height: 1.1;
+
+    color: #111827;
+
+    margin-bottom: 5px;
+}
+
+.stat-sub {
+    font-size: 13px;
+    color: #71809d;
+}
+
+
+/* ================================
+   PRIMARY - BLUE
+================================ */
+
+.stat-primary::before {
+    background: #2B3A8C;
+}
+
+.stat-primary .stat-icon {
+    color: #2B3A8C;
+}
+
+
+/* ================================
+   SUCCESS - GREEN
+================================ */
+
+.stat-success::before {
+    background: #28a745;
+}
+
+.stat-success .stat-icon {
+    color: #28a745;
+}
+
+
+/* ================================
+   INFO - CYAN
+================================ */
+
+.stat-info::before {
+    background: #12A8C0;
+}
+
+.stat-info .stat-icon {
+    color: #12A8C0;
+}
+
+
+/* ================================
+   WARNING - YELLOW
+================================ */
+
+.stat-warning::before {
+    background: #FFB800;
+}
+
+.stat-warning .stat-icon {
+    color: #FFB800;
+}
+
+
+/* ================================
+   DANGER - RED
+================================ */
+
+.stat-danger::before {
+    background: #dc3545;
+}
+
+.stat-danger .stat-icon {
+    color: #dc3545;
+}
+/* HOVER */
+.stat-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.10);
+}
 
         .large-card {
-            background: #ECEEF7;
+            background: white;
             border-radius: 18px;
             padding: 20px;
             margin-top: 25px;
@@ -573,100 +659,265 @@ $username = $userInfo['username'] ?? 'Admin';
         </div>
 
         <div class="dashboard">
-            <!-- Statistics Cards Row 1 - Based on the image design -->
-            <div class="row g-4">
-                <div class="col-lg-3 col-md-6">
-                    <div class="stat-card">
-                        <div class="stat-number primary"><?php echo number_format($stats['total_patients']); ?></div>
-                        <div class="stat-label">Total Patients</div>
-                        <div class="stat-description">Registered patients</div>
+            <!-- =========================
+         ROW 1
+    ========================== -->
+    <div class="row g-4">
+
+        <!-- Total Patients -->
+        <div class="col-lg-3 col-md-6">
+            <div class="stat-card stat-primary">
+
+                <div class="stat-icon">
+                    <i class="bi bi-person"></i>
+                </div>
+
+                <div class="stat-content">
+                    <div class="stat-label">Total Patients</div>
+
+                    <div class="stat-number">
+                        <?php echo number_format($stats['total_patients']); ?>
+                    </div>
+
+                    <div class="stat-description">
+                        Registered patients
                     </div>
                 </div>
 
-                <div class="col-lg-3 col-md-6">
-                    <div class="stat-card">
-                        <div class="stat-number primary"><?php echo number_format($stats['total_cases']); ?></div>
-                        <div class="stat-label">Total Cases</div>
-                        <div class="stat-description">All animal bite cases</div>
-                    </div>
-                </div>
-
-                <div class="col-lg-3 col-md-6">
-                    <div class="stat-card">
-                        <div class="stat-number warning"><?php echo number_format($stats['ongoing_cases']); ?></div>
-                        <div class="stat-label">Ongoing Cases</div>
-                        <div class="stat-description">Active treatment cases</div>
-                    </div>
-                </div>
-
-                <div class="col-lg-3 col-md-6">
-                    <div class="stat-card">
-                        <div class="stat-number success"><?php echo number_format($stats['completed_cases']); ?></div>
-                        <div class="stat-label">Completed Cases</div>
-                        <div class="stat-description">Fully resolved cases</div>
-                    </div>
-                </div>
             </div>
+        </div>
 
-            <!-- Statistics Cards Row 2 -->
-            <div class="row g-4 mt-2">
-                <div class="col-lg-3 col-md-6">
-                    <div class="stat-card">
-                        <div class="stat-number info"><?php echo number_format($stats['total_items']); ?></div>
-                        <div class="stat-label">Inventory Items</div>
-                        <div class="stat-description">Unique stock items</div>
+
+        <!-- Total Cases -->
+        <div class="col-lg-3 col-md-6">
+            <div class="stat-card stat-primary">
+
+                <div class="stat-icon">
+                    <i class="bi bi-file-medical"></i>
+                </div>
+
+                <div class="stat-content">
+                    <div class="stat-label">Total Cases</div>
+
+                    <div class="stat-number">
+                        <?php echo number_format($stats['total_cases']); ?>
+                    </div>
+
+                    <div class="stat-description">
+                        All animal bite cases
                     </div>
                 </div>
 
-                <div class="col-lg-3 col-md-6">
-                    <div class="stat-card">
-                        <div class="stat-number <?php echo $stats['low_stocks'] > 0 ? 'warning' : 'primary'; ?>">
-                            <?php echo number_format($stats['low_stocks']); ?>
-                        </div>
-                        <div class="stat-label">Low Stock Items</div>
-                        <div class="stat-description">Needs reordering</div>
-                    </div>
-                </div>
-
-                <div class="col-lg-3 col-md-6">
-                    <div class="stat-card">
-                        <div class="stat-number <?php echo $stats['expiring_stocks'] > 0 ? 'warning' : 'primary'; ?>">
-                            <?php echo number_format($stats['expiring_stocks']); ?>
-                        </div>
-                        <div class="stat-label">Expiring Soon</div>
-                        <div class="stat-description">Within 30 days</div>
-                    </div>
-                </div>
-
-                <div class="col-lg-3 col-md-6">
-                    <div class="stat-card">
-                        <div class="stat-number info"><?php echo number_format($stats['scheduled_vaccinations']); ?></div>
-                        <div class="stat-label">Scheduled Vaccinations</div>
-                        <div class="stat-description">Upcoming appointments</div>
-                    </div>
-                </div>
             </div>
+        </div>
 
-            <!-- Statistics Cards Row 3 - Vaccination Stats -->
-            <div class="row g-4 mt-2">
-                <div class="col-lg-4 col-md-6">
-                    <div class="stat-card" style="border-left: 4px solid #28a745;">
-                        <div class="stat-number success"><?php echo number_format($stats['completed_vaccinations']); ?></div>
-                        <div class="stat-label">Completed Vaccinations</div>
-                        <div class="stat-description">Successfully completed doses</div>
+
+        <!-- Ongoing Cases -->
+        <div class="col-lg-3 col-md-6">
+            <div class="stat-card stat-warning">
+
+                <div class="stat-icon">
+                    <i class="bi bi-hourglass-split"></i>
+                </div>
+
+                <div class="stat-content">
+                    <div class="stat-label">Ongoing Cases</div>
+
+                    <div class="stat-number">
+                        <?php echo number_format($stats['ongoing_cases']); ?>
+                    </div>
+
+                    <div class="stat-description">
+                        Active treatment cases
                     </div>
                 </div>
 
-                <div class="col-lg-4 col-md-6">
-                    <div class="stat-card" style="border-left: 4px solid #dc3545;">
-                        <div class="stat-number warning"><?php echo number_format($stats['missed_vaccinations']); ?></div>
-                        <div class="stat-label">Missed Vaccinations</div>
-                        <div class="stat-description">Missed scheduled appointments</div>
-                    </div>
-                </div>
-
-                
             </div>
+        </div>
+
+
+        <!-- Completed Cases -->
+        <div class="col-lg-3 col-md-6">
+            <div class="stat-card stat-success">
+
+                <div class="stat-icon">
+                    <i class="bi bi-check-circle"></i>
+                </div>
+
+                <div class="stat-content">
+                    <div class="stat-label">Completed Cases</div>
+
+                    <div class="stat-number">
+                        <?php echo number_format($stats['completed_cases']); ?>
+                    </div>
+
+                    <div class="stat-description">
+                        Fully resolved cases
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+    </div>
+
+
+    <!-- =========================
+         ROW 2
+    ========================== -->
+    <div class="row g-4 mt-2">
+
+        <!-- Inventory Items -->
+        <div class="col-lg-3 col-md-6">
+            <div class="stat-card stat-info">
+
+                <div class="stat-icon">
+                    <i class="bi bi-box-seam"></i>
+                </div>
+
+                <div class="stat-content">
+                    <div class="stat-label">Inventory Items</div>
+
+                    <div class="stat-number">
+                        <?php echo number_format($stats['total_items']); ?>
+                    </div>
+
+                    <div class="stat-description">
+                        Unique stock items
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+
+        <!-- Low Stock -->
+        <div class="col-lg-3 col-md-6">
+            <div class="stat-card <?php echo $stats['low_stocks'] > 0 ? 'stat-warning' : 'stat-primary'; ?>">
+
+                <div class="stat-icon">
+                    <i class="bi bi-exclamation-triangle"></i>
+                </div>
+
+                <div class="stat-content">
+                    <div class="stat-label">Low Stock Items</div>
+
+                    <div class="stat-number">
+                        <?php echo number_format($stats['low_stocks']); ?>
+                    </div>
+
+                    <div class="stat-description">
+                        Needs reordering
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+
+        <!-- Expiring Soon -->
+        <div class="col-lg-3 col-md-6">
+            <div class="stat-card <?php echo $stats['expiring_stocks'] > 0 ? 'stat-warning' : 'stat-primary'; ?>">
+
+                <div class="stat-icon">
+                    <i class="bi bi-clock-history"></i>
+                </div>
+
+                <div class="stat-content">
+                    <div class="stat-label">Expiring Soon</div>
+
+                    <div class="stat-number">
+                        <?php echo number_format($stats['expiring_stocks']); ?>
+                    </div>
+
+                    <div class="stat-description">
+                        Within 30 days
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+
+        <!-- Scheduled Vaccinations -->
+        <div class="col-lg-3 col-md-6">
+            <div class="stat-card stat-info">
+
+                <div class="stat-icon">
+                    <i class="bi bi-calendar-check"></i>
+                </div>
+
+                <div class="stat-content">
+                    <div class="stat-label">Scheduled Vaccinations</div>
+
+                    <div class="stat-number">
+                        <?php echo number_format($stats['scheduled_vaccinations']); ?>
+                    </div>
+
+                    <div class="stat-description">
+                        Upcoming appointments
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+    </div>
+
+
+    <!-- =========================
+         ROW 3
+    ========================== -->
+    <div class="row g-4 mt-2">
+
+        <!-- Completed Vaccinations -->
+        <div class="col-lg-4 col-md-6">
+            <div class="stat-card stat-success">
+
+                <div class="stat-icon">
+                    <i class="bi bi-check-circle"></i>
+                </div>
+
+                <div class="stat-content">
+                    <div class="stat-label">Completed Vaccinations</div>
+
+                    <div class="stat-number">
+                        <?php echo number_format($stats['completed_vaccinations']); ?>
+                    </div>
+
+                    <div class="stat-description">
+                        Successfully completed doses
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+
+        <!-- Missed Vaccinations -->
+        <div class="col-lg-4 col-md-6">
+            <div class="stat-card stat-danger">
+
+                <div class="stat-icon">
+                    <i class="bi bi-calendar-x"></i>
+                </div>
+
+                <div class="stat-content">
+                    <div class="stat-label">Missed Vaccinations</div>
+
+                    <div class="stat-number">
+                        <?php echo number_format($stats['missed_vaccinations']); ?>
+                    </div>
+
+                    <div class="stat-description">
+                        Missed scheduled appointments
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+    </div>
 
             <!-- Charts Row -->
             <div class="row g-4 mt-2">

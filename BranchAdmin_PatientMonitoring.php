@@ -209,7 +209,7 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
         }
 
         body {
-            background: white;
+            background:  #f9faff;
             font-family: 'Segoe UI', sans-serif;
         }
 
@@ -267,49 +267,59 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
         }
 
         .search-box {
-            display: flex;
-            align-items: center;
-            background: white;
-            border: 1px solid var(--primary);
-            border-radius: 50px;
-            padding: 8px 18px;
-            flex: 1;
-            max-width: 400px;
-        }
+    position: relative;
+    width: 400px;
+    max-width: 100%;
+}
 
-        .search-box i {
-            color: var(--primary);
-            font-size: 18px;
-            margin-right: 10px;
-        }
+.search-box form {
+    width: 100%;
+}
 
-        .search-box input {
-            border: none;
-            outline: none;
-            background: transparent;
-            color: black;
-            width: 100%;
-            font-size: 14px;
-        }
+.search-box > i {
+    position: absolute;
+    left: 16px;
+    top: 50%;
+    transform: translateY(-50%);
 
-        .search-box input::placeholder {
-            color: rgba(0, 0, 0, 0.85);
-        }
+    color: #7180a8;
+    font-size: 18px;
 
-        .search-box form {
-            width: 100%;
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
+    z-index: 2;
+    pointer-events: none;
+}
 
-        .search-box button {
-            background: none;
-            border: none;
-            color: var(--primary);
-            padding: 0 5px;
-            font-size: 18px;
-        }
+.search-box input {
+    width: 100%;
+    height: 48px;
+
+    padding: 0 18px 0 45px;
+
+    background: #ffffff;
+
+    border: 1px solid #d0d7e8;
+    border-radius: 10px;
+
+    font-size: 14px;
+    color: #1f2a4a;
+
+    outline: none;
+
+    box-sizing: border-box;
+
+    transition: 0.2s ease;
+}
+
+.search-box input::placeholder {
+    color: #7a85a8;
+}
+
+.search-box input:focus {
+    border-color: var(--primary);
+
+    box-shadow:
+        0 0 0 3px rgba(43, 58, 140, 0.10);
+}
 
         .filter-group {
             display: flex;
@@ -886,7 +896,7 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
                         <?php if (!empty($statusFilter)): ?>
                             <input type="hidden" name="status" value="<?php echo htmlspecialchars($statusFilter); ?>">
                         <?php endif; ?>
-                        <button type="submit"><i class="bi bi-arrow-right-circle"></i></button>
+                        
                     </form>
                 </div>
 

@@ -1,7 +1,3 @@
-/* ==========================
-   REUSABLE SIDEBAR
-========================== */
-
 :root{
     --primary:#2B3A8C;
     --accent:#F21D2F;
@@ -27,32 +23,25 @@
     text-align:center;
 }
 
-.logo{
-    width:90px;
-    height:90px;
-    display:block;
-    margin:0 auto;
-    object-fit:contain;
+.logo {
+    width: 90px;
+    height: 90px;
+    display: block;
+    object-fit: contain;
 }
 
-.logo{
-    width:55px;
-    height:55px;
-    object-fit:contain;
-}
-
-.logo-frame{
-    width:100px;
-    height:100px;
-    margin:0 auto;
-    border-radius:50%;
-    background:#fff;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    overflow:hidden;
-    box-shadow:0 4px 12px rgba(0,0,0,.2);
-    border:3px solid rgba(255,255,255,.3);
+.logo-frame {
+    width: 100px;
+    height: 100px;
+    margin: 0 auto;
+    border-radius: 50%;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0,0,0,.2);
+    border: 3px solid rgba(255,255,255,.3);
 }
 
 .system-name{
@@ -113,26 +102,58 @@
 
 .logout a:hover{
     color:white;
+    
 }
 
-@media(max-width:991px){
+@media (max-width: 991px) {
+  
+  .sidebar {
+        width: 90px;
+        padding: 16px 10px;
+    }
 
-.sidebar{
-    width:90px;
+    .logo-area {
+        padding: 18px 10px;
+        text-align: center;
+    }
+
+    .logo-frame {
+        width: 60px;
+        height: 60px;
+    }
+
+    .logo {
+        width: 52px;
+        height: 52px;
+    }
+
+    .system-name {
+        display: none;
+    }
+
+    .nav-menu span {
+        display: none;
+    }
+
+    .nav-menu a {
+        justify-content: center;
+        padding: 12px 8px;
+    }
+
+    .nav-menu a i {
+        font-size: 18px;
+        margin: 0;
+    }
+
+    .logout {
+        padding: 15px 10px;
+    }
+
+    .logout a {
+        justify-content: center;
+    }
+
+    .logout span {
+        display: none;
+    }
 }
-
-.system-name{
-    display:none;
-}
-
-.nav-menu span{
-    display:none;
-}
-
-
-.logout span{
-    display:none;
-}
-
-}
-

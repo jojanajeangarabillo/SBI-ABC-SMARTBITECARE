@@ -420,7 +420,7 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
         }
 
         body {
-            background: white;
+            background: #f0f2f5;
             font-family: 'Segoe UI', sans-serif;
         }
 
@@ -484,14 +484,14 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             padding: 10px 14px 10px 38px;
             border-radius: 10px;
             border: 1px solid #dcdee8;
-            background: #F7F8FC;
+            background:white;
             font-size: 14px;
         }
 
         .search-box input:focus {
-            outline: none;
             border-color: var(--primary);
-            background: white;
+            box-shadow: 0 0 0 3px rgba(43,58,140,0.12);
+            outline: none;
         }
 
         .btn-custom {
@@ -939,8 +939,8 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
 <div class="modal fade" id="addCategoryModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content" style="border-radius:16px;">
-            <div class="modal-header">
-                <h5 class="modal-title" style="color:var(--primary); font-weight:700;">Add Inventory Category</h5>
+            <div class="modal-header" style="background:var(--primary);color:white;">
+                <h5 class="modal-title" style="color:white; font-weight:700;">Add Inventory Category</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <form method="POST" action="<?php echo $_SERVER['PHP_SELF']; ?>?tab=categories">
@@ -973,9 +973,9 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
 <div class="modal fade" id="addUnitModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content" style="border-radius:16px;">
-            <div class="modal-header">
-                <h5 class="modal-title" style="color:var(--primary); font-weight:700;">Add Unit of Measurement</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            <div class="modal-header" style="background:var(--primary);color:white;">
+                <h5 class="modal-title" style="color:white; font-weight:700;">Add Unit of Measurement</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <form method="POST" action="<?php echo $_SERVER['PHP_SELF']; ?>?tab=units">
                 <div class="modal-body">

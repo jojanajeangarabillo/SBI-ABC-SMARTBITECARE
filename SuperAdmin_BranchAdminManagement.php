@@ -459,7 +459,8 @@ while ($row = $branch_result->fetch_assoc()) {
         }
         .search-wrap {
             position: relative;
-            flex: 1 1 280px;
+            width: 100%;
+            max-width: 400px;
         }
         .search-wrap i {
             position: absolute;
@@ -473,7 +474,7 @@ while ($row = $branch_result->fetch_assoc()) {
             width: 100%;
             padding: 12px 12px 12px 44px;
             border: 1px solid #d0d7e8;
-            border-radius: 40px;
+            border-radius: 10px;
             font-size: 15px;
             background: white;
             outline: none;
@@ -485,6 +486,7 @@ while ($row = $branch_result->fetch_assoc()) {
         }
         .btn-add {
             background: var(--primary);
+            margin-left: auto;
             color: white;
             border: none;
             border-radius: 40px;
@@ -495,7 +497,6 @@ while ($row = $branch_result->fetch_assoc()) {
             gap: 8px;
             white-space: nowrap;
             transition: 0.15s;
-            cursor: pointer;
         }
         .btn-add:hover {
             background: #1d2863;
@@ -508,7 +509,6 @@ while ($row = $branch_result->fetch_assoc()) {
             border-radius: 18px;
             box-shadow: 0 3px 12px rgba(0, 0, 0, 0.05);
             overflow: hidden;
-            padding: 6px 0 6px 0;
         }
         .table {
             margin-bottom: 0;
@@ -516,8 +516,8 @@ while ($row = $branch_result->fetch_assoc()) {
             border-spacing: 0;
         }
         .table thead th {
-            background: #f0f3fc;
-            color: var(--primary);
+            background: var(--primary);
+            color: white;
             font-weight: 700;
             font-size: 15px;
             padding: 16px 20px;
@@ -605,64 +605,86 @@ while ($row = $branch_result->fetch_assoc()) {
         }
 
         /* ---- pagination ---- */
-        .pagination-wrap {
-            display: flex;
-            justify-content: flex-end;
-            padding-top: 24px;
-            align-items: center;
-            gap: 6px;
-        }
-        .pagination-wrap .page-item .page-link {
-            color: var(--primary);
-            border: 1px solid #d7def0;
-            border-radius: 8px;
-            padding: 8px 16px;
-            font-weight: 600;
-            background: white;
-            margin: 0 2px;
-            transition: 0.1s;
-        }
-        .pagination-wrap .page-item.active .page-link {
-            background: var(--primary);
-            border-color: var(--primary);
-            color: white;
-        }
-        .pagination-wrap .page-item .page-link:hover {
-            background: #e7ecfc;
-            border-color: var(--primary);
-        }
-        .pagination-wrap .page-item.disabled .page-link {
-            color: #b0bcd6;
-            background: #f5f7fc;
-        }
+.pagination-wrap {
+    display: flex;
+    justify-content:center;
+    align-items: center;
+    padding-top: 24px;
+}
+
+.pagination-wrap .pagination {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin: 0;
+}
+
+.pagination-wrap .page-item {
+    margin: 0;
+}
+
+.pagination-wrap .page-link {
+    width: 40px;
+    height: 40px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    padding: 0;
+    margin: 0 3px;
+
+    border: 1px solid #dbe2f0;
+    border-radius: 10px !important;
+
+    background: #fff;
+    color: var(--primary);
+
+    font-size: 15px;
+    font-weight: 500;
+}
+
+/* First button */
+.pagination-wrap .page-item:first-child .page-link {
+    border-radius: 9px 0 0 9px;
+}
+
+/* Last button */
+.pagination-wrap .page-item:last-child .page-link {
+    border-radius: 0 9px 9px 0;
+}
+
+/* Active page */
+.pagination-wrap .page-item.active .page-link {
+    background: var(--primary);
+    color: #ffffff;
+    border-color: var(--primary);
+    border-radius: 10px !important;
+}
+
+/* Previous disabled */
+.pagination-wrap .page-item.disabled .page-link {
+    background: #eef1f6;
+    color: #aeb8ca;
+    border-color: #dbe2f0;
+    border-radius: 10px !important;
+}
+
+/* Hover */
+.pagination-wrap .page-item:not(.active):not(.disabled) .page-link:hover {
+    background: #f4f6fb;
+    color: var(--primary);
+}
+
+/* Remove Bootstrap focus */
+.pagination-wrap .page-link:focus {
+    box-shadow: none;
+}
 
         /* responsive */
         @media (max-width: 991px) {
             .main {
                 margin-left: 90px;
-            }
-            .sidebar {
-                width: 90px;
-                padding: 16px 10px;
-            }
-            .system-name,
-            .nav-menu span,
-            .logout span {
-                display: none;
-            }
-            .logo-area {
-                justify-content: center;
-            }
-            .nav-menu a {
-                justify-content: center;
-                padding: 12px 8px;
-            }
-            .nav-menu a i {
-                font-size: 26px;
-                margin: 0;
-            }
-            .logout a {
-                justify-content: center;
             }
         }
 
