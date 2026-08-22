@@ -531,7 +531,7 @@ $lastUpdate = $logResult->fetch_assoc();
             <h3>Settings</h3>
             <div class="profile">
                 <?php echo htmlspecialchars($userData['username'] ?? 'ADMIN'); ?> 
-                <i class="bi bi-caret-down-fill"></i>
+                
             </div>
         </div>
 

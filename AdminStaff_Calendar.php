@@ -1255,7 +1255,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             
             <div class="profile">
                 <?php echo htmlspecialchars($username); ?>
-                <i class="bi bi-caret-down-fill"></i>
+                
             </div>
         </div>
 

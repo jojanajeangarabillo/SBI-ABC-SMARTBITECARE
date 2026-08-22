@@ -1320,7 +1320,9 @@ $pdf_url = '?' . http_build_query($filter_params);
 <div class="main">
     <div class="topbar">
         <h3>Audit Logs</h3>
-        <div class="profile">SUPER ADMIN <i class="bi bi-caret-down-fill"></i></div>
+         <div class="profile">
+            <?php echo htmlspecialchars($_SESSION['username'] ?? 'SUPER ADMIN'); ?>
+        </div>
     </div>
 
     <div class="content">

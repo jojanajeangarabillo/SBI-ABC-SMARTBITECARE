@@ -411,7 +411,7 @@
     <!-- TOP BAR -->
     <div class="topbar">
         <h3>Prediction Viewer</h3>
-        <div class="profile">NURSE <i class="bi bi-caret-down-fill"></i></div>
+        <div class="profile">NURSE</i></div>
     </div>
 
     <!-- PAGE CONTENT -->

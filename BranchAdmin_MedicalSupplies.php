@@ -661,7 +661,7 @@ if (!$branch_id) {
             <h3>Medical Supplies</h3>
             <div class="profile">
                 <?php echo htmlspecialchars($username); ?>
-                <i class="bi bi-caret-down-fill"></i>
+                
 </div>
         </div>
 

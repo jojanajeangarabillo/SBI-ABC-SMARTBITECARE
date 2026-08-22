@@ -290,7 +290,7 @@ margin-left:90px;
 
 <div class="topbar">
 <h3>Stock Management</h3>
-<div class="profile"> INVENTORY <i class="bi bi-caret-down-fill"></i> </div>
+<div class="profile"> INVENTORY </div>
 </div>
 
 <div class="page-body">

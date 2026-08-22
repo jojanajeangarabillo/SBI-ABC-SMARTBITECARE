@@ -464,7 +464,10 @@ if (!empty($branch_filter)) {
     <!-- TOP BAR -->
     <div class="topbar">
         <h3>User Monitoring</h3>
-        <div class="profile">SUPER ADMIN <i class="bi bi-caret-down-fill"></i></div>
+        <div class="profile">
+            <?php echo htmlspecialchars($_SESSION['username'] ?? 'SUPER ADMIN'); ?>
+            
+        </div>
     </div>
 
     <!-- PAGE CONTENT -->

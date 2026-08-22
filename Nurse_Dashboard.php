@@ -715,7 +715,7 @@ while ($row = $caseStatusResult->fetch_assoc()) {
     <!-- TOP BAR -->
     <div class="topbar">
         <h3>Dashboard <small><?php echo htmlspecialchars($branch_name); ?></small></h3>
-        <div class="profile"><?php echo htmlspecialchars($username); ?> <i class="bi bi-caret-down-fill"></i></div>
+        <div class="profile"><?php echo htmlspecialchars($username); ?></i></div>
     </div>
 
     <!-- PAGE CONTENT -->

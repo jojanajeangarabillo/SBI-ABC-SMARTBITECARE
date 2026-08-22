@@ -740,7 +740,10 @@ while ($row = $branch_result->fetch_assoc()) {
     <!-- TOP BAR -->
     <div class="topbar">
         <h3>Branch Admin Management</h3>
-        <div class="profile">SUPER ADMIN <i class="bi bi-caret-down-fill"></i></div>
+        <div class="profile">
+            <?php echo htmlspecialchars($_SESSION['username'] ?? 'SUPER ADMIN'); ?>
+            
+        </div>
     </div>
 
     <!-- PAGE CONTENT -->

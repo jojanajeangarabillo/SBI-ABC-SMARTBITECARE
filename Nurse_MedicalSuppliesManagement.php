@@ -836,7 +836,7 @@ foreach ($items as $item) {
 <div class="main">
     <div class="topbar">
         <h3>Medical Supplies Management</h3>
-        <div class="profile">NURSE <i class="bi bi-caret-down-fill"></i></div>
+        <div class="profile">NURSE </i></div>
     </div>
 
     <div class="content">

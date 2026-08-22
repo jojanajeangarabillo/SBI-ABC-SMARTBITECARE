@@ -672,7 +672,7 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
     <div class="main">
         <div class="topbar">
             <h3>User Management <small><?php echo htmlspecialchars($branch_name); ?></small></h3>
-            <div class="profile"><?php echo htmlspecialchars($username); ?> <i class="bi bi-caret-down-fill"></i></div>
+            <div class="profile"><?php echo htmlspecialchars($username); ?></div>
         </div>
         <div class="content-wrapper">
             <?php if ($message): ?>

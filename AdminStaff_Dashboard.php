@@ -818,7 +818,7 @@ while ($row = $trendResult->fetch_assoc()) {
             <h3>Dashboard <span style="font-size:16px; color:#6c757d; font-weight:400; margin-left:8px;"> <?php echo htmlspecialchars($branch_name); ?> </span> </h3>
             <div class="profile">
                 <?php echo htmlspecialchars($username); ?>
-                <i class="bi bi-caret-down-fill"></i>
+                
             </div>
         </div>
 

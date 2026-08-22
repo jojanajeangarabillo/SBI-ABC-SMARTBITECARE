@@ -508,7 +508,7 @@ $today_data = $today_result->fetch_assoc();
         <h3>Dashboard</h3>
         <div class="profile">
             <?php echo htmlspecialchars($_SESSION['username'] ?? 'SUPER ADMIN'); ?>
-            <i class="bi bi-caret-down-fill"></i>
+            
         </div>
     </div>
 

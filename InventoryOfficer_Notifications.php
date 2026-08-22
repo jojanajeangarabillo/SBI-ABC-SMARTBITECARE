@@ -400,7 +400,7 @@ border-color:var(--primary);
 
 <div class="topbar">
 <h3>Notifications</h3>
-<div class="profile"> INVENTORY <i class="bi bi-caret-down-fill"></i> </div>
+<div class="profile"> INVENTORY </div>
 </div>
 
 <div class="page-body">

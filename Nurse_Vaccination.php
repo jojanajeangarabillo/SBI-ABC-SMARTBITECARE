@@ -988,7 +988,7 @@ function getStatusBadge($status) {
 <div class="main">
     <div class="topbar">
         <h3>Vaccination Administration <small><?php echo htmlspecialchars($branch_name); ?></small></h3>
-        <div class="profile"><?php echo htmlspecialchars($username); ?> <i class="bi bi-caret-down-fill"></i></div>
+        <div class="profile"><?php echo htmlspecialchars($username); ?> </i></div>
     </div>
 
     <div class="content">

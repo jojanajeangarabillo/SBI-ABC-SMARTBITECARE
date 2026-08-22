@@ -660,9 +660,7 @@ addAuditLog($conn, $_SESSION['user_id'], 'Viewed Branch Performance Monitoring -
     <div class="topbar">
         <h3>Branch Performance Monitoring</h3>
         <div class="profile">
-            <i class="bi bi-person-circle"></i>
-            <?php echo htmlspecialchars($username); ?>
-            <i class="bi bi-caret-down-fill"></i>
+            <?php echo htmlspecialchars($_SESSION['username'] ?? 'SUPER ADMIN'); ?>
         </div>
     </div>
 

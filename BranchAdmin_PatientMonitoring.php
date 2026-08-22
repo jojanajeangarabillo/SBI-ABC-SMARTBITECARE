@@ -860,7 +860,7 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
             <h3>Patient Monitoring <small><?php echo htmlspecialchars($branchName); ?></small></h3>
             <div class="profile">
                 <?php echo htmlspecialchars($userData['username'] ?? 'ADMIN'); ?> 
-                <i class="bi bi-caret-down-fill"></i>
+                
             </div>
         </div>
 

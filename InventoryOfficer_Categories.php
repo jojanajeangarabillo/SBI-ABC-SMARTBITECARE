@@ -776,7 +776,7 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
 <div class="main">
     <div class="topbar">
         <h3>Categories & Units</h3>
-        <div class="profile">INVENTORY <i class="bi bi-caret-down-fill"></i></div>
+        <div class="profile">INVENTORY </div>
     </div>
 
     <div class="page-body">

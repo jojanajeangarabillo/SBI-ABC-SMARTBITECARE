@@ -353,7 +353,7 @@
     <!-- TOP BAR -->
     <div class="topbar">
         <h3>Notifications</h3>
-        <div class="profile">NURSE <i class="bi bi-caret-down-fill"></i></div>
+        <div class="profile">NURSE</div>
     </div>
 
     <!-- PAGE CONTENT -->
