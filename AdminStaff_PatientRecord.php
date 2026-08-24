@@ -121,6 +121,25 @@ function caseNoExists(mysqli $conn, string $caseNo, ?int $excludeCaseId = null):
 }
 
 function getDefaultVaccineItemId(mysqli $conn): int {
+    // First try to get the Rabies Vaccine (item_id 5)
+    $stmt = $conn->prepare("SELECT item_id FROM inventory_items WHERE item_id = 5 LIMIT 1");
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $row = $result->fetch_assoc();
+    if ($row) {
+        return (int) $row['item_id'];
+    }
+    
+    // If not found, get any available vaccine item from category 2
+    $stmt = $conn->prepare("SELECT item_id FROM inventory_items WHERE category_id = 2 LIMIT 1");
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $row = $result->fetch_assoc();
+    if ($row) {
+        return (int) $row['item_id'];
+    }
+    
+    // Last resort: get any item
     $stmt = $conn->prepare("SELECT item_id FROM inventory_items LIMIT 1");
     $stmt->execute();
     $result = $stmt->get_result();
@@ -128,7 +147,30 @@ function getDefaultVaccineItemId(mysqli $conn): int {
     if ($row) {
         return (int) $row['item_id'];
     }
-    return 1;
+    
+    return 5; // Default fallback
+}
+
+function getDefaultUnitId(mysqli $conn): int {
+    // Try to get mL (unit_id 4) which is commonly used
+    $stmt = $conn->prepare("SELECT unit_id FROM units WHERE unit_id = 4 LIMIT 1");
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $row = $result->fetch_assoc();
+    if ($row) {
+        return (int) $row['unit_id'];
+    }
+    
+    // If not found, get any unit
+    $stmt = $conn->prepare("SELECT unit_id FROM units LIMIT 1");
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $row = $result->fetch_assoc();
+    if ($row) {
+        return (int) $row['unit_id'];
+    }
+    
+    return 4; // Default fallback
 }
 
 function validatePatientData(array $data): array {
@@ -162,6 +204,72 @@ function getDosesForCategory(string $category, string $route): array {
             return [];
         default:
             return ['d0', 'd3', 'd7', 'd14', 'd28'];
+    }
+}
+
+/**
+ * Calculate scheduled date based on date of bite and dose key
+ */
+function calculateScheduledDate(?string $dateOfBite, string $doseKey, array $doseData): ?string {
+    // If scheduled date is provided in form, use it
+    if (!empty($doseData['scheduled_date'])) {
+        return frontToDbDate($doseData['scheduled_date']);
+    }
+    
+    // Otherwise calculate from date of bite
+    $daysMap = ['d0' => 0, 'd3' => 3, 'd7' => 7, 'd14' => 14, 'd21' => 21, 'd28' => 28];
+    $days = $daysMap[$doseKey] ?? 0;
+    
+    if (!empty($dateOfBite)) {
+        return date('Y-m-d', strtotime($dateOfBite . ' + ' . $days . ' days'));
+    }
+    
+    return date('Y-m-d', strtotime('+ ' . $days . ' days'));
+}
+
+/**
+ * Send notification to nurses when a new patient is added
+ */
+function notifyNursesOnNewPatient(mysqli $conn, int $caseId, string $patientName, string $caseNumber, string $branchId, int $adminStaffId): void {
+    try {
+        // Get all nurses (role_id = 3) in the same branch
+        $stmt = $conn->prepare("
+            SELECT user_id 
+            FROM users 
+            WHERE role_id = 3 AND branch_id = ? AND status = 'Active'
+        ");
+        $stmt->bind_param("s", $branchId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        if ($result->num_rows === 0) {
+            // No nurses found in this branch
+            return;
+        }
+        
+        // Create notification title and message
+        $title = "New Patient Added";
+        $message = "Administrative staff has added a new patient: {$patientName} (Case: {$caseNumber}). Please review the vaccination schedule.";
+        $notificationType = "new_patient";
+        
+        // Insert notification for each nurse
+        $insertStmt = $conn->prepare("
+            INSERT INTO notifications (user_id, title, message, notification_type, is_read, created_at)
+            VALUES (?, ?, ?, ?, 0, NOW())
+        ");
+        
+        while ($row = $result->fetch_assoc()) {
+            $nurseId = (int) $row['user_id'];
+            $insertStmt->bind_param("isss", $nurseId, $title, $message, $notificationType);
+            $insertStmt->execute();
+        }
+        
+        // Also log that notifications were sent
+        auditLog($conn, $adminStaffId, $branchId, "Sent new patient notification to nurses for: {$patientName}", 'Notification');
+        
+    } catch (Exception $e) {
+        // Silently fail - notification should not break the main process
+        error_log("Failed to send nurse notification: " . $e->getMessage());
     }
 }
 
@@ -453,7 +561,7 @@ if ($action) {
                 $resultArray = [];
                 foreach ($rows as $row) {
                     $doseStmt = $conn->prepare("
-                        SELECT dose_number, date_administered, vaccination_status
+                        SELECT dose_number, date_administered, vaccination_status, scheduled_date
                         FROM vaccination_records
                         WHERE case_id = ? AND branch_id = ? AND is_archived = 0
                         ORDER BY dose_number
@@ -467,6 +575,8 @@ if ($action) {
                     }
 
                     $schedule = ['d0' => '', 'd3' => '', 'd7' => '', 'd14'=> '', 'd21'=> '', 'd28'=> ''];
+                    $scheduleStatus = ['d0' => 'Pending', 'd3' => 'Pending', 'd7' => 'Pending', 'd14'=> 'Pending', 'd21'=> 'Pending', 'd28'=> 'Pending'];
+                    
                     foreach ($doses as $d) {
                         $key = '';
                         switch ((int)$d['dose_number']) {
@@ -478,19 +588,22 @@ if ($action) {
                             case 6: $key = 'd28'; break;
                         }
                         if ($key) {
-                            $schedule[$key] = dbToFrontDate($d['date_administered']);
+                            $schedule[$key] = dbToFrontDate($d['date_administered']) ?: dbToFrontDate($d['scheduled_date']);
+                            $scheduleStatus[$key] = $d['vaccination_status'] ?? 'Scheduled';
                         }
                     }
 
                     $vaccStatus = 'Pending';
-                    $hasD0 = !empty($schedule['d0']);
-                    $hasD3 = !empty($schedule['d3']);
-                    $hasD7 = !empty($schedule['d7']);
-                    $hasD14 = !empty($schedule['d14']);
+                    $completedDoses = 0;
+                    $totalDoses = 0;
+                    foreach ($scheduleStatus as $status) {
+                        if ($status === 'Completed') $completedDoses++;
+                        if ($status !== '') $totalDoses++;
+                    }
                     
-                    if ($hasD0 && $hasD3 && $hasD7 && $hasD14) {
+                    if ($totalDoses > 0 && $completedDoses === $totalDoses) {
                         $vaccStatus = 'Completed';
-                    } else if ($hasD0) {
+                    } else if ($completedDoses > 0) {
                         $vaccStatus = 'In Progress';
                     } else {
                         $vaccStatus = 'Pending';
@@ -521,6 +634,7 @@ if ($action) {
                         'route' => '',
                         'vacc_category' => 'Post-Exposure Prophylaxis (PEP)',
                         'schedule' => $schedule,
+                        'schedule_status' => $scheduleStatus,
                         'vaccination_status' => $vaccStatus,
                         'philhealth' => $philhealthYes,
                         'philhealth_type' => $row['philhealth_membership'] ?? '',
@@ -579,7 +693,7 @@ if ($action) {
                 }
 
                 $doseStmt = $conn->prepare("
-                    SELECT dose_number, scheduled_date, date_administered, vaccination_status 
+                    SELECT dose_number, scheduled_date, date_administered, vaccination_status, remarks
                     FROM vaccination_records 
                     WHERE case_id = ? AND branch_id = ? AND is_archived = 0
                     ORDER BY dose_number
@@ -603,15 +717,19 @@ if ($action) {
                     if ($key) {
                         $doseData[$key]['scheduled_date'] = dbToFrontDate($doseRow['scheduled_date']);
                         $doseData[$key]['administered_date'] = dbToFrontDate($doseRow['date_administered']);
-                        $doseData[$key]['status'] = $doseRow['vaccination_status'] === 'Completed' ? 'Administered' : 'Pending';
+                        $doseData[$key]['status'] = $doseRow['vaccination_status'] === 'Completed' ? 'Administered' : ($doseRow['vaccination_status'] ?? 'Pending');
+                        $doseData[$key]['remarks'] = $doseRow['remarks'] ?? '';
                     }
                 }
 
                 $completedDoses = 0;
+                $totalDoses = 0;
                 foreach ($doseData as $d) {
                     if ($d['status'] === 'Administered') $completedDoses++;
+                    if ($d['status'] !== '') $totalDoses++;
                 }
-                $vaccStatus = $completedDoses >= 6 ? 'Completed' : 'In Progress';
+                $vaccStatus = ($totalDoses > 0 && $completedDoses === $totalDoses) ? 'Completed' : 
+                             ($completedDoses > 0 ? 'In Progress' : 'Pending');
 
                 $historyStmt = $conn->prepare("
                     SELECT c.case_id, c.case_number, r.registry_number AS case_no, c.created_at, 
@@ -741,6 +859,7 @@ if ($action) {
                 }
 
                 // 2) Handle animal_bite_cases
+                $isNewCase = false;
                 if ($caseId) {
                     $checkCase = $conn->prepare("SELECT case_id FROM animal_bite_cases WHERE case_id = ? AND branch_id = ? AND is_archived = 0");
                     $checkCase->bind_param("is", $caseId, $logged_branch_id);
@@ -760,6 +879,7 @@ if ($action) {
                         $logged_user_id, $caseId, $logged_branch_id);
                     $updCase->execute();
                 } else {
+                    $isNewCase = true;
                     $insCase = $conn->prepare("
                         INSERT INTO animal_bite_cases 
                         (case_number, patient_id, branch_id, animal_type, bite_location, animal_status, date_of_bite, 
@@ -858,13 +978,32 @@ if ($action) {
                 $delVacc->bind_param("is", $caseId, $logged_branch_id);
                 $delVacc->execute();
                 
+                // Get the default vaccine item ID
                 $vaccineItemId = getDefaultVaccineItemId($conn);
+                $defaultUnitId = getDefaultUnitId($conn);
+                
+                // Try to get a better vaccine item from inventory
+                $vaccineItemStmt = $conn->prepare("
+                    SELECT i.item_id, i.unit_id, i.item_name FROM inventory_items i
+                    JOIN inventory_stocks s ON i.item_id = s.item_id
+                    WHERE s.branch_id = ? AND i.category_id = 2 AND s.quantity_available > 0
+                    LIMIT 1
+                ");
+                $vaccineItemStmt->bind_param("s", $logged_branch_id);
+                $vaccineItemStmt->execute();
+                $vaccineItemResult = $vaccineItemStmt->get_result();
+                $vaccineItemRow = $vaccineItemResult->fetch_assoc();
+                
+                if ($vaccineItemRow) {
+                    $vaccineItemId = (int) $vaccineItemRow['item_id'];
+                    $defaultUnitId = (int) $vaccineItemRow['unit_id'];
+                }
                 
                 $insertVacc = $conn->prepare("
                     INSERT INTO vaccination_records 
-                    (patient_id, case_id, item_id, branch_id, dose_number, 
+                    (patient_id, case_id, item_id, unit_id, branch_id, dose_number, 
                      scheduled_date, date_administered, vaccination_status, remarks, nurse_id) 
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
                 ");
                 
                 $dosesToSave = getDosesForCategory($vaccCat, $route);
@@ -873,7 +1012,7 @@ if ($action) {
                     $doseNum = $doseMap[$key];
                     $doseData = $vaccinationDoses[$key] ?? ['scheduled_date' => '', 'administered_date' => '', 'status' => 'Pending'];
                     
-                    $scheduledDate = !empty($doseData['scheduled_date']) ? frontToDbDate($doseData['scheduled_date']) : null;
+                    $scheduledDate = calculateScheduledDate($biteDate, $key, $doseData);
                     $administeredDate = !empty($doseData['administered_date']) ? frontToDbDate($doseData['administered_date']) : null;
                     
                     if ($doseData['status'] === 'Administered' && empty($administeredDate)) {
@@ -882,11 +1021,47 @@ if ($action) {
                     
                     $vaccStatus = $doseData['status'] === 'Administered' ? 'Completed' : 'Scheduled';
                     
+                    // Get vaccine name and unit info for this specific dose
+                    $vaccineName = '';
+                    $unitId = $defaultUnitId;
+                    
+                    // Try to get the item details
+                    $nameStmt = $conn->prepare("SELECT item_name, unit_id FROM inventory_items WHERE item_id = ?");
+                    $nameStmt->bind_param("i", $vaccineItemId);
+                    $nameStmt->execute();
+                    $nameResult = $nameStmt->get_result();
+                    if ($nameRow = $nameResult->fetch_assoc()) {
+                        $vaccineName = $nameRow['item_name'];
+                        $unitId = (int) $nameRow['unit_id'];
+                    }
+                    
+                    // Ensure the unit_id exists in the units table
+                    $unitCheckStmt = $conn->prepare("SELECT unit_id FROM units WHERE unit_id = ?");
+                    $unitCheckStmt->bind_param("i", $unitId);
+                    $unitCheckStmt->execute();
+                    $unitResult = $unitCheckStmt->get_result();
+                    if ($unitResult->num_rows === 0) {
+                        // If the unit doesn't exist, use a default valid unit_id
+                        $unitId = getDefaultUnitId($conn);
+                    }
+                    
+                    // Also ensure the vaccine item exists
+                    $itemCheckStmt = $conn->prepare("SELECT item_id FROM inventory_items WHERE item_id = ?");
+                    $itemCheckStmt->bind_param("i", $vaccineItemId);
+                    $itemCheckStmt->execute();
+                    $itemResult = $itemCheckStmt->get_result();
+                    if ($itemResult->num_rows === 0) {
+                        // If the item doesn't exist, use the default
+                        $vaccineItemId = getDefaultVaccineItemId($conn);
+                    }
+                    
+                    // Set vaccine_name in the record
                     $insertVacc->bind_param(
-                        "iiisississ",
+                        "iiiisississ",
                         $patientId,
                         $caseId,
                         $vaccineItemId,
+                        $unitId,
                         $logged_branch_id,
                         $doseNum,
                         $scheduledDate,
@@ -895,10 +1070,32 @@ if ($action) {
                         $vaccinationRemarks,
                         $logged_user_id
                     );
-                    $insertVacc->execute();
+                    
+                    if (!$insertVacc->execute()) {
+                        error_log("Failed to insert vaccination record: " . $conn->error);
+                        throw new Exception("Failed to save vaccination record for dose " . $doseNum);
+                    }
+                    
+                    // Now update the vaccine_name for the inserted record
+                    $vaccId = $conn->insert_id;
+                    if ($vaccId > 0 && !empty($vaccineName)) {
+                        $updateVaccName = $conn->prepare("UPDATE vaccination_records SET vaccine_name = ? WHERE vaccination_id = ?");
+                        $updateVaccName->bind_param("si", $vaccineName, $vaccId);
+                        $updateVaccName->execute();
+                    }
+                    
+                    error_log("Saved vaccination record: patient_id=$patientId, case_id=$caseId, dose_num=$doseNum, scheduled_date=$scheduledDate, status=$vaccStatus, unit_id=$unitId");
                 }
 
-                $actionText = $caseId ? "Updated patient record: {$fullName} (Case: {$caseNo})" 
+                // --- SEND NOTIFICATION TO NURSES FOR NEW PATIENT ---
+                if ($isNewCase) {
+                    // Only send notification for newly created patients, not updates
+                    $patientNameForNotification = $fullName;
+                    $caseNumberForNotification = $caseNo;
+                    notifyNursesOnNewPatient($conn, $caseId, $patientNameForNotification, $caseNumberForNotification, $logged_branch_id, $logged_user_id);
+                }
+
+                $actionText = $caseId && !$isNewCase ? "Updated patient record: {$fullName} (Case: {$caseNo})" 
                                       : "Created new patient record: {$fullName} (Case: {$caseNo})";
                 auditLog($conn, $logged_user_id, $logged_branch_id, $actionText, 'Patient Record');
 
@@ -907,50 +1104,51 @@ if ($action) {
 
             } catch (Exception $e) {
                 $conn->rollback();
+                error_log("Error saving patient record: " . $e->getMessage());
                 jsonResponse(['error' => $e->getMessage()], 500);
             }
             break;
 
         case 'archive':
-    try {
-        $caseId = (int) ($_GET['case_id'] ?? 0);
-        $archiveReason = trim($_GET['reason'] ?? 'Archived by user');
-        
-        if ($caseId <= 0) {
-            jsonResponse(['error' => 'Invalid case ID'], 400);
-        }
+            try {
+                $caseId = (int) ($_GET['case_id'] ?? 0);
+                $archiveReason = trim($_GET['reason'] ?? 'Archived by user');
+                
+                if ($caseId <= 0) {
+                    jsonResponse(['error' => 'Invalid case ID'], 400);
+                }
 
-        // Check if the case exists and is not archived
-        $caseStmt = $conn->prepare("
-            SELECT c.case_id, p.full_name, c.case_number, r.registry_number 
-            FROM animal_bite_cases c
-            JOIN patients p ON c.patient_id = p.patient_id
-            LEFT JOIN registry_records r ON c.case_id = r.case_id
-            WHERE c.case_id = ? AND c.branch_id = ? AND c.is_archived = 0
-        ");
-        $caseStmt->bind_param("is", $caseId, $logged_branch_id);
-        $caseStmt->execute();
-        $caseResult = $caseStmt->get_result();
-        $caseData = $caseResult->fetch_assoc();
-        
-        if (!$caseData) {
-            throw new Exception("Record not found or already archived.");
-        }
+                // Check if the case exists and is not archived
+                $caseStmt = $conn->prepare("
+                    SELECT c.case_id, p.full_name, c.case_number, r.registry_number 
+                    FROM animal_bite_cases c
+                    JOIN patients p ON c.patient_id = p.patient_id
+                    LEFT JOIN registry_records r ON c.case_id = r.case_id
+                    WHERE c.case_id = ? AND c.branch_id = ? AND c.is_archived = 0
+                ");
+                $caseStmt->bind_param("is", $caseId, $logged_branch_id);
+                $caseStmt->execute();
+                $caseResult = $caseStmt->get_result();
+                $caseData = $caseResult->fetch_assoc();
+                
+                if (!$caseData) {
+                    throw new Exception("Record not found or already archived.");
+                }
 
-        // Archive the case
-        archiveCase($conn, $caseId, $logged_user_id, $logged_branch_id, $archiveReason);
+                // Archive the case
+                archiveCase($conn, $caseId, $logged_user_id, $logged_branch_id, $archiveReason);
 
-        // Get the case number from the data, fallback to registry_number if case_number is empty
-        $caseNumber = !empty($caseData['case_number']) ? $caseData['case_number'] : ($caseData['registry_number'] ?? '');
-        $actionText = "Archived patient record: {$caseData['full_name']} (Case: {$caseNumber})";
-        auditLog($conn, $logged_user_id, $logged_branch_id, $actionText, 'Patient Record');
+                // Get the case number from the data, fallback to registry_number if case_number is empty
+                $caseNumber = !empty($caseData['case_number']) ? $caseData['case_number'] : ($caseData['registry_number'] ?? '');
+                $actionText = "Archived patient record: {$caseData['full_name']} (Case: {$caseNumber})";
+                auditLog($conn, $logged_user_id, $logged_branch_id, $actionText, 'Patient Record');
 
-        jsonResponse(['success' => true]);
+                jsonResponse(['success' => true]);
 
-    } catch (Exception $e) {
-        jsonResponse(['error' => $e->getMessage()], 500);
-    }
-    break;
+            } catch (Exception $e) {
+                jsonResponse(['error' => $e->getMessage()], 500);
+            }
+            break;
 
         case 'check_case_no':
             try {
