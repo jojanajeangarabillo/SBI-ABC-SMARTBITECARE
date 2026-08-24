@@ -1131,6 +1131,186 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             font-weight: 700;
             margin-left: 6px;
         }
+
+        * { box-sizing: border-box; }
+
+        body {
+            background: #f3f4f6;
+            margin: 0;
+            padding: 0;
+        }
+
+        .main { background: #f3f4f6; }
+
+        .topbar {
+            border-bottom: 1px solid #e9edf5;
+            position: sticky;
+            top: 0;
+            z-index: 99;
+        }
+
+        .topbar h3 { letter-spacing: -0.3px; }
+
+        .topbar h3 .badge-unread {
+            font-size: 14px;
+            font-weight: 600;
+            background: var(--accent);
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            margin-left: 10px;
+        }
+
+        .content-wrapper { padding: 35px 35px 40px; }
+        .page-header { margin-bottom: 30px; gap: 12px; }
+        .header-left { gap: 14px; }
+
+        .search-box {
+            width: 320px;
+            height: 42px;
+            display: flex;
+            align-items: center;
+            background: white;
+            border: 1.5px solid #64748b;
+            border-radius: 30px;
+            padding: 0 16px;
+        }
+
+        .search-box:focus-within {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(43,58,140,0.1);
+        }
+
+        .search-box > i {
+            position: static;
+            transform: none;
+            color: #94a3b8;
+            font-size: 1.1rem;
+            margin-right: 8px;
+        }
+
+        .search-box input {
+            height: auto;
+            padding: 0;
+            border: 0;
+            font-size: 14px;
+            background: transparent;
+            color: #334155;
+        }
+
+        .search-box input::placeholder { color: #94a3b8; }
+
+        .btn-filter {
+            height: 42px;
+            padding: 0 18px;
+            border: 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+
+        .dropdown-menu {
+            border: 1px solid #e9edf5;
+            border-radius: 12px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.12);
+            padding: 8px 0;
+        }
+
+        .dropdown-item {
+            padding: 10px 18px;
+            color: #334155;
+            font-size: 14px;
+        }
+
+        .dropdown-item:hover, .dropdown-item.active {
+            background: #f1f5f9;
+            color: #334155;
+        }
+
+        .branch-indicator {
+            color: #64748b;
+            font-size: 14px;
+            font-weight: 500;
+            background: transparent;
+            padding: 0;
+            border-radius: 0;
+        }
+
+        .btn-readall {
+            height: 42px;
+            padding: 0 22px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+
+        .notification-section { margin-top: 0; }
+
+        .notification-day {
+            color: var(--primary);
+            margin: 24px 0 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .notification-day h5 { font-size: 18px; margin: 0; }
+
+        .notification-card {
+            align-items: flex-start;
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 18px 20px;
+            margin-bottom: 18px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+            transition: box-shadow 0.2s, border-color 0.2s;
+        }
+
+        .notification-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        .notification-card.unread { background: #f8fafc; border-color: #dbeafe; border-left: 6px solid var(--danger); }
+        .notification-card.read { border-left: 6px solid var(--success); opacity: 0.85; }
+
+        .notification-icon {
+            width: 48px;
+            height: 48px;
+            font-size: 1.4rem;
+            margin-right: 16px;
+        }
+
+        .notification-icon.danger { background: #fee2e2; color: #dc2626; }
+        .notification-icon.warning { background: #fef3c7; color: #b45309; }
+        .notification-icon.expire { background: #fef3c7; color: #b45309; }
+        .notification-icon.info { background: #dbeafe; color: #2563eb; }
+
+        .notification-content { padding: 2px 0; }
+        .notification-content h6 { color: #0f172a; font-size: 15px; margin-bottom: 3px; }
+        .notification-content p { color: #475569; line-height: 1.4; margin-bottom: 4px; }
+        .notification-content small { color: #94a3b8; }
+        .notification-right { gap: 8px; padding-left: 16px; }
+
+        .badge-status { padding: 4px 14px; border-radius: 30px; }
+        .btn-view { padding: 6px 16px; font-size: 13px; }
+        .btn-mark-read { border: 0; padding: 0; font-size: 13px; margin-top: 2px; }
+
+        @media (max-width: 991px) {
+            .search-box { width: 100%; max-width: 300px; }
+            .header-left { width: 100%; }
+            .btn-readall { width: 100%; justify-content: center; }
+        }
+
+        @media (max-width: 576px) {
+            .content-wrapper { padding: 20px 16px; }
+            .topbar { padding: 0 16px; height: 70px; }
+            .topbar h3 { font-size: 20px; }
+            .notification-card { padding: 14px 16px; gap: 12px; flex-wrap: wrap; }
+            .notification-icon { width: 34px; height: 34px; font-size: 16px; margin-bottom: 0; }
+            .notification-content h6 { font-size: 14px; }
+            .notification-content p { font-size: 13px; }
+            .notification-right { align-items: flex-start; margin: 8px 0 0; padding-left: 0; width: 100%; flex-direction: row; justify-content: space-between; flex-wrap: wrap; }
+        }
     </style>
 </head>
 
@@ -1164,10 +1344,16 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
     <div class="main">
         <!-- Top Header -->
         <div class="topbar">
-            <h3>Notifications <span style="font-size:16px; color:#6c757d; font-weight:400; margin-left:8px;"> <?php echo htmlspecialchars($branch_name); ?> </span> </h3>
+            <h3>
+                Notifications
+                <?php if ($unreadCount > 0): ?>
+                <span class="badge-unread"><?php echo $unreadCount; ?> unread</span>
+                <?php endif; ?>
+            </h3>
             <div class="profile">
+                <i class="bi bi-person-circle"></i>
                 <?php echo htmlspecialchars($username); ?>
-               
+                <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Admin Staff</span>
             </div>
         </div>
 

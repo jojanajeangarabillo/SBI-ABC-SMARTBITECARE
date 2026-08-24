@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Jul 17, 2026 at 12:21 PM
+-- Generation Time: Aug 24, 2026 at 07:47 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -62,7 +62,10 @@ INSERT INTO `animal_bite_cases` (`case_id`, `case_number`, `patient_id`, `branch
 (64, '26-0015', 70, 'SBI-002', 'Cat', 'Right Arm', NULL, 'Alive/Healthy', '2026-07-08', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-07-11 13:18:54'),
 (65, '26-0016', 71, 'SBI-002', 'Dog', 'Right Arm', NULL, 'Alive/Healthy', '2026-07-15', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
 (66, '26-0017', 72, 'SBI-002', 'Dog', 'Left Arm', NULL, 'Alive/Healthy', '2026-07-10', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-07-11 13:46:48'),
-(67, '26-0018', 73, 'SBI-002', 'Dog', 'Right Arm', NULL, 'Alive/Healthy', '2026-07-11', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-07-11 13:55:33');
+(67, '26-0018', 73, 'SBI-002', 'Dog', 'Right Arm', NULL, 'Alive/Healthy', '2026-07-11', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-07-11 13:55:33'),
+(68, '26-0019', 74, 'SBI-002', 'Cat', 'Left Leg', NULL, 'Alive/Healthy', '2026-07-17', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-07-17 12:51:02'),
+(69, '26-0020', 75, 'SBI-002', 'Cat', 'Right Arm', NULL, 'Alive/Healthy', '2026-08-23', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-08-24 14:37:04'),
+(70, '26-0021', 76, 'SBI-002', 'Dog', 'Left Arm', NULL, 'Alive/Healthy', '2026-08-04', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-08-24 16:37:58');
 
 -- --------------------------------------------------------
 
@@ -400,7 +403,132 @@ INSERT INTO `audit_logs` (`log_id`, `user_id`, `branch_id`, `action`, `module`, 
 (305, 16, 'SBI-002', 'Login Success: User \'Ella Franco\' - Role: Administrative Staff, Branch: Cainta Branch', 'Login System', '2026-07-17 10:19:18'),
 (306, 11, 'SBI-002', 'Login Failed: User \'Jean Montero\' - Incorrect password', 'Login System', '2026-07-17 10:19:53'),
 (307, 11, 'SBI-002', 'Login Success: User \'Jean Montero\' - Role: Inventory Officer, Branch: Cainta Branch', 'Login System', '2026-07-17 10:20:00'),
-(308, 9, 'SBI-002', 'Login Success: User \'Marc Beringuela\' - Role: Nurse, Branch: Cainta Branch', 'Login System', '2026-07-17 10:20:28');
+(308, 9, 'SBI-002', 'Login Success: User \'Marc Beringuela\' - Role: Nurse, Branch: Cainta Branch', 'Login System', '2026-07-17 10:20:28'),
+(309, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-17 10:22:12'),
+(310, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-17 12:48:38'),
+(311, 16, 'SBI-002', 'Updated patient record: Ferdinand Margallo (Case: 26-0019)', 'Patient Record', '2026-07-17 12:51:02'),
+(312, 16, 'SBI-002', 'Updated patient record: Ferdinand Margallo (Case: 26-0019)', 'Patient Record', '2026-07-17 12:52:05'),
+(313, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-17 12:54:08'),
+(314, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-17 13:43:07'),
+(315, 9, 'SBI-002', 'Logout: User \'Marc Beringuela\' (Role: Nurse) (IP: ::1)', 'Login System', '2026-07-17 14:26:24'),
+(316, 11, 'SBI-002', 'Logout: User \'Jean Montero\' (Role: Inventory Officer) (IP: ::1)', 'Login System', '2026-07-17 14:26:27'),
+(317, 16, 'SBI-002', 'Logout: User \'Ella Franco\' (Role: Administrative Staff) (IP: ::1)', 'Login System', '2026-07-17 14:26:29'),
+(318, 6, 'SBI-002', 'Logout: User \'Jojana Garabillo\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-07-17 14:26:33'),
+(319, 1, 'SBI-001', 'Logout: User \'superadmin\' (Role: Super Admin) (IP: ::1)', 'Login System', '2026-07-17 14:26:40'),
+(320, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-07-17 22:02:25'),
+(321, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-07-17 22:03:06'),
+(322, 16, 'SBI-002', 'Login Success: User \'Ella Franco\' - Role: Administrative Staff, Branch: Cainta Branch', 'Login System', '2026-07-17 22:03:39'),
+(323, 9, 'SBI-002', 'Login Success: User \'Marc Beringuela\' - Role: Nurse, Branch: Cainta Branch', 'Login System', '2026-07-17 22:04:17'),
+(324, 11, 'SBI-002', 'Login Success: User \'Jean Montero\' - Role: Inventory Officer, Branch: Cainta Branch', 'Login System', '2026-07-17 22:05:03'),
+(325, 1, 'SBI-001', 'Added new branch: SBI Marikina (ID: SBI-005)', 'Branch Management', '2026-07-18 05:02:46'),
+(326, 1, 'SBI-001', 'Failed to create branch admin - Username or email already exists: Pamela One, joepatlacerna54@gmail.com', 'Branch Admin Management', '2026-07-18 05:04:47'),
+(327, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-18 05:06:02'),
+(328, 1, 'SBI-001', 'Updated branch: SBI-005 (Marikina Branch) - Changes: Name: \'SBI Marikina\' → \'Marikina Branch\'', 'Branch Management', '2026-07-18 05:07:14'),
+(329, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-18 05:08:14'),
+(330, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-18 05:43:05'),
+(331, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-18 05:43:22'),
+(332, 11, 'SBI-002', 'Deleted inventory category: Medical Supplies (ID: 5)', 'Inventory Categories', '2026-07-18 06:41:14'),
+(333, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-18 06:49:12'),
+(334, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-18 06:51:14'),
+(335, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-18 06:52:20'),
+(336, 1, 'SBI-001', 'Logout: User \'superadmin\' (Role: Super Admin) (IP: ::1)', 'Login System', '2026-07-18 06:56:17'),
+(337, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-07-18 06:56:47'),
+(338, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-07-18 07:07:15'),
+(339, 1, 'SBI-001', 'Logout: User \'superadmin\' (Role: Super Admin) (IP: ::1)', 'Login System', '2026-07-18 07:07:18'),
+(340, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-07-18 07:22:54'),
+(341, 1, 'SBI-001', 'Logout: User \'superadmin\' (Role: Super Admin) (IP: ::1)', 'Login System', '2026-07-18 07:22:55'),
+(342, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-07-18 07:33:00'),
+(343, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-07-18 07:34:15'),
+(344, 1, 'SBI-001', 'Login Failed: User \'superadmin\' - Incorrect password', 'Login System', '2026-08-13 10:50:59'),
+(345, 1, 'SBI-001', 'Login Failed: User \'superadmin\' - Incorrect password', 'Login System', '2026-08-13 10:51:45'),
+(346, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-08-13 10:52:11'),
+(347, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-08-13 10:52:18'),
+(348, 11, 'SBI-002', 'Login Success: User \'Jean Montero\' - Role: Inventory Officer, Branch: Cainta Branch', 'Login System', '2026-08-22 12:02:37'),
+(349, 9, 'SBI-002', 'Login Success: User \'Marc Beringuela\' - Role: Nurse, Branch: Cainta Branch', 'Login System', '2026-08-22 12:05:08'),
+(350, 11, 'SBI-002', 'Logout: User \'Jean Montero\' (Role: Inventory Officer) (IP: ::1)', 'Login System', '2026-08-22 12:13:05'),
+(351, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-08-22 12:13:27'),
+(352, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-08-22 12:13:37'),
+(353, 1, 'SBI-001', 'Generated user report (pdf) - Branch: Antipolo Branch, Date Range: 2026-07-23 to 2026-08-22', 'Reports', '2026-08-22 12:13:53'),
+(354, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-08-22 12:15:17'),
+(355, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-08-22 12:17:35'),
+(356, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-08-22 12:18:01'),
+(357, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-08-22 12:31:20'),
+(358, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-08-22 12:31:50'),
+(359, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-08-22 12:32:20'),
+(360, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-08-22 12:32:59'),
+(361, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-08-22 12:33:51'),
+(362, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-08-22 12:35:48'),
+(363, 16, 'SBI-002', 'Login Success: User \'Ella Franco\' - Role: Administrative Staff, Branch: Cainta Branch', 'Login System', '2026-08-22 12:42:11'),
+(364, 11, 'SBI-002', 'Login Success: User \'Jean Montero\' - Role: Inventory Officer, Branch: Cainta Branch', 'Login System', '2026-08-22 12:43:36'),
+(365, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-08-22 13:27:32'),
+(366, 16, 'SBI-002', 'Logout: User \'Ella Franco\' (Role: Administrative Staff) (IP: ::1)', 'Login System', '2026-08-22 13:32:41'),
+(367, 6, 'SBI-002', 'Logout: User \'Jojana Garabillo\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-08-22 13:32:43'),
+(368, 9, 'SBI-002', 'Logout: User \'Marc Beringuela\' (Role: Nurse) (IP: ::1)', 'Login System', '2026-08-22 13:32:46'),
+(369, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-08-24 10:04:54'),
+(370, 1, 'SBI-001', 'Added new branch: Quezon City (ID: SBI-007)', 'Branch & Admin Management', '2026-08-24 10:44:42'),
+(371, 1, 'SBI-001', 'Created new branch admin: Jana Baglan (ID: 17) for branch ID: SBI-007', 'Branch & Admin Management', '2026-08-24 10:46:08'),
+(372, 1, 'SBI-001', 'Welcome email sent to new branch admin: Jana Baglan (ID: 17, Email: janajean925@gmail.com)', 'Branch & Admin Management', '2026-08-24 10:46:12'),
+(373, 1, 'SBI-001', 'Created new branch admin: Jana Baglan (ID: 18) for branch ID: SBI-007', 'Branch & Admin Management', '2026-08-24 10:59:50'),
+(374, 1, 'SBI-001', 'Welcome email sent to new branch admin: Jana Baglan (ID: 18, Email: janajean925@gmail.com)', 'Branch & Admin Management', '2026-08-24 10:59:53'),
+(375, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-08-24 11:01:27'),
+(376, 6, 'SBI-002', 'Logout: User \'Jojana Garabillo\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-08-24 11:01:43'),
+(377, 14, 'SBI-003', 'Login Success: User \'Joepat Lacerna\' - Role: Branch Admin, Branch: Pasig Branch', 'Login System', '2026-08-24 11:02:30'),
+(378, 14, 'SBI-003', 'Added new user: Jana Baglan (ID: 19)', 'User Management', '2026-08-24 11:03:04'),
+(381, 1, 'SBI-001', 'Created new branch admin: Jana Baglan (ID: 20) for branch ID: SBI-007', 'Branch & Admin Management', '2026-08-24 11:17:47'),
+(382, 1, 'SBI-001', 'Welcome email sent to new branch admin: Jana Baglan (ID: 20, Email: janajean925@gmail.com)', 'Branch & Admin Management', '2026-08-24 11:17:51'),
+(383, 1, 'SBI-001', 'Created new branch admin: Jana Baglan (ID: 21) for branch ID: SBI-007', 'Branch & Admin Management', '2026-08-24 12:18:22'),
+(384, 1, 'SBI-001', 'Welcome email sent to new branch admin: Jana Baglan (ID: 21, Email: janajean925@gmail.com)', 'Branch & Admin Management', '2026-08-24 12:18:27'),
+(385, 1, 'SBI-001', 'Created new branch admin: Jana Baglan (ID: 22) for branch ID: SBI-007', 'Branch & Admin Management', '2026-08-24 12:58:26'),
+(386, 1, 'SBI-001', 'Welcome email sent to new branch admin: Jana Baglan (ID: 22, Email: janajean925@gmail.com)', 'Branch & Admin Management', '2026-08-24 12:58:29'),
+(387, 1, 'SBI-001', 'Created new branch admin: Jana Baglan (ID: 23) for branch ID: SBI-007', 'Branch & Admin Management', '2026-08-24 13:04:19'),
+(388, 1, 'SBI-001', 'Welcome email sent to new branch admin: Jana Baglan (ID: 23, Email: janajean925@gmail.com)', 'Branch & Admin Management', '2026-08-24 13:04:24'),
+(389, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-08-24 13:08:02'),
+(390, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-08-24 13:08:07'),
+(391, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-08-24 13:09:58'),
+(392, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-08-24 13:10:44'),
+(393, 14, 'SBI-003', 'Logout: User \'Joepat Lacerna\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-08-24 13:11:07');
+INSERT INTO `audit_logs` (`log_id`, `user_id`, `branch_id`, `action`, `module`, `created_at`) VALUES
+(394, 16, 'SBI-002', 'Login Success: User \'Ella Franco\' - Role: Administrative Staff, Branch: Cainta Branch', 'Login System', '2026-08-24 13:11:20'),
+(395, 9, 'SBI-002', 'Login Success: User \'Marc Beringuela\' - Role: Nurse, Branch: Cainta Branch', 'Login System', '2026-08-24 13:12:24'),
+(396, 9, 'SBI-002', 'Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 | Patient ID: 74 | Case ID: 68 | Quantity: 1 | Vaccination ID: 91', 'Vaccination', '2026-08-24 13:15:46'),
+(397, 16, 'SBI-002', 'Updated patient record: Ferdinand Margallo (Case: 26-0019)', 'Patient Record', '2026-08-24 13:28:01'),
+(398, 16, 'SBI-002', 'Updated patient record: Ferdinand Margallo (Case: 26-0019)', 'Patient Record', '2026-08-24 14:21:29'),
+(399, 16, 'SBI-002', 'Updated patient record: Ferdinand Margallo (Case: 26-0019)', 'Patient Record', '2026-08-24 14:22:14'),
+(400, 16, 'SBI-002', 'Updated patient record: Ela Ketcho (Case: 26-0020)', 'Patient Record', '2026-08-24 14:37:04'),
+(401, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: Ela Ketcho (ID: 75) | Case ID: 69 | Quantity: 1 | Status: Completed | Date: 2026-08-24', 'Vaccination', '2026-08-24 14:39:37'),
+(402, 9, 'SBI-002', 'Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #2 (D3) | Patient: Ela Ketcho (ID: 75) | Case ID: 69 | Quantity: 1 | Status: Completed | Date: 2026-08-27', 'Vaccination', '2026-08-24 14:40:33'),
+(403, 9, 'SBI-002', 'Login Success: User \'Marc Beringuela\' - Role: Nurse, Branch: Cainta Branch', 'Login System', '2026-08-24 14:50:46'),
+(404, 9, 'SBI-002', 'Login Success: User \'Marc Beringuela\' - Role: Nurse, Branch: Cainta Branch', 'Login System', '2026-08-24 14:52:09'),
+(405, 9, 'SBI-002', 'Login Success: User \'Marc Beringuela\' - Role: Nurse, Branch: Cainta Branch', 'Login System', '2026-08-24 14:52:28'),
+(406, 9, 'SBI-002', 'Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 (D0) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-08-24', 'Vaccination', '2026-08-24 15:00:43'),
+(407, 9, 'SBI-002', 'Vaccination Administered - Rabies Vaccine Dose #3 (D7) | Patient: Ela Ketcho (ID: 75) | Case ID: 69 | Quantity: 1 | Status: Completed | Date: 2026-08-24', 'Vaccination', '2026-08-24 15:05:42'),
+(408, 9, 'SBI-002', 'Vaccination Administered - TT (Tetanus Toxoid) Dose #2 (D3) | Patient: Ela Ketcho (ID: 75) | Case ID: 69 | Quantity: 1 | Status: Completed | Date: 2026-08-31', 'Vaccination', '2026-08-24 15:05:42'),
+(409, 9, 'SBI-002', 'Vaccination Administered - TT (Tetanus Toxoid) Dose #2 (D3) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-08-27', 'Vaccination', '2026-08-24 15:44:42'),
+(410, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #3 (D7) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-08-24', 'Vaccination', '2026-08-24 15:46:54'),
+(411, 9, 'SBI-002', 'Vaccination Administered - Rabies Vaccine Dose #2 (D3) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-08-31', 'Vaccination', '2026-08-24 15:46:54'),
+(412, 9, 'SBI-002', 'Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #2 (D3) | Patient: Jean Lacerna (ID: 73) | Case ID: 67 | Quantity: 1 | Status: Completed | Date: 2026-07-16', 'Vaccination', '2026-08-24 15:54:18'),
+(413, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #2 (D3) | Patient: Jean Lacerna (ID: 73) | Case ID: 67 | Quantity: 1 | Status: Completed | Date: 2026-07-16', 'Vaccination', '2026-08-24 15:54:18'),
+(414, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #2 (D3) | Patient: Coco (ID: 72) | Case ID: 66 | Quantity: 1 | Status: Completed | Date: 2026-07-14', 'Vaccination', '2026-08-24 16:03:05'),
+(415, 9, 'SBI-002', 'Vaccination Administered - Rabies Vaccine Dose #1 (D0) | Patient: Coco (ID: 72) | Case ID: 66 | Quantity: 1 | Status: Completed | Date: 2026-07-14', 'Vaccination', '2026-08-24 16:03:05'),
+(416, 9, 'SBI-002', 'Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 (D0) | Patient: Juan (ID: 71) | Case ID: 65 | Quantity: 1 | Status: Completed | Date: 2026-07-07', 'Vaccination', '2026-08-24 16:12:05'),
+(417, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: Juan (ID: 71) | Case ID: 65 | Quantity: 1 | Status: Completed | Date: 2026-07-07', 'Vaccination', '2026-08-24 16:12:05'),
+(418, 9, 'SBI-002', 'Vaccination Administered - Rabies Vaccine Dose #2 (D3) | Patient: Juan (ID: 71) | Case ID: 65 | Quantity: 1 | Status: Completed | Date: 2026-07-14', 'Vaccination', '2026-08-24 16:13:01'),
+(419, 9, 'SBI-002', 'Vaccination Administered - TT (Tetanus Toxoid) Dose #1 (D0) | Patient: Juan (ID: 71) | Case ID: 65 | Quantity: 1 | Status: Completed | Date: 2026-07-14', 'Vaccination', '2026-08-24 16:13:01'),
+(420, 9, 'SBI-002', 'Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 (D0) | Patient: kemi (ID: 70) | Case ID: 64 | Quantity: 1 | Status: Completed | Date: 2026-07-11', 'Vaccination', '2026-08-24 16:18:05'),
+(421, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: kemi (ID: 70) | Case ID: 64 | Quantity: 1 | Status: Completed | Date: 2026-07-11', 'Vaccination', '2026-08-24 16:18:05'),
+(422, 9, 'SBI-002', 'Vaccination Administered - TT (Tetanus Toxoid) Dose #4 (D14) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-09-21', 'Vaccination', '2026-08-24 16:22:45'),
+(423, 9, 'SBI-002', 'Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 (D0) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-09-21', 'Vaccination', '2026-08-24 16:22:45'),
+(424, 9, 'SBI-002', 'Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #5 (D21) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-09-21', 'Vaccination', '2026-08-24 16:24:13'),
+(425, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-09-21', 'Vaccination', '2026-08-24 16:24:13'),
+(426, 9, 'SBI-002', 'Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #6 (D28/30) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-08-21', 'Vaccination', '2026-08-24 16:25:31'),
+(427, 9, 'SBI-002', 'Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #6 (D28/30) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-09-21', 'Vaccination', '2026-08-24 16:31:56'),
+(428, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #6 (D28/30) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-09-21', 'Vaccination', '2026-08-24 16:31:56'),
+(429, 16, 'SBI-002', 'Sent new patient notification to nurses for: Ean Abilo', 'Notification', '2026-08-24 16:37:58'),
+(430, 16, 'SBI-002', 'Created new patient record: Ean Abilo (Case: 26-0021)', 'Patient Record', '2026-08-24 16:37:58'),
+(431, 16, 'SBI-002', 'Updated patient record: Ean Abilo (Case: 26-0021)', 'Patient Record', '2026-08-24 16:39:06'),
+(432, 16, 'SBI-002', 'Updated patient record: Jean Lacerna (Case: 26-0018)', 'Patient Record', '2026-08-24 17:10:55'),
+(433, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-08-24 17:29:14'),
+(434, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-08-24 17:42:07');
 
 -- --------------------------------------------------------
 
@@ -426,7 +554,9 @@ INSERT INTO `branches` (`branch_id`, `branch_name`, `branch_address`, `contact_n
 ('SBI-001', 'Antipolo Branch', 'Antipolo City, Rizal', '09123456789', 'antipolo@smartbitecare.com', 'Active', '2026-07-04 07:53:33'),
 ('SBI-002', 'Cainta Branch', 'Cainta, Rizal', '091234578', 'sbicainta@gmail.com', 'Active', '2026-07-04 08:30:29'),
 ('SBI-003', 'Pasig Branch', 'Pasig City', '091234578', 'sbipasig@gmail.com', 'Active', '2026-07-04 08:36:45'),
-('SBI-004', 'Montalban Branch', 'Montalban, Rizal', '0912345679', 'sbimontalban@gmail.com', 'Active', '2026-07-05 11:39:58');
+('SBI-004', 'Montalban Branch', 'Montalban, Rizal', '0912345679', 'sbimontalban@gmail.com', 'Active', '2026-07-05 11:39:58'),
+('SBI-005', 'Marikina Branch', 'Marikina', '09123456', 'sbimarikina@gmail.com', 'Active', '2026-07-18 05:02:46'),
+('SBI-007', 'Quezon City', 'Nova, Quezon City', '091234567', 'sbiqc@gmail.com', 'Active', '2026-08-24 10:44:42');
 
 -- --------------------------------------------------------
 
@@ -464,8 +594,7 @@ INSERT INTO `inventory_categories` (`category_id`, `category_name`, `monitoring_
 (1, 'Appliances/Electronics', 'Monthly'),
 (2, 'Medical Supplies', 'Daily'),
 (3, 'Logbook/Forms', 'Weekly'),
-(4, 'Office Supplies', 'Weekly'),
-(5, 'Medical Supplies', 'Daily');
+(4, 'Office Supplies', 'Weekly');
 
 -- --------------------------------------------------------
 
@@ -488,7 +617,6 @@ CREATE TABLE `inventory_items` (
 --
 
 INSERT INTO `inventory_items` (`item_id`, `category_id`, `unit_id`, `item_name`, `minimum_stock`, `description`, `is_predictable`) VALUES
-(1, 1, 1, 'Rabies Vaccine (Default)', 10, 'Default vaccine item for vaccination records', 1),
 (2, 2, 4, 'ERIG (Equine Rabies Immunoglobulin)', 5, 'Equine Rabies Immunoglobulin for rabies post-exposure prophylaxis', 1),
 (3, 2, 5, 'ATS (Anti-Tetanus Serum)', 10, 'Anti-Tetanus Serum for tetanus prophylaxis', 1),
 (4, 2, 6, 'TT (Tetanus Toxoid)', 20, 'Tetanus Toxoid vaccine for tetanus prevention', 1),
@@ -514,10 +642,10 @@ CREATE TABLE `inventory_stocks` (
 --
 
 INSERT INTO `inventory_stocks` (`stock_id`, `item_id`, `branch_id`, `quantity_available`, `expiration_date`, `last_updated`) VALUES
-(1, 2, 'SBI-002', 17, '2027-07-11', '2026-07-16 03:33:31'),
-(2, 3, 'SBI-002', 29, '2028-01-11', '2026-07-16 07:31:57'),
-(3, 4, 'SBI-002', 50, '2028-07-11', '2026-07-11 12:16:00'),
-(4, 5, 'SBI-002', 100, '2027-07-11', '2026-07-11 12:16:00'),
+(1, 2, 'SBI-002', 9, '2027-07-11', '2026-08-24 16:31:56'),
+(2, 3, 'SBI-002', 19, '2028-01-11', '2026-08-24 16:31:56'),
+(3, 4, 'SBI-002', 46, '2028-07-11', '2026-08-24 16:22:45'),
+(4, 5, 'SBI-002', 96, '2027-07-11', '2026-08-24 16:13:01'),
 (5, 2, 'SBI-003', 15, '2027-07-11', '2026-07-11 12:16:00'),
 (6, 3, 'SBI-003', 25, '2028-01-11', '2026-07-11 12:16:00'),
 (7, 4, 'SBI-003', 40, '2028-07-11', '2026-07-11 12:16:00'),
@@ -555,7 +683,33 @@ INSERT INTO `inventory_usage_history` (`usage_id`, `item_id`, `branch_id`, `usag
 (1, 2, 'SBI-002', '2026-07-16', 1, 1, 0),
 (3, 2, 'SBI-002', '2026-07-16', 1, 1, 0),
 (4, 2, 'SBI-002', '2026-07-16', 1, 1, 0),
-(5, 3, 'SBI-002', '2026-07-16', 1, 1, 0);
+(5, 3, 'SBI-002', '2026-07-16', 1, 1, 0),
+(6, 3, 'SBI-002', '2026-08-24', 1, 1, 0),
+(7, 2, 'SBI-002', '2026-08-24', 1, 1, 0),
+(8, 3, 'SBI-002', '2026-08-27', 1, 1, 0),
+(9, 3, 'SBI-002', '2026-08-24', 1, 1, 0),
+(10, 5, 'SBI-002', '2026-08-24', 1, 1, 0),
+(11, 4, 'SBI-002', '2026-08-31', 1, 1, 0),
+(12, 4, 'SBI-002', '2026-08-27', 1, 1, 0),
+(13, 2, 'SBI-002', '2026-08-24', 1, 1, 0),
+(14, 5, 'SBI-002', '2026-08-31', 1, 1, 0),
+(15, 3, 'SBI-002', '2026-07-16', 1, 1, 0),
+(16, 2, 'SBI-002', '2026-07-16', 1, 1, 0),
+(17, 2, 'SBI-002', '2026-07-14', 1, 1, 0),
+(18, 5, 'SBI-002', '2026-07-14', 1, 1, 0),
+(19, 3, 'SBI-002', '2026-07-07', 1, 1, 0),
+(20, 2, 'SBI-002', '2026-07-07', 1, 1, 0),
+(21, 5, 'SBI-002', '2026-07-14', 1, 1, 0),
+(22, 4, 'SBI-002', '2026-07-14', 1, 1, 0),
+(23, 3, 'SBI-002', '2026-07-11', 1, 1, 0),
+(24, 2, 'SBI-002', '2026-07-11', 1, 1, 0),
+(25, 4, 'SBI-002', '2026-09-21', 1, 1, 0),
+(26, 3, 'SBI-002', '2026-09-21', 1, 1, 0),
+(27, 3, 'SBI-002', '2026-09-21', 1, 1, 0),
+(28, 2, 'SBI-002', '2026-09-21', 1, 1, 0),
+(29, 3, 'SBI-002', '2026-08-21', 1, 1, 0),
+(30, 3, 'SBI-002', '2026-09-21', 1, 1, 0),
+(31, 2, 'SBI-002', '2026-09-21', 1, 1, 0);
 
 -- --------------------------------------------------------
 
@@ -614,7 +768,38 @@ INSERT INTO `notifications` (`notification_id`, `user_id`, `title`, `message`, `
 (1, 8, 'Patient record saved', 'Case 26-0001 for Shane Cacho was saved.', 'admin_staff_patient_record', 0, '2026-07-06 11:52:40'),
 (2, 8, 'Patient record saved', 'Case 26-0002 for Ken Allen Rosales was saved.', 'admin_staff_patient_record', 0, '2026-07-06 12:09:16'),
 (3, 8, 'Patient record saved', 'Case 26-0003 for Ken Allen Rosales was saved.', 'admin_staff_patient_record', 0, '2026-07-06 12:15:51'),
-(4, 8, 'Patient record deleted', 'Case 26-0001 for Shane Cacho was deleted.', 'admin_staff_patient_record', 0, '2026-07-06 12:20:33');
+(4, 8, 'Patient record deleted', 'Case 26-0001 for Shane Cacho was deleted.', 'admin_staff_patient_record', 0, '2026-07-06 12:20:33'),
+(5, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ela Ketcho (ID: P0075)\nCase ID: C0069\nDate: August 24, 2026 16:39:37\n\nVaccines Administered:\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Doses: 1', 'vaccination', 0, '2026-08-24 14:39:37'),
+(6, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ela Ketcho at Cainta Branch.\nTotal vaccines administered: 1\nDate: August 24, 2026 16:39:37', 'vaccination', 1, '2026-08-24 14:39:37'),
+(7, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ela Ketcho (ID: P0075)\nCase ID: C0069\nDate: August 24, 2026 16:40:33\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D3 (Completed)\n\nTotal Doses: 1', 'vaccination', 0, '2026-08-24 14:40:33'),
+(8, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ela Ketcho at Cainta Branch.\nTotal vaccines administered: 1\nDate: August 24, 2026 16:40:33', 'vaccination', 1, '2026-08-24 14:40:33'),
+(9, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 17:00:43\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n\nTotal Doses: 1', 'vaccination', 0, '2026-08-24 15:00:43'),
+(10, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 1\nDate: August 24, 2026 17:00:43', 'vaccination', 1, '2026-08-24 15:00:43'),
+(11, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ela Ketcho (ID: P0075)\nCase ID: C0069\nDate: August 24, 2026 17:05:42\n\nVaccines Administered:\n• Rabies Vaccine - D7 (Completed)\n• TT (Tetanus Toxoid) - D3 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 15:05:42'),
+(12, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ela Ketcho at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 17:05:42', 'vaccination', 1, '2026-08-24 15:05:42'),
+(13, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 17:44:42\n\nVaccines Administered:\n• TT (Tetanus Toxoid) - D3 (Completed)\n\nTotal Doses: 1', 'vaccination', 0, '2026-08-24 15:44:42'),
+(14, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 1\nDate: August 24, 2026 17:44:42', 'vaccination', 1, '2026-08-24 15:44:42'),
+(15, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 17:46:54\n\nVaccines Administered:\n• ERIG (Equine Rabies Immunoglobulin) - D7 (Completed)\n• Rabies Vaccine - D3 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 15:46:54'),
+(16, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 17:46:54', 'vaccination', 1, '2026-08-24 15:46:54'),
+(17, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jean Lacerna (ID: P0073)\nCase ID: C0067\nDate: August 24, 2026 17:54:18\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D3 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D3 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 15:54:18'),
+(18, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Jean Lacerna at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 17:54:18', 'vaccination', 1, '2026-08-24 15:54:18'),
+(19, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Coco (ID: P0072)\nCase ID: C0066\nDate: August 24, 2026 18:03:05\n\nVaccines Administered:\n• ERIG (Equine Rabies Immunoglobulin) - D3 (Completed)\n• Rabies Vaccine - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 16:03:05'),
+(20, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Coco at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:03:05', 'vaccination', 1, '2026-08-24 16:03:05'),
+(21, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Juan (ID: P0071)\nCase ID: C0065\nDate: August 24, 2026 18:12:05\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 16:12:05'),
+(22, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Juan at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:12:05', 'vaccination', 1, '2026-08-24 16:12:05'),
+(23, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Juan (ID: P0071)\nCase ID: C0065\nDate: August 24, 2026 18:13:01\n\nVaccines Administered:\n• Rabies Vaccine - D3 (Completed)\n• TT (Tetanus Toxoid) - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 16:13:01'),
+(24, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Juan at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:13:01', 'vaccination', 1, '2026-08-24 16:13:01'),
+(25, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: kemi (ID: P0070)\nCase ID: C0064\nDate: August 24, 2026 18:18:05\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 16:18:05'),
+(26, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to kemi at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:18:05', 'vaccination', 1, '2026-08-24 16:18:05'),
+(27, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 18:22:45\n\nVaccines Administered:\n• TT (Tetanus Toxoid) - D14 (Completed)\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 16:22:45'),
+(28, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:22:45', 'vaccination', 1, '2026-08-24 16:22:45'),
+(29, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 18:24:13\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D21 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 16:24:13'),
+(30, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:24:13', 'vaccination', 1, '2026-08-24 16:24:13'),
+(31, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 18:25:31\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D28/30 (Completed)\n\nTotal Doses: 1', 'vaccination', 0, '2026-08-24 16:25:31'),
+(32, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 1\nDate: August 24, 2026 18:25:31', 'vaccination', 1, '2026-08-24 16:25:31'),
+(33, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 18:31:56\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D28/30 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D28/30 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 16:31:56'),
+(34, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:31:56', 'vaccination', 1, '2026-08-24 16:31:56'),
+(35, 9, 'New Patient Added', 'Administrative staff has added a new patient: Ean Abilo (Case: 26-0021). Please review the vaccination schedule.', 'new_patient', 1, '2026-08-24 16:37:58');
 
 -- --------------------------------------------------------
 
@@ -653,7 +838,10 @@ INSERT INTO `patients` (`patient_id`, `full_name`, `email`, `contact_number`, `b
 (70, 'kemi', NULL, '0942358332', '2004-07-28', 'Male', 'Taytay Rizal', '2026-07-11 13:18:54', 'SBI-002', 0, NULL, NULL),
 (71, 'Juan', NULL, '0942312345', '2004-07-07', 'Male', 'sdfgh', '2026-07-11 13:31:15', 'SBI-002', 0, NULL, NULL),
 (72, 'Coco', NULL, '094235123456', '2000-07-29', 'Male', 'Lifehomes', '2026-07-11 13:46:48', 'SBI-002', 0, NULL, NULL),
-(73, 'Jean Lacerna', NULL, '0942358234', '2007-07-23', 'Female', 'Taguig', '2026-07-11 13:55:33', 'SBI-002', 0, NULL, NULL);
+(73, 'Jean Lacerna', NULL, '0942358234', '2007-07-23', 'Female', 'Taguig', '2026-07-11 13:55:33', 'SBI-002', 0, NULL, NULL),
+(74, 'Ferdinand Margallo', NULL, '0992134568', '2000-11-25', 'Male', 'kabayan st. Brgy. Rosario, Pasig City', '2026-07-17 12:51:02', 'SBI-002', 0, NULL, NULL),
+(75, 'Ela Ketcho', NULL, '099213412345', '2003-08-04', 'Female', 'Maybunga Pasig City', '2026-08-24 14:37:04', 'SBI-002', 0, NULL, NULL),
+(76, 'Ean Abilo', NULL, '091234765', '2003-06-15', 'Male', 'Alfamart Taguig', '2026-08-24 16:37:58', 'SBI-002', 0, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -714,7 +902,10 @@ INSERT INTO `philhealth_records` (`philhealth_record_id`, `case_id`, `has_philhe
 (32, 64, 'No', NULL, '', NULL, 16, '2026-07-11 21:18:54', 0, NULL, NULL),
 (33, 65, 'No', NULL, '', NULL, 16, '2026-07-11 21:31:15', 0, NULL, NULL),
 (34, 66, 'No', NULL, '', NULL, 16, '2026-07-11 21:56:51', 0, NULL, NULL),
-(35, 67, 'No', NULL, '', NULL, 16, '2026-07-16 11:33:00', 0, NULL, NULL);
+(35, 67, 'No', NULL, '', NULL, 16, '2026-08-25 01:10:55', 0, NULL, NULL),
+(36, 68, 'No', NULL, '', NULL, 16, '2026-08-24 22:22:14', 0, NULL, NULL),
+(37, 69, 'No', NULL, '', NULL, 16, '2026-08-24 22:37:04', 0, NULL, NULL),
+(38, 70, 'No', NULL, '', NULL, 16, '2026-08-25 00:39:06', 0, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -844,10 +1035,13 @@ INSERT INTO `registry_records` (`registry_id`, `case_id`, `branch_id`, `created_
 (25, 25, NULL, NULL, '2026-07-11 11:28:28', '26-0007', 'Alive/Healthy', 0.00, 0, 1, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 1, 1, 0, 1, 0, '', NULL, 8, '2026-07-09 06:23:30', 0, NULL, NULL),
 (27, 27, NULL, NULL, '2026-07-11 11:28:28', '26-0012', 'Alive/Healthy', 0.00, 0, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '0994146223', NULL, 8, '2026-07-09 10:23:52', 0, NULL, NULL),
 (31, 44, NULL, NULL, '2026-07-11 11:28:28', '26-0013', 'Alive/Healthy', 1.00, 1, 0, 'PVRV TRC ABHAYRAB', NULL, NULL, 0, 0, 0, 0, 0, 0, 0, '0942358117', NULL, 16, '2026-07-11 19:07:38', 0, NULL, NULL),
-(32, 64, NULL, NULL, '2026-07-11 13:18:54', '26-0015', 'Alive/Healthy', 0.00, 0, 1, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '0942358332', NULL, 16, '2026-07-11 21:18:54', 0, NULL, NULL),
-(33, 65, NULL, NULL, '2026-07-11 13:31:15', '26-0016', 'Alive/Healthy', 5.00, 1, 1, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '0942312345', NULL, 16, '2026-07-11 21:31:15', 0, NULL, NULL),
-(34, 66, NULL, NULL, '2026-07-11 13:46:48', '26-0017', 'Alive/Healthy', 1.00, 1, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 1, 0, 0, 1, 1, '094235123456', NULL, 16, '2026-07-11 21:56:51', 0, NULL, NULL),
-(35, 67, NULL, NULL, '2026-07-11 13:55:33', '26-0018', 'Alive/Healthy', 0.00, 0, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '0942358234', NULL, 16, '2026-07-16 11:33:00', 0, NULL, NULL);
+(32, 64, NULL, NULL, '2026-07-11 13:18:54', '26-0015', 'Alive/Healthy', 0.00, 0, 1, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '0942358332', NULL, 9, '2026-08-25 00:18:05', 0, NULL, NULL),
+(33, 65, NULL, NULL, '2026-07-11 13:31:15', '26-0016', 'Alive/Healthy', 5.00, 1, 1, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 0, 0, 0, 0, 0, '0942312345', NULL, 9, '2026-08-25 00:13:01', 0, NULL, NULL),
+(34, 66, NULL, NULL, '2026-07-11 13:46:48', '26-0017', 'Alive/Healthy', 1.00, 1, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 1, 0, 0, 1, 1, '094235123456', NULL, 9, '2026-08-25 00:03:05', 0, NULL, NULL),
+(35, 67, NULL, NULL, '2026-07-11 13:55:33', '26-0018', 'Alive/Healthy', 0.00, 0, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 0, 0, 0, 0, 0, '0942358234', NULL, 16, '2026-08-25 01:10:55', 0, NULL, NULL),
+(36, 68, NULL, NULL, '2026-07-17 12:51:02', '26-0019', 'Alive/Healthy', 0.00, 0, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 1, 1, 1, 1, 0, '0992134568', NULL, 9, '2026-08-25 00:31:56', 0, NULL, NULL),
+(37, 69, NULL, NULL, '2026-08-24 14:37:04', '26-0020', 'Alive/Healthy', 0.00, 0, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 1, 0, 0, 0, 0, '099213412345', NULL, 9, '2026-08-24 23:05:42', 0, NULL, NULL),
+(38, 70, NULL, NULL, '2026-08-24 16:37:58', '26-0021', 'Alive/Healthy', 0.00, 0, 1, 'PVRV TRC SPEEDA', NULL, NULL, 0, 0, 0, 0, 0, 0, 0, '091234765', NULL, 16, '2026-08-25 00:39:06', 0, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -988,10 +1182,30 @@ CREATE TABLE `stock_transactions` (
 --
 
 INSERT INTO `stock_transactions` (`transaction_id`, `item_id`, `user_id`, `vaccination_id`, `branch_id`, `transaction_type`, `quantity`, `remarks`, `transaction_date`) VALUES
-(1, 2, 9, 74, 'SBI-002', 'OUT', 1, 'Vaccination administered - Dose 1', '2026-07-16 02:57:38'),
-(3, 2, 9, 76, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 73 | Case ID: 67 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-16', '2026-07-16 03:13:50'),
-(4, 2, 9, 81, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 73 | Case ID: 67 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-16', '2026-07-16 03:33:31'),
-(5, 3, 9, 82, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-16', '2026-07-16 07:31:57');
+(5, 3, 9, 82, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-16', '2026-07-16 07:31:57'),
+(7, 2, 9, 111, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-08-24', '2026-08-24 14:39:37'),
+(8, 3, 9, 112, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 2 | Qty Used: 1 | Date: 2026-08-27', '2026-08-24 14:40:33'),
+(9, 3, 9, 107, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-08-24', '2026-08-24 15:00:43'),
+(10, 5, 9, 113, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: Rabies Vaccine | Dose #: 3 | Qty Used: 1 | Date: 2026-08-24', '2026-08-24 15:05:42'),
+(11, 4, 9, 112, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: TT (Tetanus Toxoid) | Dose #: 2 | Qty Used: 1 | Date: 2026-08-31', '2026-08-24 15:05:42'),
+(12, 4, 9, 108, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: TT (Tetanus Toxoid) | Dose #: 2 | Qty Used: 1 | Date: 2026-08-27', '2026-08-24 15:44:42'),
+(13, 2, 9, 109, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 3 | Qty Used: 1 | Date: 2026-08-24', '2026-08-24 15:46:54'),
+(14, 5, 9, 108, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: Rabies Vaccine | Dose #: 2 | Qty Used: 1 | Date: 2026-08-31', '2026-08-24 15:46:54'),
+(17, 2, 9, 71, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 2 | Qty Used: 1 | Date: 2026-07-14', '2026-08-24 16:03:05'),
+(18, 5, 9, 82, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: Rabies Vaccine | Dose #: 1 | Qty Used: 1 | Date: 2026-07-14', '2026-08-24 16:03:05'),
+(19, 3, 9, 115, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 71 | Case ID: 65 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-07', '2026-08-24 16:12:05'),
+(20, 2, 9, 116, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 71 | Case ID: 65 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-07', '2026-08-24 16:12:05'),
+(21, 5, 9, 117, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 71 | Case ID: 65 | Vaccine: Rabies Vaccine | Dose #: 2 | Qty Used: 1 | Date: 2026-07-14', '2026-08-24 16:13:01'),
+(22, 4, 9, 118, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 71 | Case ID: 65 | Vaccine: TT (Tetanus Toxoid) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-14', '2026-08-24 16:13:01'),
+(23, 3, 9, 119, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 70 | Case ID: 64 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-11', '2026-08-24 16:18:05'),
+(24, 2, 9, 120, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 70 | Case ID: 64 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-11', '2026-08-24 16:18:05'),
+(25, 4, 9, 124, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: TT (Tetanus Toxoid) | Dose #: 4 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:22:45'),
+(26, 3, 9, 125, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:22:45'),
+(27, 3, 9, 126, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 5 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:24:13'),
+(28, 2, 9, 127, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:24:13'),
+(29, 3, 9, 128, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 6 | Qty Used: 1 | Date: 2026-08-21', '2026-08-24 16:25:31'),
+(30, 3, 9, 129, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 6 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:31:56'),
+(31, 2, 9, 130, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 6 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:31:56');
 
 -- --------------------------------------------------------
 
@@ -1001,13 +1215,14 @@ INSERT INTO `stock_transactions` (`transaction_id`, `item_id`, `user_id`, `vacci
 
 CREATE TABLE `training_dataset` (
   `training_id` int(11) NOT NULL,
-  `item_id` int(11) NOT NULL,
-  `branch_id` varchar(10) NOT NULL,
   `record_date` date NOT NULL,
-  `current_stock` int(11) NOT NULL,
+  `branch_name` varchar(100) NOT NULL,
+  `total_patient` int(11) DEFAULT 0,
+  `item_name` varchar(100) NOT NULL,
+  `beginning_stock` int(11) NOT NULL,
   `quantity_used` int(11) NOT NULL,
   `stock_received` int(11) DEFAULT 0,
-  `patient_count` int(11) DEFAULT 0,
+  `ending_stock` int(11) NOT NULL,
   `low_stock_target` tinyint(1) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
@@ -1057,14 +1272,14 @@ CREATE TABLE `users` (
 --
 
 INSERT INTO `users` (`user_id`, `branch_id`, `role_id`, `username`, `email`, `password`, `status`, `created_at`, `last_login`) VALUES
-(1, 'SBI-001', 1, 'superadmin', 'garabillo_jojanajean@plpasig.edu.ph', '$2y$10$gTUuk2.GeUd5BNNryWGq8OhJWjQcdqk8rOMPUMJ1VkFaxc7eJajHe', 'Active', '2026-07-04 07:53:47', '2026-07-17 15:18:28'),
-(6, 'SBI-002', 2, 'Jojana Garabillo', 'jojanajeangarabillo@gmail.com', '$2y$10$Gundsv.vdvdqOT1M3VIcP.r/8y/MqzNxDPnxfh2qypFd44fL6xZta', 'Active', '2026-07-04 09:59:45', '2026-07-17 15:21:37'),
+(1, 'SBI-001', 1, 'superadmin', 'garabillo_jojanajean@plpasig.edu.ph', '$2y$10$gTUuk2.GeUd5BNNryWGq8OhJWjQcdqk8rOMPUMJ1VkFaxc7eJajHe', 'Active', '2026-07-04 07:53:47', '2026-08-25 01:42:07'),
+(6, 'SBI-002', 2, 'Jojana Garabillo', 'jojanajeangarabillo@gmail.com', '$2y$10$Gundsv.vdvdqOT1M3VIcP.r/8y/MqzNxDPnxfh2qypFd44fL6xZta', 'Active', '2026-07-04 09:59:45', '2026-08-25 01:29:14'),
 (8, 'SBI-002', 4, 'Shane Cacho', 'pam066198@gmail.com', '$2a$12$rfw67uNcLetmfn6M2Dv5e.ff49vAitKIHni3Q7iKV.zgMruHVfkIa', 'Active', '2026-07-04 14:41:02', '2026-07-09 10:09:42'),
-(9, 'SBI-002', 3, 'Marc Beringuela', 'ruberducky032518@gmail.com', '$2y$10$mRG5TnwyVCEkohLgsXiCe.INa226POltPF/0M4fYuXX8mq925V7kO', 'Active', '2026-07-04 14:55:07', '2026-07-17 18:20:28'),
-(11, 'SBI-002', 5, 'Jean Montero', 'joepatlacerna54@gmail.com', '$2y$10$ga5HM6WcD0wQSSvnpCAvue4UdqknCryN93mJVLatoI4GAiEDHctNO', 'Active', '2026-07-04 15:09:39', '2026-07-17 18:20:00'),
-(14, 'SBI-003', 2, 'Joepat Lacerna', 'opat09252005@gmail.com', '$2y$10$JB4.S8HI8Zu.IbvLHuMhH.3mnmqmyWMdV4ID/nRxcotOs.tmdCasm', 'Active', '2026-07-05 11:56:22', '2026-07-05 20:04:06'),
+(9, 'SBI-002', 3, 'Marc Beringuela', 'ruberducky032518@gmail.com', '$2y$10$mRG5TnwyVCEkohLgsXiCe.INa226POltPF/0M4fYuXX8mq925V7kO', 'Active', '2026-07-04 14:55:07', '2026-08-24 22:52:28'),
+(11, 'SBI-002', 5, 'Jean Montero', 'joepatlacerna54@gmail.com', '$2y$10$ga5HM6WcD0wQSSvnpCAvue4UdqknCryN93mJVLatoI4GAiEDHctNO', 'Active', '2026-07-04 15:09:39', '2026-08-22 20:43:36'),
+(14, 'SBI-003', 2, 'Joepat Lacerna', 'opat09252005@gmail.com', '$2y$10$JB4.S8HI8Zu.IbvLHuMhH.3mnmqmyWMdV4ID/nRxcotOs.tmdCasm', 'Active', '2026-07-05 11:56:22', '2026-08-24 19:02:30'),
 (15, 'SBI-003', 2, 'Mae Ben', 'sheyn.cacho@gmail.com', '$2y$10$knOsicB5IV6qD4SqIaF3WOBBnyrFDJYTknP8yqBSXlo35gIp8mLim', 'Active', '2026-07-05 16:19:46', '2026-07-09 19:33:48'),
-(16, 'SBI-002', 4, 'Ella Franco', 'cachosheyn@gmail.com', '$2y$10$lLv3F5B3Yu1QGQU1GkAbq./clNj/7RMlMH1noMMwNAqv/45mymWfm', 'Active', '2026-07-07 06:24:22', '2026-07-17 18:19:18');
+(16, 'SBI-002', 4, 'Ella Franco', 'cachosheyn@gmail.com', '$2y$10$lLv3F5B3Yu1QGQU1GkAbq./clNj/7RMlMH1noMMwNAqv/45mymWfm', 'Active', '2026-07-07 06:24:22', '2026-08-24 21:11:20');
 
 -- --------------------------------------------------------
 
@@ -1107,12 +1322,12 @@ CREATE TABLE `vaccination_records` (
   `case_id` int(11) NOT NULL,
   `item_id` int(11) NOT NULL,
   `vaccine_name` varchar(255) DEFAULT NULL,
-  `unit_id` int(11) DEFAULT NULL,
+  `unit_id` int(11) NOT NULL,
   `branch_id` varchar(10) NOT NULL,
   `dose_number` int(11) NOT NULL,
   `date_administered` date DEFAULT NULL,
+  `administered_datetime` datetime DEFAULT NULL,
   `scheduled_date` date DEFAULT NULL,
-  `administered_at` varchar(100) DEFAULT NULL,
   `next_schedule` date DEFAULT NULL,
   `vaccination_status` enum('Scheduled','Completed','Missed') DEFAULT 'Scheduled',
   `is_final_dose` tinyint(1) DEFAULT 0,
@@ -1128,41 +1343,65 @@ CREATE TABLE `vaccination_records` (
 -- Dumping data for table `vaccination_records`
 --
 
-INSERT INTO `vaccination_records` (`vaccination_id`, `patient_id`, `case_id`, `item_id`, `vaccine_name`, `unit_id`, `branch_id`, `dose_number`, `date_administered`, `scheduled_date`, `administered_at`, `next_schedule`, `vaccination_status`, `is_final_dose`, `remarks`, `nurse_id`, `is_archived`, `archived_at`, `archived_by`, `created_at`) VALUES
-(4, 18, 15, 1, NULL, NULL, 'SBI-002', 1, '2026-07-07', NULL, NULL, NULL, 'Completed', 0, NULL, 16, 0, NULL, NULL, '2026-07-07 09:17:21'),
-(5, 18, 15, 1, NULL, NULL, 'SBI-002', 2, '2026-07-10', NULL, NULL, NULL, 'Completed', 0, NULL, 16, 0, NULL, NULL, '2026-07-07 09:17:21'),
-(14, 31, 25, 1, NULL, NULL, 'SBI-002', 1, '2026-07-09', '2026-07-09', NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
-(15, 31, 25, 1, NULL, NULL, 'SBI-002', 2, '2026-07-09', '2026-07-12', NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
-(16, 31, 25, 1, NULL, NULL, 'SBI-002', 3, '2026-07-09', NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
-(17, 31, 25, 1, NULL, NULL, 'SBI-002', 4, '2026-07-09', NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
-(18, 31, 25, 1, NULL, NULL, 'SBI-002', 5, '2026-07-09', NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
-(19, 31, 25, 1, NULL, NULL, 'SBI-002', 6, '2026-07-09', NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
-(25, 33, 27, 1, NULL, NULL, 'SBI-002', 1, '2026-07-09', '2026-07-09', NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-09 02:23:52'),
-(26, 33, 27, 1, NULL, NULL, 'SBI-002', 2, NULL, '2026-07-12', NULL, NULL, 'Scheduled', 0, '', 8, 0, NULL, NULL, '2026-07-09 02:23:52'),
-(27, 33, 27, 1, NULL, NULL, 'SBI-002', 3, NULL, '2026-07-16', NULL, NULL, 'Scheduled', 0, '', 8, 0, NULL, NULL, '2026-07-09 02:23:52'),
-(28, 33, 27, 1, NULL, NULL, 'SBI-002', 6, NULL, '2026-08-06', NULL, NULL, 'Scheduled', 0, '', 8, 0, NULL, NULL, '2026-07-09 02:23:52'),
-(45, 50, 44, 1, NULL, NULL, 'SBI-002', 1, NULL, NULL, NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 11:07:38'),
-(46, 50, 44, 1, NULL, NULL, 'SBI-002', 2, NULL, NULL, NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 11:07:38'),
-(47, 50, 44, 1, NULL, NULL, 'SBI-002', 3, NULL, NULL, NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 11:07:38'),
-(48, 50, 44, 1, NULL, NULL, 'SBI-002', 6, NULL, NULL, NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 11:07:38'),
-(49, 70, 64, 1, NULL, NULL, 'SBI-002', 1, '2026-07-11', '2026-07-11', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:18:54'),
-(50, 70, 64, 1, NULL, NULL, 'SBI-002', 2, NULL, '2026-07-14', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:18:54'),
-(51, 70, 64, 1, NULL, NULL, 'SBI-002', 3, NULL, '2026-07-18', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:18:54'),
-(52, 70, 64, 1, NULL, NULL, 'SBI-002', 6, NULL, '2026-08-08', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:18:54'),
-(53, 71, 65, 1, NULL, NULL, 'SBI-002', 1, '2026-07-11', '2026-07-11', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
-(54, 71, 65, 1, NULL, NULL, 'SBI-002', 2, NULL, '2026-07-14', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
-(55, 71, 65, 1, NULL, NULL, 'SBI-002', 3, NULL, '2026-07-18', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
-(56, 71, 65, 1, NULL, NULL, 'SBI-002', 4, NULL, '2026-07-25', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
-(57, 71, 65, 1, NULL, NULL, 'SBI-002', 6, NULL, '2026-08-08', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
-(71, 72, 66, 1, NULL, NULL, 'SBI-002', 2, '2026-07-14', '2026-07-14', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:56:51'),
-(72, 72, 66, 1, NULL, NULL, 'SBI-002', 3, '2026-07-18', '2026-07-18', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:56:51'),
-(73, 72, 66, 1, NULL, NULL, 'SBI-002', 6, '2026-08-08', '2026-08-08', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:56:51'),
-(77, 73, 67, 1, NULL, NULL, 'SBI-002', 1, '2026-07-16', '2026-07-16', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-16 03:33:00'),
-(78, 73, 67, 1, NULL, NULL, 'SBI-002', 2, NULL, '2026-07-19', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-16 03:33:00'),
-(79, 73, 67, 1, NULL, NULL, 'SBI-002', 3, NULL, '2026-07-23', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-16 03:33:00'),
-(80, 73, 67, 1, NULL, NULL, 'SBI-002', 6, NULL, '2026-08-13', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-16 03:33:00'),
-(81, 73, 67, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 1, '2026-07-16', NULL, 'Cainta Branch', NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-07-16 03:33:31'),
-(82, 72, 66, 3, 'ATS (Anti-Tetanus Serum)', 5, 'SBI-002', 1, '2026-07-16', NULL, 'Cainta Branch', NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-07-16 07:31:56');
+INSERT INTO `vaccination_records` (`vaccination_id`, `patient_id`, `case_id`, `item_id`, `vaccine_name`, `unit_id`, `branch_id`, `dose_number`, `date_administered`, `administered_datetime`, `scheduled_date`, `next_schedule`, `vaccination_status`, `is_final_dose`, `remarks`, `nurse_id`, `is_archived`, `archived_at`, `archived_by`, `created_at`) VALUES
+(4, 18, 15, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 1, '2026-07-07', NULL, NULL, NULL, 'Completed', 0, NULL, 16, 0, NULL, NULL, '2026-07-07 09:17:21'),
+(5, 18, 15, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 2, '2026-07-10', NULL, NULL, NULL, 'Completed', 0, NULL, 16, 0, NULL, NULL, '2026-07-07 09:17:21'),
+(14, 31, 25, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 1, '2026-07-09', NULL, '2026-07-09', NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
+(15, 31, 25, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 2, '2026-07-09', NULL, '2026-07-12', NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
+(16, 31, 25, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 3, '2026-07-09', NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
+(17, 31, 25, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 4, '2026-07-09', NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
+(18, 31, 25, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 5, '2026-07-09', NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
+(19, 31, 25, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 6, '2026-07-09', NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
+(25, 33, 27, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 1, '2026-07-09', NULL, '2026-07-09', NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-09 02:23:52'),
+(26, 33, 27, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 2, NULL, NULL, '2026-07-12', NULL, 'Scheduled', 0, '', 8, 0, NULL, NULL, '2026-07-09 02:23:52'),
+(27, 33, 27, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 3, NULL, NULL, '2026-07-16', NULL, 'Scheduled', 0, '', 8, 0, NULL, NULL, '2026-07-09 02:23:52'),
+(28, 33, 27, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 6, NULL, NULL, '2026-08-06', NULL, 'Scheduled', 0, '', 8, 0, NULL, NULL, '2026-07-09 02:23:52'),
+(45, 50, 44, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 1, NULL, NULL, NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 11:07:38'),
+(46, 50, 44, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 2, NULL, NULL, NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 11:07:38'),
+(47, 50, 44, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 3, NULL, NULL, NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 11:07:38'),
+(48, 50, 44, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 6, NULL, NULL, NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 11:07:38'),
+(49, 70, 64, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 1, '2026-07-11', NULL, '2026-07-11', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:18:54'),
+(50, 70, 64, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 2, NULL, NULL, '2026-07-14', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:18:54'),
+(51, 70, 64, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 3, NULL, NULL, '2026-07-18', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:18:54'),
+(52, 70, 64, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 6, NULL, NULL, '2026-08-08', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:18:54'),
+(53, 71, 65, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 1, '2026-07-11', NULL, '2026-07-11', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
+(54, 71, 65, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 2, NULL, NULL, '2026-07-14', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
+(55, 71, 65, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 3, NULL, NULL, '2026-07-18', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
+(56, 71, 65, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 4, NULL, NULL, '2026-07-25', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
+(57, 71, 65, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 6, NULL, NULL, '2026-08-08', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
+(71, 72, 66, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 2, '2026-07-14', NULL, '2026-07-14', NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-07-11 13:56:51'),
+(72, 72, 66, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 3, '2026-07-18', NULL, '2026-07-18', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:56:51'),
+(73, 72, 66, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 6, '2026-08-08', NULL, '2026-08-08', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:56:51'),
+(82, 72, 66, 5, 'Rabies Vaccine', 6, 'SBI-002', 1, '2026-07-14', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-07-16 07:31:56'),
+(107, 74, 68, 3, 'ATS (Anti-Tetanus Serum)', 5, 'SBI-002', 1, '2026-08-24', NULL, '2026-08-24', NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:22:14'),
+(108, 74, 68, 5, 'Rabies Vaccine', 6, 'SBI-002', 2, '2026-08-31', NULL, '2026-08-27', NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:22:14'),
+(109, 74, 68, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 3, '2026-08-24', NULL, '2026-08-31', NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:22:14'),
+(110, 74, 68, 5, 'Rabies Vaccine (Default)', 1, 'SBI-002', 6, NULL, NULL, '2026-09-21', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 14:22:14'),
+(111, 75, 69, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 1, '2026-08-24', NULL, '2026-08-24', NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:37:04'),
+(112, 75, 69, 4, 'TT (Tetanus Toxoid)', 6, 'SBI-002', 2, '2026-08-31', NULL, '2026-08-27', NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:37:04'),
+(113, 75, 69, 5, 'Rabies Vaccine', 6, 'SBI-002', 3, '2026-08-24', NULL, '2026-08-31', NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:37:04'),
+(114, 75, 69, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 6, NULL, NULL, '2026-09-21', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 14:37:04'),
+(115, 71, 65, 3, 'ATS (Anti-Tetanus Serum)', 5, 'SBI-002', 1, '2026-07-07', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:12:05'),
+(116, 71, 65, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 1, '2026-07-07', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:12:05'),
+(117, 71, 65, 5, 'Rabies Vaccine', 6, 'SBI-002', 2, '2026-07-14', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:13:01'),
+(118, 71, 65, 4, 'TT (Tetanus Toxoid)', 6, 'SBI-002', 1, '2026-07-14', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:13:01'),
+(119, 70, 64, 3, 'ATS (Anti-Tetanus Serum)', 5, 'SBI-002', 1, '2026-07-11', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:18:05'),
+(120, 70, 64, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 1, '2026-07-11', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:18:05'),
+(124, 74, 68, 4, 'TT (Tetanus Toxoid)', 6, 'SBI-002', 4, '2026-09-21', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:22:45'),
+(125, 74, 68, 3, 'ATS (Anti-Tetanus Serum)', 5, 'SBI-002', 1, '2026-09-21', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:22:45'),
+(126, 74, 68, 3, 'ATS (Anti-Tetanus Serum)', 5, 'SBI-002', 5, '2026-09-21', NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-08-24 16:24:13'),
+(127, 74, 68, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 1, '2026-09-21', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:24:13'),
+(128, 74, 68, 3, 'ATS (Anti-Tetanus Serum)', 5, 'SBI-002', 6, '2026-08-21', NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-08-24 16:25:31'),
+(129, 74, 68, 3, 'ATS (Anti-Tetanus Serum)', 5, 'SBI-002', 6, '2026-09-21', NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-08-24 16:31:56'),
+(130, 74, 68, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 6, '2026-09-21', NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-08-24 16:31:56'),
+(135, 76, 70, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 1, NULL, NULL, '2026-08-05', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 16:39:06'),
+(136, 76, 70, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 2, NULL, NULL, '2026-08-08', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 16:39:06'),
+(137, 76, 70, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 3, NULL, NULL, '2026-08-12', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 16:39:06'),
+(138, 76, 70, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 6, NULL, NULL, '2026-09-02', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 16:39:06'),
+(139, 73, 67, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 1, '2026-07-16', NULL, '2026-07-11', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 17:10:55'),
+(140, 73, 67, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 2, '2026-07-16', NULL, '2026-07-19', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 17:10:55'),
+(141, 73, 67, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 3, NULL, NULL, '2026-08-25', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 17:10:55'),
+(142, 73, 67, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 'SBI-002', 6, NULL, NULL, '2026-08-13', NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 17:10:55');
 
 -- --------------------------------------------------------
 
@@ -1450,15 +1689,14 @@ ALTER TABLE `stock_transactions`
   ADD PRIMARY KEY (`transaction_id`),
   ADD KEY `item_id` (`item_id`),
   ADD KEY `user_id` (`user_id`),
-  ADD KEY `fk_transaction_branch` (`branch_id`);
+  ADD KEY `fk_transaction_branch` (`branch_id`),
+  ADD KEY `fk_transaction_vaccination` (`vaccination_id`);
 
 --
 -- Indexes for table `training_dataset`
 --
 ALTER TABLE `training_dataset`
-  ADD PRIMARY KEY (`training_id`),
-  ADD KEY `item_id` (`item_id`),
-  ADD KEY `fk_training_branch` (`branch_id`);
+  ADD PRIMARY KEY (`training_id`);
 
 --
 -- Indexes for table `units`
@@ -1493,8 +1731,8 @@ ALTER TABLE `vaccination_records`
   ADD KEY `item_id` (`item_id`),
   ADD KEY `nurse_id` (`nurse_id`),
   ADD KEY `fk_vaccination_branch` (`branch_id`),
-  ADD KEY `unit_id` (`unit_id`),
-  ADD KEY `idx_is_archived` (`is_archived`);
+  ADD KEY `idx_is_archived` (`is_archived`),
+  ADD KEY `fk_vaccination_unit` (`unit_id`);
 
 --
 -- Indexes for table `vaccination_records_archive`
@@ -1528,7 +1766,7 @@ ALTER TABLE `vaccination_session_items`
 -- AUTO_INCREMENT for table `animal_bite_cases`
 --
 ALTER TABLE `animal_bite_cases`
-  MODIFY `case_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=68;
+  MODIFY `case_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=71;
 
 --
 -- AUTO_INCREMENT for table `animal_bite_cases_archive`
@@ -1540,7 +1778,7 @@ ALTER TABLE `animal_bite_cases_archive`
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `log_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=309;
+  MODIFY `log_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=435;
 
 --
 -- AUTO_INCREMENT for table `document_tracking`
@@ -1570,7 +1808,7 @@ ALTER TABLE `inventory_stocks`
 -- AUTO_INCREMENT for table `inventory_usage_history`
 --
 ALTER TABLE `inventory_usage_history`
-  MODIFY `usage_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
+  MODIFY `usage_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=32;
 
 --
 -- AUTO_INCREMENT for table `medical_documents`
@@ -1582,13 +1820,13 @@ ALTER TABLE `medical_documents`
 -- AUTO_INCREMENT for table `notifications`
 --
 ALTER TABLE `notifications`
-  MODIFY `notification_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+  MODIFY `notification_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=36;
 
 --
 -- AUTO_INCREMENT for table `patients`
 --
 ALTER TABLE `patients`
-  MODIFY `patient_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=74;
+  MODIFY `patient_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=77;
 
 --
 -- AUTO_INCREMENT for table `patients_archive`
@@ -1600,7 +1838,7 @@ ALTER TABLE `patients_archive`
 -- AUTO_INCREMENT for table `philhealth_records`
 --
 ALTER TABLE `philhealth_records`
-  MODIFY `philhealth_record_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=36;
+  MODIFY `philhealth_record_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=39;
 
 --
 -- AUTO_INCREMENT for table `philhealth_records_archive`
@@ -1630,7 +1868,7 @@ ALTER TABLE `registry_patients_archive`
 -- AUTO_INCREMENT for table `registry_records`
 --
 ALTER TABLE `registry_records`
-  MODIFY `registry_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=36;
+  MODIFY `registry_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=39;
 
 --
 -- AUTO_INCREMENT for table `registry_records_archive`
@@ -1654,7 +1892,7 @@ ALTER TABLE `registry_vaccination_doses_archive`
 -- AUTO_INCREMENT for table `stock_transactions`
 --
 ALTER TABLE `stock_transactions`
-  MODIFY `transaction_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
+  MODIFY `transaction_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=32;
 
 --
 -- AUTO_INCREMENT for table `training_dataset`
@@ -1672,19 +1910,19 @@ ALTER TABLE `units`
 -- AUTO_INCREMENT for table `users`
 --
 ALTER TABLE `users`
-  MODIFY `user_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=17;
+  MODIFY `user_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=24;
 
 --
 -- AUTO_INCREMENT for table `user_tokens`
 --
 ALTER TABLE `user_tokens`
-  MODIFY `token_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
+  MODIFY `token_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=21;
 
 --
 -- AUTO_INCREMENT for table `vaccination_records`
 --
 ALTER TABLE `vaccination_records`
-  MODIFY `vaccination_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=83;
+  MODIFY `vaccination_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=143;
 
 --
 -- AUTO_INCREMENT for table `vaccination_records_archive`
@@ -1829,6 +2067,7 @@ ALTER TABLE `registry_patients_archive`
 -- Constraints for table `registry_records`
 --
 ALTER TABLE `registry_records`
+  ADD CONSTRAINT `fk_registry_case` FOREIGN KEY (`case_id`) REFERENCES `animal_bite_cases` (`case_id`) ON DELETE CASCADE,
   ADD CONSTRAINT `registry_records_ibfk_1` FOREIGN KEY (`case_id`) REFERENCES `animal_bite_cases` (`case_id`),
   ADD CONSTRAINT `registry_records_ibfk_2` FOREIGN KEY (`updated_by`) REFERENCES `users` (`user_id`),
   ADD CONSTRAINT `registry_records_ibfk_3` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
@@ -1864,17 +2103,11 @@ ALTER TABLE `registry_vaccination_doses_archive`
 --
 ALTER TABLE `stock_transactions`
   ADD CONSTRAINT `fk_transaction_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
+  ADD CONSTRAINT `fk_transaction_inventory` FOREIGN KEY (`item_id`) REFERENCES `inventory_items` (`item_id`),
+  ADD CONSTRAINT `fk_transaction_vaccination` FOREIGN KEY (`vaccination_id`) REFERENCES `vaccination_records` (`vaccination_id`) ON DELETE CASCADE,
   ADD CONSTRAINT `stock_transactions_ibfk_1` FOREIGN KEY (`item_id`) REFERENCES `inventory_items` (`item_id`),
   ADD CONSTRAINT `stock_transactions_ibfk_2` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`),
   ADD CONSTRAINT `stock_transactions_ibfk_3` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`);
-
---
--- Constraints for table `training_dataset`
---
-ALTER TABLE `training_dataset`
-  ADD CONSTRAINT `fk_training_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `training_dataset_ibfk_1` FOREIGN KEY (`item_id`) REFERENCES `inventory_items` (`item_id`),
-  ADD CONSTRAINT `training_dataset_ibfk_2` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`);
 
 --
 -- Constraints for table `users`
@@ -1895,6 +2128,10 @@ ALTER TABLE `user_tokens`
 --
 ALTER TABLE `vaccination_records`
   ADD CONSTRAINT `fk_vaccination_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
+  ADD CONSTRAINT `fk_vaccination_case` FOREIGN KEY (`case_id`) REFERENCES `animal_bite_cases` (`case_id`),
+  ADD CONSTRAINT `fk_vaccination_inventory` FOREIGN KEY (`item_id`) REFERENCES `inventory_items` (`item_id`),
+  ADD CONSTRAINT `fk_vaccination_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`patient_id`),
+  ADD CONSTRAINT `fk_vaccination_unit` FOREIGN KEY (`unit_id`) REFERENCES `units` (`unit_id`),
   ADD CONSTRAINT `vaccination_records_ibfk_1` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`patient_id`),
   ADD CONSTRAINT `vaccination_records_ibfk_2` FOREIGN KEY (`case_id`) REFERENCES `animal_bite_cases` (`case_id`),
   ADD CONSTRAINT `vaccination_records_ibfk_3` FOREIGN KEY (`item_id`) REFERENCES `inventory_items` (`item_id`),
