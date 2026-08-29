@@ -1,22 +1,117 @@
 <?php
-/*
-  InventoryOfficer_StockTransactions.php
-  --------------------------------
-  Frontend-only page. No DB connection yet.
-  Rows mirror stock_transactions (transaction_type, quantity,
-  transaction_date) joined to inventory_items and users.
-*/
+session_start();
+require_once 'sources/db_connect.php';
 
-$transactions = [
-    ['trx' => 'TRX-0142', 'type' => 'Stock In',    'item' => 'Speeda',            'qty' => '+50 vials', 'date' => '07/01/2026', 'by' => 'Marc B.'],
-    ['trx' => 'TRX-0141', 'type' => 'Stock Out',   'item' => 'Erig Com',           'qty' => '-3 vials',  'date' => '07/01/2026', 'by' => 'Shane C.'],
-    ['trx' => 'TRX-0140', 'type' => 'Adjustment',  'item' => 'HRIG',               'qty' => '-1 unit',   'date' => '06/30/2026', 'by' => 'Marc B.'],
-    ['trx' => 'TRX-0139', 'type' => 'Stock In',    'item' => '1cc / 3cc Syringe',  'qty' => '+300 pcs',  'date' => '06/30/2026', 'by' => 'Jojana G.'],
-    ['trx' => 'TRX-0138', 'type' => 'Stock Out',   'item' => 'Mefenamic 500mg',    'qty' => '-14 pcs',   'date' => '06/29/2026', 'by' => 'Shane C.'],
-    ['trx' => 'TRX-0137', 'type' => 'Stock Out',   'item' => 'ATS 1,500 IU',       'qty' => '-2 amps',   'date' => '06/29/2026', 'by' => 'Marc B.'],
-    ['trx' => 'TRX-0136', 'type' => 'Stock In',    'item' => 'Toxoid Bett',        'qty' => '+40 amps',  'date' => '06/28/2026', 'by' => 'Jojana G.'],
-    ['trx' => 'TRX-0135', 'type' => 'Adjustment',  'item' => 'Insulin Syringe',    'qty' => '+5 pcs',    'date' => '06/28/2026', 'by' => 'Marc B.'],
-];
+if (
+    !isset($_SESSION['user_id']) ||
+    !isset($_SESSION['role_id']) ||
+    $_SESSION['role_id'] != 5 
+) {
+    header("Location: login.php");
+    exit();
+}
+
+$user_id = $_SESSION['user_id'];
+$branch_id = null;
+$branch_name = '';
+$username = '';
+
+$userQuery = "SELECT u.branch_id, u.username, b.branch_name 
+              FROM users u 
+              LEFT JOIN branches b ON u.branch_id = b.branch_id 
+              WHERE u.user_id = ?";
+$stmt = $conn->prepare($userQuery);
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$userResult = $stmt->get_result();
+
+if ($userResult->num_rows > 0) {
+    $userData = $userResult->fetch_assoc();
+    $branch_id = $userData['branch_id'];
+    $branch_name = $userData['branch_name'] ?? 'Unknown Branch';
+    $username = $userData['username'] ?? 'Inventory Officer';
+}
+
+if (!$branch_id) {
+    $branch_name = 'No Branch Assigned';
+}
+
+
+$transactions = [];
+
+if ($branch_id) {
+    $transactionQuery = "
+        SELECT
+            st.transaction_id,
+            st.transaction_type,
+            st.quantity,
+            st.transaction_date,
+            st.remarks,
+            ii.item_name,
+            u.unit_name,
+            usr.username
+        FROM stock_transactions st
+        INNER JOIN inventory_items ii
+            ON st.item_id = ii.item_id
+        LEFT JOIN units u
+            ON ii.unit_id = u.unit_id
+        INNER JOIN users usr
+            ON st.user_id = usr.user_id
+        WHERE st.branch_id = ?
+        ORDER BY st.transaction_date DESC, st.transaction_id DESC
+    ";
+
+    $transactionStmt = $conn->prepare($transactionQuery);
+
+    if ($transactionStmt) {
+        $transactionStmt->bind_param("i", $branch_id);
+        $transactionStmt->execute();
+        $transactionResult = $transactionStmt->get_result();
+
+        while ($row = $transactionResult->fetch_assoc()) {
+            $type = $row['transaction_type'];
+
+            switch ($type) {
+                case 'IN':
+                    $displayType = 'Stock In';
+                    $sign = '+';
+                    break;
+
+                case 'OUT':
+                    $displayType = 'Stock Out';
+                    $sign = '-';
+                    break;
+
+                case 'ADJUSTMENT':
+                    $displayType = 'Adjustment';
+                
+                    $sign = ((int)$row['quantity'] < 0) ? '-' : '+';
+                    break;
+
+                default:
+                    $displayType = $type ?: 'Unknown';
+                    $sign = ((int)$row['quantity'] < 0) ? '-' : '+';
+                    break;
+            }
+
+            $quantity = abs((int)$row['quantity']);
+            $unitName = $row['unit_name'] ?? '';
+
+            $transactions[] = [
+                'trx' => 'TRX-' . str_pad((string)$row['transaction_id'], 4, '0', STR_PAD_LEFT),
+                'type' => $displayType,
+                'item' => $row['item_name'] ?? 'Unknown Item',
+                'qty' => $sign . $quantity . ($unitName !== '' ? ' ' . $unitName : ''),
+                'date' => date('m/d/Y', strtotime($row['transaction_date'])),
+                'by' => $row['username'] ?? 'Unknown User'
+            ];
+        }
+
+        $transactionStmt->close();
+    } else {
+        $transactionError = "Unable to retrieve stock transactions.";
+    }
+}
 
 function trxTypeClass($type) {
     switch ($type) {
@@ -76,6 +171,12 @@ font-size:28px;
 font-weight:700;
 color:var(--primary);
 margin:0;
+}
+.topbar h3 small {
+font-size: 15px;
+font-weight: 400;
+color: #6c757d;
+margin-left: 10px;
 }
 
 .profile{
@@ -241,8 +342,12 @@ margin-left:90px;
 <div class="main">
 
 <div class="topbar">
-<h3>Stock Transactions</h3>
-<div class="profile"> INVENTORY </div>
+<h3>Stock Transactions<small><?php echo htmlspecialchars($branch_name); ?></small></h3>
+    <div class="profile">
+    <i class="bi bi-person-circle"></i>
+    <?php echo htmlspecialchars($username); ?>
+    <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Inventory Officer</span>
+</div>
 </div>
 
 <div class="page-body">
@@ -251,14 +356,20 @@ margin-left:90px;
 
 <div class="search-box">
 <i class="bi bi-search"></i>
-<input type="text" placeholder="Search transactions...">
+<input
+    type="text"
+    id="transactionSearch"
+    placeholder="Search transactions..."
+    autocomplete="off"
+    aria-label="Search transactions"
+>
 </div>
 
-<select class="filter-select">
-<option>All Types</option>
-<option>Stock In</option>
-<option>Stock Out</option>
-<option>Adjustment</option>
+<select class="filter-select" id="transactionFilter" aria-label="Filter transaction type">
+<option value="All Types">All Types</option>
+<option value="Stock In">Stock In</option>
+<option value="Stock Out">Stock Out</option>
+<option value="Adjustment">Adjustment</option>
 </select>
 
 </div>
@@ -275,17 +386,53 @@ margin-left:90px;
 <th>By</th>
 </tr>
 </thead>
-<tbody>
-<?php foreach ($transactions as $t): ?>
+<tbody id="transactionsBody">
+<?php if (!empty($transactionError)): ?>
 <tr>
+<td colspan="6" class="text-center text-danger py-4">
+    <?php echo htmlspecialchars($transactionError); ?>
+</td>
+</tr>
+
+<?php elseif (empty($transactions)): ?>
+<tr id="noTransactionsRow">
+<td colspan="6" class="text-center text-muted py-4">
+    No stock transactions found for this branch.
+</td>
+</tr>
+
+<?php else: ?>
+
+<?php foreach ($transactions as $t): ?>
+<tr
+    class="transaction-row"
+    data-trx="<?php echo htmlspecialchars($t['trx'], ENT_QUOTES, 'UTF-8'); ?>"
+    data-type="<?php echo htmlspecialchars($t['type'], ENT_QUOTES, 'UTF-8'); ?>"
+    data-item="<?php echo htmlspecialchars($t['item'], ENT_QUOTES, 'UTF-8'); ?>"
+    data-qty="<?php echo htmlspecialchars($t['qty'], ENT_QUOTES, 'UTF-8'); ?>"
+    data-date="<?php echo htmlspecialchars($t['date'], ENT_QUOTES, 'UTF-8'); ?>"
+    data-by="<?php echo htmlspecialchars($t['by'], ENT_QUOTES, 'UTF-8'); ?>"
+>
 <td><?php echo htmlspecialchars($t['trx']); ?></td>
-<td><span class="badge-status <?php echo trxTypeClass($t['type']); ?>"><?php echo htmlspecialchars($t['type']); ?></span></td>
+<td>
+    <span class="badge-status <?php echo trxTypeClass($t['type']); ?>">
+        <?php echo htmlspecialchars($t['type']); ?>
+    </span>
+</td>
 <td><?php echo htmlspecialchars($t['item']); ?></td>
 <td><?php echo htmlspecialchars($t['qty']); ?></td>
 <td><?php echo htmlspecialchars($t['date']); ?></td>
 <td><?php echo htmlspecialchars($t['by']); ?></td>
 </tr>
 <?php endforeach; ?>
+
+<tr id="noFilteredTransactionsRow" style="display:none;">
+<td colspan="6" class="text-center text-muted py-4">
+    No transactions match your search/filter.
+</td>
+</tr>
+
+<?php endif; ?>
 </tbody>
 </table>
 </div>
@@ -297,6 +444,69 @@ margin-left:90px;
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const searchInput = document.getElementById('transactionSearch');
+    const filterSelect = document.getElementById('transactionFilter');
+    const rows = Array.from(document.querySelectorAll('#transactionsBody .transaction-row'));
+    const noFilteredTransactionsRow = document.getElementById('noFilteredTransactionsRow');
+
+    if (!searchInput || !filterSelect) {
+        return;
+    }
+
+    function filterTransactions() {
+        const searchTerm = searchInput.value.trim().toLowerCase();
+        const selectedType = filterSelect.value;
+        let visibleCount = 0;
+
+        rows.forEach(function (row) {
+            const transactionText = [
+                row.dataset.trx || '',
+                row.dataset.type || '',
+                row.dataset.item || '',
+                row.dataset.qty || '',
+                row.dataset.date || '',
+                row.dataset.by || ''
+            ].join(' ').toLowerCase();
+
+            const matchesSearch =
+                searchTerm === '' ||
+                transactionText.includes(searchTerm);
+
+            const matchesType =
+                selectedType === 'All Types' ||
+                row.dataset.type === selectedType;
+
+            const shouldShow = matchesSearch && matchesType;
+
+            row.style.display = shouldShow ? '' : 'none';
+
+            if (shouldShow) {
+                visibleCount++;
+            }
+        });
+
+        if (noFilteredTransactionsRow) {
+            noFilteredTransactionsRow.style.display =
+                visibleCount === 0 ? '' : 'none';
+        }
+    }
+
+    searchInput.addEventListener('input', filterTransactions);
+    filterSelect.addEventListener('change', filterTransactions);
+
+    searchInput.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            filterTransactions();
+        }
+    });
+
+    filterTransactions();
+});
+</script>
 
 </body>
 </html>

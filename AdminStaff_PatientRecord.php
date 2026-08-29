@@ -2290,8 +2290,9 @@ if ($action) {
     <div class="topbar">
         <h3>Patient Record Management<span style="font-size:16px; color:#6c757d; font-weight:400; margin-left:8px;"> <?php echo htmlspecialchars($branch_name); ?> </span> </h3>
         <div class="profile">
-            <?php echo htmlspecialchars($logged_username); ?> 
-            
+            <i class="bi bi-person-circle"></i>
+            <?php echo htmlspecialchars($logged_username); ?>
+            <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Admin Staff</span>
         </div>
     </div>
 

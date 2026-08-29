@@ -2,145 +2,217 @@
 session_start();
 require_once 'sources/db_connect.php';
 
-// Check if user is logged in and is an inventory officer
-if (
-    !isset($_SESSION['user_id']) ||
-    !isset($_SESSION['role_id']) ||
-    $_SESSION['role_id'] != 5 // Assuming role_id 4 is for Inventory Officer
-) {
-    header("Location: login.php");
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 5) {
+    header('Location: login.php');
     exit();
 }
 
-$user_id = $_SESSION['user_id'];
+$user_id = (int)$_SESSION['user_id'];
 $branch_id = null;
-$branch_name = '';
-$username = '';
+$branch_name = 'No Branch Assigned';
+$username = 'Inventory Officer';
 
-// Get user's branch info
-$userQuery = "SELECT u.branch_id, u.username, b.branch_name 
-              FROM users u 
-              LEFT JOIN branches b ON u.branch_id = b.branch_id 
-              WHERE u.user_id = ?";
-$stmt = $conn->prepare($userQuery);
-$stmt->bind_param("i", $user_id);
-$stmt->execute();
-$userResult = $stmt->get_result();
+$userQuery = "SELECT u.branch_id, u.username, b.branch_name
+              FROM users u
+              LEFT JOIN branches b ON u.branch_id = b.branch_id
+              WHERE u.user_id = ? AND u.status = 'Active'
+              LIMIT 1";
 
-if ($userResult->num_rows > 0) {
-    $userData = $userResult->fetch_assoc();
-    $branch_id = $userData['branch_id'];
-    $branch_name = $userData['branch_name'] ?? 'Unknown Branch';
-    $username = $userData['username'] ?? 'Inventory Officer';
+$userStmt = $conn->prepare($userQuery);
+if (!$userStmt) {
+    die('Database error: Unable to prepare user query.');
+}
+$userStmt->bind_param('i', $user_id);
+if (!$userStmt->execute()) {
+    die('Database error: Unable to retrieve user information.');
+}
+$userResult = $userStmt->get_result();
+$userStmt->close();
+
+if ($userResult->num_rows === 0) {
+    session_unset();
+    session_destroy();
+    header('Location: login.php');
+    exit();
 }
 
-// If no branch assigned
-if (!$branch_id) {
-    $branch_name = 'No Branch Assigned';
-}
+$userData = $userResult->fetch_assoc();
+$branch_id = $userData['branch_id'];
+$username = $userData['username'] ?: 'Inventory Officer';
+$branch_name = $userData['branch_name'] ?: 'No Branch Assigned';
 
-// Fetch statistics for the inventory officer's branch
-$stats = [];
-
-// Current stocks (total quantity available)
-$currentStocksQuery = "SELECT SUM(quantity_available) as total 
-                       FROM inventory_stocks 
-                       WHERE branch_id = ?";
-$stmt = $conn->prepare($currentStocksQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$currentStocksResult = $stmt->get_result();
-$stats['current_stocks'] = $currentStocksResult->fetch_assoc()['total'] ?? 0;
-
-// Low stocks (items where quantity_available < minimum_stock)
-$lowStocksQuery = "SELECT COUNT(*) as low_stock_count 
-                   FROM inventory_stocks s 
-                   JOIN inventory_items i ON s.item_id = i.item_id 
-                   WHERE s.branch_id = ? 
-                   AND s.quantity_available < i.minimum_stock";
-$stmt = $conn->prepare($lowStocksQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$lowStocksResult = $stmt->get_result();
-$stats['low_stocks'] = $lowStocksResult->fetch_assoc()['low_stock_count'] ?? 0;
-
-// Expiring stocks (within 30 days)
-$expiringStocksQuery = "SELECT COUNT(*) as expiring_count 
-                        FROM inventory_stocks 
-                        WHERE branch_id = ? 
-                        AND expiration_date IS NOT NULL 
-                        AND expiration_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY) 
-                        AND expiration_date >= CURDATE()";
-$stmt = $conn->prepare($expiringStocksQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$expiringStocksResult = $stmt->get_result();
-$stats['expiring_stocks'] = $expiringStocksResult->fetch_assoc()['expiring_count'] ?? 0;
-
-// Recent transactions (last 30 days)
-$recentTransactionsQuery = "SELECT COUNT(*) as recent_count 
-                            FROM stock_transactions 
-                            WHERE branch_id = ? 
-                            AND transaction_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)";
-$stmt = $conn->prepare($recentTransactionsQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$recentTransactionsResult = $stmt->get_result();
-$stats['recent_transactions'] = $recentTransactionsResult->fetch_assoc()['recent_count'] ?? 0;
-
-// Fetch low stock items with details
-$lowStockItemsQuery = "SELECT i.item_id, i.item_name, c.category_name, 
-                       s.quantity_available, s.stock_id,
-                       u.unit_name
-                       FROM inventory_stocks s
-                       JOIN inventory_items i ON s.item_id = i.item_id
-                       JOIN inventory_categories c ON i.category_id = c.category_id
-                       JOIN units u ON i.unit_id = u.unit_id
-                       WHERE s.branch_id = ? 
-                       AND s.quantity_available < i.minimum_stock
-                       ORDER BY s.quantity_available ASC
-                       LIMIT 10";
-$stmt = $conn->prepare($lowStockItemsQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$lowStockItemsResult = $stmt->get_result();
+$stats = [
+    'current_stocks' => 0,
+    'low_stocks' => 0,
+    'expiring_stocks' => 0,
+    'recent_transactions' => 0
+];
 $lowStockItems = [];
-while ($row = $lowStockItemsResult->fetch_assoc()) {
-    // Determine status based on quantity
-    if ($row['quantity_available'] <= 0) {
-        $status = 'Critical';
-    } elseif ($row['quantity_available'] < 5) {
-        $status = 'Critical';
-    } else {
-        $status = 'Low Stock';
-    }
-    $row['status'] = $status;
-    $row['item_id_formatted'] = 'ITM-' . str_pad($row['item_id'], 4, '0', STR_PAD_LEFT);
-    $row['stock_display'] = $row['quantity_available'] . ' ' . $row['unit_name'];
-    $lowStockItems[] = $row;
-}
-
-// Fetch recent transactions
-$recentTransactionsListQuery = "SELECT t.*, i.item_name, c.category_name, 
-                               u.unit_name,
-                               t.transaction_type
-                               FROM stock_transactions t
-                               JOIN inventory_items i ON t.item_id = i.item_id
-                               JOIN inventory_categories c ON i.category_id = c.category_id
-                               JOIN units u ON i.unit_id = u.unit_id
-                               WHERE t.branch_id = ? 
-                               ORDER BY t.transaction_date DESC
-                               LIMIT 10";
-$stmt = $conn->prepare($recentTransactionsListQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$recentTransactionsListResult = $stmt->get_result();
 $recentTransactionsList = [];
-while ($row = $recentTransactionsListResult->fetch_assoc()) {
-    $row['item_id_formatted'] = 'ITM-' . str_pad($row['item_id'], 4, '0', STR_PAD_LEFT);
-    $row['stock_display'] = $row['quantity'] . ' ' . $row['unit_name'];
-    $row['status'] = $row['transaction_type'] === 'IN' ? 'Stock In' : ($row['transaction_type'] === 'OUT' ? 'Stock Out' : 'Adjustment');
-    $recentTransactionsList[] = $row;
+
+if (!empty($branch_id)) {
+    $query = "SELECT COALESCE(SUM(quantity_available), 0) AS total
+              FROM inventory_stocks
+              WHERE branch_id = ?";
+    $stmt = $conn->prepare($query);
+    if (!$stmt) die('Database error: Unable to prepare current stock query.');
+    $stmt->bind_param('s', $branch_id);
+    if (!$stmt->execute()) die('Database error: Unable to retrieve current stocks.');
+    $result = $stmt->get_result();
+    $row = $result->fetch_assoc();
+    $stats['current_stocks'] = (int)($row['total'] ?? 0);
+    $stmt->close();
+
+    $query = "SELECT COUNT(DISTINCT s.item_id) AS low_stock_count
+              FROM inventory_stocks s
+              INNER JOIN inventory_items i ON i.item_id = s.item_id
+              WHERE s.branch_id = ?
+                AND s.quantity_available < COALESCE(i.minimum_stock, 0)";
+    $stmt = $conn->prepare($query);
+    if (!$stmt) die('Database error: Unable to prepare low stock query.');
+    $stmt->bind_param('s', $branch_id);
+    if (!$stmt->execute()) die('Database error: Unable to retrieve low stocks.');
+    $result = $stmt->get_result();
+    $row = $result->fetch_assoc();
+    $stats['low_stocks'] = (int)($row['low_stock_count'] ?? 0);
+    $stmt->close();
+
+    $query = "SELECT COUNT(*) AS expiring_count
+              FROM inventory_stocks
+              WHERE branch_id = ?
+                AND expiration_date IS NOT NULL
+                AND expiration_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)";
+    $stmt = $conn->prepare($query);
+    if (!$stmt) die('Database error: Unable to prepare expiration query.');
+    $stmt->bind_param('s', $branch_id);
+    if (!$stmt->execute()) die('Database error: Unable to retrieve expiring stocks.');
+    $result = $stmt->get_result();
+    $row = $result->fetch_assoc();
+    $stats['expiring_stocks'] = (int)($row['expiring_count'] ?? 0);
+    $stmt->close();
+
+
+    $query = "SELECT COUNT(*) AS recent_count
+              FROM stock_transactions
+              WHERE branch_id = ?
+                AND transaction_date >= DATE_SUB(NOW(), INTERVAL 30 DAY)";
+    $stmt = $conn->prepare($query);
+    if (!$stmt) die('Database error: Unable to prepare transaction count query.');
+    $stmt->bind_param('s', $branch_id);
+    if (!$stmt->execute()) die('Database error: Unable to retrieve recent transaction count.');
+    $result = $stmt->get_result();
+    $row = $result->fetch_assoc();
+    $stats['recent_transactions'] = (int)($row['recent_count'] ?? 0);
+    $stmt->close();
+
+    $query = "SELECT
+                  i.item_id,
+                  i.item_name,
+                  c.category_name,
+                  i.minimum_stock,
+                  s.quantity_available,
+                  s.stock_id,
+                  u.unit_name
+              FROM inventory_stocks s
+              INNER JOIN inventory_items i ON i.item_id = s.item_id
+              INNER JOIN inventory_categories c ON c.category_id = i.category_id
+              INNER JOIN units u ON u.unit_id = i.unit_id
+              WHERE s.branch_id = ?
+                AND s.quantity_available < COALESCE(i.minimum_stock, 0)
+              ORDER BY s.quantity_available ASC, i.item_name ASC
+              LIMIT 10";
+    $stmt = $conn->prepare($query);
+    if (!$stmt) die('Database error: Unable to prepare low-stock items query.');
+    $stmt->bind_param('s', $branch_id);
+    if (!$stmt->execute()) die('Database error: Unable to retrieve low-stock items.');
+    $result = $stmt->get_result();
+
+    while ($row = $result->fetch_assoc()) {
+        $quantity = (int)$row['quantity_available'];
+        $minimum = (int)$row['minimum_stock'];
+
+        if ($quantity <= 0) {
+            $status = 'Critical';
+        } else {
+            $status = 'Low Stock';
+        }
+
+        $row['status'] = $status;
+        $row['item_id_formatted'] = 'ITM-' . str_pad((string)$row['item_id'], 4, '0', STR_PAD_LEFT);
+        $row['stock_display'] = $quantity . ' ' . $row['unit_name'];
+        $lowStockItems[] = $row;
+    }
+    $stmt->close();
+
+    // Recent Transactions preview mirrors InventoryOfficer_StockTransactions.php exactly.
+    // The only difference is LIMIT 10 because this is a dashboard preview.
+    $transactionQuery = "
+        SELECT
+            st.transaction_id,
+            st.transaction_type,
+            st.quantity,
+            st.transaction_date,
+            st.remarks,
+            ii.item_name,
+            u.unit_name,
+            usr.username
+        FROM stock_transactions st
+        INNER JOIN inventory_items ii
+            ON st.item_id = ii.item_id
+        LEFT JOIN units u
+            ON ii.unit_id = u.unit_id
+        INNER JOIN users usr
+            ON st.user_id = usr.user_id
+        WHERE st.branch_id = ?
+        ORDER BY st.transaction_date DESC, st.transaction_id DESC
+        LIMIT 10
+    ";
+
+    $transactionStmt = $conn->prepare($transactionQuery);
+    if (!$transactionStmt) die('Database error: Unable to prepare recent transactions query.');
+    $transactionStmt->bind_param('s', $branch_id);
+    if (!$transactionStmt->execute()) die('Database error: Unable to retrieve recent transactions.');
+    $transactionResult = $transactionStmt->get_result();
+
+    while ($row = $transactionResult->fetch_assoc()) {
+        $type = $row['transaction_type'];
+
+        switch ($type) {
+            case 'IN':
+                $displayType = 'Stock In';
+                $sign = '+';
+                break;
+
+            case 'OUT':
+                $displayType = 'Stock Out';
+                $sign = '-';
+                break;
+
+            case 'ADJUSTMENT':
+                $displayType = 'Adjustment';
+                $sign = ((int)$row['quantity'] < 0) ? '-' : '+';
+                break;
+
+            default:
+                $displayType = $type ?: 'Unknown';
+                $sign = ((int)$row['quantity'] < 0) ? '-' : '+';
+                break;
+        }
+
+        $quantity = abs((int)$row['quantity']);
+        $unitName = $row['unit_name'] ?? '';
+
+        $recentTransactionsList[] = [
+            'trx' => 'TRX-' . str_pad((string)$row['transaction_id'], 4, '0', STR_PAD_LEFT),
+            'type' => $displayType,
+            'item' => $row['item_name'] ?? 'Unknown Item',
+            'qty' => $sign . $quantity . ($unitName !== '' ? ' ' . $unitName : ''),
+            'date' => date('m/d/Y', strtotime($row['transaction_date'])),
+            'by' => $row['username'] ?? 'Unknown User'
+        ];
+    }
+
+    $transactionStmt->close();
 }
 
 function statusBadgeClass($status) {
@@ -151,6 +223,15 @@ function statusBadgeClass($status) {
         case 'Stock Out':  return 'badge-out';
         case 'Adjustment': return 'badge-adjustment';
         default:           return 'badge-low';
+    }
+}
+
+function trxTypeClassDashboard($type) {
+    switch ($type) {
+        case 'Stock In':   return 'badge-in';
+        case 'Stock Out':  return 'badge-out';
+        case 'Adjustment': return 'badge-adjust';
+        default:           return 'badge-in';
     }
 }
 ?>
@@ -168,15 +249,9 @@ function statusBadgeClass($status) {
 <link rel="stylesheet"
 href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 
-<!--REUSABLE SIDEBAR CSS-->
 <link rel="stylesheet" href="sidebar.css">
 
 <style>
-
-/*=========================================
-  INTERNAL CSS – Refreshed UI
-=========================================*/
-
 :root{
     --primary: #2B3A8C;
     --accent: #F21D2F;
@@ -327,6 +402,37 @@ body{
     overflow: hidden;
     border: 1px solid #eef0f5;
 }
+
+.transaction-table-wrap {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: auto;
+}
+
+.transaction-preview-table {
+    min-width: 760px;
+    width: max-content;
+    margin-bottom: 0;
+}
+
+.transaction-preview-table th,
+.transaction-preview-table td {
+    white-space: nowrap;
+}
+
+.transaction-preview-table th:nth-child(1),
+.transaction-preview-table td:nth-child(1) { min-width: 110px; }
+.transaction-preview-table th:nth-child(2),
+.transaction-preview-table td:nth-child(2) { min-width: 130px; }
+.transaction-preview-table th:nth-child(3),
+.transaction-preview-table td:nth-child(3) { min-width: 190px; }
+.transaction-preview-table th:nth-child(4),
+.transaction-preview-table td:nth-child(4) { min-width: 120px; }
+.transaction-preview-table th:nth-child(5),
+.transaction-preview-table td:nth-child(5) { min-width: 120px; }
+.transaction-preview-table th:nth-child(6),
+.transaction-preview-table td:nth-child(6) { min-width: 150px; }
 
 .data-table {
     margin: 0;
@@ -504,7 +610,13 @@ body{
 
     <div class="topbar">
         <h3>Dashboard <small><?php echo htmlspecialchars($branch_name); ?></small></h3>
-        <div class="profile"> <?php echo htmlspecialchars($username); ?> </div>
+        <div class="profile"> 
+            <i class="bi bi-person-circle"></i>
+            <?php echo htmlspecialchars($username); ?> 
+            <span style="font-size:12px;color:#adb5bd;font-weight:400;margin-left:4px;">| Inventory Officer</span>
+        
+        </div>
+        
     </div>
 
     <div class="dashboard">
@@ -620,21 +732,22 @@ body{
                         <h5 class="section-title"><i class="bi bi-arrow-left-right text-primary"></i> <span style="color: var(--primary); font-weight: bold;">Recent Transactions</span></h5>
                         <span class="badge bg-secondary">Last 10</span>
                     </div>
-                    <div class="table-wrap">
-                        <table class="table data-table">
+                    <div class="table-wrap transaction-table-wrap">
+                        <table class="table data-table transaction-preview-table">
                             <thead>
                                 <tr>
-                                    <th>Item ID</th>
+                                    <th>Trx No.</th>
+                                    <th>Type</th>
                                     <th>Item</th>
-                                    <th>Category</th>
-                                    <th>Quantity</th>
-                                    <th>Status</th>
+                                    <th>Qty</th>
+                                    <th>Date</th>
+                                    <th>By</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php if (empty($recentTransactionsList)): ?>
                                 <tr>
-                                    <td colspan="5">
+                                    <td colspan="6">
                                         <div class="empty-state">
                                             <i class="bi bi-clock-history"></i>
                                             <p>No recent transactions found.</p>
@@ -644,11 +757,16 @@ body{
                                 <?php else: ?>
                                     <?php foreach ($recentTransactionsList as $item): ?>
                                     <tr>
-                                        <td><?php echo htmlspecialchars($item['item_id_formatted']); ?></td>
-                                        <td><?php echo htmlspecialchars($item['item_name']); ?></td>
-                                        <td><?php echo htmlspecialchars($item['category_name']); ?></td>
-                                        <td><?php echo htmlspecialchars($item['stock_display']); ?></td>
-                                        <td><span class="badge-status <?php echo statusBadgeClass($item['status']); ?>"><?php echo htmlspecialchars($item['status']); ?></span></td>
+                                        <td><?php echo htmlspecialchars($item['trx']); ?></td>
+                                        <td>
+                                            <span class="badge-status <?php echo trxTypeClassDashboard($item['type']); ?>">
+                                                <?php echo htmlspecialchars($item['type']); ?>
+                                            </span>
+                                        </td>
+                                        <td><?php echo htmlspecialchars($item['item']); ?></td>
+                                        <td><?php echo htmlspecialchars($item['qty']); ?></td>
+                                        <td><?php echo htmlspecialchars($item['date']); ?></td>
+                                        <td><?php echo htmlspecialchars($item['by']); ?></td>
                                     </tr>
                                     <?php endforeach; ?>
                                 <?php endif; ?>
