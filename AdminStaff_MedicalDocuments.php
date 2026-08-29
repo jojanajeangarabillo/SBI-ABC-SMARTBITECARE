@@ -1,358 +1,1178 @@
 <?php
 session_start();
+
 require_once 'sources/db_connect.php';
 
-// Check if user is logged in and is an admin staff
+/*
+|--------------------------------------------------------------------------
+| ACCESS CONTROL
+|--------------------------------------------------------------------------
+*/
 if (
     !isset($_SESSION['user_id']) ||
     !isset($_SESSION['role_id']) ||
-    $_SESSION['role_id'] != 4
+    (int)$_SESSION['role_id'] !== 4
 ) {
     header("Location: login.php");
     exit();
 }
 
-$user_id = $_SESSION['user_id'];
+$user_id = (int)$_SESSION['user_id'];
 $branch_id = null;
-$branch_name = '';
-$username = '';
+$branch_name = 'No Branch Assigned';
+$username = 'Admin Staff';
 
-// Get user's branch info
-$userQuery = "SELECT u.branch_id, u.username, b.branch_name 
-              FROM users u 
-              LEFT JOIN branches b ON u.branch_id = b.branch_id 
-              WHERE u.user_id = ?";
+/*
+|--------------------------------------------------------------------------
+| GET CURRENT USER / BRANCH
+|--------------------------------------------------------------------------
+*/
+$userQuery = "
+    SELECT 
+        u.branch_id,
+        u.username,
+        b.branch_name
+    FROM users u
+    LEFT JOIN branches b 
+        ON u.branch_id = b.branch_id
+    WHERE u.user_id = ?
+    LIMIT 1
+";
+
 $stmt = $conn->prepare($userQuery);
+
+if (!$stmt) {
+    die("Database error: " . $conn->error);
+}
+
 $stmt->bind_param("i", $user_id);
 $stmt->execute();
+
 $userResult = $stmt->get_result();
 
-if ($userResult->num_rows > 0) {
+if ($userResult && $userResult->num_rows > 0) {
     $userData = $userResult->fetch_assoc();
+
     $branch_id = $userData['branch_id'];
     $branch_name = $userData['branch_name'] ?? 'Unknown Branch';
     $username = $userData['username'] ?? 'Admin Staff';
 }
 
+$stmt->close();
+
 if (!$branch_id) {
     $branch_name = 'No Branch Assigned';
 }
 
-// Configuration
+/*
+|--------------------------------------------------------------------------
+| CONFIGURATION
+|--------------------------------------------------------------------------
+*/
 define('UPLOAD_DIR', 'uploads/documents/');
-define('MAX_FILE_SIZE', 10 * 1024 * 1024);
-define('ALLOWED_EXTENSIONS', ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'jpg', 'jpeg', 'png', 'txt']);
+define('MAX_FILE_SIZE', 10 * 1024 * 1024); // 10 MB
 
-if (!file_exists(UPLOAD_DIR)) {
-    mkdir(UPLOAD_DIR, 0777, true);
+define('ALLOWED_EXTENSIONS', [
+    'pdf',
+    'doc',
+    'docx',
+    'xls',
+    'xlsx',
+    'jpg',
+    'jpeg',
+    'png',
+    'txt'
+]);
+
+define('ALLOWED_MIME_TYPES', [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'image/jpeg',
+    'image/png',
+    'text/plain'
+]);
+
+if (!is_dir(UPLOAD_DIR)) {
+    if (!mkdir(UPLOAD_DIR, 0755, true)) {
+        die("Unable to create document upload directory.");
+    }
 }
 
-// Handle AJAX requests
-if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
-    header('Content-Type: application/json');
-    $action = isset($_GET['action']) ? $_GET['action'] : (isset($_POST['action']) ? $_POST['action'] : '');
-    
-    switch ($action) {
-        case 'fetch_documents':
-            $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-            $documentType = isset($_GET['document_type']) ? trim($_GET['document_type']) : '';
-            $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
-            $limit = 10;
-            $offset = ($page - 1) * $limit;
-            
-            $where = "WHERE branch_id = ?";
-            $params = [$branch_id];
-            $types = "s";
-            
-            if (!empty($search)) {
-                $where .= " AND (document_name LIKE ? OR document_type LIKE ?)";
-                $searchParam = "%$search%";
-                $params[] = $searchParam;
-                $params[] = $searchParam;
-                $types .= "ss";
-            }
-            
-            if (!empty($documentType)) {
-                $where .= " AND document_type = ?";
-                $params[] = $documentType;
-                $types .= "s";
-            }
-            
-            $countQuery = "SELECT COUNT(*) as total FROM medical_documents $where";
-            $stmt = $conn->prepare($countQuery);
-            $stmt->bind_param($types, ...$params);
-            $stmt->execute();
-            $countResult = $stmt->get_result();
-            $totalRecords = $countResult->fetch_assoc()['total'] ?? 0;
-            $totalPages = ceil($totalRecords / $limit);
-            
-            $query = "
-                SELECT 
-                    document_id, document_type, document_name, file_name, file_path,
-                    file_size, description, uploaded_by,
-                    DATE_FORMAT(uploaded_at, '%b %d, %Y %h:%i %p') as formatted_date,
-                    (SELECT username FROM users WHERE user_id = medical_documents.uploaded_by) as uploaded_by_name
-                FROM medical_documents
-                $where
-                ORDER BY uploaded_at DESC
-                LIMIT ? OFFSET ?
-            ";
-            $stmt = $conn->prepare($query);
-            $params[] = $limit;
-            $params[] = $offset;
-            $types .= "ii";
-            $stmt->bind_param($types, ...$params);
-            $stmt->execute();
-            $result = $stmt->get_result();
-            
-            $documents = [];
-            while ($row = $result->fetch_assoc()) {
-                $documents[] = $row;
-            }
-            
-            echo json_encode([
-                'success' => true,
-                'documents' => $documents,
-                'total' => $totalRecords,
-                'pages' => $totalPages,
-                'current_page' => $page
-            ]);
-            break;
-            
-        case 'upload_document':
-            try {
-                if (!isset($_FILES['document_file']) || $_FILES['document_file']['error'] !== UPLOAD_ERR_OK) {
-                    throw new Exception('No file uploaded.');
-                }
-                
-                $file = $_FILES['document_file'];
-                $documentType = isset($_POST['document_type']) ? $_POST['document_type'] : '';
-                $documentName = isset($_POST['document_name']) ? trim($_POST['document_name']) : '';
-                $description = isset($_POST['description']) ? trim($_POST['description']) : '';
-                
-                $validTypes = ['Medical Certificate', 'Vaccination Certificate', 'Referral Letter', 'Other'];
-                if (!in_array($documentType, $validTypes)) {
-                    throw new Exception('Invalid document type.');
-                }
-                
-                if ($file['size'] > MAX_FILE_SIZE) {
-                    throw new Exception('File size exceeds 10MB limit.');
-                }
-                
-                $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-                if (!in_array($extension, ALLOWED_EXTENSIONS)) {
-                    throw new Exception('File type not allowed.');
-                }
-                
-                $fileName = time() . '_' . preg_replace('/[^a-zA-Z0-9._-]/', '', $file['name']);
-                $filePath = UPLOAD_DIR . $fileName;
-                
-                if (!move_uploaded_file($file['tmp_name'], $filePath)) {
-                    throw new Exception('Failed to save file.');
-                }
-                
-                if (empty($documentName)) {
-                    $documentName = pathinfo($file['name'], PATHINFO_FILENAME);
-                }
-                
-                $insertQuery = "
-                    INSERT INTO medical_documents (
-                        branch_id, document_type, document_name,
-                        file_name, file_path, file_type, file_size, description, uploaded_by
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ";
-                $stmt = $conn->prepare($insertQuery);
-                $stmt->bind_param(
-                    "ssssssisi",
-                    $branch_id,
-                    $documentType,
-                    $documentName,
-                    $file['name'],
-                    $filePath,
-                    $file['type'],
-                    $file['size'],
-                    $description,
-                    $user_id
-                );
-                
-                if (!$stmt->execute()) {
-                    unlink($filePath);
-                    throw new Exception('Failed to save record.');
-                }
-                
-                echo json_encode([
-                    'success' => true,
-                    'message' => 'Document uploaded successfully.'
-                ]);
-                
-            } catch (Exception $e) {
-                echo json_encode([
-                    'success' => false,
-                    'error' => $e->getMessage()
-                ]);
-            }
-            break;
-            
-        case 'delete_document':
-            try {
-                $documentId = isset($_GET['document_id']) ? (int)$_GET['document_id'] : 0;
-                if ($documentId <= 0) {
-                    throw new Exception('Invalid document ID.');
-                }
-                
-                $query = "SELECT file_path, document_name FROM medical_documents WHERE document_id = ? AND branch_id = ?";
-                $stmt = $conn->prepare($query);
-                $stmt->bind_param("is", $documentId, $branch_id);
-                $stmt->execute();
-                $document = $stmt->get_result()->fetch_assoc();
-                
-                if (!$document) {
-                    throw new Exception('Document not found.');
-                }
-                
-                if (file_exists($document['file_path'])) {
-                    unlink($document['file_path']);
-                }
-                
-                $deleteQuery = "DELETE FROM medical_documents WHERE document_id = ? AND branch_id = ?";
-                $stmt = $conn->prepare($deleteQuery);
-                $stmt->bind_param("is", $documentId, $branch_id);
-                $stmt->execute();
-                
-                echo json_encode([
-                    'success' => true,
-                    'message' => 'Document deleted successfully.'
-                ]);
-                
-            } catch (Exception $e) {
-                echo json_encode([
-                    'success' => false,
-                    'error' => $e->getMessage()
-                ]);
-            }
-            break;
-            
-        case 'get_document':
-            try {
-                $documentId = isset($_GET['document_id']) ? (int)$_GET['document_id'] : 0;
-                if ($documentId <= 0) {
-                    throw new Exception('Invalid document ID.');
-                }
-                
-                $query = "
-                    SELECT 
-                        document_id, document_type, document_name, file_name, file_path,
-                        file_size, description, uploaded_by,
-                        DATE_FORMAT(uploaded_at, '%b %d, %Y %h:%i %p') as formatted_date,
-                        (SELECT username FROM users WHERE user_id = medical_documents.uploaded_by) as uploaded_by_name
-                    FROM medical_documents
-                    WHERE document_id = ? AND branch_id = ?
-                ";
-                $stmt = $conn->prepare($query);
-                $stmt->bind_param("is", $documentId, $branch_id);
-                $stmt->execute();
-                $document = $stmt->get_result()->fetch_assoc();
-                
-                if (!$document) {
-                    throw new Exception('Document not found.');
-                }
-                
-                echo json_encode([
-                    'success' => true,
-                    'document' => $document
-                ]);
-                
-            } catch (Exception $e) {
-                echo json_encode([
-                    'success' => false,
-                    'error' => $e->getMessage()
-                ]);
-            }
-            break;
-            
-        case 'update_document':
-            try {
-                $documentId = isset($_POST['document_id']) ? (int)$_POST['document_id'] : 0;
-                if ($documentId <= 0) {
-                    throw new Exception('Invalid document ID.');
-                }
-                
-                $documentName = isset($_POST['document_name']) ? trim($_POST['document_name']) : '';
-                $description = isset($_POST['description']) ? trim($_POST['description']) : '';
-                $documentType = isset($_POST['document_type']) ? $_POST['document_type'] : '';
-                
-                $validTypes = ['Medical Certificate', 'Vaccination Certificate', 'Referral Letter', 'Other'];
-                if (!in_array($documentType, $validTypes)) {
-                    throw new Exception('Invalid document type.');
-                }
-                
-                if (empty($documentName)) {
-                    throw new Exception('Document name is required.');
-                }
-                
-                $updateQuery = "
-                    UPDATE medical_documents 
-                    SET document_name = ?, document_type = ?, description = ?, updated_at = NOW()
-                    WHERE document_id = ? AND branch_id = ?
-                ";
-                $stmt = $conn->prepare($updateQuery);
-                $stmt->bind_param("sssis", $documentName, $documentType, $description, $documentId, $branch_id);
-                $stmt->execute();
-                
-                echo json_encode([
-                    'success' => true,
-                    'message' => 'Document updated successfully.'
-                ]);
-                
-            } catch (Exception $e) {
-                echo json_encode([
-                    'success' => false,
-                    'error' => $e->getMessage()
-                ]);
-            }
-            break;
-            
-        default:
-            echo json_encode(['success' => false, 'error' => 'Invalid action.']);
-            break;
-    }
+/*
+|--------------------------------------------------------------------------
+| HELPER FUNCTIONS
+|--------------------------------------------------------------------------
+*/
+
+function jsonResponse($success, $message = '', $data = [])
+{
+    header('Content-Type: application/json; charset=utf-8');
+
+    echo json_encode(
+        array_merge(
+            [
+                'success' => $success,
+                'message' => $message
+            ],
+            $data
+        )
+    );
+
     exit();
 }
 
-// Get recent documents
-$recentQuery = "
-    SELECT 
-        document_id, document_type, document_name, file_path,
-        DATE_FORMAT(uploaded_at, '%b %d, %Y %h:%i %p') as formatted_date,
-        (SELECT username FROM users WHERE user_id = medical_documents.uploaded_by) as uploaded_by_name
-    FROM medical_documents
-    WHERE branch_id = ?
-    ORDER BY uploaded_at DESC
-    LIMIT 10
-";
-$stmt = $conn->prepare($recentQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$recentResult = $stmt->get_result();
-$recentDocuments = [];
-while ($row = $recentResult->fetch_assoc()) {
-    $recentDocuments[] = $row;
+/**
+ * Validate uploaded file.
+ */
+function validateUploadedFile($file)
+{
+    if (!isset($file) || !is_array($file)) {
+        throw new Exception('Invalid file upload.');
+    }
+
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+
+        switch ($file['error']) {
+            case UPLOAD_ERR_INI_SIZE:
+            case UPLOAD_ERR_FORM_SIZE:
+                throw new Exception('The uploaded file is too large.');
+
+            case UPLOAD_ERR_NO_FILE:
+                throw new Exception('No file was uploaded.');
+
+            default:
+                throw new Exception('An error occurred while uploading the file.');
+        }
+    }
+
+    if ($file['size'] <= 0) {
+        throw new Exception('The uploaded file is empty.');
+    }
+
+    if ($file['size'] > MAX_FILE_SIZE) {
+        throw new Exception('File size exceeds the 10MB limit.');
+    }
+
+    $extension = strtolower(
+        pathinfo($file['name'], PATHINFO_EXTENSION)
+    );
+
+    if (!in_array($extension, ALLOWED_EXTENSIONS, true)) {
+        throw new Exception(
+            'File type not allowed. Allowed files: PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG, PNG, TXT.'
+        );
+    }
+
+    /*
+     * Use finfo when available for additional MIME validation.
+     */
+    if (function_exists('finfo_open')) {
+
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+
+        if ($finfo) {
+
+            $mimeType = finfo_file(
+                $finfo,
+                $file['tmp_name']
+            );
+
+            finfo_close($finfo);
+
+            if (
+                $mimeType !== false &&
+                !in_array($mimeType, ALLOWED_MIME_TYPES, true)
+            ) {
+                throw new Exception('The uploaded file type is not allowed.');
+            }
+        }
+    }
+
+    return [
+        'extension' => $extension,
+        'mime_type' => $file['type'] ?? '',
+        'size' => (int)$file['size']
+    ];
 }
+
+/**
+ * Generate a safe unique filename.
+ */
+function generateStoredFileName($originalName)
+{
+    $extension = strtolower(
+        pathinfo($originalName, PATHINFO_EXTENSION)
+    );
+
+    $baseName = pathinfo(
+        $originalName,
+        PATHINFO_FILENAME
+    );
+
+    $baseName = preg_replace(
+        '/[^a-zA-Z0-9_-]/',
+        '_',
+        $baseName
+    );
+
+    $baseName = trim($baseName, '_');
+
+    if ($baseName === '') {
+        $baseName = 'document';
+    }
+
+    return $baseName . '_' . uniqid('', true) . '.' . $extension;
+}
+
+/**
+ * Make sure the requested document belongs to the current branch.
+ */
+function getDocumentById($conn, $documentId, $branchId)
+{
+    $query = "
+        SELECT
+            document_id,
+            branch_id,
+            document_type,
+            document_name,
+            file_name,
+            file_path,
+            file_type,
+            file_size,
+            uploaded_by,
+            uploaded_at,
+            updated_at,
+            status
+        FROM medical_documents
+        WHERE document_id = ?
+          AND branch_id = ?
+        LIMIT 1
+    ";
+
+    $stmt = $conn->prepare($query);
+
+    if (!$stmt) {
+        throw new Exception('Database error: ' . $conn->error);
+    }
+
+    $stmt->bind_param(
+        "is",
+        $documentId,
+        $branchId
+    );
+
+    $stmt->execute();
+
+    $result = $stmt->get_result();
+
+    $document = $result->fetch_assoc();
+
+    $stmt->close();
+
+    if (!$document) {
+        throw new Exception('Document not found.');
+    }
+
+    return $document;
+}
+
+/*
+|--------------------------------------------------------------------------
+| AJAX REQUEST HANDLER
+|--------------------------------------------------------------------------
+*/
+
+$isAjax =
+    isset($_SERVER['HTTP_X_REQUESTED_WITH']) &&
+    strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
+
+if ($isAjax) {
+
+    $action = $_GET['action']
+        ?? $_POST['action']
+        ?? '';
+
+    try {
+
+        /*
+        |--------------------------------------------------------------------------
+        | FETCH DOCUMENTS
+        |--------------------------------------------------------------------------
+        */
+        if ($action === 'fetch_documents') {
+
+            if (!$branch_id) {
+                jsonResponse(false, 'No branch is assigned to this account.');
+            }
+
+            $search = trim($_GET['search'] ?? '');
+            $documentType = trim($_GET['document_type'] ?? '');
+
+            $page = isset($_GET['page'])
+                ? max(1, (int)$_GET['page'])
+                : 1;
+
+            $limit = 10;
+            $offset = ($page - 1) * $limit;
+
+            $where = "WHERE md.branch_id = ?";
+            $params = [$branch_id];
+            $types = "s";
+
+            if ($search !== '') {
+
+                $where .= "
+                    AND (
+                        md.document_name LIKE ?
+                        OR md.document_type LIKE ?
+                        OR md.file_name LIKE ?
+                    )
+                ";
+
+                $searchParam = "%{$search}%";
+
+                $params[] = $searchParam;
+                $params[] = $searchParam;
+                $params[] = $searchParam;
+
+                $types .= "sss";
+            }
+
+            if ($documentType !== '') {
+
+                $validTypes = [
+                    'Medical Certificate',
+                    'Vaccination Certificate',
+                    'Referral Letter',
+                    'Other'
+                ];
+
+                if (!in_array($documentType, $validTypes, true)) {
+                    jsonResponse(false, 'Invalid document type.');
+                }
+
+                $where .= " AND md.document_type = ?";
+
+                $params[] = $documentType;
+                $types .= "s";
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | COUNT
+            |--------------------------------------------------------------------------
+            */
+            $countQuery = "
+                SELECT COUNT(*) AS total
+                FROM medical_documents md
+                $where
+            ";
+
+            $stmt = $conn->prepare($countQuery);
+
+            if (!$stmt) {
+                throw new Exception(
+                    'Unable to prepare count query: ' . $conn->error
+                );
+            }
+
+            $stmt->bind_param(
+                $types,
+                ...$params
+            );
+
+            $stmt->execute();
+
+            $countResult = $stmt->get_result();
+
+            $totalRecords = (int)(
+                $countResult->fetch_assoc()['total'] ?? 0
+            );
+
+            $stmt->close();
+
+            $totalPages = max(
+                1,
+                (int)ceil($totalRecords / $limit)
+            );
+
+            /*
+            |--------------------------------------------------------------------------
+            | DOCUMENT LIST
+            |--------------------------------------------------------------------------
+            */
+            $query = "
+                SELECT
+                    md.document_id,
+                    md.document_type,
+                    md.document_name,
+                    md.file_name,
+                    md.file_path,
+                    md.file_size,
+                    md.status,
+                    md.uploaded_at,
+                    md.updated_at,
+                    u.username AS uploaded_by_name
+                FROM medical_documents md
+                LEFT JOIN users u
+                    ON md.uploaded_by = u.user_id
+                $where
+                ORDER BY md.uploaded_at DESC
+                LIMIT ? OFFSET ?
+            ";
+
+            $stmt = $conn->prepare($query);
+
+            if (!$stmt) {
+                throw new Exception(
+                    'Unable to prepare document query: ' . $conn->error
+                );
+            }
+
+            $queryParams = $params;
+            $queryTypes = $types . "ii";
+
+            $queryParams[] = $limit;
+            $queryParams[] = $offset;
+
+            $stmt->bind_param(
+                $queryTypes,
+                ...$queryParams
+            );
+
+            $stmt->execute();
+
+            $result = $stmt->get_result();
+
+            $documents = [];
+
+            while ($row = $result->fetch_assoc()) {
+
+                $documents[] = [
+                    'document_id' => (int)$row['document_id'],
+                    'document_type' => $row['document_type'],
+                    'document_name' => $row['document_name'],
+                    'file_name' => $row['file_name'],
+                    'file_path' => $row['file_path'],
+                    'file_size' => (int)$row['file_size'],
+                    'status' => $row['status'],
+                    'uploaded_by_name' => $row['uploaded_by_name'] ?? 'Unknown',
+                    'formatted_date' => date(
+                        'M d, Y h:i A',
+                        strtotime($row['uploaded_at'])
+                    )
+                ];
+            }
+
+            $stmt->close();
+
+            jsonResponse(
+                true,
+                '',
+                [
+                    'documents' => $documents,
+                    'total' => $totalRecords,
+                    'pages' => $totalPages,
+                    'current_page' => $page
+                ]
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | ADD / UPLOAD DOCUMENT
+        |--------------------------------------------------------------------------
+        */
+        elseif ($action === 'upload_document') {
+
+            if (!$branch_id) {
+                jsonResponse(false, 'No branch is assigned to this account.');
+            }
+
+            if (
+                !isset($_FILES['document_file']) ||
+                $_FILES['document_file']['error'] === UPLOAD_ERR_NO_FILE
+            ) {
+                throw new Exception('Please select a document file.');
+            }
+
+            $file = $_FILES['document_file'];
+
+            validateUploadedFile($file);
+
+            $documentType = trim(
+                $_POST['document_type'] ?? ''
+            );
+
+            $documentName = trim(
+                $_POST['document_name'] ?? ''
+            );
+
+            $validTypes = [
+                'Medical Certificate',
+                'Vaccination Certificate',
+                'Referral Letter',
+                'Other'
+            ];
+
+            if (!in_array($documentType, $validTypes, true)) {
+                throw new Exception('Please select a valid document type.');
+            }
+
+            if ($documentName === '') {
+
+                $documentName = pathinfo(
+                    $file['name'],
+                    PATHINFO_FILENAME
+                );
+
+                $documentName = preg_replace(
+                    '/[_-]+/',
+                    ' ',
+                    $documentName
+                );
+
+                $documentName = trim($documentName);
+            }
+
+            if (mb_strlen($documentName) > 255) {
+                throw new Exception(
+                    'Document name cannot exceed 255 characters.'
+                );
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | CREATE STORED FILE
+            |--------------------------------------------------------------------------
+            */
+            $storedFileName = generateStoredFileName(
+                $file['name']
+            );
+
+            $filePath = UPLOAD_DIR . $storedFileName;
+
+            if (
+                !move_uploaded_file(
+                    $file['tmp_name'],
+                    $filePath
+                )
+            ) {
+                throw new Exception(
+                    'Failed to save the uploaded file.'
+                );
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | INSERT DATABASE RECORD
+            |--------------------------------------------------------------------------
+            */
+            $insertQuery = "
+                INSERT INTO medical_documents (
+                    branch_id,
+                    document_type,
+                    document_name,
+                    file_name,
+                    file_path,
+                    file_type,
+                    file_size,
+                    uploaded_by
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ";
+
+            $stmt = $conn->prepare($insertQuery);
+
+            if (!$stmt) {
+
+                if (file_exists($filePath)) {
+                    unlink($filePath);
+                }
+
+                throw new Exception(
+                    'Unable to prepare upload query: ' . $conn->error
+                );
+            }
+
+            $originalFileName = $file['name'];
+            $fileMimeType = $file['type'] ?? '';
+            $fileSize = (int)$file['size'];
+
+            $stmt->bind_param(
+                "ssssssii",
+                $branch_id,
+                $documentType,
+                $documentName,
+                $originalFileName,
+                $filePath,
+                $fileMimeType,
+                $fileSize,
+                $user_id
+            );
+
+            if (!$stmt->execute()) {
+
+                if (file_exists($filePath)) {
+                    unlink($filePath);
+                }
+
+                $error = $stmt->error;
+                $stmt->close();
+
+                throw new Exception(
+                    'Failed to save document record: ' . $error
+                );
+            }
+
+            $stmt->close();
+
+            jsonResponse(
+                true,
+                'Document uploaded successfully.'
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | GET SINGLE DOCUMENT
+        |--------------------------------------------------------------------------
+        */
+        elseif ($action === 'get_document') {
+
+            if (!$branch_id) {
+                jsonResponse(false, 'No branch is assigned.');
+            }
+
+            $documentId = isset($_GET['document_id'])
+                ? (int)$_GET['document_id']
+                : 0;
+
+            if ($documentId <= 0) {
+                throw new Exception('Invalid document ID.');
+            }
+
+            $document = getDocumentById(
+                $conn,
+                $documentId,
+                $branch_id
+            );
+
+            /*
+            |--------------------------------------------------------------------------
+            | GET UPLOADER NAME
+            |--------------------------------------------------------------------------
+            */
+            $uploadedByName = 'Unknown';
+
+            if (!empty($document['uploaded_by'])) {
+
+                $userStmt = $conn->prepare(
+                    "SELECT username FROM users WHERE user_id = ? LIMIT 1"
+                );
+
+                if ($userStmt) {
+
+                    $userStmt->bind_param(
+                        "i",
+                        $document['uploaded_by']
+                    );
+
+                    $userStmt->execute();
+
+                    $userResult = $userStmt->get_result();
+
+                    if ($userResult && $userResult->num_rows > 0) {
+
+                        $userRow = $userResult->fetch_assoc();
+
+                        $uploadedByName =
+                            $userRow['username'] ?? 'Unknown';
+                    }
+
+                    $userStmt->close();
+                }
+            }
+
+            $document['uploaded_by_name'] = $uploadedByName;
+
+            $document['formatted_date'] =
+                !empty($document['uploaded_at'])
+                ? date(
+                    'M d, Y h:i A',
+                    strtotime($document['uploaded_at'])
+                )
+                : 'N/A';
+
+            $document['formatted_updated'] =
+                !empty($document['updated_at'])
+                ? date(
+                    'M d, Y h:i A',
+                    strtotime($document['updated_at'])
+                )
+                : 'Not updated';
+
+            $document['file_size_mb'] =
+                !empty($document['file_size'])
+                ? number_format(
+                    ((int)$document['file_size']) / 1024 / 1024,
+                    2
+                )
+                : '0.00';
+
+            jsonResponse(
+                true,
+                '',
+                [
+                    'document' => $document
+                ]
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | UPDATE DOCUMENT
+        |--------------------------------------------------------------------------
+        |
+        | The replacement file is OPTIONAL.
+        |
+        | If no new file is uploaded:
+        |     keep existing file.
+        |
+        | If a new file is uploaded:
+        |     save new file,
+        |     update DB,
+        |     delete old file.
+        |--------------------------------------------------------------------------
+        */
+        elseif ($action === 'update_document') {
+
+            if (!$branch_id) {
+                jsonResponse(false, 'No branch is assigned.');
+            }
+
+            $documentId = isset($_POST['document_id'])
+                ? (int)$_POST['document_id']
+                : 0;
+
+            if ($documentId <= 0) {
+                throw new Exception('Invalid document ID.');
+            }
+
+            $documentType = trim(
+                $_POST['document_type'] ?? ''
+            );
+
+            $documentName = trim(
+                $_POST['document_name'] ?? ''
+            );
+
+            $validTypes = [
+                'Medical Certificate',
+                'Vaccination Certificate',
+                'Referral Letter',
+                'Other'
+            ];
+
+            if (!in_array($documentType, $validTypes, true)) {
+                throw new Exception('Invalid document type.');
+            }
+
+            if ($documentName === '') {
+                throw new Exception('Document name is required.');
+            }
+
+            if (mb_strlen($documentName) > 255) {
+                throw new Exception(
+                    'Document name cannot exceed 255 characters.'
+                );
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | GET EXISTING DOCUMENT
+            |--------------------------------------------------------------------------
+            */
+            $existingDocument = getDocumentById(
+                $conn,
+                $documentId,
+                $branch_id
+            );
+
+            $hasNewFile =
+                isset($_FILES['edit_document_file']) &&
+                $_FILES['edit_document_file']['error'] !== UPLOAD_ERR_NO_FILE;
+
+            $newFilePath = null;
+            $newFileName = null;
+            $newFileType = null;
+            $newFileSize = null;
+
+            /*
+            |--------------------------------------------------------------------------
+            | IF NEW FILE WAS PROVIDED
+            |--------------------------------------------------------------------------
+            */
+            if ($hasNewFile) {
+
+                $newFile = $_FILES['edit_document_file'];
+
+                validateUploadedFile($newFile);
+
+                $newStoredFileName =
+                    generateStoredFileName(
+                        $newFile['name']
+                    );
+
+                $newFilePath =
+                    UPLOAD_DIR . $newStoredFileName;
+
+                if (
+                    !move_uploaded_file(
+                        $newFile['tmp_name'],
+                        $newFilePath
+                    )
+                ) {
+                    throw new Exception(
+                        'Failed to save the replacement file.'
+                    );
+                }
+
+                $newFileName = $newFile['name'];
+                $newFileType = $newFile['type'] ?? '';
+                $newFileSize = (int)$newFile['size'];
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | UPDATE DATABASE
+            |--------------------------------------------------------------------------
+            */
+            if ($hasNewFile) {
+
+                $updateQuery = "
+                    UPDATE medical_documents
+                    SET
+                        document_type = ?,
+                        document_name = ?,
+                        file_name = ?,
+                        file_path = ?,
+                        file_type = ?,
+                        file_size = ?,
+                        updated_at = NOW()
+                    WHERE document_id = ?
+                      AND branch_id = ?
+                ";
+
+                $stmt = $conn->prepare($updateQuery);
+
+                if (!$stmt) {
+
+                    if (
+                        $newFilePath &&
+                        file_exists($newFilePath)
+                    ) {
+                        unlink($newFilePath);
+                    }
+
+                    throw new Exception(
+                        'Unable to prepare update query: ' . $conn->error
+                    );
+                }
+
+                $stmt->bind_param(
+                    "sssssiss",
+                    $documentType,
+                    $documentName,
+                    $newFileName,
+                    $newFilePath,
+                    $newFileType,
+                    $newFileSize,
+                    $documentId,
+                    $branch_id
+                );
+
+            } else {
+
+                $updateQuery = "
+                    UPDATE medical_documents
+                    SET
+                        document_type = ?,
+                        document_name = ?,
+                        updated_at = NOW()
+                    WHERE document_id = ?
+                      AND branch_id = ?
+                ";
+
+                $stmt = $conn->prepare($updateQuery);
+
+                if (!$stmt) {
+                    throw new Exception(
+                        'Unable to prepare update query: ' . $conn->error
+                    );
+                }
+
+                $stmt->bind_param(
+                    "ssis",
+                    $documentType,
+                    $documentName,
+                    $documentId,
+                    $branch_id
+                );
+            }
+
+            if (!$stmt->execute()) {
+
+                $error = $stmt->error;
+
+                $stmt->close();
+
+                if (
+                    $newFilePath &&
+                    file_exists($newFilePath)
+                ) {
+                    unlink($newFilePath);
+                }
+
+                throw new Exception(
+                    'Failed to update document: ' . $error
+                );
+            }
+
+            $affectedRows = $stmt->affected_rows;
+
+            $stmt->close();
+
+            /*
+            |--------------------------------------------------------------------------
+            | DELETE OLD FILE ONLY AFTER SUCCESSFUL DB UPDATE
+            |--------------------------------------------------------------------------
+            */
+            if (
+                $hasNewFile &&
+                !empty($existingDocument['file_path']) &&
+                $existingDocument['file_path'] !== $newFilePath &&
+                file_exists($existingDocument['file_path'])
+            ) {
+                @unlink(
+                    $existingDocument['file_path']
+                );
+            }
+
+            jsonResponse(
+                true,
+                $hasNewFile
+                    ? 'Document and file updated successfully.'
+                    : 'Document information updated successfully.',
+                [
+                    'file_replaced' => $hasNewFile,
+                    'affected_rows' => $affectedRows
+                ]
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | DELETE DOCUMENT
+        |--------------------------------------------------------------------------
+        */
+        elseif ($action === 'delete_document') {
+
+            if (!$branch_id) {
+                jsonResponse(false, 'No branch is assigned.');
+            }
+
+            $documentId = isset($_GET['document_id'])
+                ? (int)$_GET['document_id']
+                : 0;
+
+            if ($documentId <= 0) {
+                throw new Exception('Invalid document ID.');
+            }
+
+            $document = getDocumentById(
+                $conn,
+                $documentId,
+                $branch_id
+            );
+
+            /*
+            |--------------------------------------------------------------------------
+            | DELETE DATABASE RECORD
+            |--------------------------------------------------------------------------
+            */
+            $deleteQuery = "
+                DELETE FROM medical_documents
+                WHERE document_id = ?
+                  AND branch_id = ?
+            ";
+
+            $stmt = $conn->prepare($deleteQuery);
+
+            if (!$stmt) {
+                throw new Exception(
+                    'Unable to prepare delete query: ' . $conn->error
+                );
+            }
+
+            $stmt->bind_param(
+                "is",
+                $documentId,
+                $branch_id
+            );
+
+            if (!$stmt->execute()) {
+
+                $error = $stmt->error;
+                $stmt->close();
+
+                throw new Exception(
+                    'Failed to delete document: ' . $error
+                );
+            }
+
+            $deletedRows = $stmt->affected_rows;
+
+            $stmt->close();
+
+            if ($deletedRows <= 0) {
+                throw new Exception(
+                    'Document could not be deleted.'
+                );
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | DELETE PHYSICAL FILE
+            |--------------------------------------------------------------------------
+            */
+            if (
+                !empty($document['file_path']) &&
+                file_exists($document['file_path'])
+            ) {
+                @unlink(
+                    $document['file_path']
+                );
+            }
+
+            jsonResponse(
+                true,
+                'Document deleted successfully.'
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | INVALID ACTION
+        |--------------------------------------------------------------------------
+        */
+        else {
+
+            jsonResponse(
+                false,
+                'Invalid request action.'
+            );
+        }
+
+    } catch (Throwable $e) {
+
+        jsonResponse(
+            false,
+            $e->getMessage()
+        );
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| INITIAL RECENT DOCUMENTS
+|--------------------------------------------------------------------------
+*/
+
+$recentDocuments = [];
+
+if ($branch_id) {
+
+    $recentQuery = "
+        SELECT
+            md.document_id,
+            md.document_type,
+            md.document_name,
+            md.file_name,
+            md.file_path,
+            md.file_size,
+            md.status,
+            md.uploaded_at,
+            u.username AS uploaded_by_name
+        FROM medical_documents md
+        LEFT JOIN users u
+            ON md.uploaded_by = u.user_id
+        WHERE md.branch_id = ?
+        ORDER BY md.uploaded_at DESC
+        LIMIT 10
+    ";
+
+    $stmt = $conn->prepare($recentQuery);
+
+    if ($stmt) {
+
+        $stmt->bind_param(
+            "s",
+            $branch_id
+        );
+
+        $stmt->execute();
+
+        $recentResult = $stmt->get_result();
+
+        while ($row = $recentResult->fetch_assoc()) {
+            $recentDocuments[] = $row;
+        }
+
+        $stmt->close();
+    }
+}
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
+
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1"
+    >
+
     <title>Medical Documents - SmartBiteCare</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
-    <link rel="stylesheet" href="sidebar.css">
+
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+    >
+
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+    >
+
+    <link
+        rel="stylesheet"
+        href="sidebar.css"
+    >
 
     <style>
+
         :root {
             --primary: #2B3A8C;
+            --primary-dark: #1f2d6b;
             --danger: #dc3545;
+            --success: #198754;
             --gray-100: #f8f9fc;
             --gray-500: #adb5bd;
             --gray-600: #6c757d;
@@ -392,33 +1212,13 @@ while ($row = $recentResult->fetch_assoc()) {
         .profile {
             font-weight: 600;
             color: var(--primary);
-            cursor: pointer;
             display: flex;
             align-items: center;
             gap: 6px;
         }
 
-        @media (max-width: 991px) {
-            .main {
-                margin-left: 90px;
-            }
-            .topbar {
-                padding: 0 16px;
-                height: 64px;
-            }
-            .topbar h3 {
-                font-size: 20px;
-            }
-        }
-
         .content {
             padding: 30px;
-        }
-
-        @media (max-width: 768px) {
-            .content {
-                padding: 16px;
-            }
         }
 
         .section-card {
@@ -430,99 +1230,8 @@ while ($row = $recentResult->fetch_assoc()) {
             margin-bottom: 24px;
         }
 
-        .section-title {
-            color: var(--primary);
-            font-weight: 700;
-            margin-bottom: 18px;
-            font-size: 18px;
-        }
-
-        /* Document Grid */
-        .document-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 20px;
-        }
-
-        @media (max-width: 992px) {
-            .document-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-        }
-
-        @media (max-width: 576px) {
-            .document-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .document-card {
-            border: 1px solid #ececec;
-            border-radius: 15px;
-            padding: 20px;
-            text-align: center;
-            transition: var(--transition);
-        }
-
-        .document-card:hover {
-            box-shadow: 0 4px 15px rgba(0,0,0,.08);
-            transform: translateY(-2px);
-        }
-
-        .document-icon {
-            width: 70px;
-            height: 70px;
-            border-radius: 50%;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 32px;
-            margin-bottom: 12px;
-        }
-
-        .document-icon.medical {
-            background: #EAF2FF;
-            color: #2563EB;
-        }
-
-        .document-icon.vaccine {
-            background: #E8FAF2;
-            color: #1DBA6C;
-        }
-
-        .document-icon.referral {
-            background: #F2EAFE;
-            color: #7C4DFF;
-        }
-
-        .document-card h5 {
-            font-size: 16px;
-            font-weight: 700;
-            margin-bottom: 6px;
-        }
-
-        .document-card p {
-            color: #666;
-            font-size: 13px;
-            margin-bottom: 14px;
-        }
-
-        .btn-doc {
-            border: none;
-            border-radius: 8px;
-            padding: 8px 20px;
-            font-weight: 600;
-            transition: var(--transition);
-        }
-
-        .btn-doc.blue { background: #2563EB; color: #fff; }
-        .btn-doc.blue:hover { background: #1d4ed8; color: #fff; }
-        .btn-doc.green { background: #1DBA6C; color: #fff; }
-        .btn-doc.green:hover { background: #16a34a; color: #fff; }
-        .btn-doc.purple { background: #7C4DFF; color: #fff; }
-        .btn-doc.purple:hover { background: #6d3bf5; color: #fff; }
-
         /* Toolbar */
+
         .toolbar {
             display: flex;
             justify-content: space-between;
@@ -539,78 +1248,41 @@ while ($row = $recentResult->fetch_assoc()) {
             flex-wrap: wrap;
         }
 
-       .search-box {
-    position: relative;
-    width: 400px;
-    max-width: 100%;
-}
+        .search-box {
+            position: relative;
+            width: 400px;
+            max-width: 100%;
+        }
 
-.search-box form {
-    width: 100%;
-}
+        .search-box > i {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #7180a8;
+            font-size: 18px;
+            z-index: 2;
+            pointer-events: none;
+        }
 
-.search-box > i {
-    position: absolute;
-    left: 16px;
-    top: 50%;
-    transform: translateY(-50%);
-
-    color: #7180a8;
-    font-size: 18px;
-
-    z-index: 2;
-    pointer-events: none;
-}
-
-.search-box input {
-    width: 100%;
-    height: 48px;
-
-    padding: 0 18px 0 45px;
-
-    background: #ffffff;
-
-    border: 1px solid #d0d7e8;
-    border-radius: 10px;
-
-    font-size: 14px;
-    color: #1f2a4a;
-
-    outline: none;
-
-    box-sizing: border-box;
-
-    transition: 0.2s ease;
-}
-
-.search-box input::placeholder {
-    color: #7a85a8;
-}
-
-.search-box input:focus {
-    border-color: var(--primary);
-
-    box-shadow:
-        0 0 0 3px rgba(43, 58, 140, 0.10);
-}
-        .toolbar-btn {
-            background: var(--primary);
-            color: #fff;
-            border: none;
-            border-radius: 8px;
-            padding: 9px 20px;
+        .search-box input {
+            width: 100%;
+            height: 48px;
+            padding: 0 18px 0 45px;
+            background: #ffffff;
+            border: 1px solid #d0d7e8;
+            border-radius: 10px;
             font-size: 14px;
-            font-weight: 600;
-            transition: var(--transition);
+            color: #1f2a4a;
+            outline: none;
+            box-sizing: border-box;
+            transition: 0.2s ease;
         }
 
-        .toolbar-btn:hover {
-            background: #1f2d6b;
-            transform: translateY(-2px);
-        }
-
-        .toolbar-btn i {
-            margin-right: 6px;
+        .search-box input:focus {
+            border-color: var(--primary);
+            box-shadow:
+                0 0 0 3px rgba(43, 58, 140, 0.10);
         }
 
         .form-select-sm-custom {
@@ -621,7 +1293,29 @@ while ($row = $recentResult->fetch_assoc()) {
             font-size: 13px;
         }
 
+        .toolbar-btn {
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 14px;
+            font-weight: 600;
+            transition: var(--transition);
+        }
+
+        .toolbar-btn:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            color: white;
+        }
+
+        .toolbar-btn i {
+            margin-right: 6px;
+        }
+
         /* Table */
+
         .table-wrapper {
             background: #fff;
             border-radius: 18px;
@@ -635,7 +1329,6 @@ while ($row = $recentResult->fetch_assoc()) {
             margin-bottom: 0;
             border-collapse: collapse;
         }
-
 
         .table thead th {
             border: none !important;
@@ -659,20 +1352,38 @@ while ($row = $recentResult->fetch_assoc()) {
             background: var(--gray-100);
         }
 
+        /* Document Badge */
+
         .document-badge {
             display: inline-block;
-            padding: 3px 12px;
+            padding: 4px 12px;
             border-radius: 20px;
             font-size: 11px;
             font-weight: 600;
         }
 
-        .document-badge.medical { background: #EAF2FF; color: #2563EB; }
-        .document-badge.vaccine { background: #E8FAF2; color: #1DBA6C; }
-        .document-badge.referral { background: #F2EAFE; color: #7C4DFF; }
-        .document-badge.other { background: var(--gray-100); color: var(--gray-600); }
+        .document-badge.medical-certificate {
+            background: #EAF2FF;
+            color: #2563EB;
+        }
+
+        .document-badge.vaccination-certificate {
+            background: #E8FAF2;
+            color: #1DBA6C;
+        }
+
+        .document-badge.referral-letter {
+            background: #F2EAFE;
+            color: #7C4DFF;
+        }
+
+        .document-badge.other {
+            background: #f1f3f5;
+            color: #6c757d;
+        }
 
         /* Actions */
+
         .actions {
             display: flex;
             justify-content: center;
@@ -680,8 +1391,8 @@ while ($row = $recentResult->fetch_assoc()) {
         }
 
         .action-btn {
-            width: 34px;
-            height: 34px;
+            width: 36px;
+            height: 36px;
             display: inline-flex;
             justify-content: center;
             align-items: center;
@@ -693,14 +1404,52 @@ while ($row = $recentResult->fetch_assoc()) {
             font-size: 16px;
         }
 
-        .action-btn.view { color: var(--primary); }
-        .action-btn.view:hover { background: #bbffbf; }
-        .action-btn.download { color: var(--primary); }
-        .action-btn.download:hover { background: #55dc30; }
-        .action-btn.delete { color: var(--primary); }
-        .action-btn.delete:hover { background: #de5e5e; }
+        .action-btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .action-btn.view {
+            color: var(--primary);
+        }
+
+        .action-btn.view:hover {
+            background: #e7ebff;
+        }
+
+        .action-btn.edit {
+            color: #198754;
+        }
+
+        .action-btn.edit:hover {
+            background: #e8f8ef;
+        }
+
+        .action-btn.print {
+            color: #6f42c1;
+        }
+
+        .action-btn.print:hover {
+            background: #f0e9ff;
+        }
+
+        .action-btn.download {
+            color: #0d6efd;
+        }
+
+        .action-btn.download:hover {
+            background: #e7f1ff;
+        }
+
+        .action-btn.delete {
+            color: var(--danger);
+        }
+
+        .action-btn.delete:hover {
+            background: #ffe7ea;
+        }
 
         /* Pagination */
+
         .pagination-area {
             margin-top: 20px;
             display: flex;
@@ -740,9 +1489,11 @@ while ($row = $recentResult->fetch_assoc()) {
         .page-item.disabled {
             opacity: 0.5;
             cursor: not-allowed;
+            pointer-events: none;
         }
 
         /* Modal */
+
         .modal-content {
             border-radius: var(--radius);
             border: none;
@@ -751,7 +1502,11 @@ while ($row = $recentResult->fetch_assoc()) {
         .modal-header {
             background: var(--primary);
             color: #fff;
-            border-radius: var(--radius) var(--radius) 0 0;
+            border-radius:
+                var(--radius)
+                var(--radius)
+                0
+                0;
             padding: 18px 25px;
         }
 
@@ -774,17 +1529,22 @@ while ($row = $recentResult->fetch_assoc()) {
             color: #333;
         }
 
-        .form-control, .form-select {
+        .form-control,
+        .form-select {
             border-radius: 8px;
-            padding: 8px 14px;
+            padding: 9px 14px;
             border: 1px solid #ced4da;
             font-size: 14px;
         }
 
-        .form-control:focus, .form-select:focus {
+        .form-control:focus,
+        .form-select:focus {
             border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(43,58,140,0.12);
+            box-shadow:
+                0 0 0 3px rgba(43,58,140,0.12);
         }
+
+        /* File Upload */
 
         .file-upload-area {
             border: 2px dashed #ced4da;
@@ -795,7 +1555,8 @@ while ($row = $recentResult->fetch_assoc()) {
             transition: var(--transition);
         }
 
-        .file-upload-area:hover {
+        .file-upload-area:hover,
+        .file-upload-area.dragover {
             border-color: var(--primary);
             background: var(--gray-100);
         }
@@ -816,9 +1577,49 @@ while ($row = $recentResult->fetch_assoc()) {
         .file-upload-area .file-name {
             font-weight: 600;
             color: var(--primary);
+            margin-top: 8px;
+            word-break: break-word;
+        }
+
+        .current-file {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 12px 14px;
+            margin-bottom: 14px;
+        }
+
+        .current-file i {
+            color: var(--primary);
+            margin-right: 6px;
+        }
+
+        /* Details */
+
+        .detail-row {
+            display: flex;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+
+        .detail-label {
+            width: 130px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        .detail-value {
+            flex: 1;
+            color: #222;
+            word-break: break-word;
         }
 
         /* Toast */
+
         .toast-container-custom {
             position: fixed;
             bottom: 30px;
@@ -837,7 +1638,10 @@ while ($row = $recentResult->fetch_assoc()) {
             align-items: center;
             gap: 12px;
             transform: translateX(120%);
-            transition: transform 0.4s cubic-bezier(0.34,1.56,0.64,1);
+            transition:
+                transform
+                0.4s
+                cubic-bezier(0.34,1.56,0.64,1);
             margin-bottom: 10px;
         }
 
@@ -857,6 +1661,18 @@ while ($row = $recentResult->fetch_assoc()) {
         .toast-custom.error .toast-icon {
             color: var(--danger);
         }
+
+        .toast-msg {
+            font-size: 14px;
+        }
+
+        .toast-msg small {
+            display: block;
+            color: #666;
+            margin-top: 2px;
+        }
+
+        /* Loading */
 
         .loading-overlay {
             display: none;
@@ -885,8 +1701,14 @@ while ($row = $recentResult->fetch_assoc()) {
         }
 
         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
         }
 
         .no-records {
@@ -902,579 +1724,2986 @@ while ($row = $recentResult->fetch_assoc()) {
             opacity: 0.4;
         }
 
-        .admin-profile {
-            font-weight: 700;
-            color: var(--primary);
-            cursor: default;
-            font-size: 15px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
+        @media (max-width: 991px) {
+
+            .main {
+                margin-left: 90px;
+            }
+
+            .topbar {
+                padding: 0 16px;
+                height: 64px;
+            }
+
+            .topbar h3 {
+                font-size: 20px;
+            }
         }
+
+        @media (max-width: 768px) {
+
+            .content {
+                padding: 16px;
+            }
+
+            .search-box {
+                width: 100%;
+            }
+
+            .left-tools {
+                width: 100%;
+            }
+
+            .toolbar-btn {
+                width: 100%;
+            }
+
+            .detail-row {
+                display: block;
+            }
+
+            .detail-label {
+                width: auto;
+                margin-bottom: 3px;
+            }
+        }
+
     </style>
+
 </head>
 
 <body>
-    <!-- Sidebar -->
-    <div class="sidebar">
-        <div class="logo-area">
-            <div class="logo-frame">
-                <img src="logo.png" alt="Smart Bite Care Logo" class="logo">
-            </div>
-            <div class="system-name">Smart Bite Care</div>
+
+<!--
+|--------------------------------------------------------------------------
+| SIDEBAR
+|--------------------------------------------------------------------------
+-->
+
+<div class="sidebar">
+
+    <div class="logo-area">
+
+        <div class="logo-frame">
+            <img
+                src="logo.png"
+                alt="Smart Bite Care Logo"
+                class="logo"
+            >
         </div>
-        <nav class="nav-menu">
-            <ul>
-                <li><a href="AdminStaff_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
-                <li><a href="AdminStaff_Calendar.php"><i class="bi bi-calendar-fill"></i><span>Calendar</span></a></li>
-                <li><a href="AdminStaff_PatientRecord.php"><i class="bi bi-people-fill"></i><span>Patient Record Management</span></a></li>
-                <li><a href="AdminStaff_PhilhealthStatus.php"><i class="bi bi-check2-all"></i><span>PhilHealth Patient Status</span></a></li>
-                <li><a class="active" href="AdminStaff_MedicalDocuments.php"><i class="bi bi-file-earmark-ruled"></i><span>Medical Documents</span></a></li>
-                <li><a href="AdminStaff_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
-            </ul>
-        </nav>
-        <div class="logout">
-            <a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
+
+        <div class="system-name">
+            Smart Bite Care
         </div>
+
     </div>
 
-    <!-- Main Content -->
-    <div class="main">
-        <div class="topbar">
-            <h3>Medical Documents <span style="font-size:16px; color:#6c757d; font-weight:400; margin-left:8px;"> <?php echo htmlspecialchars($branch_name); ?> </span> </h3>
-            <div class="profile">
+    <nav class="nav-menu">
+
+        <ul>
+
+            <li>
+                <a href="AdminStaff_Dashboard.php">
+                    <i class="bi bi-grid-fill"></i>
+                    <span>Dashboard</span>
+                </a>
+            </li>
+
+            <li>
+                <a href="AdminStaff_Calendar.php">
+                    <i class="bi bi-calendar-fill"></i>
+                    <span>Calendar</span>
+                </a>
+            </li>
+
+            <li>
+                <a href="AdminStaff_PatientRecord.php">
+                    <i class="bi bi-people-fill"></i>
+                    <span>Patient Record Management</span>
+                </a>
+            </li>
+
+            <li>
+                <a href="AdminStaff_PhilhealthStatus.php">
+                    <i class="bi bi-check2-all"></i>
+                    <span>PhilHealth Patient Status</span>
+                </a>
+            </li>
+
+            <li>
+                <a
+                    class="active"
+                    href="AdminStaff_MedicalDocuments.php"
+                >
+                    <i class="bi bi-file-earmark-ruled"></i>
+                    <span>Medical Documents</span>
+                </a>
+            </li>
+
+            <li>
+                <a href="AdminStaff_Notifications.php">
+                    <i class="bi bi-bell-fill"></i>
+                    <span>Notifications</span>
+                </a>
+            </li>
+
+        </ul>
+
+    </nav>
+
+    <div class="logout">
+
+        <a href="logout.php">
+
+            <i class="bi bi-box-arrow-right"></i>
+
+            <span>Logout</span>
+
+        </a>
+
+    </div>
+
+</div>
+
+
+<!--
+|--------------------------------------------------------------------------
+| MAIN CONTENT
+|--------------------------------------------------------------------------
+-->
+
+<div class="main">
+
+    <div class="topbar">
+
+        <h3>
+
+            Medical Documents
+
+            <span
+                style="
+                    font-size:16px;
+                    color:#6c757d;
+                    font-weight:400;
+                    margin-left:8px;
+                "
+            >
+                <?php
+                echo htmlspecialchars(
+                    $branch_name,
+                    ENT_QUOTES,
+                    'UTF-8'
+                );
+                ?>
+            </span>
+
+        </h3>
+
+         <div class="profile">
+                <i class="bi bi-person-circle"></i>
                 <?php echo htmlspecialchars($username); ?>
-               
+                <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Admin Staff</span>
             </div>
-        </div>
+    </div>
 
-        <div class="content">
 
-            <!-- Documents Table -->
-            <div class="section-card">
-                <div class="toolbar">
-                    <div class="left-tools">
-                        <div class="search-box">
-                            <i class="bi bi-search"></i>
-                            <input type="text" id="searchInput" placeholder="Search documents...">
-                        </div>
-                        <select class="form-select-sm-custom" id="typeFilter">
-                            <option value="">All Types</option>
-                            <option value="Medical Certificate">Medical Certificate</option>
-                            <option value="Vaccination Certificate">Vaccination Certificate</option>
-                            <option value="Referral Letter">Referral Letter</option>
-                            <option value="Other">Other</option>
-                        </select>
+    <div class="content">
+
+        <div class="section-card">
+
+            <!-- TOOLBAR -->
+
+            <div class="toolbar">
+
+                <div class="left-tools">
+
+                    <div class="search-box">
+
+                        <i class="bi bi-search"></i>
+
+                        <input
+                            type="text"
+                            id="searchInput"
+                            placeholder="Search documents..."
+                        >
+
                     </div>
-                    <button class="toolbar-btn" onclick="openUploadModal()">
-                        <i class="bi bi-plus-circle"></i> Upload New
-                    </button>
+
+                    <select
+                        class="form-select-sm-custom"
+                        id="typeFilter"
+                    >
+
+                        <option value="">
+                            All Types
+                        </option>
+
+                        <option value="Medical Certificate">
+                            Medical Certificate
+                        </option>
+
+                        <option value="Vaccination Certificate">
+                            Vaccination Certificate
+                        </option>
+
+                        <option value="Referral Letter">
+                            Referral Letter
+                        </option>
+
+                        <option value="Other">
+                            Other
+                        </option>
+
+                    </select>
+
                 </div>
 
-                <div class="table-wrapper">
-                    <div class="table-responsive">
-                        <table class="table">
-                            <thead>
+
+                <button
+                    type="button"
+                    class="toolbar-btn"
+                    onclick="openUploadModal()"
+                >
+
+                    <i class="bi bi-plus-circle"></i>
+
+                    Upload New
+
+                </button>
+
+            </div>
+
+
+            <!-- DOCUMENT TABLE -->
+
+            <div class="table-wrapper">
+
+                <div class="table-responsive">
+
+                    <table class="table">
+
+                        <thead>
+
+                            <tr>
+
+                                <th>
+                                    Document Type
+                                </th>
+
+                                <th>
+                                    Document Name
+                                </th>
+
+                                <th>
+                                    Uploaded By
+                                </th>
+
+                                <th>
+                                    Date
+                                </th>
+
+                                <th>
+                                    Actions
+                                </th>
+
+                            </tr>
+
+                        </thead>
+
+                        <tbody id="documentsTableBody">
+
+                            <?php if (empty($recentDocuments)): ?>
+
                                 <tr>
-                                    <th>Document Type</th>
-                                    <th>Document Name</th>
-                                    <th>Uploaded By</th>
-                                    <th>Date</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="documentsTableBody">
-                                <?php if (empty($recentDocuments)): ?>
-                                <tr>
+
                                     <td colspan="5">
+
                                         <div class="no-records">
-                                            <i class="bi bi-file-earmark-text"></i>
-                                            <p>No documents uploaded yet.</p>
+
+                                            <i
+                                                class="bi bi-file-earmark-text"
+                                            ></i>
+
+                                            <p>
+                                                No documents uploaded yet.
+                                            </p>
+
                                         </div>
+
                                     </td>
+
                                 </tr>
-                                <?php else: ?>
+
+                            <?php else: ?>
+
                                 <?php foreach ($recentDocuments as $doc): ?>
-                                <tr>
-                                    <td>
-                                        <span class="document-badge <?php echo strtolower(str_replace(' ', '-', $doc['document_type'])); ?>">
-                                            <?php echo htmlspecialchars($doc['document_type']); ?>
-                                        </span>
-                                    </td>
-                                    <td><?php echo htmlspecialchars($doc['document_name']); ?></td>
-                                    <td><?php echo htmlspecialchars($doc['uploaded_by_name'] ?? 'Unknown'); ?></td>
-                                    <td><?php echo htmlspecialchars($doc['formatted_date']); ?></td>
-                                    <td>
-                                        <div class="actions">
-                                            <button class="action-btn view" onclick="viewDocument(<?php echo $doc['document_id']; ?>)" title="View">
-                                                <i class="bi bi-eye"></i>
-                                            </button>
-                                            <button class="action-btn download" onclick="downloadDocument(<?php echo $doc['document_id']; ?>)" title="Download">
-                                                <i class="bi bi-download"></i>
-                                            </button>
-                                            <button class="action-btn delete" onclick="deleteDocument(<?php echo $doc['document_id']; ?>)" title="Delete">
-                                                <i class="bi bi-trash"></i>
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
+
+                                    <?php
+
+                                    $badgeClass =
+                                        strtolower(
+                                            str_replace(
+                                                ' ',
+                                                '-',
+                                                $doc['document_type']
+                                            )
+                                        );
+
+                                    ?>
+
+                                    <tr>
+
+                                        <td>
+
+                                            <span
+                                                class="document-badge <?php echo htmlspecialchars($badgeClass, ENT_QUOTES, 'UTF-8'); ?>"
+                                            >
+
+                                                <?php
+                                                echo htmlspecialchars(
+                                                    $doc['document_type'],
+                                                    ENT_QUOTES,
+                                                    'UTF-8'
+                                                );
+                                                ?>
+
+                                            </span>
+
+                                        </td>
+
+                                        <td>
+
+                                            <?php
+                                            echo htmlspecialchars(
+                                                $doc['document_name'],
+                                                ENT_QUOTES,
+                                                'UTF-8'
+                                            );
+                                            ?>
+
+                                        </td>
+
+                                        <td>
+
+                                            <?php
+                                            echo htmlspecialchars(
+                                                $doc['uploaded_by_name'] ?? 'Unknown',
+                                                ENT_QUOTES,
+                                                'UTF-8'
+                                            );
+                                            ?>
+
+                                        </td>
+
+                                        <td>
+
+                                            <?php
+                                            echo htmlspecialchars(
+                                                date(
+                                                    'M d, Y h:i A',
+                                                    strtotime(
+                                                        $doc['uploaded_at']
+                                                    )
+                                                ),
+                                                ENT_QUOTES,
+                                                'UTF-8'
+                                            );
+                                            ?>
+
+                                        </td>
+
+                                        <td>
+
+                                            <div class="actions">
+
+                                                <!-- VIEW -->
+
+                                                <button
+                                                    type="button"
+                                                    class="action-btn view"
+                                                    onclick="viewDocument(<?php echo (int)$doc['document_id']; ?>)"
+                                                    title="View"
+                                                >
+
+                                                    <i class="bi bi-eye"></i>
+
+                                                </button>
+
+
+                                                <!-- EDIT -->
+
+                                                <button
+                                                    type="button"
+                                                    class="action-btn edit"
+                                                    onclick="editDocument(<?php echo (int)$doc['document_id']; ?>)"
+                                                    title="Edit"
+                                                >
+
+                                                    <i class="bi bi-pencil"></i>
+
+                                                </button>
+
+
+                                                <!-- PRINT -->
+
+                                                <button
+                                                    type="button"
+                                                    class="action-btn print"
+                                                    onclick="printDocument(<?php echo (int)$doc['document_id']; ?>)"
+                                                    title="Print"
+                                                >
+
+                                                    <i class="bi bi-printer"></i>
+
+                                                </button>
+
+
+                                                <!-- DOWNLOAD -->
+
+                                                <button
+                                                    type="button"
+                                                    class="action-btn download"
+                                                    onclick="downloadDocument(<?php echo (int)$doc['document_id']; ?>)"
+                                                    title="Download"
+                                                >
+
+                                                    <i class="bi bi-download"></i>
+
+                                                </button>
+
+
+                                                <!-- DELETE -->
+
+                                                <button
+                                                    type="button"
+                                                    class="action-btn delete"
+                                                    onclick="deleteDocument(<?php echo (int)$doc['document_id']; ?>)"
+                                                    title="Delete"
+                                                >
+
+                                                    <i class="bi bi-trash"></i>
+
+                                                </button>
+
+                                            </div>
+
+                                        </td>
+
+                                    </tr>
+
                                 <?php endforeach; ?>
-                                <?php endif; ?>
-                            </tbody>
-                        </table>
+
+                            <?php endif; ?>
+
+                        </tbody>
+
+                    </table>
+
+                </div>
+
+            </div>
+
+
+            <div
+                class="pagination-area"
+                id="paginationArea"
+            ></div>
+
+            <div class="text-center mt-2">
+
+                <small
+                    class="text-muted"
+                    id="recordCount"
+                >
+                    Loading...
+                </small>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<!--
+|--------------------------------------------------------------------------
+| UPLOAD MODAL
+|--------------------------------------------------------------------------
+-->
+
+<div
+    class="modal fade"
+    id="uploadModal"
+    tabindex="-1"
+>
+
+    <div class="modal-dialog">
+
+        <div class="modal-content">
+
+            <div class="modal-header">
+
+                <h5 class="modal-title">
+
+                    <i class="bi bi-upload"></i>
+
+                    Upload Document
+
+                </h5>
+
+                <button
+                    type="button"
+                    class="btn-close"
+                    data-bs-dismiss="modal"
+                ></button>
+
+            </div>
+
+
+            <div class="modal-body">
+
+                <form
+                    id="uploadForm"
+                    enctype="multipart/form-data"
+                >
+
+                    <div class="mb-3">
+
+                        <label class="form-label">
+
+                            Document Type
+
+                            <span class="text-danger">
+                                *
+                            </span>
+
+                        </label>
+
+                        <select
+                            class="form-select"
+                            id="docTypeSelect"
+                            name="document_type"
+                            required
+                        >
+
+                            <option value="Medical Certificate">
+                                Medical Certificate
+                            </option>
+
+                            <option value="Vaccination Certificate">
+                                Vaccination Certificate
+                            </option>
+
+                            <option value="Referral Letter">
+                                Referral Letter
+                            </option>
+
+                            <option value="Other">
+                                Other
+                            </option>
+
+                        </select>
+
                     </div>
-                </div>
 
-                <div class="pagination-area" id="paginationArea"></div>
-                <div class="text-center mt-2">
-                    <small class="text-muted" id="recordCount">Loading...</small>
-                </div>
+
+                    <div class="mb-3">
+
+                        <label class="form-label">
+
+                            Document Name
+
+                            <span class="text-danger">
+                                *
+                            </span>
+
+                        </label>
+
+                        <input
+                            type="text"
+                            class="form-control"
+                            id="docName"
+                            name="document_name"
+                            maxlength="255"
+                            required
+                        >
+
+                    </div>
+
+
+                    <div class="mb-3">
+
+                        <label class="form-label">
+
+                            File
+
+                            <span class="text-danger">
+                                *
+                            </span>
+
+                        </label>
+
+                        <div
+                            class="file-upload-area"
+                            id="fileUploadArea"
+                        >
+
+                            <i class="bi bi-cloud-arrow-up"></i>
+
+                            <p>
+                                Click or drag to upload
+                            </p>
+
+                            <p
+                                class="text-muted"
+                                style="font-size:11px;"
+                            >
+                                PDF, DOC, DOCX, XLS, XLSX,
+                                JPG, PNG, TXT
+                                (Max 10MB)
+                            </p>
+
+                            <div
+                                id="selectedFileName"
+                                class="file-name"
+                                style="display:none;"
+                            ></div>
+
+                            <input
+                                type="file"
+                                id="fileInput"
+                                name="document_file"
+                                style="display:none;"
+                                required
+                            >
+
+                        </div>
+
+                    </div>
+
+                </form>
+
             </div>
-        </div>
-    </div>
 
-    <!-- Upload Modal -->
-    <div class="modal fade" id="uploadModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title"><i class="bi bi-upload"></i> Upload Document</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <form id="uploadForm" enctype="multipart/form-data">
-                        <div class="mb-3">
-                            <label class="form-label">Document Type <span class="text-danger">*</span></label>
-                            <select class="form-select" id="docTypeSelect" name="document_type" required>
-                                <option value="Medical Certificate">Medical Certificate</option>
-                                <option value="Vaccination Certificate">Vaccination Certificate</option>
-                                <option value="Referral Letter">Referral Letter</option>
-                                <option value="Other">Other</option>
-                            </select>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Document Name <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" id="docName" name="document_name" required>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Description</label>
-                            <textarea class="form-control" id="docDescription" name="description" rows="2"></textarea>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">File <span class="text-danger">*</span></label>
-                            <div class="file-upload-area" id="fileUploadArea">
-                                <i class="bi bi-cloud-arrow-up"></i>
-                                <p>Click or drag to upload</p>
-                                <p class="text-muted" style="font-size:11px;">PDF, DOC, DOCX, JPG, PNG (Max 10MB)</p>
-                                <div id="selectedFileName" class="file-name" style="display:none;"></div>
-                                <input type="file" id="fileInput" name="document_file" style="display:none;" required>
-                            </div>
-                        </div>
-                    </form>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-primary" id="uploadBtn">
-                        <i class="bi bi-cloud-upload"></i> Upload
-                    </button>
-                </div>
+
+            <div class="modal-footer">
+
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    data-bs-dismiss="modal"
+                >
+                    Cancel
+                </button>
+
+                <button
+                    type="button"
+                    class="btn btn-primary"
+                    id="uploadBtn"
+                >
+
+                    <i class="bi bi-cloud-upload"></i>
+
+                    Upload
+
+                </button>
+
             </div>
+
         </div>
+
     </div>
 
-    <!-- View Modal -->
-    <div class="modal fade" id="viewModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">Document Details</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body" id="viewModalBody"></div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                    <button type="button" class="btn btn-primary" id="editDocBtn">
-                        <i class="bi bi-pencil"></i> Edit
-                    </button>
-                </div>
+</div>
+
+
+<!--
+|--------------------------------------------------------------------------
+| VIEW MODAL
+|--------------------------------------------------------------------------
+-->
+
+<div
+    class="modal fade"
+    id="viewModal"
+    tabindex="-1"
+>
+
+    <div class="modal-dialog">
+
+        <div class="modal-content">
+
+            <div class="modal-header">
+
+                <h5 class="modal-title">
+
+                    <i class="bi bi-file-earmark-text"></i>
+
+                    Document Details
+
+                </h5>
+
+                <button
+                    type="button"
+                    class="btn-close"
+                    data-bs-dismiss="modal"
+                ></button>
+
             </div>
-        </div>
-    </div>
 
-    <!-- Edit Modal -->
-    <div class="modal fade" id="editModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">Edit Document</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <form id="editForm">
-                        <input type="hidden" id="editDocumentId" name="document_id">
-                        <div class="mb-3">
-                            <label class="form-label">Document Type <span class="text-danger">*</span></label>
-                            <select class="form-select" id="editDocType" name="document_type" required>
-                                <option value="Medical Certificate">Medical Certificate</option>
-                                <option value="Vaccination Certificate">Vaccination Certificate</option>
-                                <option value="Referral Letter">Referral Letter</option>
-                                <option value="Other">Other</option>
-                            </select>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Document Name <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" id="editDocName" name="document_name" required>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Description</label>
-                            <textarea class="form-control" id="editDescription" name="description" rows="2"></textarea>
-                        </div>
-                    </form>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-primary" id="updateDocBtn">
-                        <i class="bi bi-save"></i> Update
-                    </button>
-                </div>
+
+            <div
+                class="modal-body"
+                id="viewModalBody"
+            ></div>
+
+
+            <div class="modal-footer">
+
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    data-bs-dismiss="modal"
+                >
+                    Close
+                </button>
+
+                <button
+                    type="button"
+                    class="btn btn-primary"
+                    id="viewEditBtn"
+                >
+
+                    <i class="bi bi-pencil"></i>
+
+                    Edit
+
+                </button>
+
             </div>
+
         </div>
+
     </div>
 
-    <!-- Delete Modal -->
-    <div class="modal fade" id="deleteModal" tabindex="-1">
-        <div class="modal-dialog modal-sm">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">Confirm Delete</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <p>Are you sure you want to delete this document?</p>
-                    <p class="text-danger"><small>This action cannot be undone.</small></p>
-                    <p id="deleteDocName" class="fw-bold"></p>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-danger" id="confirmDeleteBtn">Delete</button>
-                </div>
+</div>
+
+
+<!--
+|--------------------------------------------------------------------------
+| EDIT MODAL
+|--------------------------------------------------------------------------
+-->
+
+<div
+    class="modal fade"
+    id="editModal"
+    tabindex="-1"
+>
+
+    <div class="modal-dialog">
+
+        <div class="modal-content">
+
+            <div class="modal-header">
+
+                <h5 class="modal-title">
+
+                    <i class="bi bi-pencil-square"></i>
+
+                    Edit Document
+
+                </h5>
+
+                <button
+                    type="button"
+                    class="btn-close"
+                    data-bs-dismiss="modal"
+                ></button>
+
             </div>
+
+
+            <div class="modal-body">
+
+                <form
+                    id="editForm"
+                    enctype="multipart/form-data"
+                >
+
+                    <input
+                        type="hidden"
+                        id="editDocumentId"
+                        name="document_id"
+                    >
+
+
+                    <div class="mb-3">
+
+                        <label class="form-label">
+
+                            Document Type
+
+                            <span class="text-danger">
+                                *
+                            </span>
+
+                        </label>
+
+                        <select
+                            class="form-select"
+                            id="editDocType"
+                            name="document_type"
+                            required
+                        >
+
+                            <option value="Medical Certificate">
+                                Medical Certificate
+                            </option>
+
+                            <option value="Vaccination Certificate">
+                                Vaccination Certificate
+                            </option>
+
+                            <option value="Referral Letter">
+                                Referral Letter
+                            </option>
+
+                            <option value="Other">
+                                Other
+                            </option>
+
+                        </select>
+
+                    </div>
+
+
+                    <div class="mb-3">
+
+                        <label class="form-label">
+
+                            Document Name
+
+                            <span class="text-danger">
+                                *
+                            </span>
+
+                        </label>
+
+                        <input
+                            type="text"
+                            class="form-control"
+                            id="editDocName"
+                            name="document_name"
+                            maxlength="255"
+                            required
+                        >
+
+                    </div>
+
+
+                    <div class="mb-3">
+
+                        <label class="form-label">
+                            Current File
+                        </label>
+
+                        <div
+                            class="current-file"
+                            id="currentFileDisplay"
+                        >
+                            No file information available.
+                        </div>
+
+                    </div>
+
+
+                    <div class="mb-3">
+
+                        <label class="form-label">
+
+                            Replace File
+
+                            <small
+                                class="text-muted fw-normal"
+                            >
+                                (Optional)
+                            </small>
+
+                        </label>
+
+                        <div
+                            class="file-upload-area"
+                            id="editFileUploadArea"
+                        >
+
+                            <i class="bi bi-cloud-arrow-up"></i>
+
+                            <p>
+                                Click or drag to upload a replacement
+                            </p>
+
+                            <p
+                                class="text-muted"
+                                style="font-size:11px;"
+                            >
+                                Leave empty to keep the current file.
+                                Max 10MB.
+                            </p>
+
+                            <div
+                                id="editSelectedFileName"
+                                class="file-name"
+                                style="display:none;"
+                            ></div>
+
+                            <input
+                                type="file"
+                                id="editFileInput"
+                                name="edit_document_file"
+                                style="display:none;"
+                            >
+
+                        </div>
+
+                    </div>
+
+                </form>
+
+            </div>
+
+
+            <div class="modal-footer">
+
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    data-bs-dismiss="modal"
+                >
+                    Cancel
+                </button>
+
+                <button
+                    type="button"
+                    class="btn btn-primary"
+                    id="updateDocBtn"
+                >
+
+                    <i class="bi bi-save"></i>
+
+                    Save Changes
+
+                </button>
+
+            </div>
+
         </div>
+
     </div>
 
-    <!-- Loading Overlay -->
-    <div class="loading-overlay" id="loadingOverlay">
-        <div class="spinner"></div>
+</div>
+
+
+<!--
+|--------------------------------------------------------------------------
+| DELETE MODAL
+|--------------------------------------------------------------------------
+-->
+
+<div
+    class="modal fade"
+    id="deleteModal"
+    tabindex="-1"
+>
+
+    <div class="modal-dialog modal-sm">
+
+        <div class="modal-content">
+
+            <div class="modal-header">
+
+                <h5 class="modal-title">
+
+                    <i class="bi bi-trash"></i>
+
+                    Confirm Delete
+
+                </h5>
+
+                <button
+                    type="button"
+                    class="btn-close"
+                    data-bs-dismiss="modal"
+                ></button>
+
+            </div>
+
+
+            <div class="modal-body">
+
+                <p>
+                    Are you sure you want to delete this document?
+                </p>
+
+                <p
+                    class="text-danger"
+                >
+                    <small>
+                        This action cannot be undone.
+                    </small>
+                </p>
+
+                <p
+                    id="deleteDocName"
+                    class="fw-bold"
+                ></p>
+
+            </div>
+
+
+            <div class="modal-footer">
+
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    data-bs-dismiss="modal"
+                >
+                    Cancel
+                </button>
+
+                <button
+                    type="button"
+                    class="btn btn-danger"
+                    id="confirmDeleteBtn"
+                >
+                    Delete
+                </button>
+
+            </div>
+
+        </div>
+
     </div>
 
-    <!-- Toast Container -->
-    <div class="toast-container-custom" id="toastContainer"></div>
+</div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
-    <script>
-    // Toast
-    function showToast(msg, sub = '', isError = false) {
-        const container = document.getElementById('toastContainer');
-        const toast = document.createElement('div');
-        toast.className = 'toast-custom' + (isError ? ' error' : '');
-        const icon = isError ? 'bi-exclamation-circle-fill' : 'bi-check-circle-fill';
-        toast.innerHTML = `
-            <span class="toast-icon"><i class="bi ${icon}"></i></span>
-            <div class="toast-msg">${msg} ${sub ? '<small>' + sub + '</small>' : ''}</div>
-        `;
-        container.appendChild(toast);
-        requestAnimationFrame(() => toast.classList.add('show'));
+<!-- LOADING -->
+
+<div
+    class="loading-overlay"
+    id="loadingOverlay"
+>
+
+    <div class="spinner"></div>
+
+</div>
+
+
+<!-- TOAST -->
+
+<div
+    class="toast-container-custom"
+    id="toastContainer"
+></div>
+
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+
+<script>
+
+/*
+|--------------------------------------------------------------------------
+| GLOBAL VARIABLES
+|--------------------------------------------------------------------------
+*/
+
+let currentPage = 1;
+let totalPages = 1;
+
+let currentViewId = null;
+let deleteId = null;
+
+
+/*
+|--------------------------------------------------------------------------
+| ELEMENTS
+|--------------------------------------------------------------------------
+*/
+
+const uploadModalElement =
+    document.getElementById('uploadModal');
+
+const viewModalElement =
+    document.getElementById('viewModal');
+
+const editModalElement =
+    document.getElementById('editModal');
+
+const deleteModalElement =
+    document.getElementById('deleteModal');
+
+const uploadModal =
+    new bootstrap.Modal(uploadModalElement);
+
+const viewModal =
+    new bootstrap.Modal(viewModalElement);
+
+const editModal =
+    new bootstrap.Modal(editModalElement);
+
+const deleteModal =
+    new bootstrap.Modal(deleteModalElement);
+
+
+/*
+|--------------------------------------------------------------------------
+| TOAST
+|--------------------------------------------------------------------------
+*/
+
+function showToast(
+    message,
+    subMessage = '',
+    isError = false
+) {
+
+    const container =
+        document.getElementById(
+            'toastContainer'
+        );
+
+    const toast =
+        document.createElement('div');
+
+    toast.className =
+        'toast-custom' +
+        (isError ? ' error' : '');
+
+    const icon =
+        isError
+            ? 'bi-exclamation-circle-fill'
+            : 'bi-check-circle-fill';
+
+    const iconSpan =
+        document.createElement('span');
+
+    iconSpan.className =
+        'toast-icon';
+
+    iconSpan.innerHTML =
+        `<i class="bi ${icon}"></i>`;
+
+    const messageDiv =
+        document.createElement('div');
+
+    messageDiv.className =
+        'toast-msg';
+
+    messageDiv.textContent =
+        message;
+
+    if (subMessage) {
+
+        const small =
+            document.createElement('small');
+
+        small.textContent =
+            subMessage;
+
+        messageDiv.appendChild(small);
+    }
+
+    toast.appendChild(iconSpan);
+    toast.appendChild(messageDiv);
+
+    container.appendChild(toast);
+
+    requestAnimationFrame(() => {
+        toast.classList.add('show');
+    });
+
+    setTimeout(() => {
+
+        toast.classList.remove('show');
+
         setTimeout(() => {
-            toast.classList.remove('show');
-            setTimeout(() => toast.remove(), 400);
-        }, 3500);
+            toast.remove();
+        }, 400);
+
+    }, 3500);
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| LOADING
+|--------------------------------------------------------------------------
+*/
+
+function showLoading() {
+
+    document
+        .getElementById('loadingOverlay')
+        .classList
+        .add('show');
+}
+
+function hideLoading() {
+
+    document
+        .getElementById('loadingOverlay')
+        .classList
+        .remove('show');
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| ESCAPE HTML
+|--------------------------------------------------------------------------
+*/
+
+function escapeHtml(value) {
+
+    if (value === null || value === undefined) {
+        return '';
     }
 
-    function showLoading() {
-        document.getElementById('loadingOverlay').classList.add('show');
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| FILE VALIDATION - FRONTEND
+|--------------------------------------------------------------------------
+*/
+
+const allowedExtensions = [
+    'pdf',
+    'doc',
+    'docx',
+    'xls',
+    'xlsx',
+    'jpg',
+    'jpeg',
+    'png',
+    'txt'
+];
+
+function validateClientFile(file) {
+
+    if (!file) {
+        return 'Please select a file.';
     }
 
-    function hideLoading() {
-        document.getElementById('loadingOverlay').classList.remove('show');
+    if (file.size <= 0) {
+        return 'The selected file is empty.';
     }
 
-    // File upload
-    const uploadArea = document.getElementById('fileUploadArea');
-    const fileInput = document.getElementById('fileInput');
+    if (file.size > 10 * 1024 * 1024) {
+        return 'File exceeds the 10MB limit.';
+    }
 
-    uploadArea.addEventListener('click', () => fileInput.click());
-    uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
-    uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
-    uploadArea.addEventListener('drop', (e) => {
-        e.preventDefault();
-        uploadArea.classList.remove('dragover');
-        if (e.dataTransfer.files.length) {
-            fileInput.files = e.dataTransfer.files;
-            handleFileSelect(e.dataTransfer.files[0]);
+    const parts =
+        file.name.split('.');
+
+    const extension =
+        parts.length > 1
+            ? parts.pop().toLowerCase()
+            : '';
+
+    if (!allowedExtensions.includes(extension)) {
+
+        return (
+            'File type not allowed. ' +
+            'Allowed: PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG, PNG, TXT.'
+        );
+    }
+
+    return null;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| UPLOAD FILE AREA
+|--------------------------------------------------------------------------
+*/
+
+const uploadArea =
+    document.getElementById(
+        'fileUploadArea'
+    );
+
+const fileInput =
+    document.getElementById(
+        'fileInput'
+    );
+
+
+uploadArea.addEventListener(
+    'click',
+    () => fileInput.click()
+);
+
+
+uploadArea.addEventListener(
+    'dragover',
+    function(event) {
+
+        event.preventDefault();
+
+        uploadArea.classList.add(
+            'dragover'
+        );
+    }
+);
+
+
+uploadArea.addEventListener(
+    'dragleave',
+    function() {
+
+        uploadArea.classList.remove(
+            'dragover'
+        );
+    }
+);
+
+
+uploadArea.addEventListener(
+    'drop',
+    function(event) {
+
+        event.preventDefault();
+
+        uploadArea.classList.remove(
+            'dragover'
+        );
+
+        if (
+            event.dataTransfer.files.length
+        ) {
+
+            const file =
+                event.dataTransfer.files[0];
+
+            const error =
+                validateClientFile(file);
+
+            if (error) {
+
+                showToast(
+                    'Invalid file',
+                    error,
+                    true
+                );
+
+                return;
+            }
+
+            fileInput.files =
+                event.dataTransfer.files;
+
+            showSelectedUploadFile(file);
         }
-    });
-    fileInput.addEventListener('change', function() {
-        if (this.files.length) handleFileSelect(this.files[0]);
-    });
-
-    function handleFileSelect(file) {
-        const display = document.getElementById('selectedFileName');
-        display.textContent = file.name + ' (' + (file.size / 1024 / 1024).toFixed(2) + ' MB)';
-        display.style.display = 'block';
     }
+);
 
-    // Upload Modal
-    function openUploadModal(documentType) {
-        const modal = new bootstrap.Modal(document.getElementById('uploadModal'));
-        document.getElementById('uploadForm').reset();
-        document.getElementById('selectedFileName').style.display = 'none';
-        document.getElementById('fileInput').value = '';
-        if (documentType) document.getElementById('docTypeSelect').value = documentType;
-        modal.show();
-    }
 
-    // Upload
-    document.getElementById('uploadBtn').addEventListener('click', function() {
-        const file = fileInput.files[0];
-        if (!file) { showToast('Error', 'Please select a file.', true); return; }
-        if (file.size > 10 * 1024 * 1024) { showToast('Error', 'File exceeds 10MB limit.', true); return; }
+fileInput.addEventListener(
+    'change',
+    function() {
 
-        const formData = new FormData(document.getElementById('uploadForm'));
-        formData.append('action', 'upload_document');
-
-        showLoading();
-        fetch(window.location.href, { method: 'POST', body: formData, headers: { 'X-Requested-With': 'XMLHttpRequest' } })
-        .then(r => r.json())
-        .then(data => {
-            hideLoading();
-            if (data.success) {
-                bootstrap.Modal.getInstance(document.getElementById('uploadModal')).hide();
-                showToast('Document uploaded successfully');
-                refreshDocuments();
-            } else {
-                showToast('Upload failed', data.error, true);
-            }
-        })
-        .catch(error => { hideLoading(); showToast('Error', error.message, true); });
-    });
-
-    // View Document
-    let currentViewId = null;
-
-    function viewDocument(id) {
-        currentViewId = id;
-        showLoading();
-        fetch(window.location.href + '?action=get_document&document_id=' + id, {
-            headers: { 'X-Requested-With': 'XMLHttpRequest' }
-        })
-        .then(r => r.json())
-        .then(data => {
-            hideLoading();
-            if (data.success) {
-                const d = data.document;
-                document.getElementById('viewModalBody').innerHTML = `
-                    <p><strong>Name:</strong> ${d.document_name}</p>
-                    <p><strong>Type:</strong> ${d.document_type}</p>
-                    <p><strong>File:</strong> ${d.file_name}</p>
-                    <p><strong>Size:</strong> ${(d.file_size / 1024 / 1024).toFixed(2)} MB</p>
-                    <p><strong>Uploaded By:</strong> ${d.uploaded_by_name || 'Unknown'}</p>
-                    <p><strong>Date:</strong> ${d.formatted_date}</p>
-                    <p><strong>Description:</strong> ${d.description || 'N/A'}</p>
-                    <div class="mt-3">
-                        <a href="${d.file_path}" target="_blank" class="btn btn-primary"><i class="bi bi-eye"></i> View</a>
-                        <a href="${d.file_path}" download class="btn btn-success"><i class="bi bi-download"></i> Download</a>
-                    </div>
-                `;
-                new bootstrap.Modal(document.getElementById('viewModal')).show();
-            } else {
-                showToast('Error', data.error, true);
-            }
-        })
-        .catch(error => { hideLoading(); showToast('Error', error.message, true); });
-    }
-
-    // Edit
-    document.getElementById('editDocBtn').addEventListener('click', function() {
-        bootstrap.Modal.getInstance(document.getElementById('viewModal')).hide();
-        showLoading();
-        fetch(window.location.href + '?action=get_document&document_id=' + currentViewId, {
-            headers: { 'X-Requested-With': 'XMLHttpRequest' }
-        })
-        .then(r => r.json())
-        .then(data => {
-            hideLoading();
-            if (data.success) {
-                const d = data.document;
-                document.getElementById('editDocumentId').value = d.document_id;
-                document.getElementById('editDocType').value = d.document_type;
-                document.getElementById('editDocName').value = d.document_name;
-                document.getElementById('editDescription').value = d.description || '';
-                new bootstrap.Modal(document.getElementById('editModal')).show();
-            } else {
-                showToast('Error', data.error, true);
-            }
-        })
-        .catch(error => { hideLoading(); showToast('Error', error.message, true); });
-    });
-
-    // Update
-    document.getElementById('updateDocBtn').addEventListener('click', function() {
-        const formData = new FormData(document.getElementById('editForm'));
-        formData.append('action', 'update_document');
-
-        showLoading();
-        fetch(window.location.href, { method: 'POST', body: formData, headers: { 'X-Requested-With': 'XMLHttpRequest' } })
-        .then(r => r.json())
-        .then(data => {
-            hideLoading();
-            if (data.success) {
-                bootstrap.Modal.getInstance(document.getElementById('editModal')).hide();
-                showToast('Document updated');
-                refreshDocuments();
-            } else {
-                showToast('Update failed', data.error, true);
-            }
-        })
-        .catch(error => { hideLoading(); showToast('Error', error.message, true); });
-    });
-
-    // Delete
-    let deleteId = null;
-
-    function deleteDocument(id) {
-        deleteId = id;
-        document.getElementById('deleteDocName').textContent = 'Document ID: ' + id;
-        new bootstrap.Modal(document.getElementById('deleteModal')).show();
-    }
-
-    document.getElementById('confirmDeleteBtn').addEventListener('click', function() {
-        if (!deleteId) return;
-        showLoading();
-        fetch(window.location.href + '?action=delete_document&document_id=' + deleteId, {
-            headers: { 'X-Requested-With': 'XMLHttpRequest' }
-        })
-        .then(r => r.json())
-        .then(data => {
-            hideLoading();
-            if (data.success) {
-                bootstrap.Modal.getInstance(document.getElementById('deleteModal')).hide();
-                showToast('Document deleted');
-                refreshDocuments();
-            } else {
-                showToast('Delete failed', data.error, true);
-            }
-        })
-        .catch(error => { hideLoading(); showToast('Error', error.message, true); });
-    });
-
-    // Download
-    function downloadDocument(id) {
-        fetch(window.location.href + '?action=get_document&document_id=' + id, {
-            headers: { 'X-Requested-With': 'XMLHttpRequest' }
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.success) {
-                const link = document.createElement('a');
-                link.href = data.document.file_path;
-                link.download = data.document.file_name;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                showToast('Download started');
-            } else {
-                showToast('Download failed', data.error, true);
-            }
-        })
-        .catch(error => showToast('Error', error.message, true));
-    }
-
-    // Refresh
-    let currentPage = 1;
-    let totalPages = 1;
-
-    function refreshDocuments() {
-        const search = document.getElementById('searchInput').value.trim();
-        const type = document.getElementById('typeFilter').value;
-
-        showLoading();
-        fetch(window.location.href + '?action=fetch_documents&search=' + encodeURIComponent(search) + '&document_type=' + encodeURIComponent(type) + '&page=' + currentPage, {
-            headers: { 'X-Requested-With': 'XMLHttpRequest' }
-        })
-        .then(r => r.json())
-        .then(data => {
-            hideLoading();
-            if (data.success) {
-                renderDocuments(data.documents);
-                renderPagination(data);
-                document.getElementById('recordCount').textContent = data.documents.length + ' of ' + data.total + ' documents';
-            }
-        })
-        .catch(error => { hideLoading(); showToast('Error', error.message, true); });
-    }
-
-    function renderDocuments(docs) {
-        const tbody = document.getElementById('documentsTableBody');
-        if (!docs || docs.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="5"><div class="no-records"><i class="bi bi-file-earmark-text"></i><p>No documents found.</p></div></td></tr>`;
+        if (!this.files.length) {
             return;
         }
-        let html = '';
-        docs.forEach(d => {
-            const badgeClass = d.document_type.toLowerCase().replace(/ /g, '-');
-            html += `
-                <tr>
-                    <td><span class="document-badge ${badgeClass}">${d.document_type}</span></td>
-                    <td>${d.document_name}</td>
-                    <td>${d.uploaded_by_name || 'Unknown'}</td>
-                    <td>${d.formatted_date}</td>
-                    <td>
-                        <div class="actions">
-                            <button class="action-btn view" onclick="viewDocument(${d.document_id})"><i class="bi bi-eye"></i></button>
-                            <button class="action-btn download" onclick="downloadDocument(${d.document_id})"><i class="bi bi-download"></i></button>
-                            <button class="action-btn delete" onclick="deleteDocument(${d.document_id})"><i class="bi bi-trash"></i></button>
-                        </div>
-                    </td>
-                </tr>
-            `;
-        });
-        tbody.innerHTML = html;
-    }
 
-    function renderPagination(data) {
-        const area = document.getElementById('paginationArea');
-        totalPages = data.pages || 1;
-        currentPage = data.current_page || 1;
-        let html = '';
-        html += `<a href="#" class="page-item ${currentPage <= 1 ? 'disabled' : ''}" onclick="goToPage(${currentPage - 1})"><i class="bi bi-chevron-left"></i></a>`;
-        for (let i = 1; i <= totalPages; i++) {
-            html += `<a href="#" class="page-item ${i === currentPage ? 'active' : ''}" onclick="goToPage(${i})">${i}</a>`;
+        const file =
+            this.files[0];
+
+        const error =
+            validateClientFile(file);
+
+        if (error) {
+
+            this.value = '';
+
+            showToast(
+                'Invalid file',
+                error,
+                true
+            );
+
+            return;
         }
-        html += `<a href="#" class="page-item ${currentPage >= totalPages ? 'disabled' : ''}" onclick="goToPage(${currentPage + 1})"><i class="bi bi-chevron-right"></i></a>`;
-        area.innerHTML = html;
+
+        showSelectedUploadFile(file);
+    }
+);
+
+
+function showSelectedUploadFile(file) {
+
+    const display =
+        document.getElementById(
+            'selectedFileName'
+        );
+
+    display.textContent =
+        file.name +
+        ' (' +
+        (file.size / 1024 / 1024).toFixed(2) +
+        ' MB)';
+
+    display.style.display =
+        'block';
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| EDIT FILE AREA
+|--------------------------------------------------------------------------
+*/
+
+const editFileUploadArea =
+    document.getElementById(
+        'editFileUploadArea'
+    );
+
+const editFileInput =
+    document.getElementById(
+        'editFileInput'
+    );
+
+
+editFileUploadArea.addEventListener(
+    'click',
+    () => editFileInput.click()
+);
+
+
+editFileUploadArea.addEventListener(
+    'dragover',
+    function(event) {
+
+        event.preventDefault();
+
+        editFileUploadArea.classList.add(
+            'dragover'
+        );
+    }
+);
+
+
+editFileUploadArea.addEventListener(
+    'dragleave',
+    function() {
+
+        editFileUploadArea.classList.remove(
+            'dragover'
+        );
+    }
+);
+
+
+editFileUploadArea.addEventListener(
+    'drop',
+    function(event) {
+
+        event.preventDefault();
+
+        editFileUploadArea.classList.remove(
+            'dragover'
+        );
+
+        if (
+            event.dataTransfer.files.length
+        ) {
+
+            const file =
+                event.dataTransfer.files[0];
+
+            const error =
+                validateClientFile(file);
+
+            if (error) {
+
+                showToast(
+                    'Invalid file',
+                    error,
+                    true
+                );
+
+                return;
+            }
+
+            editFileInput.files =
+                event.dataTransfer.files;
+
+            showSelectedEditFile(file);
+        }
+    }
+);
+
+
+editFileInput.addEventListener(
+    'change',
+    function() {
+
+        if (!this.files.length) {
+            return;
+        }
+
+        const file =
+            this.files[0];
+
+        const error =
+            validateClientFile(file);
+
+        if (error) {
+
+            this.value = '';
+
+            showToast(
+                'Invalid file',
+                error,
+                true
+            );
+
+            return;
+        }
+
+        showSelectedEditFile(file);
+    }
+);
+
+
+function showSelectedEditFile(file) {
+
+    const display =
+        document.getElementById(
+            'editSelectedFileName'
+        );
+
+    display.textContent =
+        'New file: ' +
+        file.name +
+        ' (' +
+        (file.size / 1024 / 1024).toFixed(2) +
+        ' MB)';
+
+    display.style.display =
+        'block';
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| OPEN UPLOAD MODAL
+|--------------------------------------------------------------------------
+*/
+
+function openUploadModal(
+    documentType = ''
+) {
+
+    document
+        .getElementById(
+            'uploadForm'
+        )
+        .reset();
+
+    document
+        .getElementById(
+            'selectedFileName'
+        )
+        .style.display = 'none';
+
+    document
+        .getElementById(
+            'fileInput'
+        )
+        .value = '';
+
+    if (documentType) {
+
+        document
+            .getElementById(
+                'docTypeSelect'
+            )
+            .value = documentType;
     }
 
-    function goToPage(page) {
-        if (page < 1 || page > totalPages) return;
-        currentPage = page;
-        refreshDocuments();
+    uploadModal.show();
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| UPLOAD DOCUMENT
+|--------------------------------------------------------------------------
+*/
+
+document
+    .getElementById('uploadBtn')
+    .addEventListener(
+        'click',
+        function() {
+
+            const form =
+                document.getElementById(
+                    'uploadForm'
+                );
+
+            if (!form.checkValidity()) {
+
+                form.reportValidity();
+
+                return;
+            }
+
+            const file =
+                fileInput.files[0];
+
+            const fileError =
+                validateClientFile(file);
+
+            if (fileError) {
+
+                showToast(
+                    'Upload failed',
+                    fileError,
+                    true
+                );
+
+                return;
+            }
+
+            const formData =
+                new FormData(form);
+
+            formData.append(
+                'action',
+                'upload_document'
+            );
+
+            showLoading();
+
+            fetch(
+                window.location.href,
+                {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-Requested-With':
+                            'XMLHttpRequest'
+                    }
+                }
+            )
+            .then(response => {
+
+                if (!response.ok) {
+                    throw new Error(
+                        'Server returned an error.'
+                    );
+                }
+
+                return response.json();
+            })
+            .then(data => {
+
+                hideLoading();
+
+                if (data.success) {
+
+                    uploadModal.hide();
+
+                    showToast(
+                        'Document uploaded successfully.'
+                    );
+
+                    currentPage = 1;
+
+                    refreshDocuments();
+
+                } else {
+
+                    showToast(
+                        'Upload failed',
+                        data.message ||
+                        data.error ||
+                        'Unable to upload document.',
+                        true
+                    );
+                }
+            })
+            .catch(error => {
+
+                hideLoading();
+
+                showToast(
+                    'Upload error',
+                    error.message,
+                    true
+                );
+            });
+        }
+    );
+
+
+/*
+|--------------------------------------------------------------------------
+| GET DOCUMENT
+|--------------------------------------------------------------------------
+*/
+
+async function getDocument(id) {
+
+    const response =
+        await fetch(
+            window.location.href +
+            '?action=get_document&document_id=' +
+            encodeURIComponent(id),
+            {
+                headers: {
+                    'X-Requested-With':
+                        'XMLHttpRequest'
+                }
+            }
+        );
+
+    if (!response.ok) {
+
+        throw new Error(
+            'Unable to communicate with the server.'
+        );
     }
 
-    // Search & Filter
-    let searchTimeout = null;
-    document.getElementById('searchInput').addEventListener('input', function() {
-        clearTimeout(searchTimeout);
-        searchTimeout = setTimeout(() => { currentPage = 1; refreshDocuments(); }, 500);
+    const data =
+        await response.json();
+
+    if (!data.success) {
+
+        throw new Error(
+            data.message ||
+            data.error ||
+            'Document could not be retrieved.'
+        );
+    }
+
+    return data.document;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| VIEW DOCUMENT
+|--------------------------------------------------------------------------
+*/
+
+function viewDocument(id) {
+
+    currentViewId = id;
+
+    showLoading();
+
+    getDocument(id)
+
+        .then(d => {
+
+            hideLoading();
+
+            const body =
+                document.getElementById(
+                    'viewModalBody'
+                );
+
+            const filePath =
+                escapeHtml(d.file_path);
+
+            const fileName =
+                escapeHtml(d.file_name);
+
+            body.innerHTML = `
+
+                <div class="detail-row">
+                    <div class="detail-label">
+                        Name
+                    </div>
+                    <div class="detail-value">
+                        ${escapeHtml(d.document_name)}
+                    </div>
+                </div>
+
+                <div class="detail-row">
+                    <div class="detail-label">
+                        Type
+                    </div>
+                    <div class="detail-value">
+                        ${escapeHtml(d.document_type)}
+                    </div>
+                </div>
+
+                <div class="detail-row">
+                    <div class="detail-label">
+                        File
+                    </div>
+                    <div class="detail-value">
+                        ${fileName}
+                    </div>
+                </div>
+
+                <div class="detail-row">
+                    <div class="detail-label">
+                        File Size
+                    </div>
+                    <div class="detail-value">
+                        ${escapeHtml(d.file_size_mb)} MB
+                    </div>
+                </div>
+
+                <div class="detail-row">
+                    <div class="detail-label">
+                        Uploaded By
+                    </div>
+                    <div class="detail-value">
+                        ${escapeHtml(d.uploaded_by_name)}
+                    </div>
+                </div>
+
+                <div class="detail-row">
+                    <div class="detail-label">
+                        Uploaded
+                    </div>
+                    <div class="detail-value">
+                        ${escapeHtml(d.formatted_date)}
+                    </div>
+                </div>
+
+                <div class="detail-row">
+                    <div class="detail-label">
+                        Last Updated
+                    </div>
+                    <div class="detail-value">
+                        ${escapeHtml(d.formatted_updated)}
+                    </div>
+                </div>
+
+                <div class="mt-4 d-flex gap-2 flex-wrap">
+
+                    <a
+                        href="${filePath}"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="btn btn-primary"
+                    >
+                        <i class="bi bi-eye"></i>
+                        Open File
+                    </a>
+
+                    <button
+                        type="button"
+                        class="btn btn-success"
+                        onclick="downloadDocument(${d.document_id})"
+                    >
+                        <i class="bi bi-download"></i>
+                        Download
+                    </button>
+
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        onclick="printDocument(${d.document_id})"
+                    >
+                        <i class="bi bi-printer"></i>
+                        Print
+                    </button>
+
+                </div>
+            `;
+
+            viewModal.show();
+
+        })
+        .catch(error => {
+
+            hideLoading();
+
+            showToast(
+                'Unable to load document',
+                error.message,
+                true
+            );
+        });
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| EDIT DOCUMENT
+|--------------------------------------------------------------------------
+*/
+
+function editDocument(id) {
+
+    showLoading();
+
+    getDocument(id)
+
+        .then(d => {
+
+            hideLoading();
+
+            document
+                .getElementById(
+                    'editDocumentId'
+                )
+                .value = d.document_id;
+
+            document
+                .getElementById(
+                    'editDocType'
+                )
+                .value = d.document_type;
+
+            document
+                .getElementById(
+                    'editDocName'
+                )
+                .value = d.document_name;
+
+            document
+                .getElementById(
+                    'currentFileDisplay'
+                )
+                .innerHTML = `
+
+                    <i class="bi bi-file-earmark"></i>
+
+                    <strong>
+                        ${escapeHtml(d.file_name)}
+                    </strong>
+
+                    <br>
+
+                    <small class="text-muted">
+                        ${escapeHtml(d.file_size_mb)}
+                        MB
+                    </small>
+
+                `;
+
+            document
+                .getElementById(
+                    'editFileInput'
+                )
+                .value = '';
+
+            document
+                .getElementById(
+                    'editSelectedFileName'
+                )
+                .style.display = 'none';
+
+            editModal.show();
+
+        })
+        .catch(error => {
+
+            hideLoading();
+
+            showToast(
+                'Unable to load document',
+                error.message,
+                true
+            );
+        });
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| EDIT BUTTON FROM VIEW MODAL
+|--------------------------------------------------------------------------
+*/
+
+document
+    .getElementById('viewEditBtn')
+    .addEventListener(
+        'click',
+        function() {
+
+            if (!currentViewId) {
+
+                showToast(
+                    'Error',
+                    'No document selected.',
+                    true
+                );
+
+                return;
+            }
+
+            viewModal.hide();
+
+            editDocument(
+                currentViewId
+            );
+        }
+    );
+
+
+/*
+|--------------------------------------------------------------------------
+| SAVE EDIT
+|--------------------------------------------------------------------------
+*/
+
+document
+    .getElementById('updateDocBtn')
+    .addEventListener(
+        'click',
+        function() {
+
+            const form =
+                document.getElementById(
+                    'editForm'
+                );
+
+            if (!form.checkValidity()) {
+
+                form.reportValidity();
+
+                return;
+            }
+
+            const documentId =
+                document.getElementById(
+                    'editDocumentId'
+                ).value;
+
+            if (!documentId) {
+
+                showToast(
+                    'Error',
+                    'Invalid document ID.',
+                    true
+                );
+
+                return;
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | OPTIONAL NEW FILE
+            |--------------------------------------------------------------------------
+            */
+
+            const replacementFile =
+                editFileInput.files[0];
+
+            if (replacementFile) {
+
+                const fileError =
+                    validateClientFile(
+                        replacementFile
+                    );
+
+                if (fileError) {
+
+                    showToast(
+                        'Invalid replacement file',
+                        fileError,
+                        true
+                    );
+
+                    return;
+                }
+            }
+
+            const formData =
+                new FormData(form);
+
+            formData.append(
+                'action',
+                'update_document'
+            );
+
+            showLoading();
+
+            fetch(
+                window.location.href,
+                {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-Requested-With':
+                            'XMLHttpRequest'
+                    }
+                }
+            )
+            .then(response => {
+
+                if (!response.ok) {
+
+                    throw new Error(
+                        'Server returned an error.'
+                    );
+                }
+
+                return response.json();
+            })
+            .then(data => {
+
+                hideLoading();
+
+                if (data.success) {
+
+                    editModal.hide();
+
+                    showToast(
+                        data.message ||
+                        'Document updated successfully.'
+                    );
+
+                    refreshDocuments();
+
+                } else {
+
+                    showToast(
+                        'Update failed',
+                        data.message ||
+                        data.error ||
+                        'Unable to update document.',
+                        true
+                    );
+                }
+            })
+            .catch(error => {
+
+                hideLoading();
+
+                showToast(
+                    'Update error',
+                    error.message,
+                    true
+                );
+            });
+        }
+    );
+
+
+/*
+|--------------------------------------------------------------------------
+| DOWNLOAD
+|--------------------------------------------------------------------------
+*/
+
+async function downloadDocument(id) {
+
+    try {
+
+        showLoading();
+
+        const d =
+            await getDocument(id);
+
+        hideLoading();
+
+        const link =
+            document.createElement('a');
+
+        link.href =
+            d.file_path;
+
+        link.download =
+            d.file_name;
+
+        link.target =
+            '_blank';
+
+        document.body.appendChild(link);
+
+        link.click();
+
+        document.body.removeChild(link);
+
+        showToast(
+            'Download started.'
+        );
+
+    } catch (error) {
+
+        hideLoading();
+
+        showToast(
+            'Download failed',
+            error.message,
+            true
+        );
+    }
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| PRINT
+|--------------------------------------------------------------------------
+*/
+
+async function printDocument(id) {
+
+    try {
+
+        showLoading();
+
+        const d =
+            await getDocument(id);
+
+        hideLoading();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Open printable document in a new browser tab.
+        |--------------------------------------------------------------------------
+        */
+
+        const printWindow =
+            window.open(
+                d.file_path,
+                '_blank'
+            );
+
+        if (!printWindow) {
+
+            showToast(
+                'Print blocked',
+                'Please allow pop-ups for this site.',
+                true
+            );
+
+            return;
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | PDF / browser-supported files
+        |
+        | The browser's native viewer handles printing.
+        |--------------------------------------------------------------------------
+        */
+
+        showToast(
+            'Document opened',
+            'Use the browser print option to print the form.'
+        );
+
+    } catch (error) {
+
+        hideLoading();
+
+        showToast(
+            'Print failed',
+            error.message,
+            true
+        );
+    }
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| DELETE DOCUMENT
+|--------------------------------------------------------------------------
+*/
+
+function deleteDocument(id) {
+
+    deleteId = id;
+
+    showLoading();
+
+    getDocument(id)
+
+        .then(d => {
+
+            hideLoading();
+
+            document
+                .getElementById(
+                    'deleteDocName'
+                )
+                .textContent =
+                d.document_name;
+
+            deleteModal.show();
+
+        })
+        .catch(error => {
+
+            hideLoading();
+
+            showToast(
+                'Unable to delete document',
+                error.message,
+                true
+            );
+        });
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| CONFIRM DELETE
+|--------------------------------------------------------------------------
+*/
+
+document
+    .getElementById(
+        'confirmDeleteBtn'
+    )
+    .addEventListener(
+        'click',
+        function() {
+
+            if (!deleteId) {
+
+                showToast(
+                    'Error',
+                    'No document selected.',
+                    true
+                );
+
+                return;
+            }
+
+            showLoading();
+
+            fetch(
+                window.location.href +
+                '?action=delete_document&document_id=' +
+                encodeURIComponent(deleteId),
+                {
+                    method: 'GET',
+                    headers: {
+                        'X-Requested-With':
+                            'XMLHttpRequest'
+                    }
+                }
+            )
+            .then(response => {
+
+                if (!response.ok) {
+
+                    throw new Error(
+                        'Server returned an error.'
+                    );
+                }
+
+                return response.json();
+            })
+            .then(data => {
+
+                hideLoading();
+
+                if (data.success) {
+
+                    deleteModal.hide();
+
+                    showToast(
+                        'Document deleted successfully.'
+                    );
+
+                    deleteId = null;
+
+                    refreshDocuments();
+
+                } else {
+
+                    showToast(
+                        'Delete failed',
+                        data.message ||
+                        data.error ||
+                        'Unable to delete document.',
+                        true
+                    );
+                }
+            })
+            .catch(error => {
+
+                hideLoading();
+
+                showToast(
+                    'Delete error',
+                    error.message,
+                    true
+                );
+            });
+        }
+    );
+
+
+/*
+|--------------------------------------------------------------------------
+| REFRESH DOCUMENTS
+|--------------------------------------------------------------------------
+*/
+
+function refreshDocuments() {
+
+    const search =
+        document
+            .getElementById(
+                'searchInput'
+            )
+            .value
+            .trim();
+
+    const type =
+        document
+            .getElementById(
+                'typeFilter'
+            )
+            .value;
+
+    showLoading();
+
+    const url =
+        window.location.href +
+        '?action=fetch_documents' +
+        '&search=' +
+        encodeURIComponent(search) +
+        '&document_type=' +
+        encodeURIComponent(type) +
+        '&page=' +
+        encodeURIComponent(currentPage);
+
+    fetch(
+        url,
+        {
+            headers: {
+                'X-Requested-With':
+                    'XMLHttpRequest'
+            }
+        }
+    )
+    .then(response => {
+
+        if (!response.ok) {
+
+            throw new Error(
+                'Unable to load documents.'
+            );
+        }
+
+        return response.json();
+    })
+    .then(data => {
+
+        hideLoading();
+
+        if (data.success) {
+
+            renderDocuments(
+                data.documents || []
+            );
+
+            renderPagination(
+                data
+            );
+
+            document
+                .getElementById(
+                    'recordCount'
+                )
+                .textContent =
+                (
+                    data.documents
+                        ? data.documents.length
+                        : 0
+                ) +
+                ' of ' +
+                data.total +
+                ' documents';
+
+        } else {
+
+            showToast(
+                'Unable to load documents',
+                data.message ||
+                data.error ||
+                'Unknown error.',
+                true
+            );
+        }
+    })
+    .catch(error => {
+
+        hideLoading();
+
+        showToast(
+            'Error',
+            error.message,
+            true
+        );
     });
-    document.getElementById('typeFilter').addEventListener('change', function() { currentPage = 1; refreshDocuments(); });
+}
 
-    // Auto-refresh
-    setInterval(() => { if (!document.hidden) refreshDocuments(); }, 30000);
-    document.addEventListener('visibilitychange', function() { if (!document.hidden) refreshDocuments(); });
 
-    // Init
+/*
+|--------------------------------------------------------------------------
+| RENDER DOCUMENT TABLE
+|--------------------------------------------------------------------------
+*/
+
+function renderDocuments(docs) {
+
+    const tbody =
+        document.getElementById(
+            'documentsTableBody'
+        );
+
+    if (!docs || docs.length === 0) {
+
+        tbody.innerHTML = `
+
+            <tr>
+
+                <td colspan="5">
+
+                    <div class="no-records">
+
+                        <i
+                            class="bi bi-file-earmark-text"
+                        ></i>
+
+                        <p>
+                            No documents found.
+                        </p>
+
+                    </div>
+
+                </td>
+
+            </tr>
+
+        `;
+
+        return;
+    }
+
+    let html = '';
+
+    docs.forEach(d => {
+
+        let badgeClass =
+            String(
+                d.document_type || 'Other'
+            )
+            .toLowerCase()
+            .replace(/ /g, '-');
+
+        html += `
+
+            <tr>
+
+                <td>
+
+                    <span
+                        class="document-badge ${escapeHtml(badgeClass)}"
+                    >
+                        ${escapeHtml(
+                            d.document_type
+                        )}
+                    </span>
+
+                </td>
+
+                <td>
+                    ${escapeHtml(
+                        d.document_name
+                    )}
+                </td>
+
+                <td>
+                    ${escapeHtml(
+                        d.uploaded_by_name ||
+                        'Unknown'
+                    )}
+                </td>
+
+                <td>
+                    ${escapeHtml(
+                        d.formatted_date
+                    )}
+                </td>
+
+                <td>
+
+                    <div class="actions">
+
+                        <button
+                            type="button"
+                            class="action-btn view"
+                            onclick="viewDocument(${Number(d.document_id)})"
+                            title="View"
+                        >
+                            <i class="bi bi-eye"></i>
+                        </button>
+
+                        <button
+                            type="button"
+                            class="action-btn edit"
+                            onclick="editDocument(${Number(d.document_id)})"
+                            title="Edit"
+                        >
+                            <i class="bi bi-pencil"></i>
+                        </button>
+
+                        <button
+                            type="button"
+                            class="action-btn print"
+                            onclick="printDocument(${Number(d.document_id)})"
+                            title="Print"
+                        >
+                            <i class="bi bi-printer"></i>
+                        </button>
+
+                        <button
+                            type="button"
+                            class="action-btn download"
+                            onclick="downloadDocument(${Number(d.document_id)})"
+                            title="Download"
+                        >
+                            <i class="bi bi-download"></i>
+                        </button>
+
+                        <button
+                            type="button"
+                            class="action-btn delete"
+                            onclick="deleteDocument(${Number(d.document_id)})"
+                            title="Delete"
+                        >
+                            <i class="bi bi-trash"></i>
+                        </button>
+
+                    </div>
+
+                </td>
+
+            </tr>
+
+        `;
+    });
+
+    tbody.innerHTML = html;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| PAGINATION
+|--------------------------------------------------------------------------
+*/
+
+function renderPagination(data) {
+
+    const area =
+        document.getElementById(
+            'paginationArea'
+        );
+
+    totalPages =
+        Number(data.pages) || 1;
+
+    currentPage =
+        Number(data.current_page) || 1;
+
+    let html = '';
+
+    /*
+    |--------------------------------------------------------------------------
+    | PREVIOUS
+    |--------------------------------------------------------------------------
+    */
+
+    html += `
+
+        <a
+            href="#"
+            class="page-item ${
+                currentPage <= 1
+                    ? 'disabled'
+                    : ''
+            }"
+            onclick="
+                event.preventDefault();
+                goToPage(${currentPage - 1});
+            "
+        >
+            <i class="bi bi-chevron-left"></i>
+        </a>
+
+    `;
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | PAGE NUMBERS
+    |--------------------------------------------------------------------------
+    */
+
+    for (
+        let i = 1;
+        i <= totalPages;
+        i++
+    ) {
+
+        html += `
+
+            <a
+                href="#"
+                class="page-item ${
+                    i === currentPage
+                        ? 'active'
+                        : ''
+                }"
+                onclick="
+                    event.preventDefault();
+                    goToPage(${i});
+                "
+            >
+                ${i}
+            </a>
+
+        `;
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | NEXT
+    |--------------------------------------------------------------------------
+    */
+
+    html += `
+
+        <a
+            href="#"
+            class="page-item ${
+                currentPage >= totalPages
+                    ? 'disabled'
+                    : ''
+            }"
+            onclick="
+                event.preventDefault();
+                goToPage(${currentPage + 1});
+            "
+        >
+            <i class="bi bi-chevron-right"></i>
+        </a>
+
+    `;
+
+    area.innerHTML = html;
+}
+
+
+function goToPage(page) {
+
+    if (
+        page < 1 ||
+        page > totalPages
+    ) {
+        return;
+    }
+
+    currentPage = page;
+
     refreshDocuments();
-    </script>
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| SEARCH
+|--------------------------------------------------------------------------
+*/
+
+let searchTimeout = null;
+
+document
+    .getElementById(
+        'searchInput'
+    )
+    .addEventListener(
+        'input',
+        function() {
+
+            clearTimeout(
+                searchTimeout
+            );
+
+            searchTimeout =
+                setTimeout(
+                    function() {
+
+                        currentPage = 1;
+
+                        refreshDocuments();
+
+                    },
+                    400
+                );
+        }
+    );
+
+
+/*
+|--------------------------------------------------------------------------
+| FILTER
+|--------------------------------------------------------------------------
+*/
+
+document
+    .getElementById(
+        'typeFilter'
+    )
+    .addEventListener(
+        'change',
+        function() {
+
+            currentPage = 1;
+
+            refreshDocuments();
+        }
+    );
+
+
+/*
+|--------------------------------------------------------------------------
+| RESET EDIT MODAL AFTER CLOSE
+|--------------------------------------------------------------------------
+*/
+
+editModalElement.addEventListener(
+    'hidden.bs.modal',
+    function() {
+
+        document
+            .getElementById(
+                'editForm'
+            )
+            .reset();
+
+        document
+            .getElementById(
+                'editDocumentId'
+            )
+            .value = '';
+
+        document
+            .getElementById(
+                'currentFileDisplay'
+            )
+            .textContent =
+            'No file information available.';
+
+        document
+            .getElementById(
+                'editSelectedFileName'
+            )
+            .style.display = 'none';
+
+        editFileInput.value = '';
+    }
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| RESET UPLOAD MODAL AFTER CLOSE
+|--------------------------------------------------------------------------
+*/
+
+uploadModalElement.addEventListener(
+    'hidden.bs.modal',
+    function() {
+
+        document
+            .getElementById(
+                'uploadForm'
+            )
+            .reset();
+
+        document
+            .getElementById(
+                'selectedFileName'
+            )
+            .style.display = 'none';
+
+        fileInput.value = '';
+    }
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| AUTO REFRESH
+|--------------------------------------------------------------------------
+*/
+
+setInterval(
+    function() {
+
+        if (!document.hidden) {
+            refreshDocuments();
+        }
+
+    },
+    30000
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| REFRESH WHEN TAB BECOMES VISIBLE
+|--------------------------------------------------------------------------
+*/
+
+document.addEventListener(
+    'visibilitychange',
+    function() {
+
+        if (!document.hidden) {
+            refreshDocuments();
+        }
+    }
+);
+
+
+/*
+|--------------------------------------------------------------------------
+| INITIAL LOAD
+|--------------------------------------------------------------------------
+*/
+
+refreshDocuments();
+
+</script>
+
 </body>
+
 </html>

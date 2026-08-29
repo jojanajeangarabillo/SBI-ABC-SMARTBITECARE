@@ -3,6 +3,13 @@ session_start();
 require_once 'sources/db_connect.php';
 
 // ============================================
+// HTML ESCAPE HELPER
+// ============================================
+function h($value) {
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+}
+
+// ============================================
 // AUDIT LOG FUNCTION
 // ============================================
 function addAuditLog($conn, $user_id, $action, $module = 'Inventory Categories') {
@@ -31,7 +38,6 @@ function addAuditLog($conn, $user_id, $action, $module = 'Inventory Categories')
     return false;
 }
 
-// Check if user is logged in and is Inventory Officer (role_id = 5) or Super Admin (role_id = 1)
 if (
     !isset($_SESSION['user_id']) ||
     !isset($_SESSION['role_id']) ||
@@ -41,6 +47,52 @@ if (
     exit();
 }
 
+// ============================================
+// GET LOGGED-IN USER INFORMATION
+// ============================================
+
+$user_id = isset($_SESSION['user_id']) ? (int)$_SESSION['user_id'] : 0;
+
+$username = 'Inventory Officer';
+$branch_name = 'Unknown Branch';
+
+if ($user_id > 0) {
+
+    $user_sql = "
+        SELECT 
+            u.username,
+            u.branch_id,
+            b.branch_name
+        FROM users AS u
+        LEFT JOIN branches AS b
+            ON u.branch_id = b.branch_id
+        WHERE u.user_id = ?
+        LIMIT 1
+    ";
+
+    $user_stmt = $conn->prepare($user_sql);
+
+    if ($user_stmt) {
+
+        $user_stmt->bind_param("i", $user_id);
+        $user_stmt->execute();
+
+        $user_result = $user_stmt->get_result();
+
+        if ($user_row = $user_result->fetch_assoc()) {
+
+            $username = !empty($user_row['username'])
+                ? $user_row['username']
+                : 'Inventory Officer';
+
+            $branch_name = !empty($user_row['branch_name'])
+                ? $user_row['branch_name']
+                : 'Unknown Branch';
+        }
+
+        $user_stmt->close();
+    }
+}
 // ============================================
 // HANDLE CATEGORY CRUD OPERATIONS
 // ============================================
@@ -445,6 +497,12 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             color: var(--primary);
             margin: 0;
         }
+        .topbar h3 small{
+            font-size:15px;
+            font-weight:400;
+            color:#6c757d;
+            margin-left:10px;
+}
 
         .profile {
             font-weight: 600;
@@ -774,9 +832,13 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
 
 <!-- ========== MAIN CONTENT ========== -->
 <div class="main">
-    <div class="topbar">
-        <h3>Categories & Units</h3>
-        <div class="profile">INVENTORY </div>
+      <div class="topbar">
+        <h3>Categories and Units<small><?php echo h($branch_name); ?></small></h3>
+        <div class="profile">
+            <i class="bi bi-person-circle"></i>
+            <?php echo h($username); ?>
+            <span style="font-size:12px;color:#adb5bd;font-weight:400;margin-left:4px;">| Inventory Officer</span>
+        </div>
     </div>
 
     <div class="page-body">

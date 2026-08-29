@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Aug 24, 2026 at 07:47 PM
+-- Generation Time: Aug 29, 2026 at 02:18 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -528,7 +528,23 @@ INSERT INTO `audit_logs` (`log_id`, `user_id`, `branch_id`, `action`, `module`, 
 (431, 16, 'SBI-002', 'Updated patient record: Ean Abilo (Case: 26-0021)', 'Patient Record', '2026-08-24 16:39:06'),
 (432, 16, 'SBI-002', 'Updated patient record: Jean Lacerna (Case: 26-0018)', 'Patient Record', '2026-08-24 17:10:55'),
 (433, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-08-24 17:29:14'),
-(434, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-08-24 17:42:07');
+(434, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-08-24 17:42:07'),
+(435, 8, 'SBI-002', 'Login Success: User \'Shane Cacho\' - Role: Administrative Staff, Branch: Cainta Branch', 'Login System', '2026-08-28 03:03:36'),
+(436, 8, 'SBI-002', 'Login Success: User \'Shane Cacho\' - Role: Administrative Staff, Branch: Cainta Branch', 'Login System', '2026-08-28 03:52:54'),
+(437, 8, 'SBI-002', 'Logout: User \'Shane Cacho\' (Role: Administrative Staff) (IP: ::1)', 'Login System', '2026-08-28 04:28:09'),
+(438, 11, 'SBI-002', 'Login Success: User \'Jean Montero\' - Role: Inventory Officer, Branch: Cainta Branch', 'Login System', '2026-08-28 04:28:30'),
+(439, 11, 'SBI-002', 'Added new inventory category: Vaccine (ID: 6) with frequency: Weekly', 'Inventory Categories', '2026-08-29 04:29:33'),
+(440, 11, 'SBI-002', 'Added new unit: Capsule (ID: 8)', 'Inventory Categories', '2026-08-29 04:30:41'),
+(441, 11, 'SBI-002', 'Deleted unit: Capsule (ID: 8)', 'Inventory Categories', '2026-08-29 04:31:08'),
+(442, 11, 'SBI-002', 'Added new inventory category: Piece (ID: 7) with frequency: Monthly', 'Inventory Categories', '2026-08-29 05:26:47'),
+(443, 11, 'SBI-002', 'Deleted inventory category: Piece (ID: 7)', 'Inventory Categories', '2026-08-29 05:27:06'),
+(444, 11, 'SBI-002', 'Added new unit: Piece (ID: 9)', 'Inventory Categories', '2026-08-29 05:27:13'),
+(445, 11, 'SBI-002', 'Added inventory item: Scale (ID: 6)', 'Inventory Items', '2026-08-29 05:27:31'),
+(446, 11, 'SBI-002', 'Logout: User \'Jean Montero\' (Role: Inventory Officer) (IP: ::1)', 'Login System', '2026-08-29 06:45:04'),
+(447, 11, 'SBI-002', 'Login Success: User \'Jean Montero\' - Role: Inventory Officer, Branch: Cainta Branch', 'Login System', '2026-08-29 06:45:40'),
+(448, 11, 'SBI-002', 'Added inventory item: CSF Forms (ID: 7)', 'Inventory Items', '2026-08-29 12:12:18'),
+(449, 11, 'SBI-002', 'Updated inventory item: ATS (Anti-Tetanus Serum) (ID: 3) - No field changes', 'Inventory Items', '2026-08-29 12:17:03'),
+(450, 11, 'SBI-002', 'Updated inventory item: ATS (Anti-Tetanus Serum) (ID: 3) - minimum stock changed', 'Inventory Items', '2026-08-29 12:17:09');
 
 -- --------------------------------------------------------
 
@@ -593,8 +609,9 @@ CREATE TABLE `inventory_categories` (
 INSERT INTO `inventory_categories` (`category_id`, `category_name`, `monitoring_frequency`) VALUES
 (1, 'Appliances/Electronics', 'Monthly'),
 (2, 'Medical Supplies', 'Daily'),
-(3, 'Logbook/Forms', 'Weekly'),
-(4, 'Office Supplies', 'Weekly');
+(3, 'Forms', 'Weekly'),
+(4, 'Office Supplies', 'Weekly'),
+(6, 'Vaccine', 'Weekly');
 
 -- --------------------------------------------------------
 
@@ -617,10 +634,12 @@ CREATE TABLE `inventory_items` (
 --
 
 INSERT INTO `inventory_items` (`item_id`, `category_id`, `unit_id`, `item_name`, `minimum_stock`, `description`, `is_predictable`) VALUES
-(2, 2, 4, 'ERIG (Equine Rabies Immunoglobulin)', 5, 'Equine Rabies Immunoglobulin for rabies post-exposure prophylaxis', 1),
-(3, 2, 5, 'ATS (Anti-Tetanus Serum)', 10, 'Anti-Tetanus Serum for tetanus prophylaxis', 1),
-(4, 2, 6, 'TT (Tetanus Toxoid)', 20, 'Tetanus Toxoid vaccine for tetanus prevention', 1),
-(5, 2, 6, 'Rabies Vaccine', 30, 'Rabies vaccine for post-exposure prophylaxis', 1);
+(2, 2, 5, 'ERIG (Equine Rabies Immunoglobulin)', 5, 'Equine Rabies Immunoglobulin for rabies post-exposure prophylaxis', 1),
+(3, 2, 5, 'ATS (Anti-Tetanus Serum)', 20, 'Anti-Tetanus Serum for tetanus prophylaxis', 1),
+(4, 2, 7, 'TT (Tetanus Toxoid)', 20, 'Tetanus Toxoid vaccine for tetanus prevention', 1),
+(5, 2, 5, 'Speeda ', 30, 'Anti-Rabies Vaccine ', 1),
+(6, 1, 9, 'Scale', 1, 'Weighing Scale', 1),
+(7, 3, 1, 'CSF Forms', 20, 'from antipolo', 1);
 
 -- --------------------------------------------------------
 
@@ -631,6 +650,8 @@ INSERT INTO `inventory_items` (`item_id`, `category_id`, `unit_id`, `item_name`,
 CREATE TABLE `inventory_stocks` (
   `stock_id` int(11) NOT NULL,
   `item_id` int(11) NOT NULL,
+  `batch_lot_no` varchar(100) DEFAULT NULL,
+  `manufacturing_date` date DEFAULT NULL,
   `branch_id` varchar(10) NOT NULL,
   `quantity_available` int(11) NOT NULL DEFAULT 0,
   `expiration_date` date DEFAULT NULL,
@@ -641,23 +662,29 @@ CREATE TABLE `inventory_stocks` (
 -- Dumping data for table `inventory_stocks`
 --
 
-INSERT INTO `inventory_stocks` (`stock_id`, `item_id`, `branch_id`, `quantity_available`, `expiration_date`, `last_updated`) VALUES
-(1, 2, 'SBI-002', 9, '2027-07-11', '2026-08-24 16:31:56'),
-(2, 3, 'SBI-002', 19, '2028-01-11', '2026-08-24 16:31:56'),
-(3, 4, 'SBI-002', 46, '2028-07-11', '2026-08-24 16:22:45'),
-(4, 5, 'SBI-002', 96, '2027-07-11', '2026-08-24 16:13:01'),
-(5, 2, 'SBI-003', 15, '2027-07-11', '2026-07-11 12:16:00'),
-(6, 3, 'SBI-003', 25, '2028-01-11', '2026-07-11 12:16:00'),
-(7, 4, 'SBI-003', 40, '2028-07-11', '2026-07-11 12:16:00'),
-(8, 5, 'SBI-003', 80, '2027-07-11', '2026-07-11 12:16:00'),
-(9, 2, 'SBI-001', 25, '2027-07-11', '2026-07-11 12:16:00'),
-(10, 3, 'SBI-001', 35, '2028-01-11', '2026-07-11 12:16:00'),
-(11, 4, 'SBI-001', 60, '2028-07-11', '2026-07-11 12:16:00'),
-(12, 5, 'SBI-001', 120, '2027-07-11', '2026-07-11 12:16:00'),
-(13, 2, 'SBI-004', 10, '2027-07-11', '2026-07-11 12:16:00'),
-(14, 3, 'SBI-004', 20, '2028-01-11', '2026-07-11 12:16:00'),
-(15, 4, 'SBI-004', 30, '2028-07-11', '2026-07-11 12:16:00'),
-(16, 5, 'SBI-004', 60, '2027-07-11', '2026-07-11 12:16:00');
+INSERT INTO `inventory_stocks` (`stock_id`, `item_id`, `batch_lot_no`, `manufacturing_date`, `branch_id`, `quantity_available`, `expiration_date`, `last_updated`) VALUES
+(1, 2, NULL, NULL, 'SBI-002', 10, '2027-07-11', '2026-08-29 04:27:30'),
+(2, 3, NULL, NULL, 'SBI-002', 1, '2028-01-11', '2026-08-29 11:49:43'),
+(3, 4, NULL, NULL, 'SBI-002', 1, '2028-07-11', '2026-08-29 11:59:11'),
+(4, 5, NULL, NULL, 'SBI-002', 96, '2027-07-11', '2026-08-24 16:13:01'),
+(5, 2, NULL, NULL, 'SBI-003', 15, '2027-07-11', '2026-07-11 12:16:00'),
+(6, 3, NULL, NULL, 'SBI-003', 25, '2028-01-11', '2026-07-11 12:16:00'),
+(7, 4, NULL, NULL, 'SBI-003', 40, '2028-07-11', '2026-07-11 12:16:00'),
+(8, 5, NULL, NULL, 'SBI-003', 80, '2027-07-11', '2026-07-11 12:16:00'),
+(9, 2, NULL, NULL, 'SBI-001', 25, '2027-07-11', '2026-07-11 12:16:00'),
+(10, 3, NULL, NULL, 'SBI-001', 35, '2028-01-11', '2026-07-11 12:16:00'),
+(11, 4, NULL, NULL, 'SBI-001', 60, '2028-07-11', '2026-07-11 12:16:00'),
+(12, 5, NULL, NULL, 'SBI-001', 120, '2027-07-11', '2026-07-11 12:16:00'),
+(13, 2, NULL, NULL, 'SBI-004', 10, '2027-07-11', '2026-07-11 12:16:00'),
+(14, 3, NULL, NULL, 'SBI-004', 20, '2028-01-11', '2026-07-11 12:16:00'),
+(15, 4, NULL, NULL, 'SBI-004', 30, '2028-07-11', '2026-07-11 12:16:00'),
+(16, 5, NULL, NULL, 'SBI-004', 60, '2027-07-11', '2026-07-11 12:16:00'),
+(17, 5, '26-022489', '2026-08-01', 'SBI-002', 60, '2026-11-30', '2026-08-29 01:42:45'),
+(18, 4, '26-022489', '2026-07-18', 'SBI-002', 0, '2027-02-05', '2026-08-29 11:59:10'),
+(19, 6, NULL, NULL, 'SBI-002', 1, NULL, '2026-08-29 05:28:45'),
+(20, 2, '26-02248', '2026-05-09', 'SBI-002', 10, '2026-08-31', '2026-08-29 05:40:44'),
+(21, 4, '65685', '2025-02-10', 'SBI-002', 10, '2028-08-07', '2026-08-29 11:50:48'),
+(22, 7, NULL, NULL, 'SBI-002', 20, NULL, '2026-08-29 12:13:02');
 
 -- --------------------------------------------------------
 
@@ -720,15 +747,12 @@ INSERT INTO `inventory_usage_history` (`usage_id`, `item_id`, `branch_id`, `usag
 CREATE TABLE `medical_documents` (
   `document_id` int(11) NOT NULL,
   `branch_id` varchar(10) NOT NULL,
-  `case_id` int(11) DEFAULT NULL,
-  `patient_id` int(11) DEFAULT NULL,
   `document_type` enum('Medical Certificate','Vaccination Certificate','Referral Letter','Other') NOT NULL,
   `document_name` varchar(255) NOT NULL,
   `file_name` varchar(255) NOT NULL,
   `file_path` varchar(500) NOT NULL,
   `file_type` varchar(100) DEFAULT NULL,
   `file_size` int(11) DEFAULT NULL,
-  `description` text DEFAULT NULL,
   `uploaded_by` int(11) NOT NULL,
   `uploaded_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NULL DEFAULT NULL ON UPDATE current_timestamp(),
@@ -739,10 +763,10 @@ CREATE TABLE `medical_documents` (
 -- Dumping data for table `medical_documents`
 --
 
-INSERT INTO `medical_documents` (`document_id`, `branch_id`, `case_id`, `patient_id`, `document_type`, `document_name`, `file_name`, `file_path`, `file_type`, `file_size`, `description`, `uploaded_by`, `uploaded_at`, `updated_at`, `status`) VALUES
-(1, 'SBI-002', NULL, NULL, 'Medical Certificate', 'Group 1- Chat\'s Eatery', 'Group 1- Chat\'s Eatery.pdf', 'uploads/documents/1783483810_Group1-ChatsEatery.pdf', 'application/pdf', 530386, 'eme', 8, '2026-07-08 04:10:10', '2026-07-08 04:10:53', 'Active'),
-(2, 'SBI-002', NULL, NULL, 'Referral Letter', 'dd', 'MedCert-Cainta.pdf', 'uploads/documents/1783483920_MedCert-Cainta.pdf', 'application/pdf', 136030, '', 8, '2026-07-08 04:12:00', NULL, 'Active'),
-(3, 'SBI-002', 13, 16, 'Medical Certificate', 'Medical Certificate_ddd_2026-07-09', 'Medical Certificate_ddd_2026-07-09.pdf', 'documents/Medical Certificate_ddd_2026-07-09.pdf', NULL, NULL, NULL, 9, '2026-07-09 14:34:53', NULL, 'Active');
+INSERT INTO `medical_documents` (`document_id`, `branch_id`, `document_type`, `document_name`, `file_name`, `file_path`, `file_type`, `file_size`, `uploaded_by`, `uploaded_at`, `updated_at`, `status`) VALUES
+(4, 'SBI-002', 'Medical Certificate', 'Medical Certificate 2026', 'medcert.pdf', 'uploads/documents/1787888609_12b8d1e66c28a11f_medcert.pdf', 'application/pdf', 24783, 8, '2026-08-28 03:43:29', '2026-08-28 04:20:38', 'Active'),
+(5, 'SBI-002', 'Vaccination Certificate', 'Vaccination Certificate', 'vaccinon_cert.pdf', 'uploads/documents/vaccinon_cert_6a910c7654bd91.46268856.pdf', 'application/pdf', 1220061, 8, '2026-08-28 04:20:06', NULL, 'Active'),
+(6, 'SBI-002', 'Referral Letter', 'Referral Letter for San Lazaro Hospital', 'refferal_Letter.pdf', 'uploads/documents/refferal_Letter_6a910ce545ace6.24695694.pdf', 'application/pdf', 1220130, 8, '2026-08-28 04:21:17', '2026-08-28 04:21:57', 'Active');
 
 -- --------------------------------------------------------
 
@@ -756,6 +780,7 @@ CREATE TABLE `notifications` (
   `title` varchar(255) DEFAULT NULL,
   `message` text DEFAULT NULL,
   `notification_type` varchar(100) DEFAULT NULL,
+  `source_key` varchar(150) DEFAULT NULL,
   `is_read` tinyint(1) DEFAULT 0,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -764,42 +789,81 @@ CREATE TABLE `notifications` (
 -- Dumping data for table `notifications`
 --
 
-INSERT INTO `notifications` (`notification_id`, `user_id`, `title`, `message`, `notification_type`, `is_read`, `created_at`) VALUES
-(1, 8, 'Patient record saved', 'Case 26-0001 for Shane Cacho was saved.', 'admin_staff_patient_record', 0, '2026-07-06 11:52:40'),
-(2, 8, 'Patient record saved', 'Case 26-0002 for Ken Allen Rosales was saved.', 'admin_staff_patient_record', 0, '2026-07-06 12:09:16'),
-(3, 8, 'Patient record saved', 'Case 26-0003 for Ken Allen Rosales was saved.', 'admin_staff_patient_record', 0, '2026-07-06 12:15:51'),
-(4, 8, 'Patient record deleted', 'Case 26-0001 for Shane Cacho was deleted.', 'admin_staff_patient_record', 0, '2026-07-06 12:20:33'),
-(5, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ela Ketcho (ID: P0075)\nCase ID: C0069\nDate: August 24, 2026 16:39:37\n\nVaccines Administered:\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Doses: 1', 'vaccination', 0, '2026-08-24 14:39:37'),
-(6, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ela Ketcho at Cainta Branch.\nTotal vaccines administered: 1\nDate: August 24, 2026 16:39:37', 'vaccination', 1, '2026-08-24 14:39:37'),
-(7, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ela Ketcho (ID: P0075)\nCase ID: C0069\nDate: August 24, 2026 16:40:33\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D3 (Completed)\n\nTotal Doses: 1', 'vaccination', 0, '2026-08-24 14:40:33'),
-(8, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ela Ketcho at Cainta Branch.\nTotal vaccines administered: 1\nDate: August 24, 2026 16:40:33', 'vaccination', 1, '2026-08-24 14:40:33'),
-(9, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 17:00:43\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n\nTotal Doses: 1', 'vaccination', 0, '2026-08-24 15:00:43'),
-(10, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 1\nDate: August 24, 2026 17:00:43', 'vaccination', 1, '2026-08-24 15:00:43'),
-(11, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ela Ketcho (ID: P0075)\nCase ID: C0069\nDate: August 24, 2026 17:05:42\n\nVaccines Administered:\n• Rabies Vaccine - D7 (Completed)\n• TT (Tetanus Toxoid) - D3 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 15:05:42'),
-(12, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ela Ketcho at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 17:05:42', 'vaccination', 1, '2026-08-24 15:05:42'),
-(13, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 17:44:42\n\nVaccines Administered:\n• TT (Tetanus Toxoid) - D3 (Completed)\n\nTotal Doses: 1', 'vaccination', 0, '2026-08-24 15:44:42'),
-(14, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 1\nDate: August 24, 2026 17:44:42', 'vaccination', 1, '2026-08-24 15:44:42'),
-(15, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 17:46:54\n\nVaccines Administered:\n• ERIG (Equine Rabies Immunoglobulin) - D7 (Completed)\n• Rabies Vaccine - D3 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 15:46:54'),
-(16, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 17:46:54', 'vaccination', 1, '2026-08-24 15:46:54'),
-(17, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jean Lacerna (ID: P0073)\nCase ID: C0067\nDate: August 24, 2026 17:54:18\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D3 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D3 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 15:54:18'),
-(18, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Jean Lacerna at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 17:54:18', 'vaccination', 1, '2026-08-24 15:54:18'),
-(19, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Coco (ID: P0072)\nCase ID: C0066\nDate: August 24, 2026 18:03:05\n\nVaccines Administered:\n• ERIG (Equine Rabies Immunoglobulin) - D3 (Completed)\n• Rabies Vaccine - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 16:03:05'),
-(20, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Coco at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:03:05', 'vaccination', 1, '2026-08-24 16:03:05'),
-(21, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Juan (ID: P0071)\nCase ID: C0065\nDate: August 24, 2026 18:12:05\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 16:12:05'),
-(22, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Juan at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:12:05', 'vaccination', 1, '2026-08-24 16:12:05'),
-(23, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Juan (ID: P0071)\nCase ID: C0065\nDate: August 24, 2026 18:13:01\n\nVaccines Administered:\n• Rabies Vaccine - D3 (Completed)\n• TT (Tetanus Toxoid) - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 16:13:01'),
-(24, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Juan at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:13:01', 'vaccination', 1, '2026-08-24 16:13:01'),
-(25, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: kemi (ID: P0070)\nCase ID: C0064\nDate: August 24, 2026 18:18:05\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 16:18:05'),
-(26, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to kemi at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:18:05', 'vaccination', 1, '2026-08-24 16:18:05'),
-(27, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 18:22:45\n\nVaccines Administered:\n• TT (Tetanus Toxoid) - D14 (Completed)\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 16:22:45'),
-(28, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:22:45', 'vaccination', 1, '2026-08-24 16:22:45'),
-(29, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 18:24:13\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D21 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 16:24:13'),
-(30, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:24:13', 'vaccination', 1, '2026-08-24 16:24:13'),
-(31, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 18:25:31\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D28/30 (Completed)\n\nTotal Doses: 1', 'vaccination', 0, '2026-08-24 16:25:31'),
-(32, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 1\nDate: August 24, 2026 18:25:31', 'vaccination', 1, '2026-08-24 16:25:31'),
-(33, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 18:31:56\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D28/30 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D28/30 (Completed)\n\nTotal Doses: 2', 'vaccination', 0, '2026-08-24 16:31:56'),
-(34, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:31:56', 'vaccination', 1, '2026-08-24 16:31:56'),
-(35, 9, 'New Patient Added', 'Administrative staff has added a new patient: Ean Abilo (Case: 26-0021). Please review the vaccination schedule.', 'new_patient', 1, '2026-08-24 16:37:58');
+INSERT INTO `notifications` (`notification_id`, `user_id`, `title`, `message`, `notification_type`, `source_key`, `is_read`, `created_at`) VALUES
+(1, 8, 'Patient record saved', 'Case 26-0001 for Shane Cacho was saved.', 'admin_staff_patient_record', NULL, 0, '2026-07-06 11:52:40'),
+(2, 8, 'Patient record saved', 'Case 26-0002 for Ken Allen Rosales was saved.', 'admin_staff_patient_record', NULL, 0, '2026-07-06 12:09:16'),
+(3, 8, 'Patient record saved', 'Case 26-0003 for Ken Allen Rosales was saved.', 'admin_staff_patient_record', NULL, 0, '2026-07-06 12:15:51'),
+(4, 8, 'Patient record deleted', 'Case 26-0001 for Shane Cacho was deleted.', 'admin_staff_patient_record', NULL, 0, '2026-07-06 12:20:33'),
+(5, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ela Ketcho (ID: P0075)\nCase ID: C0069\nDate: August 24, 2026 16:39:37\n\nVaccines Administered:\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Doses: 1', 'vaccination', NULL, 0, '2026-08-24 14:39:37'),
+(6, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ela Ketcho at Cainta Branch.\nTotal vaccines administered: 1\nDate: August 24, 2026 16:39:37', 'vaccination', NULL, 1, '2026-08-24 14:39:37'),
+(7, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ela Ketcho (ID: P0075)\nCase ID: C0069\nDate: August 24, 2026 16:40:33\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D3 (Completed)\n\nTotal Doses: 1', 'vaccination', NULL, 0, '2026-08-24 14:40:33'),
+(8, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ela Ketcho at Cainta Branch.\nTotal vaccines administered: 1\nDate: August 24, 2026 16:40:33', 'vaccination', NULL, 1, '2026-08-24 14:40:33'),
+(9, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 17:00:43\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n\nTotal Doses: 1', 'vaccination', NULL, 0, '2026-08-24 15:00:43'),
+(10, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 1\nDate: August 24, 2026 17:00:43', 'vaccination', NULL, 1, '2026-08-24 15:00:43'),
+(11, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ela Ketcho (ID: P0075)\nCase ID: C0069\nDate: August 24, 2026 17:05:42\n\nVaccines Administered:\n• Rabies Vaccine - D7 (Completed)\n• TT (Tetanus Toxoid) - D3 (Completed)\n\nTotal Doses: 2', 'vaccination', NULL, 0, '2026-08-24 15:05:42'),
+(12, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ela Ketcho at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 17:05:42', 'vaccination', NULL, 1, '2026-08-24 15:05:42'),
+(13, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 17:44:42\n\nVaccines Administered:\n• TT (Tetanus Toxoid) - D3 (Completed)\n\nTotal Doses: 1', 'vaccination', NULL, 0, '2026-08-24 15:44:42'),
+(14, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 1\nDate: August 24, 2026 17:44:42', 'vaccination', NULL, 1, '2026-08-24 15:44:42'),
+(15, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 17:46:54\n\nVaccines Administered:\n• ERIG (Equine Rabies Immunoglobulin) - D7 (Completed)\n• Rabies Vaccine - D3 (Completed)\n\nTotal Doses: 2', 'vaccination', NULL, 0, '2026-08-24 15:46:54'),
+(16, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 17:46:54', 'vaccination', NULL, 1, '2026-08-24 15:46:54'),
+(17, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jean Lacerna (ID: P0073)\nCase ID: C0067\nDate: August 24, 2026 17:54:18\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D3 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D3 (Completed)\n\nTotal Doses: 2', 'vaccination', NULL, 0, '2026-08-24 15:54:18'),
+(18, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Jean Lacerna at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 17:54:18', 'vaccination', NULL, 1, '2026-08-24 15:54:18'),
+(19, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Coco (ID: P0072)\nCase ID: C0066\nDate: August 24, 2026 18:03:05\n\nVaccines Administered:\n• ERIG (Equine Rabies Immunoglobulin) - D3 (Completed)\n• Rabies Vaccine - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', NULL, 0, '2026-08-24 16:03:05'),
+(20, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Coco at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:03:05', 'vaccination', NULL, 1, '2026-08-24 16:03:05'),
+(21, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Juan (ID: P0071)\nCase ID: C0065\nDate: August 24, 2026 18:12:05\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', NULL, 0, '2026-08-24 16:12:05'),
+(22, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Juan at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:12:05', 'vaccination', NULL, 1, '2026-08-24 16:12:05'),
+(23, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Juan (ID: P0071)\nCase ID: C0065\nDate: August 24, 2026 18:13:01\n\nVaccines Administered:\n• Rabies Vaccine - D3 (Completed)\n• TT (Tetanus Toxoid) - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', NULL, 0, '2026-08-24 16:13:01'),
+(24, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Juan at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:13:01', 'vaccination', NULL, 1, '2026-08-24 16:13:01'),
+(25, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: kemi (ID: P0070)\nCase ID: C0064\nDate: August 24, 2026 18:18:05\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', NULL, 0, '2026-08-24 16:18:05'),
+(26, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to kemi at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:18:05', 'vaccination', NULL, 1, '2026-08-24 16:18:05'),
+(27, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 18:22:45\n\nVaccines Administered:\n• TT (Tetanus Toxoid) - D14 (Completed)\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', NULL, 0, '2026-08-24 16:22:45'),
+(28, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:22:45', 'vaccination', NULL, 1, '2026-08-24 16:22:45'),
+(29, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 18:24:13\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D21 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Doses: 2', 'vaccination', NULL, 0, '2026-08-24 16:24:13'),
+(30, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:24:13', 'vaccination', NULL, 1, '2026-08-24 16:24:13'),
+(31, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 18:25:31\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D28/30 (Completed)\n\nTotal Doses: 1', 'vaccination', NULL, 0, '2026-08-24 16:25:31'),
+(32, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 1\nDate: August 24, 2026 18:25:31', 'vaccination', NULL, 1, '2026-08-24 16:25:31'),
+(33, 6, 'New Vaccination Administered', 'A vaccination has been administered by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ferdinand Margallo (ID: P0074)\nCase ID: C0068\nDate: August 24, 2026 18:31:56\n\nVaccines Administered:\n• ATS (Anti-Tetanus Serum) - D28/30 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D28/30 (Completed)\n\nTotal Doses: 2', 'vaccination', NULL, 0, '2026-08-24 16:31:56'),
+(34, 9, 'Vaccination Submitted Successfully', 'You have successfully administered vaccination to Ferdinand Margallo at Cainta Branch.\nTotal vaccines administered: 2\nDate: August 24, 2026 18:31:56', 'vaccination', NULL, 1, '2026-08-24 16:31:56'),
+(35, 9, 'New Patient Added', 'Administrative staff has added a new patient: Ean Abilo (Case: 26-0021). Please review the vaccination schedule.', 'new_patient', NULL, 1, '2026-08-24 16:37:58'),
+(260, 11, 'Low Stock Alert', 'ATS (Anti-Tetanus Serum) has 1 Vial remaining. Minimum stock is 20 Vial.', 'low_stock', 'condition:stock:3', 1, '2026-08-29 11:58:15'),
+(261, 11, 'Low Stock Alert', 'Scale has 1 Piece remaining. Minimum stock is 1 Piece.', 'low_stock', 'condition:stock:6', 1, '2026-08-29 11:58:15'),
+(262, 11, 'Expiring Stock Alert', 'ERIG (Equine Rabies Immunoglobulin) expires in 2 days (Aug 31, 2026). 10 Vial remain in stock.', 'expiring', 'condition:expiry:20:2026-08-31', 1, '2026-08-29 11:58:15'),
+(263, 11, 'Stock In Confirmed', '10 Ampule of TT (Tetanus Toxoid) were added to inventory by Jean Montero.', 'stock_in', 'transaction:40', 1, '2026-08-29 11:58:15'),
+(264, 11, 'Stock Adjustment Recorded', 'Stock for ATS (Anti-Tetanus Serum) was adjusted by -1 Vial by Jean Montero.', 'stock_adjustment', 'transaction:39', 1, '2026-08-29 11:58:15'),
+(265, 11, 'Stock In Confirmed', '10 Vial of ERIG (Equine Rabies Immunoglobulin) were added to inventory by Jean Montero.', 'stock_in', 'transaction:38', 1, '2026-08-29 11:58:15'),
+(266, 11, 'Stock In Confirmed', '1 Piece of Scale were added to inventory by Jean Montero.', 'stock_in', 'transaction:37', 1, '2026-08-29 11:58:15'),
+(267, 11, 'Stock Adjustment Recorded', 'Stock for ERIG (Equine Rabies Immunoglobulin) was adjusted by 1 Vial by Jean Montero.', 'stock_adjustment', 'transaction:36', 1, '2026-08-29 11:58:16'),
+(268, 11, 'Stock Adjustment Recorded', 'Stock for TT (Tetanus Toxoid) was adjusted by 45 Ampule by Jean Montero.', 'stock_adjustment', 'transaction:35', 1, '2026-08-29 11:58:16'),
+(269, 11, 'Stock In Confirmed', '50 Ampule of TT (Tetanus Toxoid) were added to inventory by Jean Montero.', 'stock_in', 'transaction:34', 1, '2026-08-29 11:58:16'),
+(270, 11, 'Stock In Confirmed', '60 Vial of Speeda  were added to inventory by Jean Montero.', 'stock_in', 'transaction:33', 1, '2026-08-29 11:58:16'),
+(271, 11, 'Stock Adjustment Recorded', 'Stock for ATS (Anti-Tetanus Serum) was adjusted by -17 Vial by Jean Montero.', 'stock_adjustment', 'transaction:32', 1, '2026-08-29 11:58:16'),
+(272, 11, 'Stock Out Recorded', '1 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:31', 1, '2026-08-29 11:58:16'),
+(273, 11, 'Stock Out Recorded', '1 Vial of ATS (Anti-Tetanus Serum) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:30', 1, '2026-08-29 11:58:16'),
+(274, 11, 'Stock Out Recorded', '1 Vial of ATS (Anti-Tetanus Serum) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:29', 1, '2026-08-29 11:58:16'),
+(275, 11, 'Stock Out Recorded', '1 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:28', 1, '2026-08-29 11:58:16'),
+(276, 11, 'Stock Out Recorded', '1 Vial of ATS (Anti-Tetanus Serum) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:27', 1, '2026-08-29 11:58:16'),
+(277, 11, 'Stock Out Recorded', '1 Vial of ATS (Anti-Tetanus Serum) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:26', 1, '2026-08-29 11:58:16'),
+(278, 11, 'Stock Out Recorded', '1 Ampule of TT (Tetanus Toxoid) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:25', 1, '2026-08-29 11:58:16'),
+(279, 11, 'Stock Out Recorded', '1 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:24', 1, '2026-08-29 11:58:16'),
+(280, 11, 'Stock Out Recorded', '1 Vial of ATS (Anti-Tetanus Serum) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:23', 1, '2026-08-29 11:58:16'),
+(281, 11, 'Stock Out Recorded', '1 Ampule of TT (Tetanus Toxoid) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:22', 1, '2026-08-29 11:58:16'),
+(282, 11, 'Stock Out Recorded', '1 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:21', 1, '2026-08-29 11:58:16'),
+(283, 11, 'Stock Out Recorded', '1 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:20', 1, '2026-08-29 11:58:16'),
+(284, 11, 'Stock Out Recorded', '1 Vial of ATS (Anti-Tetanus Serum) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:19', 1, '2026-08-29 11:58:17'),
+(285, 11, 'Stock Out Recorded', '1 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:18', 1, '2026-08-29 11:58:17'),
+(286, 11, 'Stock Out Recorded', '1 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:17', 1, '2026-08-29 11:58:17'),
+(287, 11, 'Stock Out Recorded', '1 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:14', 1, '2026-08-29 11:58:17'),
+(288, 11, 'Stock Out Recorded', '1 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:13', 1, '2026-08-29 11:58:17'),
+(289, 11, 'Stock Out Recorded', '1 Ampule of TT (Tetanus Toxoid) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:12', 1, '2026-08-29 11:58:17'),
+(290, 11, 'Stock Out Recorded', '1 Ampule of TT (Tetanus Toxoid) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:11', 1, '2026-08-29 11:58:17'),
+(291, 11, 'Stock Out Recorded', '1 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:10', 1, '2026-08-29 11:58:17'),
+(292, 11, 'Stock Out Recorded', '1 Vial of ATS (Anti-Tetanus Serum) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:9', 1, '2026-08-29 11:58:17'),
+(293, 11, 'Stock Out Recorded', '1 Vial of ATS (Anti-Tetanus Serum) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:8', 1, '2026-08-29 11:58:17'),
+(294, 11, 'Stock Out Recorded', '1 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:7', 1, '2026-08-29 11:58:17'),
+(297, 11, 'Low Stock Alert', 'TT (Tetanus Toxoid) has 11 Ampule remaining. Minimum stock is 20 Ampule.', 'low_stock', 'condition:stock:4', 1, '2026-08-29 11:59:25'),
+(299, 11, 'Stock Out Recorded', '140 Ampule of TT (Tetanus Toxoid) were released from inventory by Jean Montero.', 'stock_out', 'transaction:41', 1, '2026-08-29 11:59:25'),
+(705, 11, 'Low Stock Alert', 'CSF Forms has 20 Ream remaining. Minimum stock is 20 Ream.', 'low_stock', 'condition:stock:7', 0, '2026-08-29 12:17:20'),
+(707, 11, 'Stock In Confirmed', '20 Ream of CSF Forms were added to inventory by Jean Montero.', 'stock_in', 'transaction:42', 0, '2026-08-29 12:17:20');
 
 -- --------------------------------------------------------
 
@@ -1205,7 +1269,18 @@ INSERT INTO `stock_transactions` (`transaction_id`, `item_id`, `user_id`, `vacci
 (28, 2, 9, 127, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:24:13'),
 (29, 3, 9, 128, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 6 | Qty Used: 1 | Date: 2026-08-21', '2026-08-24 16:25:31'),
 (30, 3, 9, 129, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 6 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:31:56'),
-(31, 2, 9, 130, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 6 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:31:56');
+(31, 2, 9, 130, 'SBI-002', 'OUT', 1, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 6 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:31:56'),
+(32, 3, 11, NULL, 'SBI-002', 'ADJUSTMENT', -17, 'Reason: Miscount / Physical Count Correction | Previous Stock: 19 | New Stock: 2', '2026-08-27 16:00:00'),
+(33, 5, 11, NULL, 'SBI-002', 'IN', 60, 'Batch/Lot No.: 26-022489', '2026-08-28 16:00:00'),
+(34, 4, 11, NULL, 'SBI-002', 'IN', 50, 'Batch/Lot No.: 26-022489', '2026-08-28 16:00:00'),
+(35, 4, 11, NULL, 'SBI-002', 'ADJUSTMENT', 45, 'Reason: Damaged | Previous Stock: 50 | New Stock: 95', '2026-08-28 16:00:00'),
+(36, 2, 11, NULL, 'SBI-002', 'ADJUSTMENT', 1, 'Reason: Other | Previous Stock: 9 | New Stock: 10', '2026-08-28 16:00:00'),
+(37, 6, 11, NULL, 'SBI-002', 'IN', 1, '', '2026-08-28 16:00:00'),
+(38, 2, 11, NULL, 'SBI-002', 'IN', 10, 'Batch/Lot No.: 26-02248', '2026-08-28 16:00:00'),
+(39, 3, 11, NULL, 'SBI-002', 'ADJUSTMENT', -1, 'Reason: Miscount / Physical Count Correction | Previous Stock: 2 | New Stock: 1', '2026-08-28 16:00:00'),
+(40, 4, 11, NULL, 'SBI-002', 'IN', 10, 'Batch/Lot No.: 65685', '2026-08-28 16:00:00'),
+(41, 4, 11, NULL, 'SBI-002', 'OUT', 140, 'Reason: Other | Batch/Lot: 26-022489 (-95) | pull out for pasig branch', '2026-08-28 16:00:00'),
+(42, 7, 11, NULL, 'SBI-002', 'IN', 20, '', '2026-08-28 16:00:00');
 
 -- --------------------------------------------------------
 
@@ -1247,7 +1322,9 @@ INSERT INTO `units` (`unit_id`, `unit_name`) VALUES
 (3, 'Box/s'),
 (4, 'mL'),
 (5, 'Vial'),
-(6, 'Dose');
+(6, 'Dose'),
+(7, 'Ampule'),
+(9, 'Piece');
 
 -- --------------------------------------------------------
 
@@ -1274,9 +1351,9 @@ CREATE TABLE `users` (
 INSERT INTO `users` (`user_id`, `branch_id`, `role_id`, `username`, `email`, `password`, `status`, `created_at`, `last_login`) VALUES
 (1, 'SBI-001', 1, 'superadmin', 'garabillo_jojanajean@plpasig.edu.ph', '$2y$10$gTUuk2.GeUd5BNNryWGq8OhJWjQcdqk8rOMPUMJ1VkFaxc7eJajHe', 'Active', '2026-07-04 07:53:47', '2026-08-25 01:42:07'),
 (6, 'SBI-002', 2, 'Jojana Garabillo', 'jojanajeangarabillo@gmail.com', '$2y$10$Gundsv.vdvdqOT1M3VIcP.r/8y/MqzNxDPnxfh2qypFd44fL6xZta', 'Active', '2026-07-04 09:59:45', '2026-08-25 01:29:14'),
-(8, 'SBI-002', 4, 'Shane Cacho', 'pam066198@gmail.com', '$2a$12$rfw67uNcLetmfn6M2Dv5e.ff49vAitKIHni3Q7iKV.zgMruHVfkIa', 'Active', '2026-07-04 14:41:02', '2026-07-09 10:09:42'),
+(8, 'SBI-002', 4, 'Shane Cacho', 'pam066198@gmail.com', '$2a$12$rfw67uNcLetmfn6M2Dv5e.ff49vAitKIHni3Q7iKV.zgMruHVfkIa', 'Active', '2026-07-04 14:41:02', '2026-08-28 11:52:54'),
 (9, 'SBI-002', 3, 'Marc Beringuela', 'ruberducky032518@gmail.com', '$2y$10$mRG5TnwyVCEkohLgsXiCe.INa226POltPF/0M4fYuXX8mq925V7kO', 'Active', '2026-07-04 14:55:07', '2026-08-24 22:52:28'),
-(11, 'SBI-002', 5, 'Jean Montero', 'joepatlacerna54@gmail.com', '$2y$10$ga5HM6WcD0wQSSvnpCAvue4UdqknCryN93mJVLatoI4GAiEDHctNO', 'Active', '2026-07-04 15:09:39', '2026-08-22 20:43:36'),
+(11, 'SBI-002', 5, 'Jean Montero', 'joepatlacerna54@gmail.com', '$2y$10$ga5HM6WcD0wQSSvnpCAvue4UdqknCryN93mJVLatoI4GAiEDHctNO', 'Active', '2026-07-04 15:09:39', '2026-08-29 14:45:40'),
 (14, 'SBI-003', 2, 'Joepat Lacerna', 'opat09252005@gmail.com', '$2y$10$JB4.S8HI8Zu.IbvLHuMhH.3mnmqmyWMdV4ID/nRxcotOs.tmdCasm', 'Active', '2026-07-05 11:56:22', '2026-08-24 19:02:30'),
 (15, 'SBI-003', 2, 'Mae Ben', 'sheyn.cacho@gmail.com', '$2y$10$knOsicB5IV6qD4SqIaF3WOBBnyrFDJYTknP8yqBSXlo35gIp8mLim', 'Active', '2026-07-05 16:19:46', '2026-07-09 19:33:48'),
 (16, 'SBI-002', 4, 'Ella Franco', 'cachosheyn@gmail.com', '$2y$10$lLv3F5B3Yu1QGQU1GkAbq./clNj/7RMlMH1noMMwNAqv/45mymWfm', 'Active', '2026-07-07 06:24:22', '2026-08-24 21:11:20');
@@ -1548,8 +1625,6 @@ ALTER TABLE `inventory_usage_history`
 ALTER TABLE `medical_documents`
   ADD PRIMARY KEY (`document_id`),
   ADD KEY `fk_doc_branch` (`branch_id`),
-  ADD KEY `fk_doc_case` (`case_id`),
-  ADD KEY `fk_doc_patient` (`patient_id`),
   ADD KEY `fk_doc_uploader` (`uploaded_by`);
 
 --
@@ -1557,6 +1632,7 @@ ALTER TABLE `medical_documents`
 --
 ALTER TABLE `notifications`
   ADD PRIMARY KEY (`notification_id`),
+  ADD UNIQUE KEY `uq_notifications_user_source` (`user_id`,`source_key`),
   ADD KEY `user_id` (`user_id`);
 
 --
@@ -1778,7 +1854,7 @@ ALTER TABLE `animal_bite_cases_archive`
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `log_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=435;
+  MODIFY `log_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=451;
 
 --
 -- AUTO_INCREMENT for table `document_tracking`
@@ -1790,19 +1866,19 @@ ALTER TABLE `document_tracking`
 -- AUTO_INCREMENT for table `inventory_categories`
 --
 ALTER TABLE `inventory_categories`
-  MODIFY `category_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
+  MODIFY `category_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
 
 --
 -- AUTO_INCREMENT for table `inventory_items`
 --
 ALTER TABLE `inventory_items`
-  MODIFY `item_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
+  MODIFY `item_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
 
 --
 -- AUTO_INCREMENT for table `inventory_stocks`
 --
 ALTER TABLE `inventory_stocks`
-  MODIFY `stock_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=17;
+  MODIFY `stock_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=23;
 
 --
 -- AUTO_INCREMENT for table `inventory_usage_history`
@@ -1814,13 +1890,13 @@ ALTER TABLE `inventory_usage_history`
 -- AUTO_INCREMENT for table `medical_documents`
 --
 ALTER TABLE `medical_documents`
-  MODIFY `document_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+  MODIFY `document_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
 
 --
 -- AUTO_INCREMENT for table `notifications`
 --
 ALTER TABLE `notifications`
-  MODIFY `notification_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=36;
+  MODIFY `notification_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=780;
 
 --
 -- AUTO_INCREMENT for table `patients`
@@ -1892,7 +1968,7 @@ ALTER TABLE `registry_vaccination_doses_archive`
 -- AUTO_INCREMENT for table `stock_transactions`
 --
 ALTER TABLE `stock_transactions`
-  MODIFY `transaction_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=32;
+  MODIFY `transaction_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=43;
 
 --
 -- AUTO_INCREMENT for table `training_dataset`
@@ -1904,7 +1980,7 @@ ALTER TABLE `training_dataset`
 -- AUTO_INCREMENT for table `units`
 --
 ALTER TABLE `units`
-  MODIFY `unit_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `unit_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
 
 --
 -- AUTO_INCREMENT for table `users`
@@ -2004,8 +2080,6 @@ ALTER TABLE `inventory_usage_history`
 --
 ALTER TABLE `medical_documents`
   ADD CONSTRAINT `fk_doc_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `fk_doc_case` FOREIGN KEY (`case_id`) REFERENCES `animal_bite_cases` (`case_id`) ON DELETE SET NULL,
-  ADD CONSTRAINT `fk_doc_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`patient_id`) ON DELETE SET NULL,
   ADD CONSTRAINT `fk_doc_uploader` FOREIGN KEY (`uploaded_by`) REFERENCES `users` (`user_id`);
 
 --
