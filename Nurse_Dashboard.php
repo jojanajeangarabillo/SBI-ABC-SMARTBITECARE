@@ -3,20 +3,20 @@ session_start();
 require_once 'sources/db_connect.php';
 
 // Check if user is logged in and is a nurse
-if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || $_SESSION['role_id'] != 3) {
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 3) {
     header("Location: login.php");
     exit();
 }
 
-$user_id = $_SESSION['user_id'];
+$user_id = (int)$_SESSION['user_id'];
 $branch_id = null;
 $branch_name = '';
 $username = '';
 
 // Get user's branch info
-$userQuery = "SELECT u.branch_id, u.username, b.branch_name 
-              FROM users u 
-              LEFT JOIN branches b ON u.branch_id = b.branch_id 
+$userQuery = "SELECT u.branch_id, u.username, b.branch_name
+              FROM users u
+              LEFT JOIN branches b ON u.branch_id = b.branch_id
               WHERE u.user_id = ?";
 $stmt = $conn->prepare($userQuery);
 $stmt->bind_param("i", $user_id);
@@ -29,115 +29,177 @@ if ($userResult->num_rows > 0) {
     $branch_name = $userData['branch_name'] ?? 'Unknown Branch';
     $username = $userData['username'] ?? 'Nurse';
 }
+$stmt->close();
 
-// If no branch assigned
 if (!$branch_id) {
     $branch_name = 'No Branch Assigned';
+}
+
+function dashboardDoseLabel($dose_number) {
+    $doseMap = [
+        1 => 'D0',
+        2 => 'D3',
+        3 => 'D7',
+        4 => 'D14',
+        5 => 'D21',
+        6 => 'D28/30'
+    ];
+    return $doseMap[(int)$dose_number] ?? ('D' . (int)$dose_number);
 }
 
 // =============================================
 // FETCH ALL STATISTICS FOR NURSE DASHBOARD
 // =============================================
-
 $stats = [];
 
-// 1. PATIENT WAITING (patients with ongoing cases)
-$waitingQuery = "SELECT COUNT(DISTINCT p.patient_id) as waiting 
-                 FROM patients p 
-                 JOIN animal_bite_cases abc ON p.patient_id = abc.patient_id 
-                 WHERE abc.branch_id = ? AND abc.case_status = 'Ongoing'";
+// 1. PATIENT WAITING
+// Distinct non-archived patients who currently have an ongoing, non-archived case.
+$waitingQuery = "SELECT COUNT(DISTINCT p.patient_id) AS waiting
+                 FROM patients p
+                 INNER JOIN animal_bite_cases abc ON p.patient_id = abc.patient_id
+                 WHERE abc.branch_id = ?
+                   AND p.branch_id = ?
+                   AND p.is_archived = 0
+                   AND abc.is_archived = 0
+                   AND abc.case_status = 'Ongoing'";
 $stmt = $conn->prepare($waitingQuery);
-$stmt->bind_param("s", $branch_id);
+$stmt->bind_param("ss", $branch_id, $branch_id);
 $stmt->execute();
-$waitingResult = $stmt->get_result();
-$stats['patient_waiting'] = $waitingResult->fetch_assoc()['waiting'] ?? 0;
+$stats['patient_waiting'] = (int)($stmt->get_result()->fetch_assoc()['waiting'] ?? 0);
+$stmt->close();
 
 // 2. ONGOING CASES
-$ongoingQuery = "SELECT COUNT(*) as ongoing 
-                 FROM animal_bite_cases 
-                 WHERE branch_id = ? AND case_status = 'Ongoing'";
+$ongoingQuery = "SELECT COUNT(*) AS ongoing
+                 FROM animal_bite_cases
+                 WHERE branch_id = ?
+                   AND is_archived = 0
+                   AND case_status = 'Ongoing'";
 $stmt = $conn->prepare($ongoingQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
-$ongoingResult = $stmt->get_result();
-$stats['ongoing_cases'] = $ongoingResult->fetch_assoc()['ongoing'] ?? 0;
+$stats['ongoing_cases'] = (int)($stmt->get_result()->fetch_assoc()['ongoing'] ?? 0);
+$stmt->close();
 
 // 3. COMPLETED CASES
-$completedQuery = "SELECT COUNT(*) as completed 
-                   FROM animal_bite_cases 
-                   WHERE branch_id = ? AND case_status = 'Completed'";
+$completedQuery = "SELECT COUNT(*) AS completed
+                   FROM animal_bite_cases
+                   WHERE branch_id = ?
+                     AND is_archived = 0
+                     AND case_status = 'Completed'";
 $stmt = $conn->prepare($completedQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
-$completedResult = $stmt->get_result();
-$stats['completed_cases'] = $completedResult->fetch_assoc()['completed'] ?? 0;
+$stats['completed_cases'] = (int)($stmt->get_result()->fetch_assoc()['completed'] ?? 0);
+$stmt->close();
 
 // 4. TOTAL CASES
-$totalCasesQuery = "SELECT COUNT(*) as total 
-                    FROM animal_bite_cases 
-                    WHERE branch_id = ?";
+$totalCasesQuery = "SELECT COUNT(*) AS total
+                    FROM animal_bite_cases
+                    WHERE branch_id = ?
+                      AND is_archived = 0";
 $stmt = $conn->prepare($totalCasesQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
-$totalCasesResult = $stmt->get_result();
-$stats['total_cases'] = $totalCasesResult->fetch_assoc()['total'] ?? 0;
+$stats['total_cases'] = (int)($stmt->get_result()->fetch_assoc()['total'] ?? 0);
+$stmt->close();
 
 // 5. TOTAL PATIENTS
-$totalPatientsQuery = "SELECT COUNT(*) as total 
-                       FROM patients 
-                       WHERE branch_id = ?";
+$totalPatientsQuery = "SELECT COUNT(*) AS total
+                       FROM patients
+                       WHERE branch_id = ?
+                         AND is_archived = 0";
 $stmt = $conn->prepare($totalPatientsQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
-$totalPatientsResult = $stmt->get_result();
-$stats['total_patients'] = $totalPatientsResult->fetch_assoc()['total'] ?? 0;
+$stats['total_patients'] = (int)($stmt->get_result()->fetch_assoc()['total'] ?? 0);
+$stmt->close();
+
+// Vaccination dashboard counts are DOSE-STAGE based, not product-row based.
+// Example: Rabies Vaccine + ERIG + ATS under D0 count as ONE vaccination stage.
 
 // 6. VACCINATIONS TODAY
-$todayQuery = "SELECT COUNT(*) as today_vaccinations 
-               FROM vaccination_records 
-               WHERE branch_id = ? AND DATE(date_administered) = CURDATE()";
+$todayQuery = "SELECT COUNT(*) AS today_vaccinations
+               FROM (
+                   SELECT vr.patient_id, vr.case_id, vr.dose_number
+                   FROM vaccination_records vr
+                   LEFT JOIN inventory_items ii ON vr.item_id = ii.item_id
+                   WHERE vr.branch_id = ?
+                     AND vr.is_archived = 0
+                     AND vr.vaccination_status = 'Completed'
+                     AND vr.date_administered IS NOT NULL
+                     AND DATE(vr.date_administered) = CURDATE()
+                     AND COALESCE(NULLIF(vr.vaccine_name, ''), ii.item_name, '') NOT LIKE '%Default%'
+                   GROUP BY vr.patient_id, vr.case_id, vr.dose_number
+               ) AS completed_today";
 $stmt = $conn->prepare($todayQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
-$todayResult = $stmt->get_result();
-$stats['today_vaccinations'] = $todayResult->fetch_assoc()['today_vaccinations'] ?? 0;
+$stats['today_vaccinations'] = (int)($stmt->get_result()->fetch_assoc()['today_vaccinations'] ?? 0);
+$stmt->close();
 
-// 7. TOTAL VACCINATIONS (All Time)
-$totalVaccQuery = "SELECT COUNT(*) as total 
-                   FROM vaccination_records 
-                   WHERE branch_id = ?";
+// 7. TOTAL VACCINATION STAGES (All Time)
+$totalVaccQuery = "SELECT COUNT(*) AS total
+                   FROM (
+                       SELECT vr.patient_id, vr.case_id, vr.dose_number
+                       FROM vaccination_records vr
+                       LEFT JOIN inventory_items ii ON vr.item_id = ii.item_id
+                       WHERE vr.branch_id = ?
+                         AND vr.is_archived = 0
+                         AND vr.vaccination_status = 'Completed'
+                         AND vr.date_administered IS NOT NULL
+                         AND DATE(vr.date_administered) <= CURDATE()
+                         AND COALESCE(NULLIF(vr.vaccine_name, ''), ii.item_name, '') NOT LIKE '%Default%'
+                       GROUP BY vr.patient_id, vr.case_id, vr.dose_number
+                   ) AS completed_stages";
 $stmt = $conn->prepare($totalVaccQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
-$totalVaccResult = $stmt->get_result();
-$stats['total_vaccinations'] = $totalVaccResult->fetch_assoc()['total'] ?? 0;
+$stats['total_vaccinations'] = (int)($stmt->get_result()->fetch_assoc()['total'] ?? 0);
+$stmt->close();
 
 // 8. UPCOMING SCHEDULED VACCINATIONS (Next 7 days)
-$upcomingQuery = "SELECT COUNT(*) as upcoming 
-                  FROM vaccination_records 
-                  WHERE branch_id = ? 
-                  AND vaccination_status = 'Scheduled' 
-                  AND DATE(scheduled_date) BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY)";
+$upcomingQuery = "SELECT COUNT(*) AS upcoming
+                  FROM (
+                      SELECT vr.patient_id, vr.case_id, vr.dose_number
+                      FROM vaccination_records vr
+                      LEFT JOIN inventory_items ii ON vr.item_id = ii.item_id
+                      WHERE vr.branch_id = ?
+                        AND vr.is_archived = 0
+                        AND vr.vaccination_status = 'Scheduled'
+                        AND vr.scheduled_date IS NOT NULL
+                        AND DATE(vr.scheduled_date) BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY)
+                        AND COALESCE(NULLIF(vr.vaccine_name, ''), ii.item_name, '') NOT LIKE '%Default%'
+                      GROUP BY vr.patient_id, vr.case_id, vr.dose_number
+                  ) AS upcoming_stages";
 $stmt = $conn->prepare($upcomingQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
-$upcomingResult = $stmt->get_result();
-$stats['upcoming_vaccinations'] = $upcomingResult->fetch_assoc()['upcoming'] ?? 0;
+$stats['upcoming_vaccinations'] = (int)($stmt->get_result()->fetch_assoc()['upcoming'] ?? 0);
+$stmt->close();
 
 // 9. MISSED VACCINATIONS
-$missedQuery = "SELECT COUNT(*) as missed 
-                FROM vaccination_records 
-                WHERE branch_id = ? AND vaccination_status = 'Missed'";
+$missedQuery = "SELECT COUNT(*) AS missed
+                FROM (
+                    SELECT vr.patient_id, vr.case_id, vr.dose_number
+                    FROM vaccination_records vr
+                    LEFT JOIN inventory_items ii ON vr.item_id = ii.item_id
+                    WHERE vr.branch_id = ?
+                      AND vr.is_archived = 0
+                      AND vr.vaccination_status = 'Missed'
+                      AND COALESCE(NULLIF(vr.vaccine_name, ''), ii.item_name, '') NOT LIKE '%Default%'
+                    GROUP BY vr.patient_id, vr.case_id, vr.dose_number
+                ) AS missed_stages";
 $stmt = $conn->prepare($missedQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
-$missedResult = $stmt->get_result();
-$stats['missed_vaccinations'] = $missedResult->fetch_assoc()['missed'] ?? 0;
+$stats['missed_vaccinations'] = (int)($stmt->get_result()->fetch_assoc()['missed'] ?? 0);
+$stmt->close();
 
 // 10. ANIMAL BITE CATEGORY STATISTICS
-$categoryQuery = "SELECT bite_category, COUNT(*) as count 
-                  FROM animal_bite_cases 
-                  WHERE branch_id = ? 
+$categoryQuery = "SELECT bite_category, COUNT(*) AS count
+                  FROM animal_bite_cases
+                  WHERE branch_id = ?
+                    AND is_archived = 0
                   GROUP BY bite_category";
 $stmt = $conn->prepare($categoryQuery);
 $stmt->bind_param("s", $branch_id);
@@ -147,13 +209,16 @@ $biteCategories = [];
 while ($row = $categoryResult->fetch_assoc()) {
     $biteCategories[] = $row;
 }
+$stmt->close();
 
 // 11. ANIMAL TYPE STATISTICS
-$animalTypeQuery = "SELECT animal_type, COUNT(*) as count 
-                    FROM animal_bite_cases 
-                    WHERE branch_id = ? AND animal_type IS NOT NULL
-                    GROUP BY animal_type 
-                    ORDER BY count DESC 
+$animalTypeQuery = "SELECT animal_type, COUNT(*) AS count
+                    FROM animal_bite_cases
+                    WHERE branch_id = ?
+                      AND is_archived = 0
+                      AND animal_type IS NOT NULL
+                    GROUP BY animal_type
+                    ORDER BY count DESC
                     LIMIT 5";
 $stmt = $conn->prepare($animalTypeQuery);
 $stmt->bind_param("s", $branch_id);
@@ -163,13 +228,15 @@ $animalTypes = [];
 while ($row = $animalTypeResult->fetch_assoc()) {
     $animalTypes[] = $row;
 }
+$stmt->close();
 
 // 12. PHILHEALTH COVERAGE
-$philhealthQuery = "SELECT has_philhealth, COUNT(*) as count 
+$philhealthQuery = "SELECT pr.has_philhealth, COUNT(*) AS count
                     FROM philhealth_records pr
-                    JOIN animal_bite_cases abc ON pr.case_id = abc.case_id
-                    WHERE abc.branch_id = ? 
-                    GROUP BY has_philhealth";
+                    INNER JOIN animal_bite_cases abc ON pr.case_id = abc.case_id
+                    WHERE abc.branch_id = ?
+                      AND abc.is_archived = 0
+                    GROUP BY pr.has_philhealth";
 $stmt = $conn->prepare($philhealthQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
@@ -178,15 +245,32 @@ $philhealthStats = [];
 while ($row = $philhealthResult->fetch_assoc()) {
     $philhealthStats[$row['has_philhealth']] = $row['count'];
 }
+$stmt->close();
 
-// 13. LOW STOCK ITEMS
-$lowStockQuery = "SELECT ii.item_name, is_.quantity_available, ii.minimum_stock, u.unit_name
-                  FROM inventory_stocks is_
-                  JOIN inventory_items ii ON is_.item_id = ii.item_id
-                  JOIN units u ON ii.unit_id = u.unit_id
-                  WHERE is_.branch_id = ? 
-                  AND is_.quantity_available <= ii.minimum_stock
-                  ORDER BY (is_.quantity_available / ii.minimum_stock) ASC
+// 13. LOW STOCK MEDICAL SUPPLIES
+// Compare minimum stock against the TOTAL quantity across all batches in this branch.
+$lowStockQuery = "SELECT
+                      ii.item_id,
+                      ii.item_name,
+                      COALESCE(SUM(is_.quantity_available), 0) AS quantity_available,
+                      ii.minimum_stock,
+                      u.unit_name
+                  FROM inventory_items ii
+                  INNER JOIN inventory_categories c ON ii.category_id = c.category_id
+                  INNER JOIN units u ON ii.unit_id = u.unit_id
+                  LEFT JOIN inventory_stocks is_
+                    ON is_.item_id = ii.item_id
+                   AND is_.branch_id = ?
+                  WHERE c.category_name = 'Medical Supplies'
+                  GROUP BY ii.item_id, ii.item_name, ii.minimum_stock, u.unit_name
+                  HAVING COALESCE(SUM(is_.quantity_available), 0) <= ii.minimum_stock
+                  ORDER BY
+                      CASE
+                          WHEN ii.minimum_stock > 0
+                          THEN COALESCE(SUM(is_.quantity_available), 0) / ii.minimum_stock
+                          ELSE 999999
+                      END ASC,
+                      ii.item_name ASC
                   LIMIT 5";
 $stmt = $conn->prepare($lowStockQuery);
 $stmt->bind_param("s", $branch_id);
@@ -196,52 +280,97 @@ $lowStockItems = [];
 while ($row = $lowStockResult->fetch_assoc()) {
     $lowStockItems[] = $row;
 }
+$stmt->close();
 
 // 14. TODAY'S SCHEDULE
-$scheduleQuery = "SELECT v.*, p.full_name, p.contact_number 
-                  FROM vaccination_records v
-                  JOIN patients p ON v.patient_id = p.patient_id
-                  WHERE v.branch_id = ? 
-                  AND DATE(v.scheduled_date) = CURDATE() 
-                  AND v.vaccination_status = 'Scheduled'
-                  ORDER BY v.scheduled_date ASC
+// Group all products that belong to the same patient/case/dose stage.
+$scheduleQuery = "SELECT
+                      vr.patient_id,
+                      vr.case_id,
+                      vr.dose_number,
+                      MIN(vr.scheduled_date) AS scheduled_date,
+                      MAX(vr.is_final_dose) AS is_final_dose,
+                      p.full_name,
+                      p.contact_number,
+                      GROUP_CONCAT(
+                          DISTINCT COALESCE(NULLIF(vr.vaccine_name, ''), ii.item_name, 'Unknown Vaccine')
+                          ORDER BY COALESCE(NULLIF(vr.vaccine_name, ''), ii.item_name, 'Unknown Vaccine')
+                          SEPARATOR ', '
+                      ) AS vaccine_names
+                  FROM vaccination_records vr
+                  INNER JOIN patients p ON vr.patient_id = p.patient_id
+                  LEFT JOIN inventory_items ii ON vr.item_id = ii.item_id
+                  WHERE vr.branch_id = ?
+                    AND p.branch_id = ?
+                    AND vr.is_archived = 0
+                    AND p.is_archived = 0
+                    AND vr.vaccination_status = 'Scheduled'
+                    AND vr.scheduled_date IS NOT NULL
+                    AND DATE(vr.scheduled_date) = CURDATE()
+                    AND COALESCE(NULLIF(vr.vaccine_name, ''), ii.item_name, '') NOT LIKE '%Default%'
+                  GROUP BY
+                      vr.patient_id,
+                      vr.case_id,
+                      vr.dose_number,
+                      p.full_name,
+                      p.contact_number
+                  ORDER BY scheduled_date ASC, p.full_name ASC, vr.dose_number ASC
                   LIMIT 10";
 $stmt = $conn->prepare($scheduleQuery);
-$stmt->bind_param("s", $branch_id);
+$stmt->bind_param("ss", $branch_id, $branch_id);
 $stmt->execute();
 $scheduleResult = $stmt->get_result();
 $schedules = [];
 while ($row = $scheduleResult->fetch_assoc()) {
     $schedules[] = $row;
 }
+$stmt->close();
 
-// 15. FOLLOW-UP DUE (cases needing follow-up)
-$followupQuery = "SELECT abc.case_id, p.full_name, abc.date_of_bite, 
-                  DATEDIFF(CURDATE(), abc.date_of_bite) as days_since_bite,
-                  abc.remarks
+// 15. FOLLOW-UP DUE
+$followupQuery = "SELECT abc.case_id, p.full_name, abc.date_of_bite,
+                         DATEDIFF(CURDATE(), abc.date_of_bite) AS days_since_bite,
+                         abc.remarks
                   FROM animal_bite_cases abc
-                  JOIN patients p ON abc.patient_id = p.patient_id
-                  WHERE abc.branch_id = ? 
-                  AND abc.case_status = 'Ongoing'
-                  AND DATEDIFF(CURDATE(), abc.date_of_bite) >= 7
+                  INNER JOIN patients p ON abc.patient_id = p.patient_id
+                  WHERE abc.branch_id = ?
+                    AND p.branch_id = ?
+                    AND abc.is_archived = 0
+                    AND p.is_archived = 0
+                    AND abc.case_status = 'Ongoing'
+                    AND DATEDIFF(CURDATE(), abc.date_of_bite) >= 7
                   ORDER BY abc.date_of_bite ASC
                   LIMIT 5";
 $stmt = $conn->prepare($followupQuery);
-$stmt->bind_param("s", $branch_id);
+$stmt->bind_param("ss", $branch_id, $branch_id);
 $stmt->execute();
 $followupResult = $stmt->get_result();
 $followups = [];
 while ($row = $followupResult->fetch_assoc()) {
     $followups[] = $row;
 }
+$stmt->close();
 
-// 16. WEEKLY VACCINATION TREND (Last 7 days)
-$weeklyTrendQuery = "SELECT DATE(date_administered) as date, COUNT(*) as count 
-                     FROM vaccination_records 
-                     WHERE branch_id = ? 
-                     AND date_administered >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-                     GROUP BY DATE(date_administered)
-                     ORDER BY date ASC";
+// 16. WEEKLY VACCINATION TREND (Today + previous 6 days)
+// One point = one completed dose stage, regardless of how many products were given.
+$weeklyTrendQuery = "SELECT x.date, COUNT(*) AS count
+                     FROM (
+                         SELECT
+                             DATE(vr.date_administered) AS date,
+                             vr.patient_id,
+                             vr.case_id,
+                             vr.dose_number
+                         FROM vaccination_records vr
+                         LEFT JOIN inventory_items ii ON vr.item_id = ii.item_id
+                         WHERE vr.branch_id = ?
+                           AND vr.is_archived = 0
+                           AND vr.vaccination_status = 'Completed'
+                           AND vr.date_administered IS NOT NULL
+                           AND DATE(vr.date_administered) BETWEEN DATE_SUB(CURDATE(), INTERVAL 6 DAY) AND CURDATE()
+                           AND COALESCE(NULLIF(vr.vaccine_name, ''), ii.item_name, '') NOT LIKE '%Default%'
+                         GROUP BY DATE(vr.date_administered), vr.patient_id, vr.case_id, vr.dose_number
+                     ) AS x
+                     GROUP BY x.date
+                     ORDER BY x.date ASC";
 $stmt = $conn->prepare($weeklyTrendQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
@@ -250,42 +379,49 @@ $weeklyTrend = [];
 while ($row = $weeklyTrendResult->fetch_assoc()) {
     $weeklyTrend[] = $row;
 }
+$stmt->close();
 
 // 17. REGISTRY RECORDS STATUS
-$registryStatusQuery = "SELECT 
-                        SUM(erig) as erig_count,
-                        SUM(ats) as ats_count,
-                        SUM(tt) as tt_count
+$registryStatusQuery = "SELECT
+                           COALESCE(SUM(rr.erig), 0) AS erig_count,
+                           COALESCE(SUM(rr.ats), 0) AS ats_count,
+                           COALESCE(SUM(rr.tt), 0) AS tt_count
                         FROM registry_records rr
-                        JOIN animal_bite_cases abc ON rr.case_id = abc.case_id
-                        WHERE abc.branch_id = ?";
+                        INNER JOIN animal_bite_cases abc ON rr.case_id = abc.case_id
+                        WHERE abc.branch_id = ?
+                          AND abc.is_archived = 0
+                          AND rr.is_archived = 0";
 $stmt = $conn->prepare($registryStatusQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
-$registryStatusResult = $stmt->get_result();
-$registryStatus = $registryStatusResult->fetch_assoc();
+$registryStatus = $stmt->get_result()->fetch_assoc() ?: [];
+$stmt->close();
 
 // 18. DOSE COMPLETION RATE
-$doseCompletionQuery = "SELECT 
-                        AVG(CASE WHEN dose_d0 = 1 THEN 100 ELSE 0 END) as dose0_rate,
-                        AVG(CASE WHEN dose_d3 = 1 THEN 100 ELSE 0 END) as dose3_rate,
-                        AVG(CASE WHEN dose_d7 = 1 THEN 100 ELSE 0 END) as dose7_rate,
-                        AVG(CASE WHEN dose_d14 = 1 THEN 100 ELSE 0 END) as dose14_rate,
-                        AVG(CASE WHEN dose_d21 = 1 THEN 100 ELSE 0 END) as dose21_rate,
-                        AVG(CASE WHEN dose_d28_30 = 1 THEN 100 ELSE 0 END) as dose28_rate
+// registry_records is the source of truth for dose-stage completion.
+$doseCompletionQuery = "SELECT
+                           AVG(CASE WHEN rr.dose_d0 = 1 THEN 100 ELSE 0 END) AS dose0_rate,
+                           AVG(CASE WHEN rr.dose_d3 = 1 THEN 100 ELSE 0 END) AS dose3_rate,
+                           AVG(CASE WHEN rr.dose_d7 = 1 THEN 100 ELSE 0 END) AS dose7_rate,
+                           AVG(CASE WHEN rr.dose_d14 = 1 THEN 100 ELSE 0 END) AS dose14_rate,
+                           AVG(CASE WHEN rr.dose_d21 = 1 THEN 100 ELSE 0 END) AS dose21_rate,
+                           AVG(CASE WHEN rr.dose_d28_30 = 1 THEN 100 ELSE 0 END) AS dose28_rate
                         FROM registry_records rr
-                        JOIN animal_bite_cases abc ON rr.case_id = abc.case_id
-                        WHERE abc.branch_id = ?";
+                        INNER JOIN animal_bite_cases abc ON rr.case_id = abc.case_id
+                        WHERE abc.branch_id = ?
+                          AND abc.is_archived = 0
+                          AND rr.is_archived = 0";
 $stmt = $conn->prepare($doseCompletionQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
-$doseCompletionResult = $stmt->get_result();
-$doseCompletion = $doseCompletionResult->fetch_assoc();
+$doseCompletion = $stmt->get_result()->fetch_assoc() ?: [];
+$stmt->close();
 
 // 19. CASE STATUS DISTRIBUTION
-$caseStatusQuery = "SELECT case_status, COUNT(*) as count 
-                    FROM animal_bite_cases 
-                    WHERE branch_id = ? 
+$caseStatusQuery = "SELECT case_status, COUNT(*) AS count
+                    FROM animal_bite_cases
+                    WHERE branch_id = ?
+                      AND is_archived = 0
                     GROUP BY case_status";
 $stmt = $conn->prepare($caseStatusQuery);
 $stmt->bind_param("s", $branch_id);
@@ -295,6 +431,7 @@ $caseStatusStats = [];
 while ($row = $caseStatusResult->fetch_assoc()) {
     $caseStatusStats[$row['case_status']] = $row['count'];
 }
+$stmt->close();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -372,6 +509,30 @@ while ($row = $caseStatusResult->fetch_assoc()) {
 
         .content {
             padding: 35px 35px 40px;
+        }
+
+        /* CLICKABLE STAT CARDS */
+        .stat-card-link {
+            display: block;
+            height: 100%;
+            text-decoration: none;
+            color: inherit;
+            border-radius: 16px;
+        }
+
+        .stat-card-link:hover,
+        .stat-card-link:focus {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        .stat-card-link:focus-visible {
+            outline: 3px solid rgba(43, 58, 140, 0.28);
+            outline-offset: 3px;
+        }
+
+        .stat-card-link .stat-card {
+            cursor: pointer;
         }
 
         /* ALL STAT CARDS - UNIFORM SIZE */
@@ -699,7 +860,7 @@ while ($row = $caseStatusResult->fetch_assoc()) {
             <li><a href="Nurse_Patients.php"><i class="bi bi-heart-pulse-fill"></i><span>Patients</span></a></li>
             <li><a href="Nurse_Vaccination.php"><i class="bi-shield-plus"></i><span>Vaccination</span></a></li>
             <li><a href="Nurse_MedicalSuppliesManagement.php"><i class="bi bi-calendar-check"></i><span>Medical Supplies Management</span></a></li>
-            <li><a href="Nurse_SupplyPrediction.php"><i class="bi bi-box-seam"></i><span>Supply Prediction</span></a></li>
+            <li><a href="Nurse_Supplyforecasting.php"><i class="bi bi-box-seam"></i><span>Supply Forecasting</span></a></li>
             <li><a href="Nurse_Notification.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
         </ul>
     </nav>
@@ -715,7 +876,7 @@ while ($row = $caseStatusResult->fetch_assoc()) {
     <!-- TOP BAR -->
     <div class="topbar">
         <h3>Dashboard <small><?php echo htmlspecialchars($branch_name); ?></small></h3>
-        <div class="profile"><?php echo htmlspecialchars($username); ?></i></div>
+        <div class="profile"><i class="bi bi-person-circle"></i><span><?php echo htmlspecialchars($username); ?></span><span>| Nurse</span></div>
     </div>
 
     <!-- PAGE CONTENT -->
@@ -727,35 +888,43 @@ while ($row = $caseStatusResult->fetch_assoc()) {
         <div class="row g-4">
             <!-- Patient Waiting -->
             <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stat-card stat-danger">
-                    <span class="stat-icon"><i class="bi bi-person"></i></span>
-                    <div class="stat-title">Patient Waiting</div>
-                    <div class="stat-number"><?php echo number_format($stats['patient_waiting']); ?></div>
-                </div>
+                <a class="stat-card-link" href="Nurse_Vaccination.php?tab=patients" aria-label="View patients waiting for vaccination" title="View patients waiting for vaccination">
+                    <div class="stat-card stat-danger">
+                        <span class="stat-icon"><i class="bi bi-person"></i></span>
+                        <div class="stat-title">Patient Waiting</div>
+                        <div class="stat-number"><?php echo number_format($stats['patient_waiting']); ?></div>
+                    </div>
+                </a>
             </div>
             <!-- Ongoing Cases -->
             <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stat-card stat-warning">
-                    <span class="stat-icon"><i class="bi bi-activity"></i></span>
-                    <div class="stat-title">Ongoing Cases</div>
-                    <div class="stat-number"><?php echo number_format($stats['ongoing_cases']); ?></div>
-                </div>
+                <a class="stat-card-link" href="Nurse_Patients.php" aria-label="View ongoing patient cases" title="View ongoing patient cases">
+                    <div class="stat-card stat-warning">
+                        <span class="stat-icon"><i class="bi bi-activity"></i></span>
+                        <div class="stat-title">Ongoing Cases</div>
+                        <div class="stat-number"><?php echo number_format($stats['ongoing_cases']); ?></div>
+                    </div>
+                </a>
             </div>
             <!-- Completed Cases -->
             <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stat-card stat-success">
-                    <span class="stat-icon"><i class="bi bi-check-circle"></i></span>
-                    <div class="stat-title">Completed Cases</div>
-                    <div class="stat-number"><?php echo number_format($stats['completed_cases']); ?></div>
-                </div>
+                <a class="stat-card-link" href="Nurse_Patients.php" aria-label="View completed patient cases" title="View completed patient cases">
+                    <div class="stat-card stat-success">
+                        <span class="stat-icon"><i class="bi bi-check-circle"></i></span>
+                        <div class="stat-title">Completed Cases</div>
+                        <div class="stat-number"><?php echo number_format($stats['completed_cases']); ?></div>
+                    </div>
+                </a>
             </div>
             <!-- Vaccinations Today -->
             <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stat-card stat-info">
-                    <span class="stat-icon"><i class="bi bi-shield-plus"></i></span>
-                    <div class="stat-title">Vaccinations Today</div>
-                    <div class="stat-number"><?php echo number_format($stats['today_vaccinations']); ?></div>
-                </div>
+                <a class="stat-card-link" href="Nurse_Vaccination.php" aria-label="Open vaccination management" title="Open vaccination management">
+                    <div class="stat-card stat-info">
+                        <span class="stat-icon"><i class="bi bi-shield-plus"></i></span>
+                        <div class="stat-title">Vaccination Stages Today</div>
+                        <div class="stat-number"><?php echo number_format($stats['today_vaccinations']); ?></div>
+                    </div>
+                </a>
             </div>
         </div>
 
@@ -765,35 +934,43 @@ while ($row = $caseStatusResult->fetch_assoc()) {
         <div class="row g-4 mt-3">
             <!-- Total Patients -->
             <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stat-card">
-                    <span class="stat-icon"><i class="bi bi-people"></i></span>
-                    <div class="stat-title">Total Patients</div>
-                    <div class="stat-number"><?php echo number_format($stats['total_patients']); ?></div>
-                </div>
+                <a class="stat-card-link" href="Nurse_Patients.php" aria-label="View all patients" title="View all patients">
+                    <div class="stat-card">
+                        <span class="stat-icon"><i class="bi bi-people"></i></span>
+                        <div class="stat-title">Total Patients</div>
+                        <div class="stat-number"><?php echo number_format($stats['total_patients']); ?></div>
+                    </div>
+                </a>
             </div>
             <!-- Total Cases -->
             <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stat-card">
-                    <span class="stat-icon"><i class="bi bi-file-medical"></i></span>
-                    <div class="stat-title">Total Cases</div>
-                    <div class="stat-number"><?php echo number_format($stats['total_cases']); ?></div>
-                </div>
+                <a class="stat-card-link" href="Nurse_Patients.php" aria-label="View all patient cases" title="View all patient cases">
+                    <div class="stat-card">
+                        <span class="stat-icon"><i class="bi bi-file-medical"></i></span>
+                        <div class="stat-title">Total Cases</div>
+                        <div class="stat-number"><?php echo number_format($stats['total_cases']); ?></div>
+                    </div>
+                </a>
             </div>
             <!-- Upcoming (7 days) -->
             <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stat-card">
-                    <span class="stat-icon"><i class="bi bi-calendar-check"></i></span>
-                    <div class="stat-title">Upcoming (7 days)</div>
-                    <div class="stat-number"><?php echo number_format($stats['upcoming_vaccinations']); ?></div>
-                </div>
+                <a class="stat-card-link" href="Nurse_Vaccination.php?tab=patients" aria-label="View upcoming vaccinations" title="View upcoming vaccinations">
+                    <div class="stat-card">
+                        <span class="stat-icon"><i class="bi bi-calendar-check"></i></span>
+                        <div class="stat-title">Upcoming (7 days)</div>
+                        <div class="stat-number"><?php echo number_format($stats['upcoming_vaccinations']); ?></div>
+                    </div>
+                </a>
             </div>
             <!-- Missed Vaccinations -->
             <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stat-card">
-                    <span class="stat-icon"><i class="bi bi-exclamation-triangle"></i></span>
-                    <div class="stat-title">Missed Vaccinations</div>
-                    <div class="stat-number"><?php echo number_format($stats['missed_vaccinations']); ?></div>
-                </div>
+                <a class="stat-card-link" href="Nurse_Vaccination.php?tab=patients" aria-label="View missed vaccinations" title="View missed vaccinations">
+                    <div class="stat-card">
+                        <span class="stat-icon"><i class="bi bi-exclamation-triangle"></i></span>
+                        <div class="stat-title">Missed Vaccinations</div>
+                        <div class="stat-number"><?php echo number_format($stats['missed_vaccinations']); ?></div>
+                    </div>
+                </a>
             </div>
         </div>
 
@@ -857,21 +1034,20 @@ while ($row = $caseStatusResult->fetch_assoc()) {
                             <?php foreach ($schedules as $schedule): ?>
                                 <tr>
                                     <td class="time-col">
-                                        <?php 
-                                        if ($schedule['scheduled_date']) {
-                                            echo date('h:i A', strtotime($schedule['scheduled_date']));
-                                        } else {
-                                            echo '--:--';
-                                        }
-                                        ?>
+                                        <?php echo htmlspecialchars(dashboardDoseLabel($schedule['dose_number'])); ?>
                                     </td>
                                     <td class="activity-col">
                                         <?php echo htmlspecialchars($schedule['full_name']); ?>
                                         <span class="sub-activity">
-                                            Dose <?php echo $schedule['dose_number']; ?>
-                                            <?php if ($schedule['is_final_dose']): ?>
-                                                <span class="badge bg-success">Final</span>
+                                            Dose <?php echo (int)$schedule['dose_number']; ?>
+                                            (<?php echo htmlspecialchars(dashboardDoseLabel($schedule['dose_number'])); ?>)
+                                            <?php if ((int)$schedule['dose_number'] === 6): ?>
+                                                <span class="badge bg-success">Final Stage</span>
                                             <?php endif; ?>
+                                            <br>
+                                            <small class="text-muted">
+                                                Products: <?php echo htmlspecialchars($schedule['vaccine_names'] ?? 'N/A'); ?>
+                                            </small>
                                             <br>
                                             <small class="text-muted">Contact: <?php echo htmlspecialchars($schedule['contact_number'] ?? 'N/A'); ?></small>
                                         </span>
@@ -882,7 +1058,7 @@ while ($row = $caseStatusResult->fetch_assoc()) {
                     <?php endif; ?>
 
                     <div class="text-end mt-auto">
-                        <button class="btn-view" onclick="window.location.href='Nurse_Patients.php'">View All Schedule</button>
+                        <button class="btn-view" onclick="window.location.href='Nurse_Vaccination.php?tab=patients'">View All Schedule</button>
                     </div>
                 </div>
             </div>
@@ -1068,7 +1244,7 @@ document.addEventListener('DOMContentLoaded', function() {
             data: {
                 labels: labels,
                 datasets: [{
-                    label: 'Vaccinations',
+                    label: 'Completed Dose Stages',
                     data: values,
                     backgroundColor: 'rgba(43, 58, 140, 0.2)',
                     borderColor: '#2B3A8C',

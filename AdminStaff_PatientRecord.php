@@ -17,6 +17,11 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || $_SESSION['r
     exit();
 }
 
+if (empty($_SESSION['admin_patient_record_csrf'])) {
+    $_SESSION['admin_patient_record_csrf'] = bin2hex(random_bytes(32));
+}
+$csrfToken = $_SESSION['admin_patient_record_csrf'];
+
 $logged_user_id = $_SESSION['user_id'];
 $logged_branch_id = null;
 $branch_name = '';
@@ -102,109 +107,304 @@ function jsonResponse($data, int $code = 200) {
     exit;
 }
 
-function caseNoExists(mysqli $conn, string $caseNo, ?int $excludeCaseId = null): bool {
-    $sql = "SELECT case_id FROM animal_bite_cases WHERE case_number = ? AND is_archived = 0";
-    $params = [$caseNo];
-    $types = "s";
-    
+function caseNoExists(mysqli $conn, string $caseNo, string $branchId, ?int $excludeCaseId = null): bool {
+    $sql = "SELECT case_id
+            FROM animal_bite_cases
+            WHERE case_number = ?
+              AND branch_id = ?
+              AND is_archived = 0";
+    $params = [$caseNo, $branchId];
+    $types = "ss";
+
     if ($excludeCaseId) {
         $sql .= " AND case_id != ?";
         $params[] = $excludeCaseId;
         $types .= "i";
     }
-    
+
     $stmt = $conn->prepare($sql);
+    if (!$stmt) return false;
+
     $stmt->bind_param($types, ...$params);
     $stmt->execute();
-    $result = $stmt->get_result();
-    return $result->num_rows > 0;
+    $exists = $stmt->get_result()->num_rows > 0;
+    $stmt->close();
+
+    return $exists;
 }
 
-function getDefaultVaccineItemId(mysqli $conn): int {
-    // First try to get the Rabies Vaccine (item_id 5)
-    $stmt = $conn->prepare("SELECT item_id FROM inventory_items WHERE item_id = 5 LIMIT 1");
-    $stmt->execute();
-    $result = $stmt->get_result();
-    $row = $result->fetch_assoc();
-    if ($row) {
-        return (int) $row['item_id'];
-    }
-    
-    // If not found, get any available vaccine item from category 2
-    $stmt = $conn->prepare("SELECT item_id FROM inventory_items WHERE category_id = 2 LIMIT 1");
-    $stmt->execute();
-    $result = $stmt->get_result();
-    $row = $result->fetch_assoc();
-    if ($row) {
-        return (int) $row['item_id'];
-    }
-    
-    // Last resort: get any item
-    $stmt = $conn->prepare("SELECT item_id FROM inventory_items LIMIT 1");
-    $stmt->execute();
-    $result = $stmt->get_result();
-    $row = $result->fetch_assoc();
-    if ($row) {
-        return (int) $row['item_id'];
-    }
-    
-    return 5; // Default fallback
+/**
+ * Admin Staff creates schedule-only vaccination rows.
+ * Product/item selection belongs to the Nurse during actual administration.
+ * item_id, vaccine_name, unit_id and nurse_id remain NULL for Admin Staff schedules.
+ */
+function doseNumberToKey(int $doseNumber): ?string {
+    $map = [
+        1 => 'd0',
+        2 => 'd3',
+        3 => 'd7',
+        4 => 'd14',
+        5 => 'd21',
+        6 => 'd28'
+    ];
+    return $map[$doseNumber] ?? null;
 }
 
-function getDefaultUnitId(mysqli $conn): int {
-    // Try to get mL (unit_id 4) which is commonly used
-    $stmt = $conn->prepare("SELECT unit_id FROM units WHERE unit_id = 4 LIMIT 1");
+function doseKeyToNumber(string $doseKey): ?int {
+    $map = [
+        'd0' => 1,
+        'd3' => 2,
+        'd7' => 3,
+        'd14' => 4,
+        'd21' => 5,
+        'd28' => 6
+    ];
+    return $map[$doseKey] ?? null;
+}
+
+function inferScheduleProfile(array $doseNumbers): array {
+    return [
+        'category' => 'Post-Exposure Prophylaxis (PEP)',
+        'route' => 'Intradermal (ID)'
+    ];
+}
+
+/**
+ * Removes only schedule rows that belong to Admin Staff.
+ * Nurse-entered Scheduled/Completed/Missed records are never deleted here.
+ */
+function archiveAdminScheduleRows(
+    mysqli $conn,
+    int $caseId,
+    string $branchId,
+    int $doseNumber,
+    int $userId
+): void {
+    $stmt = $conn->prepare("
+        UPDATE vaccination_records vr
+        LEFT JOIN users owner_user
+          ON owner_user.user_id = vr.nurse_id
+        SET vr.is_archived = 1,
+            vr.archived_at = NOW(),
+            vr.archived_by = ?
+        WHERE vr.case_id = ?
+          AND vr.branch_id = ?
+          AND vr.dose_number = ?
+          AND vr.vaccination_status = 'Scheduled'
+          AND vr.is_archived = 0
+          AND (
+                vr.nurse_id IS NULL
+                OR owner_user.role_id = 4
+              )
+    ");
+    if (!$stmt) {
+        throw new Exception('Unable to prepare schedule update.');
+    }
+
+    $stmt->bind_param("iisi", $userId, $caseId, $branchId, $doseNumber);
+    if (!$stmt->execute()) {
+        throw new Exception('Unable to update the vaccination schedule.');
+    }
+    $stmt->close();
+}
+
+function loadDoseStageData(mysqli $conn, int $caseId, string $branchId): array {
+    $stmt = $conn->prepare("
+        SELECT
+            vr.dose_number,
+            vr.scheduled_date,
+            vr.date_administered,
+            vr.vaccination_status,
+            vr.remarks,
+            vr.nurse_id
+        FROM vaccination_records vr
+        WHERE vr.case_id = ?
+          AND vr.branch_id = ?
+          AND vr.is_archived = 0
+          AND vr.dose_number BETWEEN 1 AND 6
+        ORDER BY vr.dose_number ASC, vr.vaccination_id ASC
+    ");
+    if (!$stmt) {
+        throw new Exception('Unable to load vaccination schedule.');
+    }
+
+    $stmt->bind_param("is", $caseId, $branchId);
     $stmt->execute();
     $result = $stmt->get_result();
-    $row = $result->fetch_assoc();
-    if ($row) {
-        return (int) $row['unit_id'];
+
+    $stages = [];
+    $doseNumbers = [];
+    $scheduleRemarks = '';
+
+    while ($row = $result->fetch_assoc()) {
+        $doseNumber = (int)$row['dose_number'];
+        $key = doseNumberToKey($doseNumber);
+        if (!$key) continue;
+
+        $doseNumbers[] = $doseNumber;
+
+        if (!isset($stages[$key])) {
+            $stages[$key] = [
+                'scheduled_date' => '',
+                'administered_date' => '',
+                'status' => '',
+                'locked' => false
+            ];
+        }
+
+        $status = (string)($row['vaccination_status'] ?? 'Scheduled');
+        $scheduled = dbToFrontDate($row['scheduled_date'] ?? null);
+        $administered = dbToFrontDate($row['date_administered'] ?? null);
+
+        // Actual completed administration always wins over schedule/missed rows.
+        $isValidCompleted = (
+            $status === 'Completed'
+            && !empty($row['date_administered'])
+            && $row['date_administered'] <= date('Y-m-d')
+        );
+
+        if ($isValidCompleted) {
+            $stages[$key]['status'] = 'Administered';
+            $stages[$key]['administered_date'] = $administered;
+            $stages[$key]['locked'] = true;
+
+            if ($scheduled !== '' && $stages[$key]['scheduled_date'] === '') {
+                $stages[$key]['scheduled_date'] = $scheduled;
+            }
+        } elseif ($status === 'Scheduled' && $stages[$key]['status'] !== 'Administered') {
+            // A rescheduled stage should display Scheduled instead of an older Missed row.
+            $stages[$key]['status'] = 'Scheduled';
+
+            if ($scheduled !== '') {
+                if (
+                    $stages[$key]['scheduled_date'] === ''
+                    || frontToDbDate($scheduled) < frontToDbDate($stages[$key]['scheduled_date'])
+                ) {
+                    $stages[$key]['scheduled_date'] = $scheduled;
+                }
+            }
+        } elseif ($status === 'Missed' && !in_array($stages[$key]['status'], ['Administered', 'Scheduled'], true)) {
+            $stages[$key]['status'] = 'Missed';
+        } elseif ($status === 'Missed' && $stages[$key]['scheduled_date'] === '') {
+            $stages[$key]['status'] = 'Missed';
+            if ($scheduled !== '') {
+                $stages[$key]['scheduled_date'] = $scheduled;
+            }
+        }
+
+        if ($scheduleRemarks === '' && trim((string)($row['remarks'] ?? '')) !== '') {
+            $scheduleRemarks = trim((string)$row['remarks']);
+        }
     }
-    
-    // If not found, get any unit
-    $stmt = $conn->prepare("SELECT unit_id FROM units LIMIT 1");
-    $stmt->execute();
-    $result = $stmt->get_result();
-    $row = $result->fetch_assoc();
-    if ($row) {
-        return (int) $row['unit_id'];
+    $stmt->close();
+
+    foreach ($stages as $key => $stage) {
+        if (($stage['status'] ?? '') === '') {
+            $stages[$key]['status'] = 'Scheduled';
+        }
     }
-    
-    return 4; // Default fallback
+
+    $doseNumbers = array_values(array_unique($doseNumbers));
+    sort($doseNumbers);
+
+    $total = count($stages);
+    $completed = 0;
+    foreach ($stages as $stage) {
+        if (($stage['status'] ?? '') === 'Administered') {
+            $completed++;
+        }
+    }
+
+    $overall = 'Pending';
+    if ($total > 0 && $completed === $total) {
+        $overall = 'Completed';
+    } elseif ($completed > 0) {
+        $overall = 'In Progress';
+    }
+
+    return [
+        'stages' => $stages,
+        'dose_numbers' => $doseNumbers,
+        'profile' => inferScheduleProfile($doseNumbers),
+        'overall_status' => $overall,
+        'completed_count' => $completed,
+        'total_count' => $total,
+        'remarks' => $scheduleRemarks
+    ];
 }
 
 function validatePatientData(array $data): array {
     $errors = [];
-    if (empty($data['case_no'])) $errors[] = "Case number is required.";
-    if (empty($data['patient_name'])) $errors[] = "Patient name is required.";
-    if (!empty($data['dob'])) {
-        $dob = frontToDbDate($data['dob']);
-        if (!$dob) $errors[] = "Invalid date of birth format.";
+
+    if (empty(trim((string)($data['case_no'] ?? '')))) {
+        $errors[] = "Case number is required.";
     }
-    if (!empty($data['admission_date'])) {
-        $admit = frontToDbDate($data['admission_date']);
-        if (!$admit) $errors[] = "Invalid admission date format.";
+    if (empty(trim((string)($data['patient_name'] ?? '')))) {
+        $errors[] = "Patient name is required.";
     }
+    if (empty(trim((string)($data['address'] ?? '')))) {
+        $errors[] = "Address is required.";
+    }
+    if (empty(trim((string)($data['contact_number'] ?? '')))) {
+        $errors[] = "Contact number is required.";
+    }
+
+    $requiredDates = [
+        'dob' => 'Date of birth',
+        'admission_date' => 'Admission date',
+        'date_of_bite' => 'Date of bite'
+    ];
+
+    foreach ($requiredDates as $key => $label) {
+        $value = trim((string)($data[$key] ?? ''));
+        if ($value === '') {
+            $errors[] = "{$label} is required.";
+            continue;
+        }
+        if (!frontToDbDate($value)) {
+            $errors[] = "Invalid {$label} format.";
+        }
+    }
+
+    $gender = trim((string)($data['gender'] ?? ''));
+    if (!in_array($gender, ['Male', 'Female', 'Other'], true)) {
+        $errors[] = "Please select a valid gender.";
+    }
+
+    if (empty(trim((string)($data['site_of_bite'] ?? '')))) {
+        $errors[] = "Site of bite is required.";
+    }
+    if (empty(trim((string)($data['biting_animal'] ?? '')))) {
+        $errors[] = "Biting animal is required.";
+    }
+    if (
+        trim((string)($data['biting_animal'] ?? '')) === 'Others'
+        && empty(trim((string)($data['custom_animal'] ?? '')))
+    ) {
+        $errors[] = "Please specify the biting animal.";
+    }
+    if (empty(trim((string)($data['animal_status'] ?? '')))) {
+        $errors[] = "Animal status is required.";
+    }
+    if (empty(trim((string)($data['active_regimen'] ?? '')))) {
+        $errors[] = "Active regimen is required.";
+    }
+    if (empty(trim((string)($data['vacc_category'] ?? '')))) {
+        $errors[] = "Vaccination category is required.";
+    }
+
     return $errors;
 }
 
 function getDosesForCategory(string $category, string $route): array {
-    switch ($category) {
-        case 'Pre-Exposure Prophylaxis (PrEP)':
-            return ['d0', 'd7', 'd21'];
-        case 'Post-Exposure Prophylaxis (PEP)':
-            if ($route === 'Intradermal (ID)') {
-                return ['d0', 'd3', 'd7', 'd28'];
-            } else {
-                return ['d0', 'd3', 'd7', 'd14', 'd28'];
-            }
-        case 'Booster Dose':
-            return ['d0', 'd3'];
-        case 'Others':
-            return [];
-        default:
-            return ['d0', 'd3', 'd7', 'd14', 'd28'];
+    // SmartBiteCare's Nurse Vaccination module tracks six dose stages:
+    // D0, D3, D7, D14, D21 and D28/30.
+    // Admin Staff assigns those same six schedule stages.
+    if ($category === 'Others') {
+        return [];
     }
+
+    return ['d0', 'd3', 'd7', 'd14', 'd21', 'd28'];
 }
 
 /**
@@ -286,11 +486,11 @@ function archiveCase(mysqli $conn, int $caseId, int $userId, string $branchId, s
              archived_at, archived_by, archive_reason, original_case_id)
             SELECT case_id, case_number, patient_id, branch_id, animal_type, bite_location, bite_category,
                    animal_status, date_of_bite, case_status, remarks, admin_staff_id, created_at,
-                   NOW(), ?, ?, ?
+                   NOW(), ?, ?, case_id
             FROM animal_bite_cases 
             WHERE case_id = ? AND branch_id = ?
         ");
-        $stmt->bind_param("iiss", $userId, $archiveReason, $caseId, $branchId);
+        $stmt->bind_param("isis", $userId, $archiveReason, $caseId, $branchId);
         $stmt->execute();
         
         // 2. Archive registry_records
@@ -303,7 +503,7 @@ function archiveCase(mysqli $conn, int $caseId, int $userId, string $branchId, s
             SELECT registry_id, case_id, branch_id, created_by, created_at, registry_number, status_of_biting_animal,
                    erig, ats, tt, active_regimen, vaccine_item_id, vaccine_unit_id, dose_d0, dose_d3, dose_d7,
                    dose_d14, dose_d21, dose_d28_30, booster, contact_number, remarks, updated_by, updated_at,
-                   NOW(), ?, ?, ?
+                   NOW(), ?, ?, registry_id
             FROM registry_records 
             WHERE case_id = ?
         ");
@@ -318,13 +518,13 @@ function archiveCase(mysqli $conn, int $caseId, int $userId, string $branchId, s
              vaccination_status, is_final_dose, remarks, nurse_id, created_at,
              archived_at, archived_by, archive_reason, original_vaccination_id)
             SELECT vaccination_id, patient_id, case_id, item_id, vaccine_name, unit_id, branch_id,
-                   dose_number, date_administered, scheduled_date, administered_at, next_schedule,
+                   dose_number, date_administered, scheduled_date, CAST(administered_datetime AS CHAR), next_schedule,
                    vaccination_status, is_final_dose, remarks, nurse_id, created_at,
-                   NOW(), ?, ?, ?
+                   NOW(), ?, ?, vaccination_id
             FROM vaccination_records 
             WHERE case_id = ? AND branch_id = ?
         ");
-        $stmt->bind_param("iss", $userId, $archiveReason, $caseId, $branchId);
+        $stmt->bind_param("isis", $userId, $archiveReason, $caseId, $branchId);
         $stmt->execute();
         
         // 4. Archive philhealth_records
@@ -334,7 +534,7 @@ function archiveCase(mysqli $conn, int $caseId, int $userId, string $branchId, s
              remarks, updated_by, updated_at, archived_at, archived_by, archive_reason,
              original_philhealth_record_id)
             SELECT philhealth_record_id, case_id, has_philhealth, philhealth_membership, status,
-                   remarks, updated_by, updated_at, NOW(), ?, ?, ?
+                   remarks, updated_by, updated_at, NOW(), ?, ?, philhealth_record_id
             FROM philhealth_records 
             WHERE case_id = ?
         ");
@@ -347,7 +547,7 @@ function archiveCase(mysqli $conn, int $caseId, int $userId, string $branchId, s
             (registry_patient_id, registry_id, patient_id, case_id, relationship_type,
              created_at, archived_at, archived_by, archive_reason, original_registry_patient_id)
             SELECT registry_patient_id, registry_id, patient_id, case_id, relationship_type,
-                   created_at, NOW(), ?, ?, ?
+                   created_at, NOW(), ?, ?, registry_patient_id
             FROM registry_patients 
             WHERE case_id = ?
         ");
@@ -363,56 +563,88 @@ function archiveCase(mysqli $conn, int $caseId, int $userId, string $branchId, s
              original_dose_id)
             SELECT dose_id, registry_id, patient_id, vaccination_id, dose_number, vaccine_name,
                    vaccine_item_id, unit_id, scheduled_date, date_administered, administered_by,
-                   status, remarks, created_at, updated_at, NOW(), ?, ?, ?
+                   status, remarks, created_at, updated_at, NOW(), ?, ?, dose_id
             FROM registry_vaccination_doses 
             WHERE registry_id IN (SELECT registry_id FROM registry_records WHERE case_id = ?)
         ");
         $stmt->bind_param("isi", $userId, $archiveReason, $caseId);
         $stmt->execute();
         
-        // 7. Archive patients (if not already archived)
-        // First get the patient_id from the case
-        $patientStmt = $conn->prepare("SELECT patient_id FROM animal_bite_cases WHERE case_id = ?");
-        $patientStmt->bind_param("i", $caseId);
+        // 7. Archive the patient ONLY if this is their last active case.
+        // A patient may have multiple bite cases. Archiving one old case must not
+        // hide the patient while another active case still exists.
+        $patientStmt = $conn->prepare("
+            SELECT patient_id
+            FROM animal_bite_cases
+            WHERE case_id = ?
+              AND branch_id = ?
+            LIMIT 1
+        ");
+        $patientStmt->bind_param("is", $caseId, $branchId);
         $patientStmt->execute();
-        $patientResult = $patientStmt->get_result();
-        $patientRow = $patientResult->fetch_assoc();
-        $patientId = $patientRow['patient_id'] ?? 0;
-        
+        $patientRow = $patientStmt->get_result()->fetch_assoc();
+        $patientStmt->close();
+
+        $patientId = (int)($patientRow['patient_id'] ?? 0);
+
         if ($patientId > 0) {
-            // Check if patient is already archived
-            $checkStmt = $conn->prepare("SELECT is_archived FROM patients WHERE patient_id = ?");
-            $checkStmt->bind_param("i", $patientId);
-            $checkStmt->execute();
-            $checkResult = $checkStmt->get_result();
-            $checkRow = $checkResult->fetch_assoc();
-            
-            if ($checkRow && $checkRow['is_archived'] == 0) {
-                // Archive the patient
-                $stmt = $conn->prepare("
-                    INSERT INTO patients_archive 
-                    (patient_id, full_name, email, contact_number, birthday, gender, address,
-                     branch_id, created_at, archived_at, archived_by, archive_reason,
-                     original_patient_id)
-                    SELECT patient_id, full_name, email, contact_number, birthday, gender, address,
-                           branch_id, created_at, NOW(), ?, ?, ?
-                    FROM patients 
+            $otherCasesStmt = $conn->prepare("
+                SELECT COUNT(*) AS active_cases
+                FROM animal_bite_cases
+                WHERE patient_id = ?
+                  AND branch_id = ?
+                  AND case_id != ?
+                  AND is_archived = 0
+            ");
+            $otherCasesStmt->bind_param("isi", $patientId, $branchId, $caseId);
+            $otherCasesStmt->execute();
+            $otherActiveCases = (int)($otherCasesStmt->get_result()->fetch_assoc()['active_cases'] ?? 0);
+            $otherCasesStmt->close();
+
+            if ($otherActiveCases === 0) {
+                $checkStmt = $conn->prepare("
+                    SELECT is_archived
+                    FROM patients
                     WHERE patient_id = ?
+                      AND branch_id = ?
+                    LIMIT 1
                 ");
-                $stmt->bind_param("isi", $userId, $archiveReason, $patientId);
-                $stmt->execute();
-                
-                // Mark patient as archived
-                $updateStmt = $conn->prepare("
-                    UPDATE patients 
-                    SET is_archived = 1, archived_at = NOW(), archived_by = ? 
-                    WHERE patient_id = ?
-                ");
-                $updateStmt->bind_param("ii", $userId, $patientId);
-                $updateStmt->execute();
+                $checkStmt->bind_param("is", $patientId, $branchId);
+                $checkStmt->execute();
+                $checkRow = $checkStmt->get_result()->fetch_assoc();
+                $checkStmt->close();
+
+                if ($checkRow && (int)$checkRow['is_archived'] === 0) {
+                    $stmt = $conn->prepare("
+                        INSERT INTO patients_archive
+                        (patient_id, full_name, email, contact_number, birthday, gender, address,
+                         branch_id, created_at, archived_at, archived_by, archive_reason,
+                         original_patient_id)
+                        SELECT patient_id, full_name, email, contact_number, birthday, gender, address,
+                               branch_id, created_at, NOW(), ?, ?, patient_id
+                        FROM patients
+                        WHERE patient_id = ?
+                          AND branch_id = ?
+                    ");
+                    $stmt->bind_param("isis", $userId, $archiveReason, $patientId, $branchId);
+                    $stmt->execute();
+                    $stmt->close();
+
+                    $updateStmt = $conn->prepare("
+                        UPDATE patients
+                        SET is_archived = 1,
+                            archived_at = NOW(),
+                            archived_by = ?
+                        WHERE patient_id = ?
+                          AND branch_id = ?
+                    ");
+                    $updateStmt->bind_param("iis", $userId, $patientId, $branchId);
+                    $updateStmt->execute();
+                    $updateStmt->close();
+                }
             }
         }
-        
+
         // 8. Mark all related records as archived in the main tables
         // Update animal_bite_cases
         $updateStmt = $conn->prepare("
@@ -491,7 +723,7 @@ if ($action) {
                 $filter = $_GET['filter'] ?? 'all';
                 $sort = $_GET['sort'] ?? 'desc';
                 
-                $where = "WHERE c.branch_id = ? AND c.is_archived = 0";
+                $where = "WHERE c.branch_id = ? AND c.is_archived = 0 AND p.is_archived = 0";
                 $params = [$logged_branch_id];
                 $types = "s";
                 
@@ -543,8 +775,8 @@ if ($action) {
                         ph.status AS philhealth_status
                     FROM animal_bite_cases c
                     JOIN patients p ON c.patient_id = p.patient_id
-                    LEFT JOIN registry_records r ON c.case_id = r.case_id
-                    LEFT JOIN philhealth_records ph ON c.case_id = ph.case_id
+                    LEFT JOIN registry_records r ON c.case_id = r.case_id AND r.is_archived = 0
+                    LEFT JOIN philhealth_records ph ON c.case_id = ph.case_id AND ph.is_archived = 0
                     $where
                     ORDER BY c.created_at $orderBy
                 ";
@@ -560,54 +792,37 @@ if ($action) {
 
                 $resultArray = [];
                 foreach ($rows as $row) {
-                    $doseStmt = $conn->prepare("
-                        SELECT dose_number, date_administered, vaccination_status, scheduled_date
-                        FROM vaccination_records
-                        WHERE case_id = ? AND branch_id = ? AND is_archived = 0
-                        ORDER BY dose_number
-                    ");
-                    $doseStmt->bind_param("is", $row['case_id'], $logged_branch_id);
-                    $doseStmt->execute();
-                    $doseResult = $doseStmt->get_result();
-                    $doses = [];
-                    while ($doseRow = $doseResult->fetch_assoc()) {
-                        $doses[] = $doseRow;
+                    $doseInfo = loadDoseStageData(
+                        $conn,
+                        (int)$row['case_id'],
+                        (string)$logged_branch_id
+                    );
+
+                    $schedule = [
+                        'd0' => '',
+                        'd3' => '',
+                        'd7' => '',
+                        'd14' => '',
+                        'd21' => '',
+                        'd28' => ''
+                    ];
+                    $scheduleStatus = [
+                        'd0' => '',
+                        'd3' => '',
+                        'd7' => '',
+                        'd14' => '',
+                        'd21' => '',
+                        'd28' => ''
+                    ];
+
+                    foreach ($doseInfo['stages'] as $key => $stage) {
+                        $schedule[$key] = $stage['administered_date'] !== ''
+                            ? $stage['administered_date']
+                            : ($stage['scheduled_date'] ?? '');
+                        $scheduleStatus[$key] = $stage['status'] ?? 'Scheduled';
                     }
 
-                    $schedule = ['d0' => '', 'd3' => '', 'd7' => '', 'd14'=> '', 'd21'=> '', 'd28'=> ''];
-                    $scheduleStatus = ['d0' => 'Pending', 'd3' => 'Pending', 'd7' => 'Pending', 'd14'=> 'Pending', 'd21'=> 'Pending', 'd28'=> 'Pending'];
-                    
-                    foreach ($doses as $d) {
-                        $key = '';
-                        switch ((int)$d['dose_number']) {
-                            case 1: $key = 'd0'; break;
-                            case 2: $key = 'd3'; break;
-                            case 3: $key = 'd7'; break;
-                            case 4: $key = 'd14'; break;
-                            case 5: $key = 'd21'; break;
-                            case 6: $key = 'd28'; break;
-                        }
-                        if ($key) {
-                            $schedule[$key] = dbToFrontDate($d['date_administered']) ?: dbToFrontDate($d['scheduled_date']);
-                            $scheduleStatus[$key] = $d['vaccination_status'] ?? 'Scheduled';
-                        }
-                    }
-
-                    $vaccStatus = 'Pending';
-                    $completedDoses = 0;
-                    $totalDoses = 0;
-                    foreach ($scheduleStatus as $status) {
-                        if ($status === 'Completed') $completedDoses++;
-                        if ($status !== '') $totalDoses++;
-                    }
-                    
-                    if ($totalDoses > 0 && $completedDoses === $totalDoses) {
-                        $vaccStatus = 'Completed';
-                    } else if ($completedDoses > 0) {
-                        $vaccStatus = 'In Progress';
-                    } else {
-                        $vaccStatus = 'Pending';
-                    }
+                    $vaccStatus = $doseInfo['overall_status'];
 
                     $hasPhilhealth = $row['has_philhealth'] ?? 'No';
                     $philhealthYes = ($hasPhilhealth === 'Yes') ? 'Yes' : 'No';
@@ -631,14 +846,14 @@ if ($action) {
                         'ats' => (bool) $row['ats'],
                         'tt' => (bool) $row['tt'],
                         'active_regimen' => $row['active_regimen'] ?? '',
-                        'route' => '',
-                        'vacc_category' => 'Post-Exposure Prophylaxis (PEP)',
+                        'route' => $doseInfo['profile']['route'],
+                        'vacc_category' => $doseInfo['profile']['category'],
                         'schedule' => $schedule,
                         'schedule_status' => $scheduleStatus,
                         'vaccination_status' => $vaccStatus,
                         'philhealth' => $philhealthYes,
                         'philhealth_type' => $row['philhealth_membership'] ?? '',
-                        'status' => $row['philhealth_status'] ?? 'For Writing',
+                        'status' => $row['philhealth_status'] ?? '',
                         'remarks' => $row['case_remarks'] ?? $row['registry_remarks'] ?? '',
                         'created_at' => $row['created_at'],
                     ];
@@ -663,96 +878,110 @@ if ($action) {
 
         case 'view':
             try {
-                $caseId = (int) ($_GET['case_id'] ?? 0);
+                $caseId = (int)($_GET['case_id'] ?? 0);
                 if ($caseId <= 0) {
                     jsonResponse(['error' => 'Invalid case ID'], 400);
                 }
 
                 $stmt = $conn->prepare("
-                    SELECT 
-                        c.*, 
-                        p.*, 
-                        r.*, 
+                    SELECT
+                        c.case_id,
+                        c.case_number,
+                        c.patient_id,
+                        c.branch_id AS case_branch_id,
+                        c.animal_type,
+                        c.bite_location,
+                        c.bite_category,
+                        c.animal_status,
+                        c.date_of_bite,
+                        c.case_status,
+                        c.remarks AS case_remarks,
+                        c.created_at AS case_created_at,
+
+                        p.full_name,
+                        p.email,
+                        p.contact_number,
+                        p.birthday,
+                        p.gender,
+                        p.address,
+
+                        r.registry_id,
+                        r.registry_number,
+                        r.erig,
+                        r.ats,
+                        r.tt,
+                        r.active_regimen,
+                        r.remarks AS registry_remarks,
+
                         ph.has_philhealth,
                         ph.philhealth_membership,
                         ph.status AS philhealth_status,
                         ph.remarks AS philhealth_remarks
+
                     FROM animal_bite_cases c
-                    JOIN patients p ON c.patient_id = p.patient_id
-                    LEFT JOIN registry_records r ON c.case_id = r.case_id
-                    LEFT JOIN philhealth_records ph ON c.case_id = ph.case_id
-                    WHERE c.case_id = ? AND c.branch_id = ? AND c.is_archived = 0
+                    INNER JOIN patients p
+                      ON c.patient_id = p.patient_id
+                     AND p.branch_id = c.branch_id
+                    LEFT JOIN registry_records r
+                      ON c.case_id = r.case_id
+                     AND r.is_archived = 0
+                    LEFT JOIN philhealth_records ph
+                      ON c.case_id = ph.case_id
+                     AND ph.is_archived = 0
+                    WHERE c.case_id = ?
+                      AND c.branch_id = ?
+                      AND c.is_archived = 0
+                      AND p.is_archived = 0
+                    LIMIT 1
                 ");
                 $stmt->bind_param("is", $caseId, $logged_branch_id);
                 $stmt->execute();
-                $result = $stmt->get_result();
-                $row = $result->fetch_assoc();
+                $row = $stmt->get_result()->fetch_assoc();
+                $stmt->close();
 
                 if (!$row) {
                     jsonResponse(['error' => 'Record not found'], 404);
                 }
 
-                $doseStmt = $conn->prepare("
-                    SELECT dose_number, scheduled_date, date_administered, vaccination_status, remarks
-                    FROM vaccination_records 
-                    WHERE case_id = ? AND branch_id = ? AND is_archived = 0
-                    ORDER BY dose_number
-                ");
-                $doseStmt->bind_param("is", $caseId, $logged_branch_id);
-                $doseStmt->execute();
-                $doseResult = $doseStmt->get_result();
-                
-                $doseMap = ['d0' => 1, 'd3' => 2, 'd7' => 3, 'd14' => 4, 'd21' => 5, 'd28' => 6];
-                $doseData = [];
-                foreach ($doseMap as $key => $num) {
-                    $doseData[$key] = [
-                        'scheduled_date' => '',
-                        'administered_date' => '',
-                        'status' => 'Pending'
-                    ];
-                }
-                
-                while ($doseRow = $doseResult->fetch_assoc()) {
-                    $key = array_search((int)$doseRow['dose_number'], $doseMap);
-                    if ($key) {
-                        $doseData[$key]['scheduled_date'] = dbToFrontDate($doseRow['scheduled_date']);
-                        $doseData[$key]['administered_date'] = dbToFrontDate($doseRow['date_administered']);
-                        $doseData[$key]['status'] = $doseRow['vaccination_status'] === 'Completed' ? 'Administered' : ($doseRow['vaccination_status'] ?? 'Pending');
-                        $doseData[$key]['remarks'] = $doseRow['remarks'] ?? '';
-                    }
-                }
-
-                $completedDoses = 0;
-                $totalDoses = 0;
-                foreach ($doseData as $d) {
-                    if ($d['status'] === 'Administered') $completedDoses++;
-                    if ($d['status'] !== '') $totalDoses++;
-                }
-                $vaccStatus = ($totalDoses > 0 && $completedDoses === $totalDoses) ? 'Completed' : 
-                             ($completedDoses > 0 ? 'In Progress' : 'Pending');
+                $doseInfo = loadDoseStageData($conn, $caseId, (string)$logged_branch_id);
 
                 $historyStmt = $conn->prepare("
-                    SELECT c.case_id, c.case_number, r.registry_number AS case_no, c.created_at, 
-                           DATE(c.created_at) AS admit_date, c.case_status
+                    SELECT
+                        c.case_id,
+                        c.case_number,
+                        r.registry_number AS registry_number,
+                        DATE(c.created_at) AS admit_date,
+                        c.case_status
                     FROM animal_bite_cases c
-                    LEFT JOIN registry_records r ON c.case_id = r.case_id
-                    WHERE c.patient_id = ? AND c.case_id != ? AND c.is_archived = 0
+                    LEFT JOIN registry_records r
+                      ON c.case_id = r.case_id
+                     AND r.is_archived = 0
+                    WHERE c.patient_id = ?
+                      AND c.branch_id = ?
+                      AND c.case_id != ?
+                      AND c.is_archived = 0
                     ORDER BY c.created_at DESC
                 ");
-                $historyStmt->bind_param("ii", $row['patient_id'], $caseId);
+                $historyStmt->bind_param("isi", $row['patient_id'], $logged_branch_id, $caseId);
                 $historyStmt->execute();
                 $historyResult = $historyStmt->get_result();
                 $history = [];
                 while ($histRow = $historyResult->fetch_assoc()) {
-                    $history[] = $histRow;
+                    $history[] = [
+                        'case_id' => (int)$histRow['case_id'],
+                        'case_no' => $histRow['case_number'] ?: ($histRow['registry_number'] ?? ''),
+                        'admit_date' => dbToFrontDate($histRow['admit_date']),
+                        'status' => $histRow['case_status'] ?? 'Ongoing'
+                    ];
                 }
+                $historyStmt->close();
 
                 $hasPhilhealth = $row['has_philhealth'] ?? 'No';
 
                 $details = [
-                    'case_id' => $row['case_id'],
-                    'patient_id' => $row['patient_id'],
-                    'case_no' => $row['case_number'] ?? $row['registry_number'] ?? '',
+                    'case_id' => (int)$row['case_id'],
+                    'patient_id' => (int)$row['patient_id'],
+                    'case_no' => $row['case_number'] ?: ($row['registry_number'] ?? ''),
                     'patient_name' => $row['full_name'],
                     'address' => $row['address'] ?? '',
                     'dob' => dbToFrontDate($row['birthday']),
@@ -761,23 +990,27 @@ if ($action) {
                     'has_philhealth' => $hasPhilhealth,
                     'philhealth_membership' => $row['philhealth_membership'] ?? '',
                     'contact_number' => $row['contact_number'] ?? '',
-                    'admission_date' => dbToFrontDate($row['date_of_bite'] ?? $row['created_at']),
+                    'admission_date' => dbToFrontDate(substr((string)$row['case_created_at'], 0, 10)),
                     'date_of_bite' => dbToFrontDate($row['date_of_bite']),
                     'site_of_bite' => $row['bite_location'] ?? '',
                     'biting_animal' => $row['animal_type'] ?? '',
+                    'bite_category' => $row['bite_category'] ?? '',
                     'animal_status' => $row['animal_status'] ?? '',
+                    // Treatment values are read-only here. Nurses own actual administration.
                     'erig_ml' => $row['erig'] ?? 0,
-                    'ats' => (bool) $row['ats'],
-                    'tt' => (bool) $row['tt'],
+                    'ats' => (bool)$row['ats'],
+                    'tt' => (bool)$row['tt'],
                     'active_regimen' => $row['active_regimen'] ?? '',
-                    'route' => '',
-                    'vacc_category' => 'Post-Exposure Prophylaxis (PEP)',
-                    'vaccination_doses' => $doseData,
-                    'vaccination_status' => $vaccStatus,
-                    'status' => $row['philhealth_status'] ?? 'For Writing',
-                    'remarks' => $row['case_remarks'] ?? $row['philhealth_remarks'] ?? '',
+                    'route' => $doseInfo['profile']['route'],
+                    'vacc_category' => $doseInfo['profile']['category'],
+                    'vaccination_doses' => $doseInfo['stages'],
+                    'vaccination_status' => $doseInfo['overall_status'],
+                    'vaccination_remarks' => $doseInfo['remarks'],
+                    'status' => $row['philhealth_status'] ?? '',
+                    'remarks' => $row['case_remarks'] ?: ($row['philhealth_remarks'] ?? ''),
                     'history' => $history,
                 ];
+
                 jsonResponse($details);
             } catch (Exception $e) {
                 jsonResponse(['error' => 'Failed to view patient: ' . $e->getMessage()], 500);
@@ -788,8 +1021,14 @@ if ($action) {
             try {
                 $rawInput = file_get_contents('php://input');
                 $input = json_decode($rawInput, true);
-                if (!$input) {
+
+                if (!is_array($input)) {
                     jsonResponse(['error' => 'Invalid JSON input'], 400);
+                }
+
+                $postedCsrf = (string)($input['csrf_token'] ?? '');
+                if ($postedCsrf === '' || !hash_equals($csrfToken, $postedCsrf)) {
+                    jsonResponse(['error' => 'Invalid request token. Please refresh the page and try again.'], 403);
                 }
 
                 $validationErrors = validatePatientData($input);
@@ -797,313 +1036,553 @@ if ($action) {
                     jsonResponse(['error' => implode(' ', $validationErrors)], 400);
                 }
 
+                $caseId = !empty($input['case_id']) ? (int)$input['case_id'] : null;
+                $patientId = !empty($input['patient_id']) ? (int)$input['patient_id'] : null;
+
+                $caseNo = trim((string)($input['case_no'] ?? ''));
+                $fullName = trim((string)($input['patient_name'] ?? ''));
+                $dob = frontToDbDate((string)($input['dob'] ?? ''));
+                $gender = trim((string)($input['gender'] ?? ''));
+                $address = trim((string)($input['address'] ?? ''));
+                $contact = trim((string)($input['contact_number'] ?? ''));
+
+                $admissionDate = frontToDbDate((string)($input['admission_date'] ?? ''));
+                $biteDate = frontToDbDate((string)($input['date_of_bite'] ?? ''));
+                $siteBite = trim((string)($input['site_of_bite'] ?? ''));
+
+                $animal = trim((string)($input['biting_animal'] ?? ''));
+                $customAnimal = trim((string)($input['custom_animal'] ?? ''));
+                if ($animal === 'Others' && $customAnimal !== '') {
+                    $animal = $customAnimal;
+                }
+
+                $animalStat = trim((string)($input['animal_status'] ?? ''));
+                $regimen = trim((string)($input['active_regimen'] ?? ''));
+                $vaccCategory = trim((string)($input['vacc_category'] ?? ''));
+                $route = trim((string)($input['route'] ?? ''));
+
+                $status = trim((string)($input['status'] ?? 'For Writing'));
+                $hasPhilhealth = trim((string)($input['philhealth'] ?? 'No'));
+                $philhealthMembership = trim((string)($input['philhealth_type'] ?? ''));
+
+                $vaccinationDoses = is_array($input['vaccination_doses'] ?? null)
+                    ? $input['vaccination_doses']
+                    : [];
+                $scheduleRemarks = trim((string)($input['vaccination_remarks'] ?? ''));
+
+                if (caseNoExists($conn, $caseNo, (string)$logged_branch_id, $caseId)) {
+                    throw new Exception("Case number '{$caseNo}' already exists in this branch.");
+                }
+
                 $conn->begin_transaction();
 
-                $caseId = !empty($input['case_id']) ? (int) $input['case_id'] : null;
-                $patientId = !empty($input['patient_id']) ? (int) $input['patient_id'] : null;
-                $caseNo = trim($input['case_no'] ?? '');
-                $fullName = trim($input['patient_name'] ?? '');
-                $dob = frontToDbDate($input['dob'] ?? '');
-                $gender = $input['gender'] ?? '';
-                $address = trim($input['address'] ?? '');
-                $contact = trim($input['contact_number'] ?? '');
-                $biteDate = frontToDbDate($input['date_of_bite'] ?? '');
-                $siteBite = trim($input['site_of_bite'] ?? '');
-                $animal = trim($input['biting_animal'] ?? '');
-                $animalStat = trim($input['animal_status'] ?? '');
-                $erigMl = isset($input['erig_ml']) ? floatval($input['erig_ml']) : 0;
-                $ats = !empty($input['ats']);
-                $tt = !empty($input['tt']);
-                $regimen = trim($input['active_regimen'] ?? '');
-                $vaccCat = trim($input['vacc_category'] ?? '');
-                $route = trim($input['route'] ?? '');
-                $status = trim($input['status'] ?? 'For Writing');
-                $hasPhilhealth = trim($input['philhealth'] ?? 'No');
-                $philhealthMembership = trim($input['philhealth_type'] ?? '');
-                $vaccinationDoses = $input['vaccination_doses'] ?? [];
-                $vaccinationRemarks = trim($input['vaccination_remarks'] ?? '');
-                $customVaccCategory = trim($input['custom_vacc_category'] ?? '');
-
-                if (empty($caseNo)) throw new Exception("Case number is required.");
-                if (empty($fullName)) throw new Exception("Patient name is required.");
-
-                if (caseNoExists($conn, $caseNo, $caseId)) {
-                    throw new Exception("Case number '{$caseNo}' already exists.");
-                }
-
-                // 1) Handle patient
+                /* -----------------------------------------------------
+                   1. PATIENT INFORMATION
+                   ----------------------------------------------------- */
                 if ($patientId) {
-                    $checkStmt = $conn->prepare("SELECT patient_id FROM patients WHERE patient_id = ? AND branch_id = ? AND is_archived = 0");
+                    $checkStmt = $conn->prepare("
+                        SELECT patient_id
+                        FROM patients
+                        WHERE patient_id = ?
+                          AND branch_id = ?
+                          AND is_archived = 0
+                        LIMIT 1
+                    ");
                     $checkStmt->bind_param("is", $patientId, $logged_branch_id);
                     $checkStmt->execute();
-                    $checkResult = $checkStmt->get_result();
-                    if (!$checkResult->fetch_assoc()) {
+                    $patientExists = $checkStmt->get_result()->fetch_assoc();
+                    $checkStmt->close();
+
+                    if (!$patientExists) {
                         throw new Exception("Patient not found or access denied.");
                     }
-                    
+
                     $upd = $conn->prepare("
-                        UPDATE patients 
-                        SET full_name=?, contact_number=?, birthday=?, gender=?, address=? 
-                        WHERE patient_id=? AND branch_id=? AND is_archived = 0
+                        UPDATE patients
+                        SET full_name = ?,
+                            contact_number = ?,
+                            birthday = ?,
+                            gender = ?,
+                            address = ?
+                        WHERE patient_id = ?
+                          AND branch_id = ?
+                          AND is_archived = 0
                     ");
-                    $upd->bind_param("sssssis", $fullName, $contact, $dob, $gender, $address, $patientId, $logged_branch_id);
-                    $upd->execute();
+                    $upd->bind_param(
+                        "sssssis",
+                        $fullName,
+                        $contact,
+                        $dob,
+                        $gender,
+                        $address,
+                        $patientId,
+                        $logged_branch_id
+                    );
+                    if (!$upd->execute()) {
+                        throw new Exception('Unable to update patient information.');
+                    }
+                    $upd->close();
                 } else {
                     $ins = $conn->prepare("
-                        INSERT INTO patients (full_name, contact_number, birthday, gender, address, branch_id) 
-                        VALUES (?,?,?,?,?,?)
+                        INSERT INTO patients
+                        (full_name, contact_number, birthday, gender, address, branch_id)
+                        VALUES (?, ?, ?, ?, ?, ?)
                     ");
-                    $ins->bind_param("ssssss", $fullName, $contact, $dob, $gender, $address, $logged_branch_id);
-                    $ins->execute();
-                    $patientId = (int) $conn->insert_id;
+                    $ins->bind_param(
+                        "ssssss",
+                        $fullName,
+                        $contact,
+                        $dob,
+                        $gender,
+                        $address,
+                        $logged_branch_id
+                    );
+                    if (!$ins->execute()) {
+                        throw new Exception('Unable to create patient record.');
+                    }
+                    $patientId = (int)$conn->insert_id;
+                    $ins->close();
                 }
 
-                // 2) Handle animal_bite_cases
+                /* -----------------------------------------------------
+                   2. ANIMAL BITE CASE
+                   created_at is the existing field this module uses as
+                   the admission date, so preserve that behavior.
+                   ----------------------------------------------------- */
                 $isNewCase = false;
+
                 if ($caseId) {
-                    $checkCase = $conn->prepare("SELECT case_id FROM animal_bite_cases WHERE case_id = ? AND branch_id = ? AND is_archived = 0");
+                    $checkCase = $conn->prepare("
+                        SELECT case_id
+                        FROM animal_bite_cases
+                        WHERE case_id = ?
+                          AND branch_id = ?
+                          AND is_archived = 0
+                        LIMIT 1
+                    ");
                     $checkCase->bind_param("is", $caseId, $logged_branch_id);
                     $checkCase->execute();
-                    $checkCaseResult = $checkCase->get_result();
-                    if (!$checkCaseResult->fetch_assoc()) {
+                    $caseExists = $checkCase->get_result()->fetch_assoc();
+                    $checkCase->close();
+
+                    if (!$caseExists) {
                         throw new Exception("Case not found or access denied.");
                     }
-                    
+
                     $updCase = $conn->prepare("
-                        UPDATE animal_bite_cases 
-                        SET case_number=?, animal_type=?, bite_location=?, animal_status=?, date_of_bite=?,
-                            admin_staff_id=?
-                        WHERE case_id=? AND branch_id=? AND is_archived = 0
+                        UPDATE animal_bite_cases
+                        SET case_number = ?,
+                            patient_id = ?,
+                            animal_type = ?,
+                            bite_location = ?,
+                            animal_status = ?,
+                            date_of_bite = ?,
+                            admin_staff_id = ?,
+                            created_at = CONCAT(?, ' ', TIME(created_at))
+                        WHERE case_id = ?
+                          AND branch_id = ?
+                          AND is_archived = 0
                     ");
-                    $updCase->bind_param("ssssssis", $caseNo, $animal, $siteBite, $animalStat, $biteDate, 
-                        $logged_user_id, $caseId, $logged_branch_id);
-                    $updCase->execute();
+                    $updCase->bind_param(
+                        "sissssisis",
+                        $caseNo,
+                        $patientId,
+                        $animal,
+                        $siteBite,
+                        $animalStat,
+                        $biteDate,
+                        $logged_user_id,
+                        $admissionDate,
+                        $caseId,
+                        $logged_branch_id
+                    );
+                    if (!$updCase->execute()) {
+                        throw new Exception('Unable to update bite case.');
+                    }
+                    $updCase->close();
                 } else {
                     $isNewCase = true;
-                    $insCase = $conn->prepare("
-                        INSERT INTO animal_bite_cases 
-                        (case_number, patient_id, branch_id, animal_type, bite_location, animal_status, date_of_bite, 
-                         case_status, admin_staff_id) 
-                        VALUES (?,?,?,?,?,?,?,?,?)
-                    ");
                     $caseStatus = 'Ongoing';
-                    $insCase->bind_param("sissssssi", 
-                        $caseNo, $patientId, $logged_branch_id, $animal, $siteBite, $animalStat, 
-                        $biteDate, $caseStatus, $logged_user_id);
-                    $insCase->execute();
-                    $caseId = (int) $conn->insert_id;
+
+                    $insCase = $conn->prepare("
+                        INSERT INTO animal_bite_cases
+                        (
+                            case_number,
+                            patient_id,
+                            branch_id,
+                            animal_type,
+                            bite_location,
+                            animal_status,
+                            date_of_bite,
+                            case_status,
+                            admin_staff_id,
+                            created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CONCAT(?, ' 00:00:00'))
+                    ");
+                    $insCase->bind_param(
+                        "sissssssis",
+                        $caseNo,
+                        $patientId,
+                        $logged_branch_id,
+                        $animal,
+                        $siteBite,
+                        $animalStat,
+                        $biteDate,
+                        $caseStatus,
+                        $logged_user_id,
+                        $admissionDate
+                    );
+                    if (!$insCase->execute()) {
+                        throw new Exception('Unable to create bite case.');
+                    }
+                    $caseId = (int)$conn->insert_id;
+                    $insCase->close();
                 }
 
-                // 3) Handle registry_records
-                $regExists = $conn->prepare("SELECT registry_id FROM registry_records WHERE case_id=? AND is_archived = 0");
+                /* -----------------------------------------------------
+                   3. REGISTRY INFORMATION
+                   Admin Staff maintains planning/registry fields only.
+                   Existing dose-completion flags and treatment values
+                   (ERIG/ATS/TT) are NOT overwritten here.
+                   ----------------------------------------------------- */
+                $regExists = $conn->prepare("
+                    SELECT registry_id
+                    FROM registry_records
+                    WHERE case_id = ?
+                      AND is_archived = 0
+                    LIMIT 1
+                ");
                 $regExists->bind_param("i", $caseId);
                 $regExists->execute();
-                $regResult = $regExists->get_result();
-                $regRow = $regResult->fetch_assoc();
+                $regRow = $regExists->get_result()->fetch_assoc();
+                $regExists->close();
+
                 $registryId = $regRow['registry_id'] ?? null;
-
-                $doseMap = ['d0' => 1, 'd3' => 2, 'd7' => 3, 'd14' => 4, 'd21' => 5, 'd28' => 6];
-                $doseFlags = [];
-                foreach ($doseMap as $key => $num) {
-                    $doseData = $vaccinationDoses[$key] ?? ['status' => 'Pending'];
-                    $doseFlags[$key] = ($doseData['status'] === 'Administered') ? 1 : 0;
-                }
-
-                $booster = $doseFlags['d28'] ?? 0;
 
                 if ($registryId) {
                     $updReg = $conn->prepare("
-                        UPDATE registry_records 
-                        SET registry_number=?, status_of_biting_animal=?, erig=?, ats=?, tt=?, 
-                            active_regimen=?, dose_d0=?, dose_d3=?, dose_d7=?, dose_d14=?, 
-                            dose_d21=?, dose_d28_30=?, booster=?, contact_number=?, 
-                            updated_by=?, updated_at=NOW() 
-                        WHERE registry_id=? AND is_archived = 0
+                        UPDATE registry_records
+                        SET registry_number = ?,
+                            status_of_biting_animal = ?,
+                            active_regimen = ?,
+                            contact_number = ?,
+                            updated_by = ?,
+                            updated_at = NOW()
+                        WHERE registry_id = ?
+                          AND is_archived = 0
                     ");
-                    $updReg->bind_param("ssdiisiiiiiiissi", 
-                        $caseNo, $animalStat, $erigMl, $ats, $tt, $regimen, 
-                        $doseFlags['d0'], $doseFlags['d3'], $doseFlags['d7'], $doseFlags['d14'], 
-                        $doseFlags['d21'], $doseFlags['d28'], $booster, $contact, 
-                        $logged_user_id, $registryId);
-                    $updReg->execute();
+                    $updReg->bind_param(
+                        "ssssii",
+                        $caseNo,
+                        $animalStat,
+                        $regimen,
+                        $contact,
+                        $logged_user_id,
+                        $registryId
+                    );
+                    if (!$updReg->execute()) {
+                        throw new Exception('Unable to update registry information.');
+                    }
+                    $updReg->close();
                 } else {
                     $insReg = $conn->prepare("
-                        INSERT INTO registry_records 
-                        (case_id, registry_number, status_of_biting_animal, erig, ats, tt, active_regimen, 
-                         dose_d0, dose_d3, dose_d7, dose_d14, dose_d21, dose_d28_30, booster, 
-                         contact_number, updated_by, updated_at) 
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())
+                        INSERT INTO registry_records
+                        (
+                            case_id,
+                            branch_id,
+                            created_by,
+                            registry_number,
+                            status_of_biting_animal,
+                            active_regimen,
+                            contact_number,
+                            updated_by,
+                            updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
                     ");
-                    $insReg->bind_param("issdiisiiiiiiiss", 
-                        $caseId, $caseNo, $animalStat, $erigMl, $ats, $tt, $regimen,
-                        $doseFlags['d0'], $doseFlags['d3'], $doseFlags['d7'], $doseFlags['d14'], 
-                        $doseFlags['d21'], $doseFlags['d28'], $booster, $contact, $logged_user_id);
-                    $insReg->execute();
+                    $insReg->bind_param(
+                        "isissssi",
+                        $caseId,
+                        $logged_branch_id,
+                        $logged_user_id,
+                        $caseNo,
+                        $animalStat,
+                        $regimen,
+                        $contact,
+                        $logged_user_id
+                    );
+                    if (!$insReg->execute()) {
+                        throw new Exception('Unable to create registry information.');
+                    }
+                    $registryId = (int)$conn->insert_id;
+                    $insReg->close();
                 }
 
-                // 4) Handle philhealth_records
-                $phExists = $conn->prepare("SELECT philhealth_record_id FROM philhealth_records WHERE case_id=? AND is_archived = 0");
+                /* -----------------------------------------------------
+                   4. PHILHEALTH
+                   ----------------------------------------------------- */
+                $phExists = $conn->prepare("
+                    SELECT philhealth_record_id
+                    FROM philhealth_records
+                    WHERE case_id = ?
+                      AND is_archived = 0
+                    LIMIT 1
+                ");
                 $phExists->bind_param("i", $caseId);
                 $phExists->execute();
-                $phResult = $phExists->get_result();
-                $phRow = $phResult->fetch_assoc();
+                $phRow = $phExists->get_result()->fetch_assoc();
+                $phExists->close();
+
                 $phRecId = $phRow['philhealth_record_id'] ?? null;
-                
                 $dbHasPhilhealth = ($hasPhilhealth === 'Yes') ? 'Yes' : 'No';
-                $dbPhilhealthMembership = ($dbHasPhilhealth === 'Yes') ? $philhealthMembership : null;
+                $dbPhilhealthMembership = ($dbHasPhilhealth === 'Yes')
+                    ? ($philhealthMembership !== '' ? $philhealthMembership : null)
+                    : null;
+
+                $allowedPhilhealthStatuses = [
+                    'For Writing',
+                    'For Screening',
+                    'For Signing/Transmittal',
+                    'Completed'
+                ];
+                $dbPhilhealthStatus = ($dbHasPhilhealth === 'Yes' && in_array($status, $allowedPhilhealthStatuses, true))
+                    ? $status
+                    : null;
 
                 if ($phRecId) {
                     $updPh = $conn->prepare("
-                        UPDATE philhealth_records 
-                        SET has_philhealth=?, philhealth_membership=?, status=?, 
-                            updated_by=?, updated_at=NOW() 
-                        WHERE philhealth_record_id=? AND is_archived = 0
+                        UPDATE philhealth_records
+                        SET has_philhealth = ?,
+                            philhealth_membership = ?,
+                            status = ?,
+                            updated_by = ?,
+                            updated_at = NOW()
+                        WHERE philhealth_record_id = ?
+                          AND is_archived = 0
                     ");
-                    $updPh->bind_param("sssii", $dbHasPhilhealth, $dbPhilhealthMembership, $status, 
-                        $logged_user_id, $phRecId);
-                    $updPh->execute();
+                    $updPh->bind_param(
+                        "sssii",
+                        $dbHasPhilhealth,
+                        $dbPhilhealthMembership,
+                        $dbPhilhealthStatus,
+                        $logged_user_id,
+                        $phRecId
+                    );
+                    if (!$updPh->execute()) {
+                        throw new Exception('Unable to update PhilHealth information.');
+                    }
+                    $updPh->close();
                 } else {
                     $insPh = $conn->prepare("
-                        INSERT INTO philhealth_records 
-                        (case_id, has_philhealth, philhealth_membership, status, updated_by, updated_at) 
-                        VALUES (?,?,?,?,?,NOW())
+                        INSERT INTO philhealth_records
+                        (case_id, has_philhealth, philhealth_membership, status, updated_by, updated_at)
+                        VALUES (?, ?, ?, ?, ?, NOW())
                     ");
-                    $insPh->bind_param("isssi", $caseId, $dbHasPhilhealth, $dbPhilhealthMembership, 
-                        $status, $logged_user_id);
-                    $insPh->execute();
-                }
-
-                // 5) Handle vaccination_records
-                $delVacc = $conn->prepare("DELETE FROM vaccination_records WHERE case_id=? AND branch_id=? AND is_archived = 0");
-                $delVacc->bind_param("is", $caseId, $logged_branch_id);
-                $delVacc->execute();
-                
-                // Get the default vaccine item ID
-                $vaccineItemId = getDefaultVaccineItemId($conn);
-                $defaultUnitId = getDefaultUnitId($conn);
-                
-                // Try to get a better vaccine item from inventory
-                $vaccineItemStmt = $conn->prepare("
-                    SELECT i.item_id, i.unit_id, i.item_name FROM inventory_items i
-                    JOIN inventory_stocks s ON i.item_id = s.item_id
-                    WHERE s.branch_id = ? AND i.category_id = 2 AND s.quantity_available > 0
-                    LIMIT 1
-                ");
-                $vaccineItemStmt->bind_param("s", $logged_branch_id);
-                $vaccineItemStmt->execute();
-                $vaccineItemResult = $vaccineItemStmt->get_result();
-                $vaccineItemRow = $vaccineItemResult->fetch_assoc();
-                
-                if ($vaccineItemRow) {
-                    $vaccineItemId = (int) $vaccineItemRow['item_id'];
-                    $defaultUnitId = (int) $vaccineItemRow['unit_id'];
-                }
-                
-                $insertVacc = $conn->prepare("
-                    INSERT INTO vaccination_records 
-                    (patient_id, case_id, item_id, unit_id, branch_id, dose_number, 
-                     scheduled_date, date_administered, vaccination_status, remarks, nurse_id) 
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                ");
-                
-                $dosesToSave = getDosesForCategory($vaccCat, $route);
-                
-                foreach ($dosesToSave as $key) {
-                    $doseNum = $doseMap[$key];
-                    $doseData = $vaccinationDoses[$key] ?? ['scheduled_date' => '', 'administered_date' => '', 'status' => 'Pending'];
-                    
-                    $scheduledDate = calculateScheduledDate($biteDate, $key, $doseData);
-                    $administeredDate = !empty($doseData['administered_date']) ? frontToDbDate($doseData['administered_date']) : null;
-                    
-                    if ($doseData['status'] === 'Administered' && empty($administeredDate)) {
-                        $administeredDate = date('Y-m-d');
-                    }
-                    
-                    $vaccStatus = $doseData['status'] === 'Administered' ? 'Completed' : 'Scheduled';
-                    
-                    // Get vaccine name and unit info for this specific dose
-                    $vaccineName = '';
-                    $unitId = $defaultUnitId;
-                    
-                    // Try to get the item details
-                    $nameStmt = $conn->prepare("SELECT item_name, unit_id FROM inventory_items WHERE item_id = ?");
-                    $nameStmt->bind_param("i", $vaccineItemId);
-                    $nameStmt->execute();
-                    $nameResult = $nameStmt->get_result();
-                    if ($nameRow = $nameResult->fetch_assoc()) {
-                        $vaccineName = $nameRow['item_name'];
-                        $unitId = (int) $nameRow['unit_id'];
-                    }
-                    
-                    // Ensure the unit_id exists in the units table
-                    $unitCheckStmt = $conn->prepare("SELECT unit_id FROM units WHERE unit_id = ?");
-                    $unitCheckStmt->bind_param("i", $unitId);
-                    $unitCheckStmt->execute();
-                    $unitResult = $unitCheckStmt->get_result();
-                    if ($unitResult->num_rows === 0) {
-                        // If the unit doesn't exist, use a default valid unit_id
-                        $unitId = getDefaultUnitId($conn);
-                    }
-                    
-                    // Also ensure the vaccine item exists
-                    $itemCheckStmt = $conn->prepare("SELECT item_id FROM inventory_items WHERE item_id = ?");
-                    $itemCheckStmt->bind_param("i", $vaccineItemId);
-                    $itemCheckStmt->execute();
-                    $itemResult = $itemCheckStmt->get_result();
-                    if ($itemResult->num_rows === 0) {
-                        // If the item doesn't exist, use the default
-                        $vaccineItemId = getDefaultVaccineItemId($conn);
-                    }
-                    
-                    // Set vaccine_name in the record
-                    $insertVacc->bind_param(
-                        "iiiisississ",
-                        $patientId,
+                    $insPh->bind_param(
+                        "isssi",
                         $caseId,
-                        $vaccineItemId,
-                        $unitId,
-                        $logged_branch_id,
-                        $doseNum,
-                        $scheduledDate,
-                        $administeredDate,
-                        $vaccStatus,
-                        $vaccinationRemarks,
+                        $dbHasPhilhealth,
+                        $dbPhilhealthMembership,
+                        $dbPhilhealthStatus,
                         $logged_user_id
                     );
-                    
-                    if (!$insertVacc->execute()) {
-                        error_log("Failed to insert vaccination record: " . $conn->error);
-                        throw new Exception("Failed to save vaccination record for dose " . $doseNum);
+                    if (!$insPh->execute()) {
+                        throw new Exception('Unable to create PhilHealth information.');
                     }
-                    
-                    // Now update the vaccine_name for the inserted record
-                    $vaccId = $conn->insert_id;
-                    if ($vaccId > 0 && !empty($vaccineName)) {
-                        $updateVaccName = $conn->prepare("UPDATE vaccination_records SET vaccine_name = ? WHERE vaccination_id = ?");
-                        $updateVaccName->bind_param("si", $vaccineName, $vaccId);
-                        $updateVaccName->execute();
-                    }
-                    
-                    error_log("Saved vaccination record: patient_id=$patientId, case_id=$caseId, dose_num=$doseNum, scheduled_date=$scheduledDate, status=$vaccStatus, unit_id=$unitId");
+                    $insPh->close();
                 }
 
-                // --- SEND NOTIFICATION TO NURSES FOR NEW PATIENT ---
+                /* -----------------------------------------------------
+                   5. VACCINATION SCHEDULE ONLY
+                   IMPORTANT:
+                   - Admin Staff does not mark a dose Completed.
+                   - Admin Staff does not deduct inventory.
+                   - Admin Staff does not set nurse_id.
+                   - item_id, vaccine_name and unit_id stay NULL until Nurse administration.
+                   - Completed/Missed/Nurse-created records are preserved.
+                   ----------------------------------------------------- */
+                $requiredDoseKeys = getDosesForCategory($vaccCategory, $route);
+                $requiredDoseNumbers = [];
+                foreach ($requiredDoseKeys as $key) {
+                    $num = doseKeyToNumber($key);
+                    if ($num) $requiredDoseNumbers[] = $num;
+                }
+                for ($doseNumber = 1; $doseNumber <= 6; $doseNumber++) {
+                    $doseKey = doseNumberToKey($doseNumber);
+                    if (!$doseKey) continue;
+
+                    // Soft-archive only old Admin Staff schedule placeholders.
+                    archiveAdminScheduleRows(
+                        $conn,
+                        (int)$caseId,
+                        (string)$logged_branch_id,
+                        $doseNumber,
+                        (int)$logged_user_id
+                    );
+
+                    if (!in_array($doseNumber, $requiredDoseNumbers, true)) {
+                        continue;
+                    }
+
+                    // A dose already completed by a nurse must never be recreated
+                    // as a pending schedule by Admin Staff.
+                    $completedStmt = $conn->prepare("
+                        SELECT vaccination_id
+                        FROM vaccination_records
+                        WHERE case_id = ?
+                          AND branch_id = ?
+                          AND dose_number = ?
+                          AND vaccination_status = 'Completed'
+                          AND date_administered IS NOT NULL
+                          AND date_administered <= CURDATE()
+                          AND is_archived = 0
+                        LIMIT 1
+                    ");
+                    $completedStmt->bind_param(
+                        "isi",
+                        $caseId,
+                        $logged_branch_id,
+                        $doseNumber
+                    );
+                    $completedStmt->execute();
+                    $alreadyCompleted = $completedStmt->get_result()->num_rows > 0;
+                    $completedStmt->close();
+
+                    if ($alreadyCompleted) {
+                        continue;
+                    }
+
+                    // If a Nurse already created a schedule for this stage,
+                    // preserve it rather than creating a duplicate.
+                    $nurseScheduleStmt = $conn->prepare("
+                        SELECT vr.vaccination_id
+                        FROM vaccination_records vr
+                        INNER JOIN users schedule_user
+                          ON schedule_user.user_id = vr.nurse_id
+                        WHERE vr.case_id = ?
+                          AND vr.branch_id = ?
+                          AND vr.dose_number = ?
+                          AND vr.vaccination_status = 'Scheduled'
+                          AND vr.is_archived = 0
+                          AND schedule_user.role_id = 3
+                        LIMIT 1
+                    ");
+                    $nurseScheduleStmt->bind_param(
+                        "isi",
+                        $caseId,
+                        $logged_branch_id,
+                        $doseNumber
+                    );
+                    $nurseScheduleStmt->execute();
+                    $nurseOwnsSchedule = $nurseScheduleStmt->get_result()->num_rows > 0;
+                    $nurseScheduleStmt->close();
+
+                    if ($nurseOwnsSchedule) {
+                        continue;
+                    }
+
+                    $dosePayload = is_array($vaccinationDoses[$doseKey] ?? null)
+                        ? $vaccinationDoses[$doseKey]
+                        : [];
+
+                    $scheduledDate = null;
+                    if (!empty($dosePayload['scheduled_date'])) {
+                        $scheduledDate = frontToDbDate((string)$dosePayload['scheduled_date']);
+                    }
+
+                    if (!$scheduledDate) {
+                        $scheduledDate = calculateScheduledDate(
+                            $biteDate,
+                            $doseKey,
+                            $dosePayload
+                        );
+                    }
+
+                    if (!$scheduledDate) {
+                        throw new Exception(
+                            'Please assign a valid scheduled date for ' . strtoupper($doseKey) . '.'
+                        );
+                    }
+
+                    // Admin Staff assigns only the dose-stage schedule.
+                    // The actual product, unit and nurse are recorded later by the Nurse.
+                    $isFinalDose = ($doseNumber === 6) ? 1 : 0;
+
+                    $insertSchedule = $conn->prepare("
+                        INSERT INTO vaccination_records
+                        (
+                            patient_id,
+                            case_id,
+                            item_id,
+                            vaccine_name,
+                            unit_id,
+                            branch_id,
+                            dose_number,
+                            date_administered,
+                            scheduled_date,
+                            vaccination_status,
+                            is_final_dose,
+                            remarks,
+                            nurse_id
+                        )
+                        VALUES (?, ?, NULL, NULL, NULL, ?, ?, NULL, ?, 'Scheduled', ?, ?, NULL)
+                    ");
+                    $insertSchedule->bind_param(
+                        "iisisis",
+                        $patientId,
+                        $caseId,
+                        $logged_branch_id,
+                        $doseNumber,
+                        $scheduledDate,
+                        $isFinalDose,
+                        $scheduleRemarks
+                    );
+                    if (!$insertSchedule->execute()) {
+                        throw new Exception(
+                            'Unable to save the vaccination schedule for dose stage ' . $doseNumber . '.'
+                        );
+                    }
+                    $insertSchedule->close();
+                }
+
                 if ($isNewCase) {
-                    // Only send notification for newly created patients, not updates
-                    $patientNameForNotification = $fullName;
-                    $caseNumberForNotification = $caseNo;
-                    notifyNursesOnNewPatient($conn, $caseId, $patientNameForNotification, $caseNumberForNotification, $logged_branch_id, $logged_user_id);
+                    notifyNursesOnNewPatient(
+                        $conn,
+                        (int)$caseId,
+                        $fullName,
+                        $caseNo,
+                        (string)$logged_branch_id,
+                        (int)$logged_user_id
+                    );
                 }
 
-                $actionText = $caseId && !$isNewCase ? "Updated patient record: {$fullName} (Case: {$caseNo})" 
-                                      : "Created new patient record: {$fullName} (Case: {$caseNo})";
-                auditLog($conn, $logged_user_id, $logged_branch_id, $actionText, 'Patient Record');
+                $actionText = $isNewCase
+                    ? "Created patient record and vaccination schedule: {$fullName} (Case: {$caseNo})"
+                    : "Updated patient information/schedule: {$fullName} (Case: {$caseNo})";
+
+                auditLog(
+                    $conn,
+                    (int)$logged_user_id,
+                    (string)$logged_branch_id,
+                    $actionText,
+                    'Patient Record'
+                );
 
                 $conn->commit();
-                jsonResponse(['success' => true, 'case_id' => $caseId, 'case_no' => $caseNo]);
+
+                jsonResponse([
+                    'success' => true,
+                    'case_id' => (int)$caseId,
+                    'case_no' => $caseNo
+                ]);
 
             } catch (Exception $e) {
-                $conn->rollback();
+                try {
+                    $conn->rollback();
+                } catch (Throwable $ignored) {
+                }
+
                 error_log("Error saving patient record: " . $e->getMessage());
                 jsonResponse(['error' => $e->getMessage()], 500);
             }
@@ -1111,37 +1590,73 @@ if ($action) {
 
         case 'archive':
             try {
-                $caseId = (int) ($_GET['case_id'] ?? 0);
-                $archiveReason = trim($_GET['reason'] ?? 'Archived by user');
-                
+                $rawInput = file_get_contents('php://input');
+                $input = json_decode($rawInput, true);
+                if (!is_array($input)) {
+                    jsonResponse(['error' => 'Invalid archive request.'], 400);
+                }
+
+                $postedCsrf = (string)($input['csrf_token'] ?? '');
+                if ($postedCsrf === '' || !hash_equals($csrfToken, $postedCsrf)) {
+                    jsonResponse(['error' => 'Invalid request token. Please refresh the page and try again.'], 403);
+                }
+
+                $caseId = (int)($input['case_id'] ?? 0);
+                $archiveReason = trim((string)($input['reason'] ?? 'Archived by user'));
+                if ($archiveReason === '') {
+                    $archiveReason = 'Archived by user';
+                }
+
                 if ($caseId <= 0) {
                     jsonResponse(['error' => 'Invalid case ID'], 400);
                 }
 
-                // Check if the case exists and is not archived
                 $caseStmt = $conn->prepare("
-                    SELECT c.case_id, p.full_name, c.case_number, r.registry_number 
+                    SELECT
+                        c.case_id,
+                        p.full_name,
+                        c.case_number,
+                        r.registry_number
                     FROM animal_bite_cases c
-                    JOIN patients p ON c.patient_id = p.patient_id
-                    LEFT JOIN registry_records r ON c.case_id = r.case_id
-                    WHERE c.case_id = ? AND c.branch_id = ? AND c.is_archived = 0
+                    INNER JOIN patients p
+                      ON c.patient_id = p.patient_id
+                     AND p.branch_id = c.branch_id
+                    LEFT JOIN registry_records r
+                      ON c.case_id = r.case_id
+                     AND r.is_archived = 0
+                    WHERE c.case_id = ?
+                      AND c.branch_id = ?
+                      AND c.is_archived = 0
+                    LIMIT 1
                 ");
                 $caseStmt->bind_param("is", $caseId, $logged_branch_id);
                 $caseStmt->execute();
-                $caseResult = $caseStmt->get_result();
-                $caseData = $caseResult->fetch_assoc();
-                
+                $caseData = $caseStmt->get_result()->fetch_assoc();
+                $caseStmt->close();
+
                 if (!$caseData) {
                     throw new Exception("Record not found or already archived.");
                 }
 
-                // Archive the case
-                archiveCase($conn, $caseId, $logged_user_id, $logged_branch_id, $archiveReason);
+                archiveCase(
+                    $conn,
+                    $caseId,
+                    (int)$logged_user_id,
+                    (string)$logged_branch_id,
+                    $archiveReason
+                );
 
-                // Get the case number from the data, fallback to registry_number if case_number is empty
-                $caseNumber = !empty($caseData['case_number']) ? $caseData['case_number'] : ($caseData['registry_number'] ?? '');
-                $actionText = "Archived patient record: {$caseData['full_name']} (Case: {$caseNumber})";
-                auditLog($conn, $logged_user_id, $logged_branch_id, $actionText, 'Patient Record');
+                $caseNumber = !empty($caseData['case_number'])
+                    ? $caseData['case_number']
+                    : ($caseData['registry_number'] ?? '');
+
+                auditLog(
+                    $conn,
+                    (int)$logged_user_id,
+                    (string)$logged_branch_id,
+                    "Archived patient case: {$caseData['full_name']} (Case: {$caseNumber})",
+                    'Patient Record'
+                );
 
                 jsonResponse(['success' => true]);
 
@@ -1157,7 +1672,7 @@ if ($action) {
                 if (empty($caseNo)) {
                     jsonResponse(['exists' => false]);
                 }
-                $exists = caseNoExists($conn, $caseNo, $excludeId);
+                $exists = caseNoExists($conn, $caseNo, (string)$logged_branch_id, $excludeId);
                 jsonResponse(['exists' => $exists]);
             } catch (Exception $e) {
                 jsonResponse(['error' => 'Failed to check case number: ' . $e->getMessage()], 500);
@@ -1632,6 +2147,30 @@ if ($action) {
         }
 
         .tab .vacc-status-badge.completed {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .vacc-status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .vacc-status-badge.pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .vacc-status-badge.in-progress {
+            background: #e6ecff;
+            color: var(--primary);
+        }
+
+        .vacc-status-badge.completed {
             background: #d4edda;
             color: #155724;
         }
@@ -2530,32 +3069,18 @@ if ($action) {
                         </div>
 
                         <hr>
-                        <div class="section-title">Vaccination & Treatment</div>
+                        <div class="section-title">Vaccination Scheduling</div>
+
+                        <div class="alert alert-info border-0 mb-3" style="background:#eef3ff;color:#2B3A8C;">
+                            <i class="bi bi-info-circle-fill me-2"></i>
+                            Admin Staff assigns the patient's vaccination schedule only.
+                            Actual vaccine products, quantities, administration dates, and completed doses are recorded by the Nurse.
+                        </div>
+
                         <div class="row">
                             <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label class="form-label">ERIG (mL)</label>
-                                    <input type="number" class="form-control" id="erigMl" step="0.1" min="0" placeholder="eg. .5mL, 1mL, 2mL, etc">
-                                </div>
-                                <div class="mb-3 inline-check">
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="checkbox" id="ats">
-                                        <label class="form-check-label" for="ats">Anti-Tetanus Serum (ATS)</label>
-                                    </div>
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="checkbox" id="tt">
-                                        <label class="form-check-label" for="tt">Tetanus-Toxoid</label>
-                                    </div>
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Route</label>
-                                    <select class="form-select" id="route">
-                                        <option value="Intradermal (ID)">Intradermal (ID)</option>
-                                        <option value="Intramuscular (IM)">Intramuscular (IM)</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
+                                <input type="hidden" id="route" value="Intradermal (ID)">
+
                                 <div class="mb-3">
                                     <label class="form-label">Active Regimen <span class="text-danger">*</span></label>
                                     <select class="form-select" id="activeRegimen" required>
@@ -2564,18 +3089,18 @@ if ($action) {
                                         <option value="OTHER">OTHER</option>
                                     </select>
                                 </div>
+                            </div>
+
+                            <div class="col-md-6">
                                 <div class="mb-3">
                                     <label class="form-label">Vaccination Category <span class="text-danger">*</span></label>
                                     <select class="form-select" id="vaccCategory" required>
-                                        <option value="Pre-Exposure Prophylaxis (PrEP)">Pre-Exposure Prophylaxis (PrEP)</option>
                                         <option value="Post-Exposure Prophylaxis (PEP)" selected>Post-Exposure Prophylaxis (PEP)</option>
-                                        <option value="Booster Dose">Booster Dose</option>
-                                        <option value="Others">Others</option>
                                     </select>
                                 </div>
+
                                 <div id="customVaccCategoryContainer" style="display:none;">
-                                    <label class="form-label">Specify Vaccination Category <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="customVaccCategory" placeholder="Enter custom category">
+                                    <input type="hidden" id="customVaccCategory" value="">
                                 </div>
                             </div>
                         </div>
@@ -2583,41 +3108,39 @@ if ($action) {
                         <!-- Vaccination Schedule Section -->
                         <div id="scheduleSection">
                             <div class="section-title">Vaccination Schedule</div>
-                            
+
                             <div class="schedule-table-wrapper">
                                 <table class="schedule-table">
                                     <thead>
                                         <tr>
-                                            <th>Dose</th>
+                                            <th>Dose Stage</th>
                                             <th>Scheduled Date</th>
-                                            <th>Administered Date</th>
-                                            <th>Status</th>
+                                            <th>Current Status</th>
                                         </tr>
                                     </thead>
                                     <tbody id="scheduleTableBody">
-                                        <!-- Rows will be populated by JavaScript -->
+                                        <!-- Rows populated by JavaScript -->
                                     </tbody>
                                 </table>
                             </div>
 
-                            <!-- Vaccination Status Summary -->
                             <div class="vaccination-summary">
                                 <div class="summary-header">
-                                    <strong>Vaccination Status (Overall)</strong>
-                                    <span class="summary-badge" id="vaccStatusBadge">In Progress</span>
+                                    <strong>Schedule Progress</strong>
+                                    <span class="summary-badge" id="vaccStatusBadge">Pending</span>
                                 </div>
                                 <div class="summary-progress">
-                                    <span id="progressText">0 of 0 doses completed</span>
+                                    <span id="progressText">0 of 0 stages completed by Nurse</span>
                                     <div class="progress-bar-wrapper">
                                         <div class="progress-bar-fill" id="progressBarFill" style="width: 0%;"></div>
                                     </div>
                                 </div>
                             </div>
 
-                            <!-- Remarks -->
                             <div class="schedule-remarks">
-                                <label class="form-label">Remarks</label>
-                                <textarea class="form-control" id="vaccinationRemarks" rows="2" placeholder="Enter remarks (optional)..."></textarea>
+                                <label class="form-label">Schedule Remarks</label>
+                                <textarea class="form-control" id="vaccinationRemarks" rows="2"
+                                          placeholder="Enter schedule remarks (optional)..."></textarea>
                             </div>
                         </div>
 
@@ -2627,10 +3150,10 @@ if ($action) {
                                 <div class="mb-3">
                                     <label class="form-label">Philhealth Status <span class="text-danger">*</span></label>
                                     <select class="form-select" id="status" required>
-                                        <option value="Awaiting Processing">Awaiting Processing</option>
+                                        <option value="">Not Applicable</option>
                                         <option value="For Writing">For Writing</option>
                                         <option value="For Screening">For Screening</option>
-                                        <option value="For Signing">For Signing/Transmittal</option>
+                                        <option value="For Signing/Transmittal">For Signing/Transmittal</option>
                                         <option value="Completed">Completed</option>
                                     </select>
                                 </div>
@@ -2640,7 +3163,7 @@ if ($action) {
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-primary" id="savePatientBtn">Save Patient</button>
+                    <button type="button" class="btn btn-primary" id="savePatientBtn">Save Patient & Schedule</button>
                 </div>
             </div>
         </div>
@@ -2699,6 +3222,16 @@ if ($action) {
     // FRONTEND JAVASCRIPT
     // ----------------------------------------------------------------
     const apiBase = window.location.href.split('?')[0];
+    const csrfToken = <?php echo json_encode($csrfToken); ?>;
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
     let currentAdmissionDate = '<?php echo date('m/d/Y'); ?>';
     let currentPage = 1;
     const pageSize = 8;
@@ -2770,22 +3303,8 @@ if ($action) {
     }
 
     function getDoseKeysForCategory(category, route) {
-        switch (category) {
-            case 'Pre-Exposure Prophylaxis (PrEP)':
-                return ['d0', 'd7', 'd21'];
-            case 'Post-Exposure Prophylaxis (PEP)':
-                if (route === 'Intradermal (ID)') {
-                    return ['d0', 'd3', 'd7', 'd28'];
-                } else {
-                    return ['d0', 'd3', 'd7', 'd14', 'd28'];
-                }
-            case 'Booster Dose':
-                return ['d0', 'd3'];
-            case 'Others':
-                return [];
-            default:
-                return ['d0', 'd3', 'd7', 'd14', 'd28'];
-        }
+        if (category === 'Others') return [];
+        return ['d0', 'd3', 'd7', 'd14', 'd21', 'd28'];
     }
 
     function calculateAutoSchedule(day0Date) {
@@ -2810,7 +3329,7 @@ if ($action) {
     function updateScheduleBasedOnCategory() {
         const category = document.getElementById('vaccCategory').value;
         const route = document.getElementById('route').value;
-        
+
         const customContainer = document.getElementById('customVaccCategoryContainer');
         if (category === 'Others') {
             customContainer.style.display = 'block';
@@ -2819,115 +3338,108 @@ if ($action) {
             customContainer.style.display = 'none';
             document.getElementById('customVaccCategory').removeAttribute('required');
         }
-        
-        const doseKeys = getDoseKeysForCategory(category, route);
-        currentDoseKeys = doseKeys;
-        
-        const currentData = getCurrentDoseData();
+
+        const oldData = getCurrentDoseData();
+        currentDoseKeys = getDoseKeysForCategory(category, route);
+
         const newDoseData = {};
-        DOSE_CONFIG.forEach(d => {
-            if (doseKeys.includes(d.key)) {
-                newDoseData[d.key] = currentData[d.key] || {
-                    scheduled_date: '',
-                    administered_date: '',
-                    status: 'Pending'
-                };
-            }
+        currentDoseKeys.forEach(key => {
+            newDoseData[key] = oldData[key] || {
+                scheduled_date: '',
+                administered_date: '',
+                status: 'Scheduled',
+                locked: false
+            };
         });
-        
+
         renderScheduleTable(newDoseData);
-        
+
         const scheduleSection = document.getElementById('scheduleSection');
-        if (category === 'Others') {
-            scheduleSection.style.display = 'none';
-        } else {
-            scheduleSection.style.display = 'block';
+        scheduleSection.style.display = category === 'Others' ? 'none' : 'block';
+    }
+
+    function scheduleStatusBadge(status) {
+        if (status === 'Administered') {
+            return '<span class="badge bg-success">Completed by Nurse</span>';
         }
+        if (status === 'Missed') {
+            return '<span class="badge bg-danger">Missed</span>';
+        }
+        return '<span class="badge bg-primary">Scheduled</span>';
     }
 
     function renderScheduleTable(doseData = null) {
         const tbody = document.getElementById('scheduleTableBody');
-        
+
         if (!doseData) {
             doseData = {};
             currentDoseKeys.forEach(key => {
                 doseData[key] = {
                     scheduled_date: '',
                     administered_date: '',
-                    status: 'Pending'
+                    status: 'Scheduled',
+                    locked: false
                 };
             });
         }
-        
+
         currentDoseData = doseData;
-        
+
         let html = '';
         DOSE_CONFIG.forEach(d => {
             if (!currentDoseKeys.includes(d.key)) return;
-            
-            const data = doseData[d.key] || { scheduled_date: '', administered_date: '', status: 'Pending' };
-            const statusClass = data.status === 'Administered' ? 'status-administered' : 'status-pending';
-            
+
+            const data = doseData[d.key] || {
+                scheduled_date: '',
+                administered_date: '',
+                status: 'Scheduled',
+                locked: false
+            };
+
+            const completed = data.status === 'Administered' || data.locked === true;
+            const value = escapeHtml(data.scheduled_date || '');
+            const statusHtml = scheduleStatusBadge(data.status || 'Scheduled');
+
             html += `
                 <tr data-dose="${d.key}">
-                    <td class="dose-label">${d.label}</td>
+                    <td class="dose-label">${escapeHtml(d.label)}</td>
                     <td>
-                        <input type="text" class="form-control form-control-sm schedule-date-input flatpickr-date" 
-                               id="sched_${d.key}" value="${data.scheduled_date || ''}" 
-                               placeholder="mm/dd/yyyy"
-                               data-dose="${d.key}">
+                        <input
+                            type="text"
+                            class="form-control form-control-sm schedule-date-input flatpickr-date"
+                            id="sched_${d.key}"
+                            value="${value}"
+                            placeholder="mm/dd/yyyy"
+                            data-dose="${d.key}"
+                            ${completed ? 'disabled' : ''}
+                        >
+                        ${completed && data.administered_date
+                            ? `<small class="text-success d-block mt-1">Administered: ${escapeHtml(data.administered_date)}</small>`
+                            : ''}
                     </td>
-                    <td>
-                        <input type="text" class="form-control form-control-sm schedule-date-input flatpickr-date" 
-                               id="admin_${d.key}" value="${data.administered_date || ''}" 
-                               placeholder="mm/dd/yyyy"
-                               data-dose="${d.key}"
-                               ${data.status === 'Pending' ? '' : 'disabled'}>
-                    </td>
-                    <td>
-                        <select class="form-select form-select-sm status-select ${statusClass}" 
-                                id="status_${d.key}" 
-                                data-dose="${d.key}">
-                            <option value="Pending" ${data.status === 'Pending' ? 'selected' : ''}>Pending</option>
-                            <option value="Administered" ${data.status === 'Administered' ? 'selected' : ''}>Administered</option>
-                        </select>
-                    </td>
+                    <td>${statusHtml}</td>
                 </tr>
             `;
         });
+
         tbody.innerHTML = html;
-        
         initScheduleFlatpickrs();
-        
-        document.querySelectorAll('.status-select').forEach(sel => {
-            sel.addEventListener('change', function() {
+
+        document.querySelectorAll('.schedule-date-input').forEach(input => {
+            if (input.disabled) return;
+
+            input.addEventListener('change', function() {
                 const doseKey = this.dataset.dose;
-                const isAdministered = this.value === 'Administered';
-                const adminInput = document.getElementById(`admin_${doseKey}`);
-                adminInput.disabled = !isAdministered;
-                if (isAdministered && !adminInput.value) {
-                    const today = new Date();
-                    const month = String(today.getMonth() + 1).padStart(2, '0');
-                    const day = String(today.getDate()).padStart(2, '0');
-                    const year = today.getFullYear();
-                    adminInput.value = `${month}/${day}/${year}`;
+                if (doseKey === 'd0') {
+                    autoCalculateSchedules(this.value);
                 }
-                this.className = `form-select form-select-sm status-select ${isAdministered ? 'status-administered' : 'status-pending'}`;
-                updateVaccinationSummary();
+            });
+
+            input.addEventListener('input', function() {
+                this.dataset.autoCalculated = 'false';
             });
         });
-        
-        document.querySelectorAll('.schedule-date-input').forEach(input => {
-            if (input.id.startsWith('sched_')) {
-                input.addEventListener('change', function() {
-                    const doseKey = this.dataset.dose;
-                    if (doseKey === 'd0') {
-                        autoCalculateSchedules(this.value);
-                    }
-                });
-            }
-        });
-        
+
         updateVaccinationSummary();
     }
 
@@ -2938,97 +3450,121 @@ if ($action) {
             altInput: true,
             altFormat: 'm/d/Y'
         };
+
         document.querySelectorAll('.schedule-date-input').forEach(el => {
             if (el._flatpickr) {
                 el._flatpickr.destroy();
             }
-            flatpickr(el, config);
+
+            if (!el.disabled) {
+                flatpickr(el, config);
+            }
         });
     }
 
     function autoCalculateSchedules(day0Date) {
         if (!day0Date) return;
+
         const autoSchedules = calculateAutoSchedule(day0Date);
         if (Object.keys(autoSchedules).length === 0) return;
+
         DOSE_CONFIG.forEach(d => {
-            if (d.key === 'd0') return;
-            if (!currentDoseKeys.includes(d.key)) return;
+            if (d.key === 'd0' || !currentDoseKeys.includes(d.key)) return;
+
             const input = document.getElementById(`sched_${d.key}`);
-            if (input && autoSchedules[d.key]) {
-                if (!input.value || input.dataset.autoCalculated !== 'false') {
-                    input.value = autoSchedules[d.key];
-                    input.dataset.autoCalculated = 'true';
+            if (!input || input.disabled || !autoSchedules[d.key]) return;
+
+            if (!input.value || input.dataset.autoCalculated !== 'false') {
+                input.value = autoSchedules[d.key];
+                input.dataset.autoCalculated = 'true';
+
+                if (input._flatpickr) {
+                    input._flatpickr.setDate(autoSchedules[d.key], false, 'm/d/Y');
                 }
             }
         });
-        const updatedData = getCurrentDoseData();
-        renderScheduleTable(updatedData);
+
+        updateVaccinationSummary();
     }
 
     function getCurrentDoseData() {
         const data = {};
-        DOSE_CONFIG.forEach(d => {
-            if (currentDoseKeys.includes(d.key)) {
-                data[d.key] = {
-                    scheduled_date: document.getElementById(`sched_${d.key}`)?.value || '',
-                    administered_date: document.getElementById(`admin_${d.key}`)?.value || '',
-                    status: document.getElementById(`status_${d.key}`)?.value || 'Pending'
-                };
-            }
+
+        currentDoseKeys.forEach(key => {
+            const existing = currentDoseData[key] || {};
+            const input = document.getElementById(`sched_${key}`);
+
+            data[key] = {
+                scheduled_date: input ? input.value : (existing.scheduled_date || ''),
+                administered_date: existing.administered_date || '',
+                status: existing.status || 'Scheduled',
+                locked: existing.locked === true || existing.status === 'Administered'
+            };
         });
+
         return data;
     }
 
     function updateVaccinationSummary() {
         const doseData = getCurrentDoseData();
-        let completed = 0;
         const total = currentDoseKeys.length;
-        
+        let completed = 0;
+
         currentDoseKeys.forEach(key => {
-            if (doseData[key] && doseData[key].status === 'Administered') {
+            if ((doseData[key]?.status || '') === 'Administered') {
                 completed++;
             }
         });
-        
+
         const progressText = document.getElementById('progressText');
         const progressBarFill = document.getElementById('progressBarFill');
         const statusBadge = document.getElementById('vaccStatusBadge');
-        
-        progressText.textContent = `${completed} of ${total} doses completed`;
+
+        progressText.textContent = `${completed} of ${total} stages completed by Nurse`;
+
         const percentage = total > 0 ? (completed / total) * 100 : 0;
         progressBarFill.style.width = `${percentage}%`;
-        
+
         if (total > 0 && completed === total) {
             statusBadge.textContent = 'Completed';
             statusBadge.className = 'summary-badge completed';
             progressBarFill.className = 'progress-bar-fill completed';
+        } else if (completed > 0) {
+            statusBadge.textContent = 'In Progress';
+            statusBadge.className = 'summary-badge';
+            progressBarFill.className = 'progress-bar-fill';
         } else {
-            statusBadge.textContent = total > 0 ? 'In Progress' : 'No Doses';
+            statusBadge.textContent = total > 0 ? 'Scheduled' : 'No Schedule';
             statusBadge.className = 'summary-badge';
             progressBarFill.className = 'progress-bar-fill';
         }
     }
 
     function loadDoseDataForEdit(doseData) {
-        if (!doseData) {
-            renderScheduleTable();
-            return;
-        }
-        renderScheduleTable(doseData);
+        renderScheduleTable(doseData || {});
     }
 
     function initNewSchedule() {
         const category = document.getElementById('vaccCategory').value;
         const route = document.getElementById('route').value;
+
         currentDoseKeys = getDoseKeysForCategory(category, route);
-        renderScheduleTable();
+
+        const scheduleData = {};
+        currentDoseKeys.forEach(key => {
+            scheduleData[key] = {
+                scheduled_date: '',
+                administered_date: '',
+                status: 'Scheduled',
+                locked: false
+            };
+        });
+
+        renderScheduleTable(scheduleData);
         document.getElementById('vaccinationRemarks').value = '';
+
         const scheduleSection = document.getElementById('scheduleSection');
-        if (category === 'Others') {
-            scheduleSection.style.display = 'none';
-        } else {
-            scheduleSection.style.display = 'block';
-        }
+        scheduleSection.style.display = category === 'Others' ? 'none' : 'block';
     }
 
     async function checkCaseNo(caseNo, excludeId = null) {
@@ -3140,19 +3676,21 @@ if ($action) {
                     const philBadge = p.philhealth === 'Yes' ? 
                         '<span class="status-yes">Yes</span>' : 
                         '<span class="status-no">No</span>';
-                    const vaccBadge = p.vaccination_status === 'Completed' ? 
-                        '<span class="vacc-status-badge completed">Completed</span>' : 
-                        '<span class="vacc-status-badge pending">Pending</span>';
+                    const vaccBadge = p.vaccination_status === 'Completed'
+                        ? '<span class="vacc-status-badge completed">Completed</span>'
+                        : (p.vaccination_status === 'In Progress'
+                            ? '<span class="vacc-status-badge in-progress">In Progress</span>'
+                            : '<span class="vacc-status-badge pending">Pending</span>');
                     html += `
                         <tr>
-                            <td><strong>${p.case_no}</strong></td>
-                            <td>${p.patient_name}</td>
+                            <td><strong>${escapeHtml(p.case_no)}</strong></td>
+                            <td>${escapeHtml(p.patient_name)}</td>
                             <td>${philBadge}</td>
-                            <td>${p.philhealth_type || ''}</td>
-                            <td>${p.dob}</td>
-                            <td>${p.age ?? ''}</td>
-                            <td>${p.gender || ''}</td>
-                            <td>${p.address || ''}</td>
+                            <td>${escapeHtml(p.philhealth_type || '')}</td>
+                            <td>${escapeHtml(p.dob)}</td>
+                            <td>${escapeHtml(p.age ?? '')}</td>
+                            <td>${escapeHtml(p.gender || '')}</td>
+                            <td>${escapeHtml(p.address || '')}</td>
                             <td>${vaccBadge}</td>
                             <td>
                                 <div class="action-icons">
@@ -3237,13 +3775,10 @@ if ($action) {
                 ['Site of Bite', data.site_of_bite || ''],
                 ['Biting Animal', data.biting_animal || ''],
                 ['Animal Status', data.animal_status || ''],
-                ['ERIG (mL)', data.erig_ml || '0'],
-                ['Anti-Tetanus Serum (ATS)', data.ats ? 'Yes' : 'No'],
-                ['Tetanus-Toxoid', data.tt ? 'Yes' : 'No'],
                 ['Active Regimen', data.active_regimen || ''],
                 ['Vaccination Category', data.vacc_category || ''],
                 ['Vaccination Status', data.vaccination_status || 'Pending'],
-                ['Record Status', data.status || 'For Writing'],
+                ['Record Status', data.has_philhealth === 'Yes' ? (data.status || 'For Writing') : 'Not Applicable'],
                 ['Remarks', data.remarks || '']
             ];
 
@@ -3251,12 +3786,50 @@ if ($action) {
             fields.forEach((f, index) => {
                 html += `
                     <div class="view-detail-row" style="${index % 2 === 0 ? '' : 'border-bottom:none;'}">
-                        <span class="view-detail-label">${f[0]}</span>
-                        <span class="view-detail-value">${f[1]}</span>
+                        <span class="view-detail-label">${escapeHtml(f[0])}</span>
+                        <span class="view-detail-value">${escapeHtml(f[1])}</span>
                     </div>
                 `;
             });
             html += '</div>';
+
+            if (data.vaccination_doses && Object.keys(data.vaccination_doses).length > 0) {
+                html += `
+                    <hr>
+                    <h6 class="fw-bold" style="color:var(--primary);">Vaccination Schedule</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Dose Stage</th>
+                                    <th>Scheduled Date</th>
+                                    <th>Administered Date</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                `;
+
+                DOSE_CONFIG.forEach(d => {
+                    const stage = data.vaccination_doses[d.key];
+                    if (!stage) return;
+
+                    html += `
+                        <tr>
+                            <td>${escapeHtml(d.label)}</td>
+                            <td>${escapeHtml(stage.scheduled_date || '—')}</td>
+                            <td>${escapeHtml(stage.administered_date || '—')}</td>
+                            <td>${scheduleStatusBadge(stage.status || 'Scheduled')}</td>
+                        </tr>
+                    `;
+                });
+
+                html += `
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            }
 
             document.getElementById('viewModalBody').innerHTML = html;
             new bootstrap.Modal(document.getElementById('viewModal')).show();
@@ -3292,21 +3865,37 @@ if ($action) {
             document.getElementById('admissionDate').value = data.admission_date || '';
             document.getElementById('dateOfBite').value = data.date_of_bite || '';
             document.getElementById('siteOfBite').value = data.site_of_bite || '';
-            document.getElementById('bitingAnimal').value = data.biting_animal || 'Dog';
+            const knownAnimals = ['Dog', 'Cat', 'Not Applicable'];
+            if (knownAnimals.includes(data.biting_animal)) {
+                document.getElementById('bitingAnimal').value = data.biting_animal;
+                document.getElementById('customAnimal').value = '';
+                document.getElementById('customAnimalContainer').style.display = 'none';
+            } else {
+                document.getElementById('bitingAnimal').value = 'Others';
+                document.getElementById('customAnimal').value = data.biting_animal || '';
+                document.getElementById('customAnimalContainer').style.display = 'block';
+            }
             document.getElementById('animalStatus').value = data.animal_status || '';
-            document.getElementById('erigMl').value = data.erig_ml || '';
-            document.getElementById('ats').checked = data.ats || false;
-            document.getElementById('tt').checked = data.tt || false;
             document.getElementById('activeRegimen').value = data.active_regimen || '';
             document.getElementById('vaccCategory').value = data.vacc_category || 'Post-Exposure Prophylaxis (PEP)';
             document.getElementById('route').value = data.route || 'Intradermal (ID)';
-            document.getElementById('status').value = data.status || 'For Writing';
+            document.getElementById('status').value =
+                data.has_philhealth === 'Yes'
+                    ? (data.status || 'For Writing')
+                    : '';
 
             const category = document.getElementById('vaccCategory').value;
             const route = document.getElementById('route').value;
-            currentDoseKeys = getDoseKeysForCategory(category, route);
-            
-            if (data.vaccination_doses) {
+
+            const returnedDoseKeys = data.vaccination_doses
+                ? Object.keys(data.vaccination_doses)
+                : [];
+
+            currentDoseKeys = returnedDoseKeys.length > 0
+                ? DOSE_CONFIG.filter(d => returnedDoseKeys.includes(d.key)).map(d => d.key)
+                : getDoseKeysForCategory(category, route);
+
+            if (data.vaccination_doses && Object.keys(data.vaccination_doses).length > 0) {
                 loadDoseDataForEdit(data.vaccination_doses);
             } else {
                 renderScheduleTable();
@@ -3331,8 +3920,8 @@ if ($action) {
                     hist.forEach(h => {
                         histHtml += `
                             <div class="history-item">
-                                <span>${h.case_no || 'N/A'} (${h.admit_date || ''})</span>
-                                <span class="badge bg-${h.status === 'Completed' ? 'success' : 'warning'}">${h.status || 'Ongoing'}</span>
+                                <span>${escapeHtml(h.case_no || 'N/A')} (${escapeHtml(h.admit_date || '')})</span>
+                                <span class="badge bg-${h.status === 'Completed' ? 'success' : 'warning'}">${escapeHtml(h.status || 'Ongoing')}</span>
                             </div>
                         `;
                     });
@@ -3365,7 +3954,15 @@ if ($action) {
         const reason = document.getElementById('archiveReason').value.trim() || 'Archived by user';
         
         try {
-            const res = await fetch(`${apiBase}?action=archive&case_id=${archiveTargetCaseId}&reason=${encodeURIComponent(reason)}`, { method: 'POST' });
+            const res = await fetch(`${apiBase}?action=archive`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    csrf_token: csrfToken,
+                    case_id: archiveTargetCaseId,
+                    reason: reason
+                })
+            });
             const data = await res.json();
             if (data.success) {
                 bootstrap.Modal.getInstance(document.getElementById('archiveModal')).hide();
@@ -3384,11 +3981,15 @@ if ($action) {
     function togglePhilhealthStatus() {
         const philhealth = document.getElementById('philhealth').value;
         const statusSelect = document.getElementById('status');
+
         if (philhealth === 'No') {
             statusSelect.disabled = true;
-            statusSelect.value = 'Awaiting Processing';
+            statusSelect.value = '';
         } else {
             statusSelect.disabled = false;
+            if (!statusSelect.value) {
+                statusSelect.value = 'For Writing';
+            }
         }
     }
 
@@ -3409,6 +4010,7 @@ if ($action) {
         }
 
         const formData = {
+            csrf_token: csrfToken,
             case_id: parseInt(document.getElementById('editId').value) || null,
             patient_id: parseInt(document.getElementById('editPatientId').value) || null,
             case_no: caseNo,
@@ -3424,10 +4026,8 @@ if ($action) {
             date_of_bite: document.getElementById('dateOfBite').value,
             site_of_bite: document.getElementById('siteOfBite').value.trim(),
             biting_animal: document.getElementById('bitingAnimal').value,
+            custom_animal: document.getElementById('customAnimal').value.trim(),
             animal_status: document.getElementById('animalStatus').value,
-            erig_ml: parseFloat(document.getElementById('erigMl').value) || 0,
-            ats: document.getElementById('ats').checked,
-            tt: document.getElementById('tt').checked,
             active_regimen: document.getElementById('activeRegimen').value,
             vacc_category: document.getElementById('vaccCategory').value,
             route: document.getElementById('route').value,
@@ -3444,7 +4044,6 @@ if ($action) {
                 document.getElementById('customVaccCategory').focus();
                 return;
             }
-            formData.vacc_category = customCat;
         }
 
         if (!formData.patient_name) {
@@ -3489,6 +4088,11 @@ if ($action) {
         if (!formData.biting_animal) {
             showToast('Error', 'Biting animal is required.', true);
             document.getElementById('bitingAnimal').focus();
+            return;
+        }
+        if (formData.biting_animal === 'Others' && !formData.custom_animal) {
+            showToast('Error', 'Please specify the biting animal.', true);
+            document.getElementById('customAnimal').focus();
             return;
         }
         if (!formData.animal_status) {
@@ -3548,11 +4152,10 @@ if ($action) {
         document.querySelectorAll('input[name="gender"]').forEach(el => {
             el.checked = false;
         });
-        
-        document.getElementById('erigMl').value = '';
-        document.getElementById('ats').checked = false;
-        document.getElementById('tt').checked = false;
-        
+
+        document.getElementById('customAnimal').value = '';
+        document.getElementById('customAnimalContainer').style.display = 'none';
+
         togglePhilhealthStatus();
         initNewSchedule();
         
@@ -3676,7 +4279,7 @@ if ($action) {
                     p.gender || '',
                     `"${(p.address || '').replace(/"/g, '""')}"`,
                     p.vaccination_status || 'Pending',
-                    p.status || 'For Writing'
+                    p.philhealth === 'Yes' ? (p.status || 'For Writing') : 'Not Applicable'
                 ];
                 csv += row.join(',') + '\n';
             });
@@ -3712,6 +4315,19 @@ if ($action) {
                     document.getElementById('age').value = age;
                 }
             }
+        }
+    });
+
+    document.getElementById('dateOfBite').addEventListener('change', function() {
+        if (!this.value || !currentDoseKeys.includes('d0')) return;
+
+        const d0Input = document.getElementById('sched_d0');
+        if (d0Input && !d0Input.disabled && !d0Input.value) {
+            d0Input.value = this.value;
+            if (d0Input._flatpickr) {
+                d0Input._flatpickr.setDate(this.value, false, 'm/d/Y');
+            }
+            autoCalculateSchedules(this.value);
         }
     });
 

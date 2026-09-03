@@ -1,485 +1,2443 @@
 <?php
 session_start();
+
 require_once 'sources/db_connect.php';
 
-// ============================================
-// HTML ESCAPE HELPER
-// ============================================
-function h($value) {
-    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
-}
 
-// ============================================
-// AUDIT LOG FUNCTION
-// ============================================
-function addAuditLog($conn, $user_id, $action, $module = 'Inventory Categories') {
-    // Get user's branch_id
-    $branch_id = null;
-    $user_sql = "SELECT branch_id FROM users WHERE user_id = ?";
-    $user_stmt = $conn->prepare($user_sql);
-    if ($user_stmt) {
-        $user_stmt->bind_param("i", $user_id);
-        $user_stmt->execute();
-        $user_result = $user_stmt->get_result();
-        if ($user_row = $user_result->fetch_assoc()) {
-            $branch_id = $user_row['branch_id'];
-        }
-        $user_stmt->close();
-    }
-    
-    $log_sql = "INSERT INTO audit_logs (user_id, branch_id, action, module) VALUES (?, ?, ?, ?)";
-    $log_stmt = $conn->prepare($log_sql);
-    if ($log_stmt) {
-        $log_stmt->bind_param("isss", $user_id, $branch_id, $action, $module);
-        $result = $log_stmt->execute();
-        $log_stmt->close();
-        return $result;
-    }
-    return false;
-}
+/* =========================================================
+   ACCESS CONTROL
+   ========================================================= */
 
 if (
     !isset($_SESSION['user_id']) ||
     !isset($_SESSION['role_id']) ||
-    ($_SESSION['role_id'] != 1 && $_SESSION['role_id'] != 5)
+    (
+        (int)$_SESSION['role_id'] !== 1 &&
+        (int)$_SESSION['role_id'] !== 5
+    )
 ) {
     header("Location: login.php");
     exit();
 }
 
-// ============================================
-// GET LOGGED-IN USER INFORMATION
-// ============================================
 
-$user_id = isset($_SESSION['user_id']) ? (int)$_SESSION['user_id'] : 0;
+/* =========================================================
+   HTML ESCAPE HELPER
+   ========================================================= */
 
-$username = 'Inventory Officer';
-$branch_name = 'Unknown Branch';
+function h($value)
+{
+    return htmlspecialchars(
+        (string)$value,
+        ENT_QUOTES,
+        'UTF-8'
+    );
+}
 
-if ($user_id > 0) {
 
-    $user_sql = "
-        SELECT 
-            u.username,
-            u.branch_id,
-            b.branch_name
-        FROM users AS u
-        LEFT JOIN branches AS b
-            ON u.branch_id = b.branch_id
-        WHERE u.user_id = ?
-        LIMIT 1
+/* =========================================================
+   CSRF TOKEN
+   ========================================================= */
+
+if (empty($_SESSION['categories_units_csrf'])) {
+    $_SESSION['categories_units_csrf'] =
+        bin2hex(random_bytes(32));
+}
+
+$csrf_token =
+    $_SESSION['categories_units_csrf'];
+
+
+/* =========================================================
+   FLASH MESSAGE HELPER
+   ========================================================= */
+
+function setFlashMessage($type, $message)
+{
+    $_SESSION['categories_units_flash'] = [
+        'type' => $type,
+        'message' => $message
+    ];
+}
+
+
+function redirectToTab($tab)
+{
+    $tab =
+        $tab === 'units'
+        ? 'units'
+        : 'categories';
+
+    header(
+        "Location: " .
+        $_SERVER['PHP_SELF'] .
+        "?tab=" .
+        urlencode($tab)
+    );
+
+    exit();
+}
+
+
+/* =========================================================
+   GET FLASH MESSAGE
+   ========================================================= */
+
+$success_msg = '';
+$error_msg = '';
+
+if (
+    isset($_SESSION['categories_units_flash']) &&
+    is_array($_SESSION['categories_units_flash'])
+) {
+
+    $flash =
+        $_SESSION['categories_units_flash'];
+
+    if (
+        isset($flash['type']) &&
+        $flash['type'] === 'success'
+    ) {
+        $success_msg =
+            $flash['message']
+            ?? '';
+    } else {
+        $error_msg =
+            $flash['message']
+            ?? '';
+    }
+
+    unset(
+        $_SESSION['categories_units_flash']
+    );
+}
+
+
+/* =========================================================
+   LOGGED-IN USER
+   ========================================================= */
+
+$user_id =
+    (int)$_SESSION['user_id'];
+
+$username =
+    'Inventory Officer';
+
+$branch_id =
+    null;
+
+$branch_name =
+    'Unknown Branch';
+
+
+$user_sql = "
+    SELECT
+        u.username,
+        u.branch_id,
+        b.branch_name
+
+    FROM users u
+
+    LEFT JOIN branches b
+        ON u.branch_id = b.branch_id
+
+    WHERE u.user_id = ?
+
+    LIMIT 1
+";
+
+
+$user_stmt =
+    $conn->prepare($user_sql);
+
+if (!$user_stmt) {
+    die(
+        "Database error while loading user information."
+    );
+}
+
+
+$user_stmt->bind_param(
+    "i",
+    $user_id
+);
+
+$user_stmt->execute();
+
+$user_result =
+    $user_stmt->get_result();
+
+
+if (
+    $user_row =
+    $user_result->fetch_assoc()
+) {
+
+    $username =
+        !empty($user_row['username'])
+        ? $user_row['username']
+        : 'Inventory Officer';
+
+    $branch_id =
+        $user_row['branch_id']
+        ?? null;
+
+    $branch_name =
+        !empty($user_row['branch_name'])
+        ? $user_row['branch_name']
+        : 'Unknown Branch';
+}
+
+
+$user_stmt->close();
+
+
+/* =========================================================
+   AUDIT LOG
+   ========================================================= */
+
+function addAuditLog(
+    $conn,
+    $user_id,
+    $branch_id,
+    $action,
+    $module = 'Inventory Categories'
+) {
+
+    $log_sql = "
+        INSERT INTO audit_logs
+        (
+            user_id,
+            branch_id,
+            action,
+            module
+        )
+        VALUES
+        (
+            ?,
+            ?,
+            ?,
+            ?
+        )
     ";
 
-    $user_stmt = $conn->prepare($user_sql);
 
-    if ($user_stmt) {
+    $log_stmt =
+        $conn->prepare($log_sql);
 
-        $user_stmt->bind_param("i", $user_id);
-        $user_stmt->execute();
+    if (!$log_stmt) {
+        return false;
+    }
 
-        $user_result = $user_stmt->get_result();
 
-        if ($user_row = $user_result->fetch_assoc()) {
+    $log_stmt->bind_param(
+        "isss",
+        $user_id,
+        $branch_id,
+        $action,
+        $module
+    );
 
-            $username = !empty($user_row['username'])
-                ? $user_row['username']
-                : 'Inventory Officer';
 
-            $branch_name = !empty($user_row['branch_name'])
-                ? $user_row['branch_name']
-                : 'Unknown Branch';
+    $result =
+        $log_stmt->execute();
+
+    $log_stmt->close();
+
+    return $result;
+}
+
+
+/* =========================================================
+   CHECK POST CSRF
+   ========================================================= */
+
+function validateCsrf()
+{
+    $postedToken =
+        $_POST['csrf_token']
+        ?? '';
+
+    return (
+        isset($_SESSION['categories_units_csrf']) &&
+        hash_equals(
+            $_SESSION['categories_units_csrf'],
+            $postedToken
+        )
+    );
+}
+
+
+/* =========================================================
+   ALLOWED MONITORING FREQUENCIES
+   ========================================================= */
+
+$allowed_frequencies = [
+    'Daily',
+    'Weekly',
+    'Monthly'
+];
+
+
+/* =========================================================
+   HANDLE POST REQUESTS
+   ========================================================= */
+
+if (
+    $_SERVER['REQUEST_METHOD'] === 'POST'
+) {
+
+    if (!validateCsrf()) {
+
+        setFlashMessage(
+            'error',
+            'Invalid request. Please refresh the page and try again.'
+        );
+
+        redirectToTab(
+            $_POST['active_tab']
+            ?? 'categories'
+        );
+    }
+
+
+    $action =
+        $_POST['action']
+        ?? '';
+
+
+    /* =====================================================
+       ADD CATEGORY
+       ===================================================== */
+
+    if ($action === 'add_category') {
+
+        $category_name =
+            trim(
+                $_POST['category_name']
+                ?? ''
+            );
+
+
+        $monitoring_frequency =
+            $_POST['monitoring_frequency']
+            ?? 'Monthly';
+
+
+        if (
+            !in_array(
+                $monitoring_frequency,
+                $allowed_frequencies,
+                true
+            )
+        ) {
+            $monitoring_frequency =
+                'Monthly';
         }
 
-        $user_stmt->close();
-    }
-}
-// ============================================
-// HANDLE CATEGORY CRUD OPERATIONS
-// ============================================
 
-// Handle Add Category
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_category'])) {
-    $category_name = trim($_POST['category_name']);
-    $monitoring_frequency = $_POST['monitoring_frequency'] ?? 'Monthly';
-    
-    if (empty($category_name)) {
-        $error_msg = "Category name is required.";
-    } else {
-        // Check if category already exists
-        $check_sql = "SELECT category_id FROM inventory_categories WHERE category_name = ?";
-        $check_stmt = $conn->prepare($check_sql);
-        $check_stmt->bind_param("s", $category_name);
+        if ($category_name === '') {
+
+            setFlashMessage(
+                'error',
+                'Category name is required.'
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        /* -----------------------------------------------
+           DUPLICATE CATEGORY CHECK
+           ----------------------------------------------- */
+
+        $check_sql = "
+            SELECT category_id
+
+            FROM inventory_categories
+
+            WHERE LOWER(TRIM(category_name))
+                = LOWER(TRIM(?))
+
+            LIMIT 1
+        ";
+
+
+        $check_stmt =
+            $conn->prepare($check_sql);
+
+
+        if (!$check_stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to check duplicate category.'
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        $check_stmt->bind_param(
+            "s",
+            $category_name
+        );
+
         $check_stmt->execute();
-        $check_result = $check_stmt->get_result();
-        
-        if ($check_result->num_rows > 0) {
-            $error_msg = "Category '$category_name' already exists.";
-        } else {
-            $sql = "INSERT INTO inventory_categories (category_name, monitoring_frequency) VALUES (?, ?)";
-            $stmt = $conn->prepare($sql);
-            $stmt->bind_param("ss", $category_name, $monitoring_frequency);
-            
-            if ($stmt->execute()) {
-                $category_id = $conn->insert_id;
-                addAuditLog($conn, $_SESSION['user_id'], 
-                    "Added new inventory category: $category_name (ID: $category_id) with frequency: $monitoring_frequency");
-                $success_msg = "Category added successfully!";
-            } else {
-                $error_msg = "Error adding category: " . $conn->error;
-                addAuditLog($conn, $_SESSION['user_id'], "Failed to add inventory category: $category_name - " . $conn->error);
-            }
+
+        $check_result =
+            $check_stmt->get_result();
+
+        $duplicateExists =
+            $check_result->num_rows > 0;
+
+        $check_stmt->close();
+
+
+        if ($duplicateExists) {
+
+            setFlashMessage(
+                'error',
+                "Category '{$category_name}' already exists."
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        /* -----------------------------------------------
+           INSERT CATEGORY
+           ----------------------------------------------- */
+
+        $sql = "
+            INSERT INTO inventory_categories
+            (
+                category_name,
+                monitoring_frequency
+            )
+            VALUES
+            (
+                ?,
+                ?
+            )
+        ";
+
+
+        $stmt =
+            $conn->prepare($sql);
+
+
+        if (!$stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to prepare category insertion.'
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        $stmt->bind_param(
+            "ss",
+            $category_name,
+            $monitoring_frequency
+        );
+
+
+        if ($stmt->execute()) {
+
+            $category_id =
+                $conn->insert_id;
+
+
+            addAuditLog(
+                $conn,
+                $user_id,
+                $branch_id,
+                "Added new inventory category: {$category_name} " .
+                "(ID: {$category_id}) " .
+                "with frequency: {$monitoring_frequency}"
+            );
+
+
             $stmt->close();
-        }
-        $check_stmt->close();
-    }
-}
 
-// Handle Edit Category
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_category'])) {
-    $category_id = intval($_POST['category_id']);
-    $category_name = trim($_POST['edit_category_name']);
-    $monitoring_frequency = $_POST['edit_monitoring_frequency'] ?? 'Monthly';
-    
-    // Get old data for audit log
-    $old_sql = "SELECT category_name, monitoring_frequency FROM inventory_categories WHERE category_id = ?";
-    $old_stmt = $conn->prepare($old_sql);
-    $old_stmt->bind_param("i", $category_id);
-    $old_stmt->execute();
-    $old_result = $old_stmt->get_result();
-    $old_data = $old_result->fetch_assoc();
-    $old_stmt->close();
-    
-    if (empty($category_name)) {
-        $error_msg = "Category name is required.";
-    } else {
-        // Check if name already exists (excluding current category)
-        $check_sql = "SELECT category_id FROM inventory_categories WHERE category_name = ? AND category_id != ?";
-        $check_stmt = $conn->prepare($check_sql);
-        $check_stmt->bind_param("si", $category_name, $category_id);
-        $check_stmt->execute();
-        $check_result = $check_stmt->get_result();
-        
-        if ($check_result->num_rows > 0) {
-            $error_msg = "Category '$category_name' already exists.";
+
+            setFlashMessage(
+                'success',
+                'Category added successfully!'
+            );
+
+
+            redirectToTab(
+                'categories'
+            );
+
         } else {
-            $sql = "UPDATE inventory_categories SET category_name = ?, monitoring_frequency = ? WHERE category_id = ?";
-            $stmt = $conn->prepare($sql);
-            $stmt->bind_param("ssi", $category_name, $monitoring_frequency, $category_id);
-            
-            if ($stmt->execute()) {
-                // Build change description
-                $changes = [];
-                if ($old_data['category_name'] != $category_name) {
-                    $changes[] = "Name: '{$old_data['category_name']}' → '$category_name'";
-                }
-                if ($old_data['monitoring_frequency'] != $monitoring_frequency) {
-                    $changes[] = "Frequency: '{$old_data['monitoring_frequency']}' → '$monitoring_frequency'";
-                }
-                
-                $details = !empty($changes) ? "Changes: " . implode(", ", $changes) : "No changes made";
-                addAuditLog($conn, $_SESSION['user_id'], "Updated inventory category: $category_name (ID: $category_id) - $details");
-                $success_msg = "Category updated successfully!";
-            } else {
-                $error_msg = "Error updating category: " . $conn->error;
-                addAuditLog($conn, $_SESSION['user_id'], "Failed to update inventory category: $category_name - " . $conn->error);
-            }
+
+            $dbError =
+                $stmt->error;
+
             $stmt->close();
-        }
-        $check_stmt->close();
-    }
-}
 
-// Handle Delete Category
-if (isset($_GET['delete_category_id'])) {
-    $category_id = intval($_GET['delete_category_id']);
-    
-    // Get category details before deletion
-    $cat_sql = "SELECT category_name FROM inventory_categories WHERE category_id = ?";
-    $cat_stmt = $conn->prepare($cat_sql);
-    $cat_stmt->bind_param("i", $category_id);
-    $cat_stmt->execute();
-    $cat_result = $cat_stmt->get_result();
-    $cat_data = $cat_result->fetch_assoc();
-    $cat_stmt->close();
-    
-    if ($cat_data) {
-        // Check if category has items
-        $check_sql = "SELECT COUNT(*) as count FROM inventory_items WHERE category_id = ?";
-        $check_stmt = $conn->prepare($check_sql);
-        $check_stmt->bind_param("i", $category_id);
+
+            addAuditLog(
+                $conn,
+                $user_id,
+                $branch_id,
+                "Failed to add inventory category: " .
+                "{$category_name} - {$dbError}"
+            );
+
+
+            setFlashMessage(
+                'error',
+                'Error adding category: ' .
+                $dbError
+            );
+
+
+            redirectToTab(
+                'categories'
+            );
+        }
+    }
+
+
+    /* =====================================================
+       EDIT CATEGORY
+       ===================================================== */
+
+    if ($action === 'edit_category') {
+
+        $category_id =
+            filter_input(
+                INPUT_POST,
+                'category_id',
+                FILTER_VALIDATE_INT
+            );
+
+
+        $category_name =
+            trim(
+                $_POST['edit_category_name']
+                ?? ''
+            );
+
+
+        $monitoring_frequency =
+            $_POST['edit_monitoring_frequency']
+            ?? 'Monthly';
+
+
+        if (
+            !$category_id ||
+            $category_id <= 0
+        ) {
+
+            setFlashMessage(
+                'error',
+                'Invalid category.'
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        if ($category_name === '') {
+
+            setFlashMessage(
+                'error',
+                'Category name is required.'
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        if (
+            !in_array(
+                $monitoring_frequency,
+                $allowed_frequencies,
+                true
+            )
+        ) {
+
+            $monitoring_frequency =
+                'Monthly';
+        }
+
+
+        /* -----------------------------------------------
+           GET OLD CATEGORY
+           ----------------------------------------------- */
+
+        $old_sql = "
+            SELECT
+                category_name,
+                monitoring_frequency
+
+            FROM inventory_categories
+
+            WHERE category_id = ?
+
+            LIMIT 1
+        ";
+
+
+        $old_stmt =
+            $conn->prepare($old_sql);
+
+
+        if (!$old_stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to retrieve category.'
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        $old_stmt->bind_param(
+            "i",
+            $category_id
+        );
+
+        $old_stmt->execute();
+
+
+        $old_data =
+            $old_stmt
+                ->get_result()
+                ->fetch_assoc();
+
+
+        $old_stmt->close();
+
+
+        if (!$old_data) {
+
+            setFlashMessage(
+                'error',
+                'Category not found.'
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        /* -----------------------------------------------
+           DUPLICATE CATEGORY CHECK
+           ----------------------------------------------- */
+
+        $check_sql = "
+            SELECT category_id
+
+            FROM inventory_categories
+
+            WHERE LOWER(TRIM(category_name))
+                = LOWER(TRIM(?))
+
+              AND category_id <> ?
+
+            LIMIT 1
+        ";
+
+
+        $check_stmt =
+            $conn->prepare($check_sql);
+
+
+        if (!$check_stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to check duplicate category.'
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        $check_stmt->bind_param(
+            "si",
+            $category_name,
+            $category_id
+        );
+
+
         $check_stmt->execute();
-        $check_result = $check_stmt->get_result();
-        $check_data = $check_result->fetch_assoc();
+
+
+        $duplicateExists =
+            $check_stmt
+                ->get_result()
+                ->num_rows > 0;
+
+
         $check_stmt->close();
-        
-        if ($check_data['count'] > 0) {
-            $error_msg = "Cannot delete category: It has " . $check_data['count'] . " items associated with it.";
-        } else {
-            $delete_sql = "DELETE FROM inventory_categories WHERE category_id = ?";
-            $delete_stmt = $conn->prepare($delete_sql);
-            $delete_stmt->bind_param("i", $category_id);
-            
-            if ($delete_stmt->execute()) {
-                addAuditLog($conn, $_SESSION['user_id'], "Deleted inventory category: " . $cat_data['category_name'] . " (ID: $category_id)");
-                $success_msg = "Category deleted successfully!";
-            } else {
-                $error_msg = "Error deleting category: " . $conn->error;
-                addAuditLog($conn, $_SESSION['user_id'], "Failed to delete inventory category: " . $cat_data['category_name'] . " - " . $conn->error);
+
+
+        if ($duplicateExists) {
+
+            setFlashMessage(
+                'error',
+                "Category '{$category_name}' already exists."
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        /* -----------------------------------------------
+           UPDATE CATEGORY
+           ----------------------------------------------- */
+
+        $sql = "
+            UPDATE inventory_categories
+
+            SET
+                category_name = ?,
+                monitoring_frequency = ?
+
+            WHERE category_id = ?
+        ";
+
+
+        $stmt =
+            $conn->prepare($sql);
+
+
+        if (!$stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to prepare category update.'
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        $stmt->bind_param(
+            "ssi",
+            $category_name,
+            $monitoring_frequency,
+            $category_id
+        );
+
+
+        if ($stmt->execute()) {
+
+            $changes = [];
+
+
+            if (
+                $old_data['category_name']
+                !== $category_name
+            ) {
+
+                $changes[] =
+                    "Name: '{$old_data['category_name']}' → '{$category_name}'";
             }
+
+
+            if (
+                $old_data['monitoring_frequency']
+                !== $monitoring_frequency
+            ) {
+
+                $changes[] =
+                    "Frequency: " .
+                    "'{$old_data['monitoring_frequency']}' " .
+                    "→ '{$monitoring_frequency}'";
+            }
+
+
+            $details =
+                !empty($changes)
+                ? "Changes: " .
+                  implode(
+                      ', ',
+                      $changes
+                  )
+                : 'No changes made';
+
+
+            addAuditLog(
+                $conn,
+                $user_id,
+                $branch_id,
+                "Updated inventory category: " .
+                "{$category_name} " .
+                "(ID: {$category_id}) - {$details}"
+            );
+
+
+            $stmt->close();
+
+
+            setFlashMessage(
+                'success',
+                'Category updated successfully!'
+            );
+
+
+            redirectToTab(
+                'categories'
+            );
+
+        } else {
+
+            $dbError =
+                $stmt->error;
+
+            $stmt->close();
+
+
+            setFlashMessage(
+                'error',
+                'Error updating category: ' .
+                $dbError
+            );
+
+
+            redirectToTab(
+                'categories'
+            );
+        }
+    }
+
+
+    /* =====================================================
+       DELETE CATEGORY
+       ===================================================== */
+
+    if ($action === 'delete_category') {
+
+        $category_id =
+            filter_input(
+                INPUT_POST,
+                'category_id',
+                FILTER_VALIDATE_INT
+            );
+
+
+        if (
+            !$category_id ||
+            $category_id <= 0
+        ) {
+
+            setFlashMessage(
+                'error',
+                'Invalid category.'
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        /* -----------------------------------------------
+           GET CATEGORY
+           ----------------------------------------------- */
+
+        $cat_sql = "
+            SELECT category_name
+
+            FROM inventory_categories
+
+            WHERE category_id = ?
+
+            LIMIT 1
+        ";
+
+
+        $cat_stmt =
+            $conn->prepare($cat_sql);
+
+
+        if (!$cat_stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to retrieve category.'
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        $cat_stmt->bind_param(
+            "i",
+            $category_id
+        );
+
+
+        $cat_stmt->execute();
+
+
+        $cat_data =
+            $cat_stmt
+                ->get_result()
+                ->fetch_assoc();
+
+
+        $cat_stmt->close();
+
+
+        if (!$cat_data) {
+
+            setFlashMessage(
+                'error',
+                'Category not found.'
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        /* -----------------------------------------------
+           CHECK ITEMS USING CATEGORY
+           ----------------------------------------------- */
+
+        $check_sql = "
+            SELECT COUNT(*) AS total
+
+            FROM inventory_items
+
+            WHERE category_id = ?
+        ";
+
+
+        $check_stmt =
+            $conn->prepare($check_sql);
+
+
+        if (!$check_stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to check category usage.'
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        $check_stmt->bind_param(
+            "i",
+            $category_id
+        );
+
+
+        $check_stmt->execute();
+
+
+        $check_data =
+            $check_stmt
+                ->get_result()
+                ->fetch_assoc();
+
+
+        $itemCount =
+            (int)(
+                $check_data['total']
+                ?? 0
+            );
+
+
+        $check_stmt->close();
+
+
+        if ($itemCount > 0) {
+
+            setFlashMessage(
+                'error',
+                "Cannot delete category: " .
+                "It has {$itemCount} inventory item(s) associated with it."
+            );
+
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        /* -----------------------------------------------
+           DELETE CATEGORY
+           ----------------------------------------------- */
+
+        $delete_sql = "
+            DELETE FROM inventory_categories
+            WHERE category_id = ?
+        ";
+
+
+        $delete_stmt =
+            $conn->prepare($delete_sql);
+
+
+        if (!$delete_stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to prepare category deletion.'
+            );
+
+            redirectToTab(
+                'categories'
+            );
+        }
+
+
+        $delete_stmt->bind_param(
+            "i",
+            $category_id
+        );
+
+
+        if ($delete_stmt->execute()) {
+
+            addAuditLog(
+                $conn,
+                $user_id,
+                $branch_id,
+                "Deleted inventory category: " .
+                $cat_data['category_name'] .
+                " (ID: {$category_id})"
+            );
+
+
             $delete_stmt->close();
-        }
-    } else {
-        $error_msg = "Category not found.";
-    }
-    
-    header("Location: " . $_SERVER['PHP_SELF']);
-    exit();
-}
 
-// ============================================
-// HANDLE UNIT CRUD OPERATIONS
-// ============================================
 
-// Handle Add Unit
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_unit'])) {
-    $unit_name = trim($_POST['unit_name']);
-    
-    if (empty($unit_name)) {
-        $error_msg = "Unit name is required.";
-    } else {
-        // Check if unit already exists
-        $check_sql = "SELECT unit_id FROM units WHERE unit_name = ?";
-        $check_stmt = $conn->prepare($check_sql);
-        $check_stmt->bind_param("s", $unit_name);
-        $check_stmt->execute();
-        $check_result = $check_stmt->get_result();
-        
-        if ($check_result->num_rows > 0) {
-            $error_msg = "Unit '$unit_name' already exists.";
+            setFlashMessage(
+                'success',
+                'Category deleted successfully!'
+            );
+
+
+            redirectToTab(
+                'categories'
+            );
+
         } else {
-            $sql = "INSERT INTO units (unit_name) VALUES (?)";
-            $stmt = $conn->prepare($sql);
-            $stmt->bind_param("s", $unit_name);
-            
-            if ($stmt->execute()) {
-                $unit_id = $conn->insert_id;
-                addAuditLog($conn, $_SESSION['user_id'], "Added new unit: $unit_name (ID: $unit_id)");
-                $success_msg = "Unit added successfully!";
-            } else {
-                $error_msg = "Error adding unit: " . $conn->error;
-                addAuditLog($conn, $_SESSION['user_id'], "Failed to add unit: $unit_name - " . $conn->error);
-            }
-            $stmt->close();
-        }
-        $check_stmt->close();
-    }
-}
 
-// Handle Edit Unit
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_unit'])) {
-    $unit_id = intval($_POST['unit_id']);
-    $unit_name = trim($_POST['edit_unit_name']);
-    
-    // Get old data for audit log
-    $old_sql = "SELECT unit_name FROM units WHERE unit_id = ?";
-    $old_stmt = $conn->prepare($old_sql);
-    $old_stmt->bind_param("i", $unit_id);
-    $old_stmt->execute();
-    $old_result = $old_stmt->get_result();
-    $old_data = $old_result->fetch_assoc();
-    $old_stmt->close();
-    
-    if (empty($unit_name)) {
-        $error_msg = "Unit name is required.";
-    } else {
-        // Check if name already exists (excluding current unit)
-        $check_sql = "SELECT unit_id FROM units WHERE unit_name = ? AND unit_id != ?";
-        $check_stmt = $conn->prepare($check_sql);
-        $check_stmt->bind_param("si", $unit_name, $unit_id);
-        $check_stmt->execute();
-        $check_result = $check_stmt->get_result();
-        
-        if ($check_result->num_rows > 0) {
-            $error_msg = "Unit '$unit_name' already exists.";
-        } else {
-            $sql = "UPDATE units SET unit_name = ? WHERE unit_id = ?";
-            $stmt = $conn->prepare($sql);
-            $stmt->bind_param("si", $unit_name, $unit_id);
-            
-            if ($stmt->execute()) {
-                addAuditLog($conn, $_SESSION['user_id'], "Updated unit: '{$old_data['unit_name']}' → '$unit_name' (ID: $unit_id)");
-                $success_msg = "Unit updated successfully!";
-            } else {
-                $error_msg = "Error updating unit: " . $conn->error;
-                addAuditLog($conn, $_SESSION['user_id'], "Failed to update unit: $unit_name - " . $conn->error);
-            }
-            $stmt->close();
-        }
-        $check_stmt->close();
-    }
-}
+            $dbError =
+                $delete_stmt->error;
 
-// Handle Delete Unit
-if (isset($_GET['delete_unit_id'])) {
-    $unit_id = intval($_GET['delete_unit_id']);
-    
-    // Get unit details before deletion
-    $unit_sql = "SELECT unit_name FROM units WHERE unit_id = ?";
-    $unit_stmt = $conn->prepare($unit_sql);
-    $unit_stmt->bind_param("i", $unit_id);
-    $unit_stmt->execute();
-    $unit_result = $unit_stmt->get_result();
-    $unit_data = $unit_result->fetch_assoc();
-    $unit_stmt->close();
-    
-    if ($unit_data) {
-        // Check if unit has items
-        $check_sql = "SELECT COUNT(*) as count FROM inventory_items WHERE unit_id = ?";
-        $check_stmt = $conn->prepare($check_sql);
-        $check_stmt->bind_param("i", $unit_id);
-        $check_stmt->execute();
-        $check_result = $check_stmt->get_result();
-        $check_data = $check_result->fetch_assoc();
-        $check_stmt->close();
-        
-        if ($check_data['count'] > 0) {
-            $error_msg = "Cannot delete unit: It is used by " . $check_data['count'] . " inventory items.";
-        } else {
-            $delete_sql = "DELETE FROM units WHERE unit_id = ?";
-            $delete_stmt = $conn->prepare($delete_sql);
-            $delete_stmt->bind_param("i", $unit_id);
-            
-            if ($delete_stmt->execute()) {
-                addAuditLog($conn, $_SESSION['user_id'], "Deleted unit: " . $unit_data['unit_name'] . " (ID: $unit_id)");
-                $success_msg = "Unit deleted successfully!";
-            } else {
-                $error_msg = "Error deleting unit: " . $conn->error;
-                addAuditLog($conn, $_SESSION['user_id'], "Failed to delete unit: " . $unit_data['unit_name'] . " - " . $conn->error);
-            }
             $delete_stmt->close();
+
+
+            setFlashMessage(
+                'error',
+                'Error deleting category: ' .
+                $dbError
+            );
+
+
+            redirectToTab(
+                'categories'
+            );
         }
-    } else {
-        $error_msg = "Unit not found.";
     }
-    
-    header("Location: " . $_SERVER['PHP_SELF']);
-    exit();
+
+
+    /* =====================================================
+       ADD UNIT
+       ===================================================== */
+
+    if ($action === 'add_unit') {
+
+        $unit_name =
+            trim(
+                $_POST['unit_name']
+                ?? ''
+            );
+
+
+        if ($unit_name === '') {
+
+            setFlashMessage(
+                'error',
+                'Unit name is required.'
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        /* -----------------------------------------------
+           DUPLICATE UNIT CHECK
+           ----------------------------------------------- */
+
+        $check_sql = "
+            SELECT unit_id
+
+            FROM units
+
+            WHERE LOWER(TRIM(unit_name))
+                = LOWER(TRIM(?))
+
+            LIMIT 1
+        ";
+
+
+        $check_stmt =
+            $conn->prepare($check_sql);
+
+
+        if (!$check_stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to check duplicate unit.'
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        $check_stmt->bind_param(
+            "s",
+            $unit_name
+        );
+
+
+        $check_stmt->execute();
+
+
+        $duplicateExists =
+            $check_stmt
+                ->get_result()
+                ->num_rows > 0;
+
+
+        $check_stmt->close();
+
+
+        if ($duplicateExists) {
+
+            setFlashMessage(
+                'error',
+                "Unit '{$unit_name}' already exists."
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        /* -----------------------------------------------
+           INSERT UNIT
+           ----------------------------------------------- */
+
+        $sql = "
+            INSERT INTO units
+            (
+                unit_name
+            )
+            VALUES
+            (
+                ?
+            )
+        ";
+
+
+        $stmt =
+            $conn->prepare($sql);
+
+
+        if (!$stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to prepare unit insertion.'
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        $stmt->bind_param(
+            "s",
+            $unit_name
+        );
+
+
+        if ($stmt->execute()) {
+
+            $unit_id =
+                $conn->insert_id;
+
+
+            addAuditLog(
+                $conn,
+                $user_id,
+                $branch_id,
+                "Added new unit: " .
+                "{$unit_name} " .
+                "(ID: {$unit_id})",
+                'Inventory Units'
+            );
+
+
+            $stmt->close();
+
+
+            setFlashMessage(
+                'success',
+                'Unit added successfully!'
+            );
+
+
+            redirectToTab(
+                'units'
+            );
+
+        } else {
+
+            $dbError =
+                $stmt->error;
+
+            $stmt->close();
+
+
+            setFlashMessage(
+                'error',
+                'Error adding unit: ' .
+                $dbError
+            );
+
+
+            redirectToTab(
+                'units'
+            );
+        }
+    }
+
+
+    /* =====================================================
+       EDIT UNIT
+       ===================================================== */
+
+    if ($action === 'edit_unit') {
+
+        $unit_id =
+            filter_input(
+                INPUT_POST,
+                'unit_id',
+                FILTER_VALIDATE_INT
+            );
+
+
+        $unit_name =
+            trim(
+                $_POST['edit_unit_name']
+                ?? ''
+            );
+
+
+        if (
+            !$unit_id ||
+            $unit_id <= 0
+        ) {
+
+            setFlashMessage(
+                'error',
+                'Invalid unit.'
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        if ($unit_name === '') {
+
+            setFlashMessage(
+                'error',
+                'Unit name is required.'
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        /* -----------------------------------------------
+           GET OLD UNIT
+           ----------------------------------------------- */
+
+        $old_sql = "
+            SELECT unit_name
+
+            FROM units
+
+            WHERE unit_id = ?
+
+            LIMIT 1
+        ";
+
+
+        $old_stmt =
+            $conn->prepare($old_sql);
+
+
+        if (!$old_stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to retrieve unit.'
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        $old_stmt->bind_param(
+            "i",
+            $unit_id
+        );
+
+
+        $old_stmt->execute();
+
+
+        $old_data =
+            $old_stmt
+                ->get_result()
+                ->fetch_assoc();
+
+
+        $old_stmt->close();
+
+
+        if (!$old_data) {
+
+            setFlashMessage(
+                'error',
+                'Unit not found.'
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        /* -----------------------------------------------
+           DUPLICATE UNIT CHECK
+           ----------------------------------------------- */
+
+        $check_sql = "
+            SELECT unit_id
+
+            FROM units
+
+            WHERE LOWER(TRIM(unit_name))
+                = LOWER(TRIM(?))
+
+              AND unit_id <> ?
+
+            LIMIT 1
+        ";
+
+
+        $check_stmt =
+            $conn->prepare($check_sql);
+
+
+        if (!$check_stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to check duplicate unit.'
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        $check_stmt->bind_param(
+            "si",
+            $unit_name,
+            $unit_id
+        );
+
+
+        $check_stmt->execute();
+
+
+        $duplicateExists =
+            $check_stmt
+                ->get_result()
+                ->num_rows > 0;
+
+
+        $check_stmt->close();
+
+
+        if ($duplicateExists) {
+
+            setFlashMessage(
+                'error',
+                "Unit '{$unit_name}' already exists."
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        /* -----------------------------------------------
+           UPDATE UNIT
+           ----------------------------------------------- */
+
+        $sql = "
+            UPDATE units
+
+            SET unit_name = ?
+
+            WHERE unit_id = ?
+        ";
+
+
+        $stmt =
+            $conn->prepare($sql);
+
+
+        if (!$stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to prepare unit update.'
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        $stmt->bind_param(
+            "si",
+            $unit_name,
+            $unit_id
+        );
+
+
+        if ($stmt->execute()) {
+
+            addAuditLog(
+                $conn,
+                $user_id,
+                $branch_id,
+                "Updated unit: " .
+                "'{$old_data['unit_name']}' → '{$unit_name}' " .
+                "(ID: {$unit_id})",
+                'Inventory Units'
+            );
+
+
+            $stmt->close();
+
+
+            setFlashMessage(
+                'success',
+                'Unit updated successfully!'
+            );
+
+
+            redirectToTab(
+                'units'
+            );
+
+        } else {
+
+            $dbError =
+                $stmt->error;
+
+            $stmt->close();
+
+
+            setFlashMessage(
+                'error',
+                'Error updating unit: ' .
+                $dbError
+            );
+
+
+            redirectToTab(
+                'units'
+            );
+        }
+    }
+
+
+    /* =====================================================
+       DELETE UNIT
+       ===================================================== */
+
+    if ($action === 'delete_unit') {
+
+        $unit_id =
+            filter_input(
+                INPUT_POST,
+                'unit_id',
+                FILTER_VALIDATE_INT
+            );
+
+
+        if (
+            !$unit_id ||
+            $unit_id <= 0
+        ) {
+
+            setFlashMessage(
+                'error',
+                'Invalid unit.'
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        /* -----------------------------------------------
+           GET UNIT
+           ----------------------------------------------- */
+
+        $unit_sql = "
+            SELECT unit_name
+
+            FROM units
+
+            WHERE unit_id = ?
+
+            LIMIT 1
+        ";
+
+
+        $unit_stmt =
+            $conn->prepare($unit_sql);
+
+
+        if (!$unit_stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to retrieve unit.'
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        $unit_stmt->bind_param(
+            "i",
+            $unit_id
+        );
+
+
+        $unit_stmt->execute();
+
+
+        $unit_data =
+            $unit_stmt
+                ->get_result()
+                ->fetch_assoc();
+
+
+        $unit_stmt->close();
+
+
+        if (!$unit_data) {
+
+            setFlashMessage(
+                'error',
+                'Unit not found.'
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        /* -----------------------------------------------
+           CHECK UNIT USAGE
+           ----------------------------------------------- */
+
+        $check_sql = "
+            SELECT COUNT(*) AS total
+
+            FROM inventory_items
+
+            WHERE unit_id = ?
+        ";
+
+
+        $check_stmt =
+            $conn->prepare($check_sql);
+
+
+        if (!$check_stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to check unit usage.'
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        $check_stmt->bind_param(
+            "i",
+            $unit_id
+        );
+
+
+        $check_stmt->execute();
+
+
+        $check_data =
+            $check_stmt
+                ->get_result()
+                ->fetch_assoc();
+
+
+        $itemCount =
+            (int)(
+                $check_data['total']
+                ?? 0
+            );
+
+
+        $check_stmt->close();
+
+
+        if ($itemCount > 0) {
+
+            setFlashMessage(
+                'error',
+                "Cannot delete unit: " .
+                "It is used by {$itemCount} inventory item(s)."
+            );
+
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        /* -----------------------------------------------
+           DELETE UNIT
+           ----------------------------------------------- */
+
+        $delete_sql = "
+            DELETE FROM units
+
+            WHERE unit_id = ?
+        ";
+
+
+        $delete_stmt =
+            $conn->prepare($delete_sql);
+
+
+        if (!$delete_stmt) {
+
+            setFlashMessage(
+                'error',
+                'Unable to prepare unit deletion.'
+            );
+
+            redirectToTab(
+                'units'
+            );
+        }
+
+
+        $delete_stmt->bind_param(
+            "i",
+            $unit_id
+        );
+
+
+        if ($delete_stmt->execute()) {
+
+            addAuditLog(
+                $conn,
+                $user_id,
+                $branch_id,
+                "Deleted unit: " .
+                $unit_data['unit_name'] .
+                " (ID: {$unit_id})",
+                'Inventory Units'
+            );
+
+
+            $delete_stmt->close();
+
+
+            setFlashMessage(
+                'success',
+                'Unit deleted successfully!'
+            );
+
+
+            redirectToTab(
+                'units'
+            );
+
+        } else {
+
+            $dbError =
+                $delete_stmt->error;
+
+            $delete_stmt->close();
+
+
+            setFlashMessage(
+                'error',
+                'Error deleting unit: ' .
+                $dbError
+            );
+
+
+            redirectToTab(
+                'units'
+            );
+        }
+    }
 }
 
-// ============================================
-// GET DATA FROM DATABASE
-// ============================================
 
-// Get all categories with item count
-$cat_sql = "SELECT 
-        c.category_id, 
-        c.category_name, 
-        c.monitoring_frequency,
-        COUNT(i.item_id) as item_count,
-        COALESCE(SUM(s.quantity_available), 0) as total_stock
-        FROM inventory_categories c
-        LEFT JOIN inventory_items i ON c.category_id = i.category_id
-        LEFT JOIN inventory_stocks s ON i.item_id = s.item_id
-        GROUP BY c.category_id
-        ORDER BY c.category_name ASC";
+/* =========================================================
+   ACTIVE TAB
+   ========================================================= */
 
-$cat_result = $conn->query($cat_sql);
+$active_tab =
+    $_GET['tab']
+    ?? 'categories';
+
+
+if (
+    $active_tab !== 'categories' &&
+    $active_tab !== 'units'
+) {
+    $active_tab =
+        'categories';
+}
+
+
+/* =========================================================
+   GET CATEGORIES
+   BRANCH-SPECIFIC STOCK TOTAL
+   ========================================================= */
+
 $categories = [];
-while ($row = $cat_result->fetch_assoc()) {
-    $categories[] = $row;
+
+
+if (!empty($branch_id)) {
+
+    /*
+     * First total each item's stock for the current branch.
+     *
+     * Then categories count DISTINCT inventory items.
+     *
+     * This prevents multiple stock batches from increasing
+     * the item count.
+     */
+
+    $cat_sql = "
+        SELECT
+            c.category_id,
+            c.category_name,
+            c.monitoring_frequency,
+
+            COUNT(
+                DISTINCT i.item_id
+            ) AS item_count,
+
+            COALESCE(
+                SUM(stock.total_quantity),
+                0
+            ) AS total_stock
+
+        FROM inventory_categories c
+
+        LEFT JOIN inventory_items i
+            ON c.category_id = i.category_id
+
+        LEFT JOIN
+        (
+            SELECT
+                item_id,
+                SUM(quantity_available)
+                    AS total_quantity
+
+            FROM inventory_stocks
+
+            WHERE branch_id = ?
+
+            GROUP BY item_id
+
+        ) stock
+            ON i.item_id = stock.item_id
+
+        GROUP BY
+            c.category_id,
+            c.category_name,
+            c.monitoring_frequency
+
+        ORDER BY
+            c.category_name ASC
+    ";
+
+
+    $cat_stmt =
+        $conn->prepare($cat_sql);
+
+
+    if ($cat_stmt) {
+
+        $cat_stmt->bind_param(
+            "s",
+            $branch_id
+        );
+
+
+        $cat_stmt->execute();
+
+
+        $cat_result =
+            $cat_stmt->get_result();
+
+
+        while (
+            $row =
+            $cat_result->fetch_assoc()
+        ) {
+
+            $row['item_count'] =
+                (int)$row['item_count'];
+
+            $row['total_stock'] =
+                (int)$row['total_stock'];
+
+            $categories[] =
+                $row;
+        }
+
+
+        $cat_stmt->close();
+    }
+
+} else {
+
+    /*
+     * Still display category master records if
+     * no branch is assigned, but stock remains 0.
+     */
+
+    $cat_sql = "
+        SELECT
+            c.category_id,
+            c.category_name,
+            c.monitoring_frequency,
+
+            COUNT(
+                DISTINCT i.item_id
+            ) AS item_count,
+
+            0 AS total_stock
+
+        FROM inventory_categories c
+
+        LEFT JOIN inventory_items i
+            ON c.category_id = i.category_id
+
+        GROUP BY
+            c.category_id,
+            c.category_name,
+            c.monitoring_frequency
+
+        ORDER BY
+            c.category_name ASC
+    ";
+
+
+    $cat_result =
+        $conn->query($cat_sql);
+
+
+    if ($cat_result) {
+
+        while (
+            $row =
+            $cat_result->fetch_assoc()
+        ) {
+
+            $row['item_count'] =
+                (int)$row['item_count'];
+
+            $row['total_stock'] =
+                0;
+
+            $categories[] =
+                $row;
+        }
+    }
 }
 
-// Get all units with item count
-$unit_sql = "SELECT 
-        u.unit_id, 
-        u.unit_name,
-        COUNT(i.item_id) as item_count
-        FROM units u
-        LEFT JOIN inventory_items i ON u.unit_id = i.unit_id
-        GROUP BY u.unit_id
-        ORDER BY u.unit_name ASC";
 
-$unit_result = $conn->query($unit_sql);
+/* =========================================================
+   GET UNITS WITH ITEM COUNT
+   ========================================================= */
+
 $units = [];
-while ($row = $unit_result->fetch_assoc()) {
-    $units[] = $row;
+
+
+$unit_sql = "
+    SELECT
+        u.unit_id,
+        u.unit_name,
+
+        COUNT(
+            DISTINCT i.item_id
+        ) AS item_count
+
+    FROM units u
+
+    LEFT JOIN inventory_items i
+        ON u.unit_id = i.unit_id
+
+    GROUP BY
+        u.unit_id,
+        u.unit_name
+
+    ORDER BY
+        u.unit_name ASC
+";
+
+
+$unit_result =
+    $conn->query($unit_sql);
+
+
+if ($unit_result) {
+
+    while (
+        $row =
+        $unit_result->fetch_assoc()
+    ) {
+
+        $row['item_count'] =
+            (int)$row['item_count'];
+
+        $units[] =
+            $row;
+    }
 }
 
-// Get category for editing
+
+/* =========================================================
+   GET CATEGORY FOR EDITING
+   ========================================================= */
+
 $edit_category = null;
-if (isset($_GET['edit_category_id'])) {
-    $edit_id = intval($_GET['edit_category_id']);
-    $edit_sql = "SELECT * FROM inventory_categories WHERE category_id = ?";
-    $edit_stmt = $conn->prepare($edit_sql);
-    $edit_stmt->bind_param("i", $edit_id);
-    $edit_stmt->execute();
-    $edit_result = $edit_stmt->get_result();
-    $edit_category = $edit_result->fetch_assoc();
-    $edit_stmt->close();
+
+
+if (
+    isset($_GET['edit_category_id'])
+) {
+
+    $edit_id =
+        filter_input(
+            INPUT_GET,
+            'edit_category_id',
+            FILTER_VALIDATE_INT
+        );
+
+
+    if (
+        $edit_id &&
+        $edit_id > 0
+    ) {
+
+        $edit_sql = "
+            SELECT
+                category_id,
+                category_name,
+                monitoring_frequency
+
+            FROM inventory_categories
+
+            WHERE category_id = ?
+
+            LIMIT 1
+        ";
+
+
+        $edit_stmt =
+            $conn->prepare($edit_sql);
+
+
+        if ($edit_stmt) {
+
+            $edit_stmt->bind_param(
+                "i",
+                $edit_id
+            );
+
+
+            $edit_stmt->execute();
+
+
+            $edit_category =
+                $edit_stmt
+                    ->get_result()
+                    ->fetch_assoc();
+
+
+            $edit_stmt->close();
+        }
+    }
 }
 
-// Get unit for editing
+
+/* =========================================================
+   GET UNIT FOR EDITING
+   ========================================================= */
+
 $edit_unit = null;
-if (isset($_GET['edit_unit_id'])) {
-    $edit_id = intval($_GET['edit_unit_id']);
-    $edit_sql = "SELECT * FROM units WHERE unit_id = ?";
-    $edit_stmt = $conn->prepare($edit_sql);
-    $edit_stmt->bind_param("i", $edit_id);
-    $edit_stmt->execute();
-    $edit_result = $edit_stmt->get_result();
-    $edit_unit = $edit_result->fetch_assoc();
-    $edit_stmt->close();
+
+
+if (
+    isset($_GET['edit_unit_id'])
+) {
+
+    $edit_id =
+        filter_input(
+            INPUT_GET,
+            'edit_unit_id',
+            FILTER_VALIDATE_INT
+        );
+
+
+    if (
+        $edit_id &&
+        $edit_id > 0
+    ) {
+
+        $edit_sql = "
+            SELECT
+                unit_id,
+                unit_name
+
+            FROM units
+
+            WHERE unit_id = ?
+
+            LIMIT 1
+        ";
+
+
+        $edit_stmt =
+            $conn->prepare($edit_sql);
+
+
+        if ($edit_stmt) {
+
+            $edit_stmt->bind_param(
+                "i",
+                $edit_id
+            );
+
+
+            $edit_stmt->execute();
+
+
+            $edit_unit =
+                $edit_stmt
+                    ->get_result()
+                    ->fetch_assoc();
+
+
+            $edit_stmt->close();
+        }
+    }
 }
 
-// Get category for viewing
+
+/* =========================================================
+   GET CATEGORY FOR VIEWING
+   ========================================================= */
+
 $view_category = null;
-if (isset($_GET['view_category_id'])) {
-    $view_id = intval($_GET['view_category_id']);
-    $view_sql = "SELECT 
-                    c.*,
-                    COUNT(i.item_id) as item_count,
-                    COALESCE(SUM(s.quantity_available), 0) as total_stock
-                 FROM inventory_categories c
-                 LEFT JOIN inventory_items i ON c.category_id = i.category_id
-                 LEFT JOIN inventory_stocks s ON i.item_id = s.item_id
-                 WHERE c.category_id = ?
-                 GROUP BY c.category_id";
-    $view_stmt = $conn->prepare($view_sql);
-    $view_stmt->bind_param("i", $view_id);
-    $view_stmt->execute();
-    $view_result = $view_stmt->get_result();
-    $view_category = $view_result->fetch_assoc();
-    $view_stmt->close();
+
+
+if (
+    isset($_GET['view_category_id'])
+) {
+
+    $view_id =
+        filter_input(
+            INPUT_GET,
+            'view_category_id',
+            FILTER_VALIDATE_INT
+        );
+
+
+    if (
+        $view_id &&
+        $view_id > 0
+    ) {
+
+        if (!empty($branch_id)) {
+
+            $view_sql = "
+                SELECT
+                    c.category_id,
+                    c.category_name,
+                    c.monitoring_frequency,
+
+                    COUNT(
+                        DISTINCT i.item_id
+                    ) AS item_count,
+
+                    COALESCE(
+                        SUM(stock.total_quantity),
+                        0
+                    ) AS total_stock
+
+                FROM inventory_categories c
+
+                LEFT JOIN inventory_items i
+                    ON c.category_id =
+                       i.category_id
+
+                LEFT JOIN
+                (
+                    SELECT
+                        item_id,
+
+                        SUM(
+                            quantity_available
+                        ) AS total_quantity
+
+                    FROM inventory_stocks
+
+                    WHERE branch_id = ?
+
+                    GROUP BY item_id
+
+                ) stock
+                    ON i.item_id =
+                       stock.item_id
+
+                WHERE c.category_id = ?
+
+                GROUP BY
+                    c.category_id,
+                    c.category_name,
+                    c.monitoring_frequency
+            ";
+
+
+            $view_stmt =
+                $conn->prepare($view_sql);
+
+
+            if ($view_stmt) {
+
+                $view_stmt->bind_param(
+                    "si",
+                    $branch_id,
+                    $view_id
+                );
+
+
+                $view_stmt->execute();
+
+
+                $view_category =
+                    $view_stmt
+                        ->get_result()
+                        ->fetch_assoc();
+
+
+                $view_stmt->close();
+            }
+
+        } else {
+
+            $view_sql = "
+                SELECT
+                    c.category_id,
+                    c.category_name,
+                    c.monitoring_frequency,
+
+                    COUNT(
+                        DISTINCT i.item_id
+                    ) AS item_count,
+
+                    0 AS total_stock
+
+                FROM inventory_categories c
+
+                LEFT JOIN inventory_items i
+                    ON c.category_id =
+                       i.category_id
+
+                WHERE c.category_id = ?
+
+                GROUP BY
+                    c.category_id,
+                    c.category_name,
+                    c.monitoring_frequency
+            ";
+
+
+            $view_stmt =
+                $conn->prepare($view_sql);
+
+
+            if ($view_stmt) {
+
+                $view_stmt->bind_param(
+                    "i",
+                    $view_id
+                );
+
+
+                $view_stmt->execute();
+
+
+                $view_category =
+                    $view_stmt
+                        ->get_result()
+                        ->fetch_assoc();
+
+
+                $view_stmt->close();
+            }
+        }
+
+
+        if ($view_category) {
+
+            $view_category['item_count'] =
+                (int)$view_category['item_count'];
+
+            $view_category['total_stock'] =
+                (int)$view_category['total_stock'];
+        }
+    }
 }
 
-// Get active tab from URL
-$active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
+
+/* =========================================================
+   GET ITEMS FOR VIEW CATEGORY
+   ========================================================= */
+
+$view_category_items = [];
+
+
+if ($view_category) {
+
+    $items_sql = "
+        SELECT
+            i.item_id,
+            i.item_name,
+            u.unit_name,
+
+            COALESCE(
+                stock.total_quantity,
+                0
+            ) AS total_quantity
+
+        FROM inventory_items i
+
+        LEFT JOIN units u
+            ON i.unit_id = u.unit_id
+
+        LEFT JOIN
+        (
+            SELECT
+                item_id,
+                SUM(quantity_available)
+                    AS total_quantity
+
+            FROM inventory_stocks
+
+            WHERE branch_id = ?
+
+            GROUP BY item_id
+
+        ) stock
+            ON i.item_id = stock.item_id
+
+        WHERE i.category_id = ?
+
+        ORDER BY
+            i.item_name ASC
+    ";
+
+
+    if (!empty($branch_id)) {
+
+        $items_stmt =
+            $conn->prepare($items_sql);
+
+
+        if ($items_stmt) {
+
+            $items_stmt->bind_param(
+                "si",
+                $branch_id,
+                $view_category['category_id']
+            );
+
+
+            $items_stmt->execute();
+
+
+            $items_result =
+                $items_stmt->get_result();
+
+
+            while (
+                $item =
+                $items_result->fetch_assoc()
+            ) {
+
+                $item['total_quantity'] =
+                    (int)$item['total_quantity'];
+
+                $view_category_items[] =
+                    $item;
+            }
+
+
+            $items_stmt->close();
+        }
+    }
+}
+
 ?>
+
 <!DOCTYPE html>
+
 <html lang="en">
+
 <head>
+
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Inventory Categories & Units</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
-    <link rel="stylesheet" href="sidebar.css">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1"
+    >
+
+    <title>
+        Inventory Categories & Units
+    </title>
+
+
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+    >
+
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+    >
+
+    <link
+        rel="stylesheet"
+        href="sidebar.css"
+    >
+
+
     <style>
+
         :root {
             --primary: #2B3A8C;
             --accent: #F21D2F;
             --bg: #F2F2F2;
         }
 
+
         body {
             background: #f0f2f5;
             font-family: 'Segoe UI', sans-serif;
         }
 
+
         .main {
             margin-left: 260px;
             min-height: 100vh;
         }
+
 
         .topbar {
             background: white;
@@ -491,18 +2449,22 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             box-shadow: 0 2px 8px rgba(0,0,0,.08);
         }
 
+
         .topbar h3 {
             font-size: 28px;
             font-weight: 700;
             color: var(--primary);
             margin: 0;
         }
-        .topbar h3 small{
-            font-size:15px;
-            font-weight:400;
-            color:#6c757d;
-            margin-left:10px;
-}
+
+
+        .topbar h3 small {
+            font-size: 15px;
+            font-weight: 400;
+            color: #6c757d;
+            margin-left: 10px;
+        }
+
 
         .profile {
             font-weight: 600;
@@ -510,9 +2472,11 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             cursor: pointer;
         }
 
+
         .page-body {
             padding: 35px;
         }
+
 
         .toolbar {
             display: flex;
@@ -523,11 +2487,13 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             flex-wrap: wrap;
         }
 
+
         .search-box {
             position: relative;
             flex: 1;
             max-width: 340px;
         }
+
 
         .search-box i {
             position: absolute;
@@ -537,20 +2503,25 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             color: #9aa0c3;
         }
 
+
         .search-box input {
             width: 100%;
             padding: 10px 14px 10px 38px;
             border-radius: 10px;
             border: 1px solid #dcdee8;
-            background:white;
+            background: white;
             font-size: 14px;
         }
 
+
         .search-box input:focus {
             border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(43,58,140,0.12);
+            box-shadow:
+                0 0 0 3px
+                rgba(43,58,140,0.12);
             outline: none;
         }
+
 
         .btn-custom {
             background: var(--primary);
@@ -561,13 +2532,15 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             font-weight: 600;
             font-size: 14px;
             white-space: nowrap;
-            transition: 0.15s;
+            transition: .15s;
         }
+
 
         .btn-custom:hover {
             background: #1d2863;
             color: white;
         }
+
 
         .btn-outline-custom {
             background: white;
@@ -577,13 +2550,15 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             padding: 9px 19px;
             font-weight: 600;
             font-size: 14px;
-            transition: 0.15s;
+            transition: .15s;
         }
+
 
         .btn-outline-custom:hover {
             background: var(--primary);
             color: white;
         }
+
 
         .table-wrap {
             background: white;
@@ -592,9 +2567,11 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             overflow: hidden;
         }
 
+
         .data-table {
             margin: 0;
         }
+
 
         .data-table thead th {
             background: var(--primary);
@@ -606,6 +2583,7 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             white-space: nowrap;
         }
 
+
         .data-table tbody td {
             font-size: 14px;
             color: #333;
@@ -614,13 +2592,16 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             border-bottom: 1px solid #eef0f7;
         }
 
+
         .data-table tbody tr:last-child td {
             border-bottom: none;
         }
 
+
         .data-table tbody tr:hover {
             background: #f7f8fc;
         }
+
 
         .badge-frequency {
             display: inline-block;
@@ -630,20 +2611,24 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             font-weight: 600;
         }
 
+
         .badge-daily {
             background: #E3F2FD;
             color: #0D47A1;
         }
+
 
         .badge-weekly {
             background: #E8F5E9;
             color: #1B5E20;
         }
 
+
         .badge-monthly {
             background: #FFF3E0;
             color: #E65100;
         }
+
 
         .unit-badge {
             display: inline-block;
@@ -655,6 +2640,7 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             font-size: 13px;
         }
 
+
         .action-btn {
             border: 1px solid #dcdee8;
             background: white;
@@ -665,10 +2651,16 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            transition: 0.15s;
+            transition: .15s;
             text-decoration: none;
             margin: 0 2px;
         }
+
+
+        button.action-btn {
+            padding: 0;
+        }
+
 
         .action-btn:hover {
             background: var(--primary);
@@ -676,36 +2668,50 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             border-color: var(--primary);
         }
 
+
         .action-btn.text-danger:hover {
             background: var(--accent);
             border-color: var(--accent);
-            color: white;
+            color: white !important;
         }
+
+
+        .action-btn.disabled {
+            opacity: .3;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
 
         .nav-tabs-custom {
             border-bottom: 2px solid #eef0f7;
             margin-bottom: 24px;
         }
 
+
         .nav-tabs-custom .nav-link {
             color: #6c7a9a;
             font-weight: 600;
             padding: 12px 24px;
             border: none;
-            border-bottom: 3px solid transparent;
-            transition: 0.15s;
+            border-bottom:
+                3px solid transparent;
+            transition: .15s;
         }
+
 
         .nav-tabs-custom .nav-link:hover {
             color: var(--primary);
             border-bottom-color: #d7def0;
         }
 
+
         .nav-tabs-custom .nav-link.active {
             color: var(--primary);
             border-bottom-color: var(--primary);
             background: transparent;
         }
+
 
         .toast-container {
             position: fixed;
@@ -714,38 +2720,48 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             z-index: 9999;
         }
 
+
         .toast-custom {
             background: white;
             border-radius: 12px;
             padding: 16px 24px;
-            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
-            border-left: 6px solid #28a745;
+            box-shadow:
+                0 8px 30px
+                rgba(0,0,0,.15);
+            border-left:
+                6px solid #28a745;
             display: flex;
             align-items: center;
             gap: 14px;
             min-width: 320px;
-            animation: slideIn 0.4s ease;
+            animation:
+                slideIn .4s ease;
             margin-bottom: 10px;
         }
+
 
         .toast-custom.error {
             border-left-color: #dc3545;
         }
+
 
         .toast-custom .toast-icon {
             font-size: 28px;
             color: #28a745;
         }
 
+
         .toast-custom.error .toast-icon {
             color: #dc3545;
         }
+
 
         .toast-custom .toast-msg {
             font-weight: 500;
             color: #1f2a4a;
             flex: 1;
         }
+
 
         .toast-custom .toast-close {
             background: none;
@@ -756,510 +2772,2221 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'categories';
             padding: 0 4px;
         }
 
+
         .toast-custom .toast-close:hover {
             color: #333;
         }
 
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateX(40px); }
-            to { opacity: 1; transform: translateX(0); }
+
+        .stock-detail-list {
+            max-height: 220px;
+            overflow-y: auto;
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 8px;
         }
 
-        @media (max-width: 991px) {
+
+        .stock-detail-item {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 8px 10px;
+            border-bottom:
+                1px solid #e5e7eb;
+            font-size: 14px;
+        }
+
+
+        .stock-detail-item:last-child {
+            border-bottom: none;
+        }
+
+
+        @keyframes slideIn {
+
+            from {
+                opacity: 0;
+                transform:
+                    translateX(40px);
+            }
+
+            to {
+                opacity: 1;
+                transform:
+                    translateX(0);
+            }
+        }
+
+
+        @media(max-width: 991px) {
+
             .main {
                 margin-left: 90px;
             }
         }
 
-        @media (max-width: 576px) {
+
+        @media(max-width: 576px) {
+
             .topbar {
                 padding: 0 16px;
                 height: 70px;
             }
+
+
             .topbar h3 {
                 font-size: 20px;
             }
+
+
             .page-body {
                 padding: 20px 16px;
             }
+
+
             .toolbar {
                 flex-direction: column;
                 align-items: stretch;
             }
+
+
             .search-box {
                 max-width: 100%;
             }
+
+
             .table-wrap {
                 overflow-x: auto;
             }
+
+
             .nav-tabs-custom .nav-link {
                 padding: 10px 16px;
                 font-size: 14px;
             }
         }
+
     </style>
+
 </head>
+
+
 <body>
 
-<!-- ========== TOAST CONTAINER ========== -->
-<div class="toast-container" id="toastContainer"></div>
 
-<!-- ========== SIDEBAR ========== -->
+<!-- =====================================================
+     TOAST CONTAINER
+     ===================================================== -->
+
+<div
+    class="toast-container"
+    id="toastContainer"
+></div>
+
+
+<!-- =====================================================
+     SIDEBAR
+     ===================================================== -->
+
 <div class="sidebar">
+
     <div class="logo-area">
+
         <div class="logo-frame">
-            <img src="logo.png" alt="Smart Bite Care Logo" class="logo">
+
+            <img
+                src="logo.png"
+                alt="Smart Bite Care Logo"
+                class="logo"
+            >
+
         </div>
-        <div class="system-name">Smart Bite Care</div>
+
+
+        <div class="system-name">
+            Smart Bite Care
+        </div>
+
     </div>
+
 
     <nav class="nav-menu">
+
         <ul>
-            <li><a href="InventoryOfficer_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
-            <li><a href="InventoryOfficer_InventoryItems.php"><i class="bi bi-box-seam"></i><span>Inventory Items</span></a></li>
-            <li><a class="active" href="InventoryOfficer_Categories.php"><i class="bi bi-tags"></i><span>Categories & Units</span></a></li>
-            <li><a href="InventoryOfficer_StockManagement.php"><i class="bi bi-boxes"></i><span>Stock Management</span></a></li>
-            <li><a href="InventoryOfficer_StockTransactions.php"><i class="bi bi-arrow-left-right"></i><span>Stock Transactions</span></a></li>
-            <li><a href="InventoryOfficer_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Inventory Reports</span></a></li>
-            <li><a href="InventoryOfficer_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+
+            <li>
+
+                <a href="InventoryOfficer_Dashboard.php">
+
+                    <i class="bi bi-grid-fill"></i>
+
+                    <span>
+                        Dashboard
+                    </span>
+
+                </a>
+
+            </li>
+
+
+            <li>
+
+                <a href="InventoryOfficer_InventoryItems.php">
+
+                    <i class="bi bi-box-seam"></i>
+
+                    <span>
+                        Inventory Items
+                    </span>
+
+                </a>
+
+            </li>
+
+
+            <li>
+
+                <a
+                    class="active"
+                    href="InventoryOfficer_Categories.php"
+                >
+
+                    <i class="bi bi-tags"></i>
+
+                    <span>
+                        Categories & Units
+                    </span>
+
+                </a>
+
+            </li>
+
+
+            <li>
+
+                <a href="InventoryOfficer_StockManagement.php">
+
+                    <i class="bi bi-boxes"></i>
+
+                    <span>
+                        Stock Management
+                    </span>
+
+                </a>
+
+            </li>
+
+
+            <li>
+
+                <a href="InventoryOfficer_StockTransactions.php">
+
+                    <i class="bi bi-arrow-left-right"></i>
+
+                    <span>
+                        Stock Transactions
+                    </span>
+
+                </a>
+
+            </li>
+
+
+            <li>
+
+                <a href="InventoryOfficer_Reports.php">
+
+                    <i class="bi bi-file-earmark-bar-graph-fill"></i>
+
+                    <span>
+                        Inventory Reports
+                    </span>
+
+                </a>
+
+            </li>
+
+
+            <li>
+
+                <a href="InventoryOfficer_Notifications.php">
+
+                    <i class="bi bi-bell-fill"></i>
+
+                    <span>
+                        Notifications
+                    </span>
+
+                </a>
+
+            </li>
+
         </ul>
+
     </nav>
 
+
     <div class="logout">
-        <a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
+
+        <a href="logout.php">
+
+            <i class="bi bi-box-arrow-right"></i>
+
+            <span>
+                Logout
+            </span>
+
+        </a>
+
     </div>
+
 </div>
 
-<!-- ========== MAIN CONTENT ========== -->
+
+<!-- =====================================================
+     MAIN CONTENT
+     ===================================================== -->
+
 <div class="main">
-      <div class="topbar">
-        <h3>Categories and Units<small><?php echo h($branch_name); ?></small></h3>
+
+
+    <!-- TOP BAR -->
+
+    <div class="topbar">
+
+        <h3>
+
+            Categories and Units
+
+            <small>
+                <?php echo h($branch_name); ?>
+            </small>
+
+        </h3>
+
+
         <div class="profile">
+
             <i class="bi bi-person-circle"></i>
+
             <?php echo h($username); ?>
-            <span style="font-size:12px;color:#adb5bd;font-weight:400;margin-left:4px;">| Inventory Officer</span>
+
+            <span
+                style="
+                    font-size:12px;
+                    color:#adb5bd;
+                    font-weight:400;
+                    margin-left:4px;
+                "
+            >
+                | Inventory Officer
+            </span>
+
         </div>
+
     </div>
+
 
     <div class="page-body">
-        <!-- Tabs -->
-        <ul class="nav nav-tabs nav-tabs-custom" role="tablist">
-            <li class="nav-item" role="presentation">
-                <a class="nav-link <?php echo $active_tab == 'categories' ? 'active' : ''; ?>" 
-                   href="?tab=categories" role="tab">
-                    <i class="bi bi-tags me-2"></i>Categories
+
+
+        <!-- =================================================
+             TABS
+             ================================================= -->
+
+        <ul
+            class="nav nav-tabs nav-tabs-custom"
+            role="tablist"
+        >
+
+            <li
+                class="nav-item"
+                role="presentation"
+            >
+
+                <a
+                    class="nav-link <?php
+                    echo $active_tab === 'categories'
+                        ? 'active'
+                        : '';
+                    ?>"
+                    href="?tab=categories"
+                    role="tab"
+                >
+
+                    <i class="bi bi-tags me-2"></i>
+
+                    Categories
+
                 </a>
+
             </li>
-            <li class="nav-item" role="presentation">
-                <a class="nav-link <?php echo $active_tab == 'units' ? 'active' : ''; ?>" 
-                   href="?tab=units" role="tab">
-                    <i class="bi bi-rulers me-2"></i>Units
+
+
+            <li
+                class="nav-item"
+                role="presentation"
+            >
+
+                <a
+                    class="nav-link <?php
+                    echo $active_tab === 'units'
+                        ? 'active'
+                        : '';
+                    ?>"
+                    href="?tab=units"
+                    role="tab"
+                >
+
+                    <i class="bi bi-rulers me-2"></i>
+
+                    Units
+
                 </a>
+
             </li>
+
         </ul>
 
-        <!-- ============================================ -->
-        <!-- CATEGORIES TAB -->
-        <!-- ============================================ -->
-        <?php if ($active_tab == 'categories'): ?>
-        <div class="tab-content">
-            <div class="toolbar">
-                <div class="search-box">
-                    <i class="bi bi-search"></i>
-                    <input type="text" id="searchCategories" placeholder="Search categories..." onkeyup="filterTable('categoriesTable', 'searchCategories')">
+
+        <!-- =================================================
+             CATEGORIES TAB
+             ================================================= -->
+
+        <?php if ($active_tab === 'categories'): ?>
+
+            <div class="tab-content">
+
+
+                <div class="toolbar">
+
+
+                    <div class="search-box">
+
+                        <i class="bi bi-search"></i>
+
+                        <input
+                            type="text"
+                            id="searchCategories"
+                            placeholder="Search categories..."
+                            onkeyup="
+                                filterTable(
+                                    'categoriesTable',
+                                    'searchCategories'
+                                )
+                            "
+                        >
+
+                    </div>
+
+
+                    <button
+                        class="btn-custom"
+                        data-bs-toggle="modal"
+                        data-bs-target="#addCategoryModal"
+                    >
+
+                        <i class="bi bi-plus-lg me-1"></i>
+
+                        Add Category
+
+                    </button>
+
                 </div>
-                <button class="btn-custom" data-bs-toggle="modal" data-bs-target="#addCategoryModal">
-                    <i class="bi bi-plus-lg me-1"></i> Add Category
-                </button>
+
+
+                <div class="table-wrap">
+
+                    <table
+                        class="table data-table"
+                        id="categoriesTable"
+                    >
+
+                        <thead>
+
+                            <tr>
+
+                                <th>
+                                    Category Name
+                                </th>
+
+                                <th>
+                                    Monitoring Frequency
+                                </th>
+
+                                <th>
+                                    Total Items
+                                </th>
+
+                                <th>
+                                    Total Stock
+                                </th>
+
+                                <th class="text-center">
+                                    Action
+                                </th>
+
+                            </tr>
+
+                        </thead>
+
+
+                        <tbody>
+
+
+                        <?php if (!empty($categories)): ?>
+
+
+                            <?php foreach ($categories as $category): ?>
+
+
+                                <?php
+
+                                $freq_class =
+                                    'badge-monthly';
+
+                                if (
+                                    $category['monitoring_frequency']
+                                    === 'Daily'
+                                ) {
+
+                                    $freq_class =
+                                        'badge-daily';
+
+                                } elseif (
+                                    $category['monitoring_frequency']
+                                    === 'Weekly'
+                                ) {
+
+                                    $freq_class =
+                                        'badge-weekly';
+                                }
+
+                                ?>
+
+
+                                <tr>
+
+
+                                    <td>
+
+                                        <strong>
+                                            <?php
+                                            echo h(
+                                                $category['category_name']
+                                            );
+                                            ?>
+                                        </strong>
+
+                                    </td>
+
+
+                                    <td>
+
+                                        <span
+                                            class="badge-frequency <?php
+                                            echo h($freq_class);
+                                            ?>"
+                                        >
+
+                                            <?php
+                                            echo h(
+                                                $category['monitoring_frequency']
+                                            );
+                                            ?>
+
+                                        </span>
+
+                                    </td>
+
+
+                                    <td>
+
+                                        <?php
+                                        echo (int)$category['item_count'];
+                                        ?>
+
+                                    </td>
+
+
+                                    <td>
+
+                                        <?php
+                                        echo (int)$category['total_stock'];
+                                        ?>
+
+                                    </td>
+
+
+                                    <td class="text-center">
+
+
+                                        <!-- VIEW -->
+
+                                        <a
+                                            href="?tab=categories&view_category_id=<?php
+                                            echo (int)$category['category_id'];
+                                            ?>"
+                                            class="action-btn"
+                                            title="View"
+                                        >
+
+                                            <i class="bi bi-eye"></i>
+
+                                        </a>
+
+
+                                        <!-- EDIT -->
+
+                                        <a
+                                            href="?tab=categories&edit_category_id=<?php
+                                            echo (int)$category['category_id'];
+                                            ?>"
+                                            class="action-btn"
+                                            title="Edit"
+                                        >
+
+                                            <i class="bi bi-pencil"></i>
+
+                                        </a>
+
+
+                                        <!-- DELETE -->
+
+                                        <?php if ((int)$category['item_count'] === 0): ?>
+
+                                            <form
+                                                method="POST"
+                                                action="<?php echo h($_SERVER['PHP_SELF']); ?>"
+                                                style="display:inline;"
+                                                onsubmit="
+                                                    return confirm(
+                                                        'Are you sure you want to delete this category?'
+                                                    );
+                                                "
+                                            >
+
+                                                <input
+                                                    type="hidden"
+                                                    name="csrf_token"
+                                                    value="<?php echo h($csrf_token); ?>"
+                                                >
+
+                                                <input
+                                                    type="hidden"
+                                                    name="active_tab"
+                                                    value="categories"
+                                                >
+
+                                                <input
+                                                    type="hidden"
+                                                    name="action"
+                                                    value="delete_category"
+                                                >
+
+                                                <input
+                                                    type="hidden"
+                                                    name="category_id"
+                                                    value="<?php
+                                                    echo (int)$category['category_id'];
+                                                    ?>"
+                                                >
+
+
+                                                <button
+                                                    type="submit"
+                                                    class="action-btn text-danger"
+                                                    title="Delete"
+                                                >
+
+                                                    <i class="bi bi-trash"></i>
+
+                                                </button>
+
+                                            </form>
+
+
+                                        <?php else: ?>
+
+
+                                            <span
+                                                class="action-btn disabled"
+                                                title="Cannot delete - category has items"
+                                            >
+
+                                                <i class="bi bi-trash"></i>
+
+                                            </span>
+
+
+                                        <?php endif; ?>
+
+
+                                    </td>
+
+                                </tr>
+
+
+                            <?php endforeach; ?>
+
+
+                        <?php else: ?>
+
+
+                            <tr>
+
+                                <td
+                                    colspan="5"
+                                    class="text-center py-4 text-muted"
+                                >
+
+                                    <i
+                                        class="bi bi-inbox fs-2 d-block mb-2"
+                                    ></i>
+
+                                    No categories found.
+                                    Click "Add Category" to create one.
+
+                                </td>
+
+                            </tr>
+
+
+                        <?php endif; ?>
+
+
+                        </tbody>
+
+                    </table>
+
+                </div>
+
             </div>
 
-            <div class="table-wrap">
-                <table class="table data-table" id="categoriesTable">
-                    <thead>
-                        <tr>
-                            <th>Category Name</th>
-                            <th>Monitoring Frequency</th>
-                            <th>Total Items</th>
-                            <th>Total Stock</th>
-                            <th class="text-center">Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php if (count($categories) > 0): ?>
-                            <?php foreach ($categories as $category): 
-                                $freq_class = 'badge-monthly';
-                                if ($category['monitoring_frequency'] == 'Daily') $freq_class = 'badge-daily';
-                                elseif ($category['monitoring_frequency'] == 'Weekly') $freq_class = 'badge-weekly';
-                            ?>
-                            <tr>
-                                <td><strong><?php echo htmlspecialchars($category['category_name']); ?></strong></td>
-                                <td>
-                                    <span class="badge-frequency <?php echo $freq_class; ?>">
-                                        <?php echo htmlspecialchars($category['monitoring_frequency']); ?>
-                                    </span>
-                                </td>
-                                <td><?php echo htmlspecialchars($category['item_count']); ?></td>
-                                <td><?php echo htmlspecialchars($category['total_stock']); ?></td>
-                                <td class="text-center">
-                                    <a href="?tab=categories&view_category_id=<?php echo $category['category_id']; ?>" class="action-btn" title="View">
-                                        <i class="bi bi-eye"></i>
-                                    </a>
-                                    <a href="?tab=categories&edit_category_id=<?php echo $category['category_id']; ?>" class="action-btn" title="Edit">
-                                        <i class="bi bi-pencil"></i>
-                                    </a>
-                                    <?php if ($category['item_count'] == 0): ?>
-                                        <a href="?delete_category_id=<?php echo $category['category_id']; ?>" class="action-btn text-danger" title="Delete" 
-                                           onclick="return confirm('Are you sure you want to delete this category?')">
-                                            <i class="bi bi-trash"></i>
-                                        </a>
-                                    <?php else: ?>
-                                        <span class="action-btn disabled" style="opacity:0.3;cursor:not-allowed;" title="Cannot delete - has items">
-                                            <i class="bi bi-trash"></i>
-                                        </span>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <tr>
-                                <td colspan="5" class="text-center py-4 text-muted">
-                                    <i class="bi bi-inbox fs-2 d-block mb-2"></i>
-                                    No categories found. Click "Add Category" to create one.
-                                </td>
-                            </tr>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
         <?php endif; ?>
 
-        <!-- ============================================ -->
-        <!-- UNITS TAB -->
-        <!-- ============================================ -->
-        <?php if ($active_tab == 'units'): ?>
-        <div class="tab-content">
-            <div class="toolbar">
-                <div class="search-box">
-                    <i class="bi bi-search"></i>
-                    <input type="text" id="searchUnits" placeholder="Search units..." onkeyup="filterTable('unitsTable', 'searchUnits')">
-                </div>
-                <button class="btn-custom" data-bs-toggle="modal" data-bs-target="#addUnitModal">
-                    <i class="bi bi-plus-lg me-1"></i> Add Unit
-                </button>
-            </div>
 
-            <div class="table-wrap">
-                <table class="table data-table" id="unitsTable">
-                    <thead>
-                        <tr>
-                            <th>Unit Name</th>
-                            <th>Used By (Items)</th>
-                            <th class="text-center">Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php if (count($units) > 0): ?>
+        <!-- =================================================
+             UNITS TAB
+             ================================================= -->
+
+        <?php if ($active_tab === 'units'): ?>
+
+            <div class="tab-content">
+
+
+                <div class="toolbar">
+
+
+                    <div class="search-box">
+
+                        <i class="bi bi-search"></i>
+
+                        <input
+                            type="text"
+                            id="searchUnits"
+                            placeholder="Search units..."
+                            onkeyup="
+                                filterTable(
+                                    'unitsTable',
+                                    'searchUnits'
+                                )
+                            "
+                        >
+
+                    </div>
+
+
+                    <button
+                        class="btn-custom"
+                        data-bs-toggle="modal"
+                        data-bs-target="#addUnitModal"
+                    >
+
+                        <i class="bi bi-plus-lg me-1"></i>
+
+                        Add Unit
+
+                    </button>
+
+                </div>
+
+
+                <div class="table-wrap">
+
+                    <table
+                        class="table data-table"
+                        id="unitsTable"
+                    >
+
+                        <thead>
+
+                            <tr>
+
+                                <th>
+                                    Unit Name
+                                </th>
+
+                                <th>
+                                    Used By (Items)
+                                </th>
+
+                                <th class="text-center">
+                                    Action
+                                </th>
+
+                            </tr>
+
+                        </thead>
+
+
+                        <tbody>
+
+
+                        <?php if (!empty($units)): ?>
+
+
                             <?php foreach ($units as $unit): ?>
-                            <tr>
-                                <td><span class="unit-badge"><?php echo htmlspecialchars($unit['unit_name']); ?></span></td>
-                                <td><?php echo htmlspecialchars($unit['item_count']); ?> items</td>
-                                <td class="text-center">
-                                    <a href="?tab=units&edit_unit_id=<?php echo $unit['unit_id']; ?>" class="action-btn" title="Edit">
-                                        <i class="bi bi-pencil"></i>
-                                    </a>
-                                    <?php if ($unit['item_count'] == 0): ?>
-                                        <a href="?delete_unit_id=<?php echo $unit['unit_id']; ?>" class="action-btn text-danger" title="Delete" 
-                                           onclick="return confirm('Are you sure you want to delete this unit?')">
-                                            <i class="bi bi-trash"></i>
-                                        </a>
-                                    <?php else: ?>
-                                        <span class="action-btn disabled" style="opacity:0.3;cursor:not-allowed;" title="Cannot delete - used by items">
-                                            <i class="bi bi-trash"></i>
+
+
+                                <tr>
+
+
+                                    <td>
+
+                                        <span class="unit-badge">
+
+                                            <?php
+                                            echo h(
+                                                $unit['unit_name']
+                                            );
+                                            ?>
+
                                         </span>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
+
+                                    </td>
+
+
+                                    <td>
+
+                                        <?php
+                                        echo (int)$unit['item_count'];
+                                        ?>
+
+                                        items
+
+                                    </td>
+
+
+                                    <td class="text-center">
+
+
+                                        <!-- EDIT -->
+
+                                        <a
+                                            href="?tab=units&edit_unit_id=<?php
+                                            echo (int)$unit['unit_id'];
+                                            ?>"
+                                            class="action-btn"
+                                            title="Edit"
+                                        >
+
+                                            <i class="bi bi-pencil"></i>
+
+                                        </a>
+
+
+                                        <!-- DELETE -->
+
+                                        <?php if ((int)$unit['item_count'] === 0): ?>
+
+                                            <form
+                                                method="POST"
+                                                action="<?php echo h($_SERVER['PHP_SELF']); ?>"
+                                                style="display:inline;"
+                                                onsubmit="
+                                                    return confirm(
+                                                        'Are you sure you want to delete this unit?'
+                                                    );
+                                                "
+                                            >
+
+                                                <input
+                                                    type="hidden"
+                                                    name="csrf_token"
+                                                    value="<?php echo h($csrf_token); ?>"
+                                                >
+
+                                                <input
+                                                    type="hidden"
+                                                    name="active_tab"
+                                                    value="units"
+                                                >
+
+                                                <input
+                                                    type="hidden"
+                                                    name="action"
+                                                    value="delete_unit"
+                                                >
+
+                                                <input
+                                                    type="hidden"
+                                                    name="unit_id"
+                                                    value="<?php
+                                                    echo (int)$unit['unit_id'];
+                                                    ?>"
+                                                >
+
+
+                                                <button
+                                                    type="submit"
+                                                    class="action-btn text-danger"
+                                                    title="Delete"
+                                                >
+
+                                                    <i class="bi bi-trash"></i>
+
+                                                </button>
+
+                                            </form>
+
+
+                                        <?php else: ?>
+
+
+                                            <span
+                                                class="action-btn disabled"
+                                                title="Cannot delete - unit is used by items"
+                                            >
+
+                                                <i class="bi bi-trash"></i>
+
+                                            </span>
+
+
+                                        <?php endif; ?>
+
+
+                                    </td>
+
+                                </tr>
+
+
                             <?php endforeach; ?>
+
+
                         <?php else: ?>
+
+
                             <tr>
-                                <td colspan="3" class="text-center py-4 text-muted">
-                                    <i class="bi bi-inbox fs-2 d-block mb-2"></i>
-                                    No units found. Click "Add Unit" to create one.
+
+                                <td
+                                    colspan="3"
+                                    class="text-center py-4 text-muted"
+                                >
+
+                                    <i
+                                        class="bi bi-inbox fs-2 d-block mb-2"
+                                    ></i>
+
+                                    No units found.
+                                    Click "Add Unit" to create one.
+
                                 </td>
+
                             </tr>
+
+
                         <?php endif; ?>
-                    </tbody>
-                </table>
+
+
+                        </tbody>
+
+                    </table>
+
+                </div>
+
             </div>
-        </div>
+
         <?php endif; ?>
+
+
     </div>
+
 </div>
 
-<!-- ========== ADD CATEGORY MODAL ========== -->
-<div class="modal fade" id="addCategoryModal" tabindex="-1">
+
+<!-- =====================================================
+     ADD CATEGORY MODAL
+     ===================================================== -->
+
+<div
+    class="modal fade"
+    id="addCategoryModal"
+    tabindex="-1"
+>
+
     <div class="modal-dialog">
-        <div class="modal-content" style="border-radius:16px;">
-            <div class="modal-header" style="background:var(--primary);color:white;">
-                <h5 class="modal-title" style="color:white; font-weight:700;">Add Inventory Category</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+
+        <div
+            class="modal-content"
+            style="border-radius:16px;"
+        >
+
+
+            <div
+                class="modal-header"
+                style="
+                    background:var(--primary);
+                    color:white;
+                "
+            >
+
+                <h5
+                    class="modal-title"
+                    style="
+                        color:white;
+                        font-weight:700;
+                    "
+                >
+
+                    Add Inventory Category
+
+                </h5>
+
+
+                <button
+                    type="button"
+                    class="btn-close btn-close-white"
+                    data-bs-dismiss="modal"
+                ></button>
+
             </div>
-            <form method="POST" action="<?php echo $_SERVER['PHP_SELF']; ?>?tab=categories">
+
+
+            <form
+                method="POST"
+                action="<?php echo h($_SERVER['PHP_SELF']); ?>"
+            >
+
+
+                <input
+                    type="hidden"
+                    name="csrf_token"
+                    value="<?php echo h($csrf_token); ?>"
+                >
+
+                <input
+                    type="hidden"
+                    name="active_tab"
+                    value="categories"
+                >
+
+                <input
+                    type="hidden"
+                    name="action"
+                    value="add_category"
+                >
+
+
                 <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label fw-semibold">Category Name *</label>
-                        <input type="text" class="form-control" name="category_name" placeholder="Enter category name" required>
-                        <div class="form-text">Examples: Appliances, Furniture, Office Supplies, Forms, Equipment</div>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label fw-semibold">Monitoring Frequency</label>
-                        <select class="form-select" name="monitoring_frequency">
-                            <option value="Daily">Daily</option>
-                            <option value="Weekly">Weekly</option>
-                            <option value="Monthly" selected>Monthly</option>
-                        </select>
-                        <div class="form-text">How often should this category be monitored for stock levels?</div>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn-outline-custom" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" name="add_category" class="btn-custom">Save Category</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
 
-<!-- ========== ADD UNIT MODAL ========== -->
-<div class="modal fade" id="addUnitModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content" style="border-radius:16px;">
-            <div class="modal-header" style="background:var(--primary);color:white;">
-                <h5 class="modal-title" style="color:white; font-weight:700;">Add Unit of Measurement</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <form method="POST" action="<?php echo $_SERVER['PHP_SELF']; ?>?tab=units">
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label fw-semibold">Unit Name *</label>
-                        <input type="text" class="form-control" name="unit_name" placeholder="Enter unit name (e.g., Vial, Box, Piece)" required>
-                        <div class="form-text">Examples: Piece, Vial, Ampule, Box, Bottle, Tablet, Capsule, Set, Bundle</div>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn-outline-custom" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" name="add_unit" class="btn-custom">Save Unit</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
 
-<!-- ========== VIEW CATEGORY MODAL ========== -->
-<?php if ($view_category): ?>
-<div class="modal fade" id="viewCategoryModal" tabindex="-1" data-bs-backdrop="static">
-    <div class="modal-dialog">
-        <div class="modal-content" style="border-radius:16px;">
-            <div class="modal-header" style="background:var(--primary);color:white;">
-                <h5 class="modal-title"><i class="bi bi-eye me-2"></i>Category Details</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="row g-3">
-                    <div class="col-12">
-                        <label class="fw-bold text-muted small">Category Name</label>
-                        <p class="fw-semibold" style="font-size:18px;"><?php echo htmlspecialchars($view_category['category_name']); ?></p>
-                    </div>
-                    <div class="col-6">
-                        <label class="fw-bold text-muted small">Monitoring Frequency</label>
-                        <p>
-                            <span class="badge-frequency <?php 
-                                echo $view_category['monitoring_frequency'] == 'Daily' ? 'badge-daily' : 
-                                    ($view_category['monitoring_frequency'] == 'Weekly' ? 'badge-weekly' : 'badge-monthly'); 
-                            ?>">
-                                <?php echo htmlspecialchars($view_category['monitoring_frequency']); ?>
-                            </span>
-                        </p>
-                    </div>
-                    <div class="col-6">
-                        <label class="fw-bold text-muted small">Total Items</label>
-                        <p><?php echo htmlspecialchars($view_category['item_count']); ?></p>
-                    </div>
-                    <div class="col-12">
-                        <label class="fw-bold text-muted small">Total Stock Across All Items</label>
-                        <p class="fw-bold" style="color:var(--primary);font-size:18px;">
-                            <?php echo htmlspecialchars($view_category['total_stock']); ?> units
-                        </p>
-                    </div>
-                    <?php if ($view_category['item_count'] > 0): ?>
-                    <div class="col-12">
-                        <label class="fw-bold text-muted small">Items in this Category</label>
-                        <?php
-                        $items_sql = "SELECT item_name FROM inventory_items WHERE category_id = ? ORDER BY item_name";
-                        $items_stmt = $conn->prepare($items_sql);
-                        $items_stmt->bind_param("i", $view_category['category_id']);
-                        $items_stmt->execute();
-                        $items_result = $items_stmt->get_result();
-                        $items_list = [];
-                        while ($item = $items_result->fetch_assoc()) {
-                            $items_list[] = $item['item_name'];
-                        }
-                        $items_stmt->close();
-                        ?>
-                        <div style="max-height:150px;overflow-y:auto;background:#f8f9fa;padding:10px;border-radius:8px;">
-                            <?php foreach ($items_list as $item): ?>
-                                <span class="badge bg-light text-dark me-1 mb-1" style="padding:6px 12px;">
-                                    <?php echo htmlspecialchars($item); ?>
-                                </span>
-                            <?php endforeach; ?>
+                    <div class="mb-3">
+
+                        <label
+                            class="form-label fw-semibold"
+                        >
+                            Category Name *
+                        </label>
+
+
+                        <input
+                            type="text"
+                            class="form-control"
+                            name="category_name"
+                            placeholder="Enter category name"
+                            maxlength="255"
+                            required
+                        >
+
+
+                        <div class="form-text">
+                            Examples: Medical Supplies,
+                            Vaccine, Forms,
+                            Office Supplies,
+                            Appliances
                         </div>
-                    </div>
-                    <?php endif; ?>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn-custom" data-bs-dismiss="modal">Close</button>
-            </div>
-        </div>
-    </div>
-</div>
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        var modal = new bootstrap.Modal(document.getElementById('viewCategoryModal'));
-        modal.show();
-    });
-</script>
-<?php endif; ?>
 
-<!-- ========== EDIT CATEGORY MODAL ========== -->
-<?php if ($edit_category): ?>
-<div class="modal fade" id="editCategoryModal" tabindex="-1" data-bs-backdrop="static">
-    <div class="modal-dialog">
-        <div class="modal-content" style="border-radius:16px;">
-            <div class="modal-header" style="background:var(--primary);color:white;">
-                <h5 class="modal-title"><i class="bi bi-pencil me-2"></i>Edit Category</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <form method="POST" action="<?php echo $_SERVER['PHP_SELF']; ?>?tab=categories">
-                <div class="modal-body">
-                    <input type="hidden" name="category_id" value="<?php echo $edit_category['category_id']; ?>">
-                    <div class="mb-3">
-                        <label class="form-label fw-semibold">Category Name *</label>
-                        <input type="text" class="form-control" name="edit_category_name" 
-                               value="<?php echo htmlspecialchars($edit_category['category_name']); ?>" required>
                     </div>
+
+
                     <div class="mb-3">
-                        <label class="form-label fw-semibold">Monitoring Frequency</label>
-                        <select class="form-select" name="edit_monitoring_frequency">
-                            <option value="Daily" <?php echo $edit_category['monitoring_frequency'] == 'Daily' ? 'selected' : ''; ?>>Daily</option>
-                            <option value="Weekly" <?php echo $edit_category['monitoring_frequency'] == 'Weekly' ? 'selected' : ''; ?>>Weekly</option>
-                            <option value="Monthly" <?php echo $edit_category['monitoring_frequency'] == 'Monthly' ? 'selected' : ''; ?>>Monthly</option>
+
+                        <label
+                            class="form-label fw-semibold"
+                        >
+                            Monitoring Frequency
+                        </label>
+
+
+                        <select
+                            class="form-select"
+                            name="monitoring_frequency"
+                        >
+
+                            <option value="Daily">
+                                Daily
+                            </option>
+
+                            <option value="Weekly">
+                                Weekly
+                            </option>
+
+                            <option
+                                value="Monthly"
+                                selected
+                            >
+                                Monthly
+                            </option>
+
                         </select>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn-outline-custom" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" name="edit_category" class="btn-custom">Update Category</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        var modal = new bootstrap.Modal(document.getElementById('editCategoryModal'));
-        modal.show();
-    });
-</script>
-<?php endif; ?>
 
-<!-- ========== EDIT UNIT MODAL ========== -->
-<?php if ($edit_unit): ?>
-<div class="modal fade" id="editUnitModal" tabindex="-1" data-bs-backdrop="static">
+
+                        <div class="form-text">
+                            How often should this category
+                            be monitored for stock levels?
+                        </div>
+
+                    </div>
+
+
+                </div>
+
+
+                <div class="modal-footer">
+
+                    <button
+                        type="button"
+                        class="btn-outline-custom"
+                        data-bs-dismiss="modal"
+                    >
+                        Cancel
+                    </button>
+
+
+                    <button
+                        type="submit"
+                        class="btn-custom"
+                    >
+                        Save Category
+                    </button>
+
+                </div>
+
+            </form>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<!-- =====================================================
+     ADD UNIT MODAL
+     ===================================================== -->
+
+<div
+    class="modal fade"
+    id="addUnitModal"
+    tabindex="-1"
+>
+
     <div class="modal-dialog">
-        <div class="modal-content" style="border-radius:16px;">
-            <div class="modal-header" style="background:var(--primary);color:white;">
-                <h5 class="modal-title"><i class="bi bi-pencil me-2"></i>Edit Unit</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+
+        <div
+            class="modal-content"
+            style="border-radius:16px;"
+        >
+
+
+            <div
+                class="modal-header"
+                style="
+                    background:var(--primary);
+                    color:white;
+                "
+            >
+
+                <h5
+                    class="modal-title"
+                    style="
+                        color:white;
+                        font-weight:700;
+                    "
+                >
+
+                    Add Unit of Measurement
+
+                </h5>
+
+
+                <button
+                    type="button"
+                    class="btn-close btn-close-white"
+                    data-bs-dismiss="modal"
+                ></button>
+
             </div>
-            <form method="POST" action="<?php echo $_SERVER['PHP_SELF']; ?>?tab=units">
+
+
+            <form
+                method="POST"
+                action="<?php echo h($_SERVER['PHP_SELF']); ?>"
+            >
+
+
+                <input
+                    type="hidden"
+                    name="csrf_token"
+                    value="<?php echo h($csrf_token); ?>"
+                >
+
+                <input
+                    type="hidden"
+                    name="active_tab"
+                    value="units"
+                >
+
+                <input
+                    type="hidden"
+                    name="action"
+                    value="add_unit"
+                >
+
+
                 <div class="modal-body">
-                    <input type="hidden" name="unit_id" value="<?php echo $edit_unit['unit_id']; ?>">
+
+
                     <div class="mb-3">
-                        <label class="form-label fw-semibold">Unit Name *</label>
-                        <input type="text" class="form-control" name="edit_unit_name" 
-                               value="<?php echo htmlspecialchars($edit_unit['unit_name']); ?>" required>
+
+                        <label
+                            class="form-label fw-semibold"
+                        >
+                            Unit Name *
+                        </label>
+
+
+                        <input
+                            type="text"
+                            class="form-control"
+                            name="unit_name"
+                            placeholder="Enter unit name"
+                            maxlength="100"
+                            required
+                        >
+
+
+                        <div class="form-text">
+                            Examples: Piece, Vial,
+                            Ampule, Box, Bottle,
+                            Ream, Set
+                        </div>
+
                     </div>
+
+
                 </div>
+
+
                 <div class="modal-footer">
-                    <button type="button" class="btn-outline-custom" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" name="edit_unit" class="btn-custom">Update Unit</button>
+
+                    <button
+                        type="button"
+                        class="btn-outline-custom"
+                        data-bs-dismiss="modal"
+                    >
+                        Cancel
+                    </button>
+
+
+                    <button
+                        type="submit"
+                        class="btn-custom"
+                    >
+                        Save Unit
+                    </button>
+
                 </div>
+
             </form>
+
         </div>
+
     </div>
+
 </div>
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        var modal = new bootstrap.Modal(document.getElementById('editUnitModal'));
-        modal.show();
-    });
-</script>
+
+
+<!-- =====================================================
+     VIEW CATEGORY MODAL
+     ===================================================== -->
+
+<?php if ($view_category): ?>
+
+
+<div
+    class="modal fade"
+    id="viewCategoryModal"
+    tabindex="-1"
+    data-bs-backdrop="static"
+>
+
+    <div class="modal-dialog">
+
+        <div
+            class="modal-content"
+            style="border-radius:16px;"
+        >
+
+
+            <div
+                class="modal-header"
+                style="
+                    background:var(--primary);
+                    color:white;
+                "
+            >
+
+                <h5 class="modal-title">
+
+                    <i class="bi bi-eye me-2"></i>
+
+                    Category Details
+
+                </h5>
+
+
+                <button
+                    type="button"
+                    class="btn-close btn-close-white"
+                    data-bs-dismiss="modal"
+                ></button>
+
+            </div>
+
+
+            <div class="modal-body">
+
+                <div class="row g-3">
+
+
+                    <div class="col-12">
+
+                        <label
+                            class="fw-bold text-muted small"
+                        >
+                            Category Name
+                        </label>
+
+
+                        <p
+                            class="fw-semibold"
+                            style="font-size:18px;"
+                        >
+
+                            <?php
+                            echo h(
+                                $view_category['category_name']
+                            );
+                            ?>
+
+                        </p>
+
+                    </div>
+
+
+                    <div class="col-6">
+
+                        <label
+                            class="fw-bold text-muted small"
+                        >
+                            Monitoring Frequency
+                        </label>
+
+
+                        <p>
+
+                            <?php
+
+                            $viewFreqClass =
+                                'badge-monthly';
+
+                            if (
+                                $view_category['monitoring_frequency']
+                                === 'Daily'
+                            ) {
+
+                                $viewFreqClass =
+                                    'badge-daily';
+
+                            } elseif (
+                                $view_category['monitoring_frequency']
+                                === 'Weekly'
+                            ) {
+
+                                $viewFreqClass =
+                                    'badge-weekly';
+                            }
+
+                            ?>
+
+
+                            <span
+                                class="badge-frequency <?php
+                                echo h($viewFreqClass);
+                                ?>"
+                            >
+
+                                <?php
+                                echo h(
+                                    $view_category['monitoring_frequency']
+                                );
+                                ?>
+
+                            </span>
+
+                        </p>
+
+                    </div>
+
+
+                    <div class="col-6">
+
+                        <label
+                            class="fw-bold text-muted small"
+                        >
+                            Total Items
+                        </label>
+
+
+                        <p>
+
+                            <?php
+                            echo (int)$view_category['item_count'];
+                            ?>
+
+                        </p>
+
+                    </div>
+
+
+                    <div class="col-12">
+
+                        <label
+                            class="fw-bold text-muted small"
+                        >
+                            Total Stock for
+                            <?php echo h($branch_name); ?>
+                        </label>
+
+
+                        <p
+                            class="fw-bold"
+                            style="
+                                color:var(--primary);
+                                font-size:18px;
+                            "
+                        >
+
+                            <?php
+                            echo (int)$view_category['total_stock'];
+                            ?>
+
+                            total units
+
+                        </p>
+
+                    </div>
+
+
+                    <?php if (!empty($view_category_items)): ?>
+
+
+                        <div class="col-12">
+
+                            <label
+                                class="fw-bold text-muted small mb-2"
+                            >
+                                Items in this Category
+                            </label>
+
+
+                            <div class="stock-detail-list">
+
+
+                                <?php foreach ($view_category_items as $item): ?>
+
+
+                                    <div class="stock-detail-item">
+
+                                        <span>
+
+                                            <?php
+                                            echo h(
+                                                $item['item_name']
+                                            );
+                                            ?>
+
+                                        </span>
+
+
+                                        <strong>
+
+                                            <?php
+                                            echo (int)$item['total_quantity'];
+                                            ?>
+
+                                            <?php
+                                            echo h(
+                                                $item['unit_name']
+                                            );
+                                            ?>
+
+                                        </strong>
+
+                                    </div>
+
+
+                                <?php endforeach; ?>
+
+
+                            </div>
+
+                        </div>
+
+
+                    <?php elseif ((int)$view_category['item_count'] > 0): ?>
+
+
+                        <div class="col-12">
+
+                            <div
+                                class="alert alert-light mb-0"
+                            >
+
+                                This category has inventory
+                                items, but no branch stock
+                                is currently available.
+
+                            </div>
+
+                        </div>
+
+
+                    <?php endif; ?>
+
+
+                </div>
+
+            </div>
+
+
+            <div class="modal-footer">
+
+                <a
+                    href="?tab=categories"
+                    class="btn-custom text-decoration-none"
+                >
+                    Close
+                </a>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+
 <?php endif; ?>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<script>
-// Filter table rows based on search input
-function filterTable(tableId, inputId) {
-    const input = document.getElementById(inputId);
-    const filter = input.value.toLowerCase();
-    const table = document.getElementById(tableId);
-    const rows = table.getElementsByTagName('tr');
 
-    for (let i = 1; i < rows.length; i++) {
-        const cells = rows[i].getElementsByTagName('td');
-        let found = false;
-        for (let j = 0; j < cells.length - 1; j++) {
-            const text = cells[j].textContent.toLowerCase();
-            if (text.indexOf(filter) > -1) {
-                found = true;
+<!-- =====================================================
+     EDIT CATEGORY MODAL
+     ===================================================== -->
+
+<?php if ($edit_category): ?>
+
+
+<div
+    class="modal fade"
+    id="editCategoryModal"
+    tabindex="-1"
+    data-bs-backdrop="static"
+>
+
+    <div class="modal-dialog">
+
+        <div
+            class="modal-content"
+            style="border-radius:16px;"
+        >
+
+
+            <div
+                class="modal-header"
+                style="
+                    background:var(--primary);
+                    color:white;
+                "
+            >
+
+                <h5 class="modal-title">
+
+                    <i class="bi bi-pencil me-2"></i>
+
+                    Edit Category
+
+                </h5>
+
+
+                <button
+                    type="button"
+                    class="btn-close btn-close-white"
+                    data-bs-dismiss="modal"
+                ></button>
+
+            </div>
+
+
+            <form
+                method="POST"
+                action="<?php echo h($_SERVER['PHP_SELF']); ?>"
+            >
+
+
+                <input
+                    type="hidden"
+                    name="csrf_token"
+                    value="<?php echo h($csrf_token); ?>"
+                >
+
+                <input
+                    type="hidden"
+                    name="active_tab"
+                    value="categories"
+                >
+
+                <input
+                    type="hidden"
+                    name="action"
+                    value="edit_category"
+                >
+
+                <input
+                    type="hidden"
+                    name="category_id"
+                    value="<?php
+                    echo (int)$edit_category['category_id'];
+                    ?>"
+                >
+
+
+                <div class="modal-body">
+
+
+                    <div class="mb-3">
+
+                        <label
+                            class="form-label fw-semibold"
+                        >
+                            Category Name *
+                        </label>
+
+
+                        <input
+                            type="text"
+                            class="form-control"
+                            name="edit_category_name"
+                            maxlength="255"
+                            value="<?php
+                            echo h(
+                                $edit_category['category_name']
+                            );
+                            ?>"
+                            required
+                        >
+
+                    </div>
+
+
+                    <div class="mb-3">
+
+                        <label
+                            class="form-label fw-semibold"
+                        >
+                            Monitoring Frequency
+                        </label>
+
+
+                        <select
+                            class="form-select"
+                            name="edit_monitoring_frequency"
+                        >
+
+                            <option
+                                value="Daily"
+                                <?php
+                                echo (
+                                    $edit_category['monitoring_frequency']
+                                    === 'Daily'
+                                ) ? 'selected' : '';
+                                ?>
+                            >
+                                Daily
+                            </option>
+
+
+                            <option
+                                value="Weekly"
+                                <?php
+                                echo (
+                                    $edit_category['monitoring_frequency']
+                                    === 'Weekly'
+                                ) ? 'selected' : '';
+                                ?>
+                            >
+                                Weekly
+                            </option>
+
+
+                            <option
+                                value="Monthly"
+                                <?php
+                                echo (
+                                    $edit_category['monitoring_frequency']
+                                    === 'Monthly'
+                                ) ? 'selected' : '';
+                                ?>
+                            >
+                                Monthly
+                            </option>
+
+                        </select>
+
+                    </div>
+
+
+                </div>
+
+
+                <div class="modal-footer">
+
+                    <a
+                        href="?tab=categories"
+                        class="btn-outline-custom text-decoration-none"
+                    >
+                        Cancel
+                    </a>
+
+
+                    <button
+                        type="submit"
+                        class="btn-custom"
+                    >
+                        Update Category
+                    </button>
+
+                </div>
+
+            </form>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<?php endif; ?>
+
+
+<!-- =====================================================
+     EDIT UNIT MODAL
+     ===================================================== -->
+
+<?php if ($edit_unit): ?>
+
+
+<div
+    class="modal fade"
+    id="editUnitModal"
+    tabindex="-1"
+    data-bs-backdrop="static"
+>
+
+    <div class="modal-dialog">
+
+        <div
+            class="modal-content"
+            style="border-radius:16px;"
+        >
+
+
+            <div
+                class="modal-header"
+                style="
+                    background:var(--primary);
+                    color:white;
+                "
+            >
+
+                <h5 class="modal-title">
+
+                    <i class="bi bi-pencil me-2"></i>
+
+                    Edit Unit
+
+                </h5>
+
+
+                <button
+                    type="button"
+                    class="btn-close btn-close-white"
+                    data-bs-dismiss="modal"
+                ></button>
+
+            </div>
+
+
+            <form
+                method="POST"
+                action="<?php echo h($_SERVER['PHP_SELF']); ?>"
+            >
+
+
+                <input
+                    type="hidden"
+                    name="csrf_token"
+                    value="<?php echo h($csrf_token); ?>"
+                >
+
+                <input
+                    type="hidden"
+                    name="active_tab"
+                    value="units"
+                >
+
+                <input
+                    type="hidden"
+                    name="action"
+                    value="edit_unit"
+                >
+
+                <input
+                    type="hidden"
+                    name="unit_id"
+                    value="<?php
+                    echo (int)$edit_unit['unit_id'];
+                    ?>"
+                >
+
+
+                <div class="modal-body">
+
+
+                    <div class="mb-3">
+
+                        <label
+                            class="form-label fw-semibold"
+                        >
+                            Unit Name *
+                        </label>
+
+
+                        <input
+                            type="text"
+                            class="form-control"
+                            name="edit_unit_name"
+                            maxlength="100"
+                            value="<?php
+                            echo h(
+                                $edit_unit['unit_name']
+                            );
+                            ?>"
+                            required
+                        >
+
+                    </div>
+
+
+                </div>
+
+
+                <div class="modal-footer">
+
+                    <a
+                        href="?tab=units"
+                        class="btn-outline-custom text-decoration-none"
+                    >
+                        Cancel
+                    </a>
+
+
+                    <button
+                        type="submit"
+                        class="btn-custom"
+                    >
+                        Update Unit
+                    </button>
+
+                </div>
+
+            </form>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<?php endif; ?>
+
+
+<script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+></script>
+
+
+<script>
+
+/* =========================================================
+   FILTER TABLE
+   ========================================================= */
+
+function filterTable(
+    tableId,
+    inputId
+) {
+
+    const input =
+        document.getElementById(
+            inputId
+        );
+
+    const filter =
+        input.value.toLowerCase();
+
+    const table =
+        document.getElementById(
+            tableId
+        );
+
+    const rows =
+        table.getElementsByTagName(
+            'tr'
+        );
+
+
+    for (
+        let i = 1;
+        i < rows.length;
+        i++
+    ) {
+
+        const cells =
+            rows[i].getElementsByTagName(
+                'td'
+            );
+
+        let found =
+            false;
+
+
+        for (
+            let j = 0;
+            j < cells.length - 1;
+            j++
+        ) {
+
+            const text =
+                cells[j]
+                    .textContent
+                    .toLowerCase();
+
+
+            if (
+                text.indexOf(filter)
+                > -1
+            ) {
+
+                found =
+                    true;
+
                 break;
             }
         }
-        rows[i].style.display = found ? '' : 'none';
+
+
+        rows[i].style.display =
+            found
+            ? ''
+            : 'none';
     }
 }
 
-// Toast notification function
-function showToast(message, type = 'success') {
-    const container = document.getElementById('toastContainer');
-    const toast = document.createElement('div');
-    toast.className = 'toast-custom' + (type === 'error' ? ' error' : '');
+
+/* =========================================================
+   TOAST
+   ========================================================= */
+
+function showToast(
+    message,
+    type = 'success'
+) {
+
+    const container =
+        document.getElementById(
+            'toastContainer'
+        );
+
+
+    const toast =
+        document.createElement(
+            'div'
+        );
+
+
+    toast.className =
+        'toast-custom' +
+        (
+            type === 'error'
+            ? ' error'
+            : ''
+        );
+
+
     const iconMap = {
-        'success': 'bi-check-circle-fill',
-        'error': 'bi-x-circle-fill',
-        'warning': 'bi-exclamation-triangle-fill'
+
+        success:
+            'bi-check-circle-fill',
+
+        error:
+            'bi-x-circle-fill',
+
+        warning:
+            'bi-exclamation-triangle-fill'
+
     };
-    const icon = iconMap[type] || 'bi-info-circle-fill';
-    toast.innerHTML = `
-        <span class="toast-icon"><i class="bi ${icon}"></i></span>
-        <span class="toast-msg">${message}</span>
-        <button class="toast-close" onclick="this.parentElement.remove()">&times;</button>
-    `;
-    container.appendChild(toast);
-    setTimeout(() => {
-        if (toast.parentElement) toast.remove();
-    }, 5000);
+
+
+    const icon =
+        iconMap[type]
+        || 'bi-info-circle-fill';
+
+
+    const iconSpan =
+        document.createElement(
+            'span'
+        );
+
+    iconSpan.className =
+        'toast-icon';
+
+    iconSpan.innerHTML =
+        '<i class="bi ' +
+        icon +
+        '"></i>';
+
+
+    const msgSpan =
+        document.createElement(
+            'span'
+        );
+
+    msgSpan.className =
+        'toast-msg';
+
+    msgSpan.textContent =
+        message;
+
+
+    const closeBtn =
+        document.createElement(
+            'button'
+        );
+
+    closeBtn.className =
+        'toast-close';
+
+    closeBtn.type =
+        'button';
+
+    closeBtn.innerHTML =
+        '&times;';
+
+    closeBtn.addEventListener(
+        'click',
+        function()
+        {
+            toast.remove();
+        }
+    );
+
+
+    toast.appendChild(
+        iconSpan
+    );
+
+    toast.appendChild(
+        msgSpan
+    );
+
+    toast.appendChild(
+        closeBtn
+    );
+
+
+    container.appendChild(
+        toast
+    );
+
+
+    setTimeout(
+        function()
+        {
+            if (
+                toast.parentElement
+            ) {
+                toast.remove();
+            }
+        },
+        5000
+    );
 }
 
-// Auto-show toast for PHP messages
-<?php if (isset($success_msg)): ?>
-    showToast('<?php echo addslashes($success_msg); ?>', 'success');
+
+/* =========================================================
+   AUTO SHOW FLASH MESSAGE
+   ========================================================= */
+
+<?php if ($success_msg !== ''): ?>
+
+showToast(
+    <?php echo json_encode($success_msg); ?>,
+    'success'
+);
+
 <?php endif; ?>
-<?php if (isset($error_msg)): ?>
-    showToast('<?php echo addslashes($error_msg); ?>', 'error');
+
+
+<?php if ($error_msg !== ''): ?>
+
+showToast(
+    <?php echo json_encode($error_msg); ?>,
+    'error'
+);
+
 <?php endif; ?>
+
+
+/* =========================================================
+   AUTO OPEN VIEW CATEGORY
+   ========================================================= */
+
+<?php if ($view_category): ?>
+
+document.addEventListener(
+    'DOMContentLoaded',
+    function()
+    {
+        const element =
+            document.getElementById(
+                'viewCategoryModal'
+            );
+
+        if (element) {
+
+            const modal =
+                new bootstrap.Modal(
+                    element
+                );
+
+            modal.show();
+        }
+    }
+);
+
+<?php endif; ?>
+
+
+/* =========================================================
+   AUTO OPEN EDIT CATEGORY
+   ========================================================= */
+
+<?php if ($edit_category): ?>
+
+document.addEventListener(
+    'DOMContentLoaded',
+    function()
+    {
+        const element =
+            document.getElementById(
+                'editCategoryModal'
+            );
+
+        if (element) {
+
+            const modal =
+                new bootstrap.Modal(
+                    element
+                );
+
+            modal.show();
+        }
+    }
+);
+
+<?php endif; ?>
+
+
+/* =========================================================
+   AUTO OPEN EDIT UNIT
+   ========================================================= */
+
+<?php if ($edit_unit): ?>
+
+document.addEventListener(
+    'DOMContentLoaded',
+    function()
+    {
+        const element =
+            document.getElementById(
+                'editUnitModal'
+            );
+
+        if (element) {
+
+            const modal =
+                new bootstrap.Modal(
+                    element
+                );
+
+            modal.show();
+        }
+    }
+);
+
+<?php endif; ?>
+
 </script>
+
+
 </body>
+
 </html>
