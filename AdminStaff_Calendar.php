@@ -81,7 +81,7 @@ $allFollowUpsQuery = "
         v.dose_number,
         v.vaccine_name,
         v.date_administered,
-        v.next_schedule,
+        v.scheduled_date,
         v.vaccination_status,
         v.is_final_dose,
         v.remarks as vaccination_remarks,
@@ -100,16 +100,16 @@ $allFollowUpsQuery = "
         END as dose_label,
         CASE 
             WHEN v.vaccination_status = 'Completed' THEN 'Completed'
-            WHEN v.next_schedule < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 'Overdue'
-            WHEN v.vaccination_status = 'Scheduled' AND v.next_schedule = CURDATE() THEN 'Today'
-            WHEN v.vaccination_status = 'Scheduled' AND v.next_schedule > CURDATE() THEN 'Pending'
+            WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 'Overdue'
+            WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 'Today'
+            WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 'Pending'
             ELSE v.vaccination_status
         END as display_status,
         CASE 
             WHEN v.vaccination_status = 'Completed' THEN 1
-            WHEN v.next_schedule < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 2
-            WHEN v.vaccination_status = 'Scheduled' AND v.next_schedule = CURDATE() THEN 3
-            WHEN v.vaccination_status = 'Scheduled' AND v.next_schedule > CURDATE() THEN 4
+            WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 2
+            WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 3
+            WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 4
             ELSE 5
         END as status_order
     FROM animal_bite_cases c
@@ -117,7 +117,7 @@ $allFollowUpsQuery = "
     INNER JOIN patients p ON c.patient_id = p.patient_id
     LEFT JOIN registry_records r ON c.case_id = r.case_id
     WHERE c.branch_id = ?
-    AND v.next_schedule IS NOT NULL
+    AND v.scheduled_date IS NOT NULL
 ";
 
 // Apply filters
@@ -127,17 +127,17 @@ $types = "s";
 
 // Date filter (specific day)
 if (!empty($selectedDate)) {
-    $whereConditions[] = "DATE(v.next_schedule) = ?";
+    $whereConditions[] = "DATE(v.scheduled_date) = ?";
     $params[] = $selectedDate;
     $types .= "s";
 }
 
 // Month/Year filter (if no specific date, filter by month/year)
 if (empty($selectedDate)) {
-    $whereConditions[] = "YEAR(v.next_schedule) = ?";
+    $whereConditions[] = "YEAR(v.scheduled_date) = ?";
     $params[] = $currentYear;
     $types .= "i";
-    $whereConditions[] = "MONTH(v.next_schedule) = ?";
+    $whereConditions[] = "MONTH(v.scheduled_date) = ?";
     $params[] = $currentMonth;
     $types .= "i";
 }
@@ -147,11 +147,11 @@ if ($filterStatus != 'all') {
     if ($filterStatus == 'completed') {
         $whereConditions[] = "v.vaccination_status = 'Completed'";
     } elseif ($filterStatus == 'overdue') {
-        $whereConditions[] = "v.next_schedule < CURDATE() AND v.vaccination_status = 'Scheduled'";
+        $whereConditions[] = "v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled'";
     } elseif ($filterStatus == 'today') {
-        $whereConditions[] = "v.next_schedule = CURDATE() AND v.vaccination_status = 'Scheduled'";
+        $whereConditions[] = "v.scheduled_date = CURDATE() AND v.vaccination_status = 'Scheduled'";
     } elseif ($filterStatus == 'pending') {
-        $whereConditions[] = "v.next_schedule > CURDATE() AND v.vaccination_status = 'Scheduled'";
+        $whereConditions[] = "v.scheduled_date > CURDATE() AND v.vaccination_status = 'Scheduled'";
     }
 }
 
@@ -170,7 +170,7 @@ if (!empty($whereConditions)) {
     $allFollowUpsQuery .= " AND " . implode(" AND ", $whereConditions);
 }
 
-$allFollowUpsQuery .= " ORDER BY status_order ASC, v.next_schedule ASC, p.full_name ASC";
+$allFollowUpsQuery .= " ORDER BY status_order ASC, v.scheduled_date ASC, p.full_name ASC";
 
 // Execute main query
 $stmt = $conn->prepare($allFollowUpsQuery);
@@ -192,13 +192,13 @@ $statsQuery = "
     SELECT 
         COUNT(DISTINCT c.case_id) as total,
         SUM(CASE WHEN v.vaccination_status = 'Completed' THEN 1 ELSE 0 END) as completed,
-        SUM(CASE WHEN v.next_schedule < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue,
-        SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.next_schedule = CURDATE() THEN 1 ELSE 0 END) as today,
-        SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.next_schedule > CURDATE() THEN 1 ELSE 0 END) as pending
+        SUM(CASE WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue,
+        SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 1 ELSE 0 END) as today,
+        SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 1 ELSE 0 END) as pending
     FROM animal_bite_cases c
     INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
     WHERE c.branch_id = ?
-    AND v.next_schedule IS NOT NULL
+    AND v.scheduled_date IS NOT NULL
 ";
 $stmt = $conn->prepare($statsQuery);
 $stmt->bind_param("s", $branch_id);
@@ -217,17 +217,17 @@ $pendingCount = $stats['pending'] ?? 0;
 // ----------------------------------------------------------------------
 $calQuery = "
     SELECT 
-        DATE(v.next_schedule) as schedule_date,
+        DATE(v.scheduled_date) as schedule_date,
         COUNT(DISTINCT c.case_id) as count,
-        SUM(CASE WHEN v.next_schedule < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue_count,
+        SUM(CASE WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue_count,
         SUM(CASE WHEN v.vaccination_status = 'Completed' THEN 1 ELSE 0 END) as completed_count
     FROM animal_bite_cases c
     INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
     WHERE c.branch_id = ?
-    AND v.next_schedule IS NOT NULL
-    AND YEAR(v.next_schedule) = ?
-    AND MONTH(v.next_schedule) = ?
-    GROUP BY DATE(v.next_schedule)
+    AND v.scheduled_date IS NOT NULL
+    AND YEAR(v.scheduled_date) = ?
+    AND MONTH(v.scheduled_date) = ?
+    GROUP BY DATE(v.scheduled_date)
     ORDER BY schedule_date
 ";
 $stmt = $conn->prepare($calQuery);
@@ -251,16 +251,16 @@ while ($row = $calResult->fetch_assoc()) {
 // ----------------------------------------------------------------------
 $upcomingQuery = "
     SELECT 
-        DATE(v.next_schedule) as schedule_date,
+        DATE(v.scheduled_date) as schedule_date,
         COUNT(DISTINCT c.case_id) as count
     FROM animal_bite_cases c
     INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
     WHERE c.branch_id = ?
-    AND v.next_schedule IS NOT NULL
+    AND v.scheduled_date IS NOT NULL
     AND v.vaccination_status = 'Scheduled'
-    AND v.next_schedule >= CURDATE()
-    AND v.next_schedule <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)
-    GROUP BY DATE(v.next_schedule)
+    AND v.scheduled_date >= CURDATE()
+    AND v.scheduled_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)
+    GROUP BY DATE(v.scheduled_date)
     ORDER BY schedule_date
 ";
 $stmt = $conn->prepare($upcomingQuery);
@@ -291,14 +291,14 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
             c.bite_location,
             v.vaccine_name,
             v.dose_number,
-            DATE(v.next_schedule) as scheduled_date,
+            DATE(v.scheduled_date) as scheduled_date,
             DATE(v.date_administered) as date_administered,
             v.vaccination_status,
             CASE 
                 WHEN v.vaccination_status = 'Completed' THEN 'Completed'
-                WHEN v.next_schedule < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 'Overdue'
-                WHEN v.vaccination_status = 'Scheduled' AND v.next_schedule = CURDATE() THEN 'Today'
-                WHEN v.vaccination_status = 'Scheduled' AND v.next_schedule > CURDATE() THEN 'Pending'
+                WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 'Overdue'
+                WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 'Today'
+                WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 'Pending'
                 ELSE v.vaccination_status
             END as display_status
         FROM animal_bite_cases c
@@ -306,14 +306,14 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
         INNER JOIN patients p ON c.patient_id = p.patient_id
         LEFT JOIN registry_records r ON c.case_id = r.case_id
         WHERE c.branch_id = ?
-        AND v.next_schedule IS NOT NULL
+        AND v.scheduled_date IS NOT NULL
     ";
     
     $exportParams = [$branch_id];
     $exportTypes = "s";
     
     if (!empty($exportDate)) {
-        $exportQuery .= " AND DATE(v.next_schedule) = ?";
+        $exportQuery .= " AND DATE(v.scheduled_date) = ?";
         $exportParams[] = $exportDate;
         $exportTypes .= "s";
     }
@@ -322,15 +322,15 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
         if ($exportStatus == 'completed') {
             $exportQuery .= " AND v.vaccination_status = 'Completed'";
         } elseif ($exportStatus == 'overdue') {
-            $exportQuery .= " AND v.next_schedule < CURDATE() AND v.vaccination_status = 'Scheduled'";
+            $exportQuery .= " AND v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled'";
         } elseif ($exportStatus == 'today') {
-            $exportQuery .= " AND v.next_schedule = CURDATE() AND v.vaccination_status = 'Scheduled'";
+            $exportQuery .= " AND v.scheduled_date = CURDATE() AND v.vaccination_status = 'Scheduled'";
         } elseif ($exportStatus == 'pending') {
-            $exportQuery .= " AND v.next_schedule > CURDATE() AND v.vaccination_status = 'Scheduled'";
+            $exportQuery .= " AND v.scheduled_date > CURDATE() AND v.vaccination_status = 'Scheduled'";
         }
     }
     
-    $exportQuery .= " ORDER BY v.next_schedule ASC";
+    $exportQuery .= " ORDER BY v.scheduled_date ASC";
     
     $stmt = $conn->prepare($exportQuery);
     $stmt->bind_param($exportTypes, ...$exportParams);
@@ -383,13 +383,13 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 SELECT 
                     COUNT(DISTINCT c.case_id) as total,
                     SUM(CASE WHEN v.vaccination_status = 'Completed' THEN 1 ELSE 0 END) as completed,
-                    SUM(CASE WHEN v.next_schedule < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue,
-                    SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.next_schedule = CURDATE() THEN 1 ELSE 0 END) as today,
-                    SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.next_schedule > CURDATE() THEN 1 ELSE 0 END) as pending
+                    SUM(CASE WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue,
+                    SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 1 ELSE 0 END) as today,
+                    SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 1 ELSE 0 END) as pending
                 FROM animal_bite_cases c
                 INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
                 WHERE c.branch_id = ?
-                AND v.next_schedule IS NOT NULL
+                AND v.scheduled_date IS NOT NULL
             ";
             $stmt = $conn->prepare($statsQuery);
             $stmt->bind_param("s", $branch_id);
@@ -413,17 +413,17 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             
             $calQuery = "
                 SELECT 
-                    DATE(v.next_schedule) as schedule_date,
+                    DATE(v.scheduled_date) as schedule_date,
                     COUNT(DISTINCT c.case_id) as count,
-                    SUM(CASE WHEN v.next_schedule < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue_count,
+                    SUM(CASE WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue_count,
                     SUM(CASE WHEN v.vaccination_status = 'Completed' THEN 1 ELSE 0 END) as completed_count
                 FROM animal_bite_cases c
                 INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
                 WHERE c.branch_id = ?
-                AND v.next_schedule IS NOT NULL
-                AND YEAR(v.next_schedule) = ?
-                AND MONTH(v.next_schedule) = ?
-                GROUP BY DATE(v.next_schedule)
+                AND v.scheduled_date IS NOT NULL
+                AND YEAR(v.scheduled_date) = ?
+                AND MONTH(v.scheduled_date) = ?
+                GROUP BY DATE(v.scheduled_date)
             ";
             $stmt = $conn->prepare($calQuery);
             $stmt->bind_param("sii", $branch_id, $year, $month);
@@ -468,7 +468,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     v.dose_number,
                     v.vaccine_name,
                     v.date_administered,
-                    v.next_schedule,
+                    v.scheduled_date,
                     v.vaccination_status,
                     v.is_final_dose,
                     TIMESTAMPDIFF(YEAR, p.birthday, CURDATE()) as age,
@@ -483,16 +483,16 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     END as dose_label,
                     CASE 
                         WHEN v.vaccination_status = 'Completed' THEN 'Completed'
-                        WHEN v.next_schedule < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 'Overdue'
-                        WHEN v.vaccination_status = 'Scheduled' AND v.next_schedule = CURDATE() THEN 'Today'
-                        WHEN v.vaccination_status = 'Scheduled' AND v.next_schedule > CURDATE() THEN 'Pending'
+                        WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 'Overdue'
+                        WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 'Today'
+                        WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 'Pending'
                         ELSE v.vaccination_status
                     END as display_status,
                     CASE 
                         WHEN v.vaccination_status = 'Completed' THEN 1
-                        WHEN v.next_schedule < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 2
-                        WHEN v.vaccination_status = 'Scheduled' AND v.next_schedule = CURDATE() THEN 3
-                        WHEN v.vaccination_status = 'Scheduled' AND v.next_schedule > CURDATE() THEN 4
+                        WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 2
+                        WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 3
+                        WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 4
                         ELSE 5
                     END as status_order
                 FROM animal_bite_cases c
@@ -500,18 +500,18 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 INNER JOIN patients p ON c.patient_id = p.patient_id
                 LEFT JOIN registry_records r ON c.case_id = r.case_id
                 WHERE c.branch_id = ?
-                AND v.next_schedule IS NOT NULL
+                AND v.scheduled_date IS NOT NULL
             ";
             
             $params = [$branch_id];
             $types = "s";
             
             if (!empty($date)) {
-                $query .= " AND DATE(v.next_schedule) = ?";
+                $query .= " AND DATE(v.scheduled_date) = ?";
                 $params[] = $date;
                 $types .= "s";
             } else {
-                $query .= " AND YEAR(v.next_schedule) = ? AND MONTH(v.next_schedule) = ?";
+                $query .= " AND YEAR(v.scheduled_date) = ? AND MONTH(v.scheduled_date) = ?";
                 $params[] = $year;
                 $params[] = $month;
                 $types .= "ii";
@@ -521,11 +521,11 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 if ($status == 'completed') {
                     $query .= " AND v.vaccination_status = 'Completed'";
                 } elseif ($status == 'overdue') {
-                    $query .= " AND v.next_schedule < CURDATE() AND v.vaccination_status = 'Scheduled'";
+                    $query .= " AND v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled'";
                 } elseif ($status == 'today') {
-                    $query .= " AND v.next_schedule = CURDATE() AND v.vaccination_status = 'Scheduled'";
+                    $query .= " AND v.scheduled_date = CURDATE() AND v.vaccination_status = 'Scheduled'";
                 } elseif ($status == 'pending') {
-                    $query .= " AND v.next_schedule > CURDATE() AND v.vaccination_status = 'Scheduled'";
+                    $query .= " AND v.scheduled_date > CURDATE() AND v.vaccination_status = 'Scheduled'";
                 }
             }
             
@@ -539,7 +539,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 $types .= "ssss";
             }
             
-            $query .= " ORDER BY status_order ASC, v.next_schedule ASC, p.full_name ASC";
+            $query .= " ORDER BY status_order ASC, v.scheduled_date ASC, p.full_name ASC";
             
             $stmt = $conn->prepare($query);
             $stmt->bind_param($types, ...$params);
@@ -1653,7 +1653,9 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 <li><a href="AdminStaff_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
                 <li><a class="active" href="AdminStaff_Calendar.php"><i class="bi bi-calendar-fill"></i><span>Calendar</span></a></li>
                 <li><a href="AdminStaff_PatientRecord.php"><i class="bi bi-people-fill"></i><span>Patient Record Management</span></a></li>
-                <li><a href="AdminStaff_PhilhealthStatus.php"><i class="bi bi-check2-all"></i><span>PhilHealth Patient Status</span></a></li>
+                <li><a href="AdminStaff_VisitQueue.php"><i class="bi bi-person-check-fill"></i><span>Visit Check-in</span></a></li>
+                <li><a href="AdminStaff_Registry.php"><i class="bi bi-journal-check"></i><span>Registry Queue</span></a></li>
+                <li><a href="AdminStaff_PhilhealthWorkflow.php"><i class="bi bi-check2-all"></i><span>PhilHealth Workflow</span></a></li>
                 <li><a href="AdminStaff_MedicalDocuments.php"><i class="bi bi-file-earmark-ruled"></i><span>Medical Documents</span></a></li>
                 <li><a href="AdminStaff_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
             </ul>
@@ -1938,7 +1940,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                                 </td>
                                 <td><span style="font-size:13px;"><?php echo htmlspecialchars($record['vaccine_name'] ?? 'N/A'); ?></span></td>
                                 <td><?php echo htmlspecialchars($record['dose_label'] ?? 'Dose ' . $record['dose_number']); ?></td>
-                                <td><?php echo $record['next_schedule'] ? date('M d, Y', strtotime($record['next_schedule'])) : 'N/A'; ?></td>
+                                <td><?php echo $record['scheduled_date'] ? date('M d, Y', strtotime($record['scheduled_date'])) : 'N/A'; ?></td>
                                 <td><?php echo $record['date_administered'] ? date('M d, Y', strtotime($record['date_administered'])) : '—'; ?></td>
                                 <td><span class="status-badge <?php echo $statusClass; ?>"><?php echo htmlspecialchars($statusLabel); ?></span></td>
                                 <td>
@@ -2288,7 +2290,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     </td>
                     <td><span style="font-size:13px;">${record.vaccine_name || 'N/A'}</span></td>
                     <td>${record.dose_label || 'Dose ' + record.dose_number}</td>
-                    <td>${record.next_schedule ? new Date(record.next_schedule).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'N/A'}</td>
+                    <td>${record.scheduled_date ? new Date(record.scheduled_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'N/A'}</td>
                     <td>${record.date_administered ? new Date(record.date_administered).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td>
                     <td><span class="status-badge ${statusClass}">${record.display_status}</span></td>
                     <td>

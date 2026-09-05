@@ -6,6 +6,7 @@ error_reporting(E_ALL);
 ini_set('display_errors', 0); 
 
 require_once 'sources/db_connect.php';
+require_once 'sources/workflow_helpers.php';
 
 // CSRF protection for vaccination submissions
 if (empty($_SESSION['csrf_token'])) {
@@ -65,7 +66,7 @@ function getAdminStaffByBranch($conn, $branch_id) {
     $sql = "SELECT u.user_id, u.username, u.email 
             FROM users u 
             WHERE u.branch_id = ? 
-            AND u.role_id IN (1, 2, 5)  
+            AND u.role_id = 4
             AND u.status = 'Active'";
     $stmt = $conn->prepare($sql);
     $stmt->bind_param("s", $branch_id);
@@ -159,27 +160,49 @@ function getCompletedDoseStages($conn, $patient_id, $case_id) {
 
 function getNextDoseNumber($conn, $patient_id, $case_id) {
     $stages = getCompletedDoseStages($conn, $patient_id, $case_id);
+    $required = getRequiredDoseNumbers($conn, $case_id);
 
-    for ($dose = 1; $dose <= 6; $dose++) {
+    foreach ($required as $dose) {
         if (empty($stages[$dose])) {
             return $dose;
         }
     }
 
-    // All stages are complete. Return the final stage only for display fallback.
-    return 6;
+    return (int)end($required);
 }
 
 function isVaccinationComplete($conn, $patient_id, $case_id) {
     $stages = getCompletedDoseStages($conn, $patient_id, $case_id);
 
-    for ($dose = 1; $dose <= 6; $dose++) {
+    foreach (getRequiredDoseNumbers($conn, $case_id) as $dose) {
         if (empty($stages[$dose])) {
             return false;
         }
     }
 
     return true;
+}
+
+function getRequiredDoseNumbers($conn, $case_id) {
+    $stmt = $conn->prepare("SELECT treatment_profile
+                            FROM clinical_assessments
+                            WHERE case_id = ?
+                            ORDER BY updated_at DESC, assessment_id DESC
+                            LIMIT 1");
+    $stmt->bind_param('i', $case_id);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    if ($row && !empty($row['treatment_profile'])) {
+        $configured = array_keys(workflowScheduleStages((string)$row['treatment_profile']));
+        if ($configured) {
+            return array_map('intval', $configured);
+        }
+    }
+
+    // Legacy cases created before the workflow migration used all six stages.
+    return [1, 2, 3, 4, 5, 6];
 }
 
 // Validate YYYY-MM-DD date
@@ -236,7 +259,7 @@ function deductVaccineStockFEFO($conn, $item_id, $branch_id, $quantity_needed) {
     $total_available = 0;
     while ($row = $result->fetch_assoc()) {
         $stocks[] = $row;
-        $total_available += (int)$row['quantity_available'];
+        $total_available += (float)$row['quantity_available'];
     }
     $stmt->close();
 
@@ -250,14 +273,14 @@ function deductVaccineStockFEFO($conn, $item_id, $branch_id, $quantity_needed) {
     foreach ($stocks as $stock) {
         if ($remaining <= 0) break;
 
-        $take = min((int)$stock['quantity_available'], $remaining);
+        $take = min((float)$stock['quantity_available'], $remaining);
         $stock_id = (int)$stock['stock_id'];
 
         $update = $conn->prepare("UPDATE inventory_stocks
                                   SET quantity_available = quantity_available - ?,
                                       last_updated = CURRENT_TIMESTAMP
                                   WHERE stock_id = ?");
-        $update->bind_param("ii", $take, $stock_id);
+        $update->bind_param("di", $take, $stock_id);
         if (!$update->execute()) {
             throw new Exception('Failed to update vaccine batch stock.');
         }
@@ -278,7 +301,8 @@ function deductVaccineStockFEFO($conn, $item_id, $branch_id, $quantity_needed) {
 function vaccineBatchSummary($batches) {
     $parts = [];
     foreach ($batches as $batch) {
-        $label = $batch['batch_lot_no'] . ': ' . (int)$batch['quantity'];
+        $displayQuantity = rtrim(rtrim(number_format((float)$batch['quantity'], 2, '.', ''), '0'), '.');
+        $label = $batch['batch_lot_no'] . ': ' . $displayQuantity;
         if (!empty($batch['expiration_date'])) {
             $label .= ' (exp ' . $batch['expiration_date'] . ')';
         }
@@ -643,7 +667,7 @@ if (isset($_POST['submit_vaccination'])) {
         foreach ($vaccine_items as $item) {
             $item_id = intval($item['item_id'] ?? 0);
             $dose_number = intval($item['dose_number'] ?? 0);
-            $quantity = intval($item['quantity'] ?? 0);
+            $quantity = (float)($item['quantity'] ?? 0);
             $date_administered = !empty($item['date_administered'])
                 ? trim($item['date_administered'])
                 : date('Y-m-d');
@@ -685,7 +709,8 @@ if (isset($_POST['submit_vaccination'])) {
 
             $vaccine_name = $vaccine['item_name'];
             $unit_id = (int)$vaccine['unit_id'];
-            $is_final_dose = ($dose_number === 6) ? 1 : 0;
+            $requiredDoses = getRequiredDoseNumbers($conn, $case_id);
+            $is_final_dose = ($dose_number === (int)end($requiredDoses)) ? 1 : 0;
 
             // Different products may be administered under the same dose stage
             // (for example Rabies Vaccine + ERIG + ATS on D0). What we prevent is
@@ -772,6 +797,7 @@ if (isset($_POST['submit_vaccination'])) {
                     SET item_id = ?,
                         vaccine_name = ?,
                         unit_id = ?,
+                        quantity_used = ?,
                         date_administered = ?,
                         administered_datetime = NOW(),
                         vaccination_status = 'Completed',
@@ -783,10 +809,11 @@ if (isset($_POST['submit_vaccination'])) {
                       AND is_archived = 0
                 ");
                 $updateVaccination->bind_param(
-                    "isisisii",
+                    "isidsisii",
                     $item_id,
                     $vaccine_name,
                     $unit_id,
+                    $quantity,
                     $date_administered,
                     $is_final_dose,
                     $remarks,
@@ -868,6 +895,7 @@ if (isset($_POST['submit_vaccination'])) {
                         item_id,
                         vaccine_name,
                         unit_id,
+                        quantity_used,
                         branch_id,
                         dose_number,
                         date_administered,
@@ -879,7 +907,7 @@ if (isset($_POST['submit_vaccination'])) {
                         nurse_id
                     )
                     VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?,
                         CASE WHEN ? = 'Completed' THEN NOW() ELSE NULL END,
                         ?, ?, ?, ?, ?
                     )
@@ -887,12 +915,13 @@ if (isset($_POST['submit_vaccination'])) {
 
                 $stmt = $conn->prepare($insertVaccination);
                 $stmt->bind_param(
-                    "iiisisissssisi",
+                    "iiisidsissssisi",
                     $patient_id,
                     $case_id,
                     $item_id,
                     $vaccine_name,
                     $unit_id,
+                    $quantity,
                     $branch_id,
                     $dose_number,
                     $completed_date,
@@ -949,7 +978,7 @@ if (isset($_POST['submit_vaccination'])) {
                 $transactionDate = $date_administered . ' ' . date('H:i:s');
                 $stmt = $conn->prepare($insertTransaction);
                 $stmt->bind_param(
-                    "iiisiss",
+                    "iiisdss",
                     $item_id,
                     $user_id,
                     $vaccination_id,
@@ -975,7 +1004,7 @@ if (isset($_POST['submit_vaccination'])) {
                     VALUES (?, ?, ?, ?, 1)
                 ";
                 $stmt = $conn->prepare($insertUsage);
-                $stmt->bind_param("issi", $item_id, $branch_id, $date_administered, $quantity);
+                $stmt->bind_param("issd", $item_id, $branch_id, $date_administered, $quantity);
                 if (!$stmt->execute()) {
                     throw new Exception('Failed to save usage history.');
                 }
@@ -1010,8 +1039,9 @@ if (isset($_POST['submit_vaccination'])) {
                 }
                 $updateReg->close();
 
-                // The CASE is complete only when all six dose STAGES are complete.
-                // Multiple products under the same stage never count as extra doses.
+                // The case is complete only when every stage required by the
+                // nurse-confirmed profile is complete. Multiple products under
+                // one stage still count as one stage.
                 if (isVaccinationComplete($conn, $patient_id, $case_id)) {
                     $updateCase = $conn->prepare("UPDATE animal_bite_cases
                                                   SET case_status = 'Completed'
@@ -1659,13 +1689,15 @@ function getStatusBadge($status)
         <div class="logo-frame"><img src="logo.png" alt="Smart Bite Care Logo" class="logo" /></div>
         <div class="system-name">Smart Bite Care</div>
     </div>
-    <nav class="nav-menu">
+       <nav class="nav-menu">
         <ul>
             <li><a href="Nurse_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
             <li><a href="Nurse_Patients.php"><i class="bi bi-heart-pulse-fill"></i><span>Patients</span></a></li>
+            <li><a href="Nurse_Assessment.php"><i class="bi bi-clipboard2-pulse-fill"></i><span>Assessment Queue</span></a></li>
             <li><a class="active" href="Nurse_Vaccination.php"><i class="bi-shield-plus"></i><span>Vaccination</span></a></li>
+            <li><a href="Nurse_DailyInventory.php"><i class="bi bi-clipboard-data-fill"></i><span>Daily Inventory</span></a></li>
             <li><a href="Nurse_MedicalSuppliesManagement.php"><i class="bi bi-calendar-check"></i><span>Medical Supplies Management</span></a></li>
-            <li><a href="Nurse_SupplyPrediction.php"><i class="bi bi-box-seam"></i><span>Supply Prediction</span></a></li>
+            <li><a href="Nurse_Supplyforecasting.php"><i class="bi bi-box-seam"></i><span>Supply Forecasting</span></a></li>
             <li><a href="Nurse_Notification.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
         </ul>
     </nav>

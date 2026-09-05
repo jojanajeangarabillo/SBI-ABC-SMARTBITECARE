@@ -7,7 +7,9 @@
 
 .sidebar{
     width:260px;
-    min-height:100vh;
+    height:100vh;
+    height:100dvh;
+    min-height:0;
     background:var(--primary);
     display:flex;
     flex-direction:column;
@@ -15,12 +17,20 @@
     position:fixed;
     left:0;
     top:0;
+    overflow:hidden;
+    z-index:1000;
+    box-sizing:border-box;
+}
+
+.sidebar *{
+    box-sizing:border-box;
 }
 
 .logo-area{
     padding:25px 20px;
     border-bottom:1px solid rgba(255,255,255,.15);
     text-align:center;
+    flex-shrink:0;
 }
 
 .logo {
@@ -53,6 +63,31 @@
 .nav-menu{
     margin-top:20px;
     flex:1;
+    min-height:0;
+    padding-bottom:10px;
+    overflow-x:hidden;
+    overflow-y:auto;
+    overscroll-behavior:contain;
+    scrollbar-width:thin;
+    scrollbar-color:rgba(255,255,255,.45) transparent;
+    -webkit-overflow-scrolling:touch;
+}
+
+.nav-menu::-webkit-scrollbar{
+    width:6px;
+}
+
+.nav-menu::-webkit-scrollbar-track{
+    background:transparent;
+}
+
+.nav-menu::-webkit-scrollbar-thumb{
+    background:rgba(255,255,255,.38);
+    border-radius:10px;
+}
+
+.nav-menu::-webkit-scrollbar-thumb:hover{
+    background:rgba(255,255,255,.58);
 }
 
 .nav-menu ul{
@@ -89,6 +124,9 @@
 
 .logout{
     padding:20px;
+    flex-shrink:0;
+    border-top:1px solid rgba(255,255,255,.12);
+    background:var(--primary);
 }
 
 .logout a{
@@ -138,6 +176,10 @@
     .nav-menu a {
         justify-content: center;
         padding: 12px 8px;
+    }
+
+    .nav-menu li {
+        margin: 6px 0;
     }
 
     .nav-menu a i {
