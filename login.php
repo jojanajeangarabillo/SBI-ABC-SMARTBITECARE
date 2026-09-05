@@ -7,47 +7,67 @@ $error = '';
 /**
  * Log login attempts with detailed information
  */
-function logLoginAttempt($conn, $user_id, $username, $status, $details = '') {
+function logLoginAttempt(
+    mysqli $conn,
+    ?int $userId,
+    string $username,
+    string $status,
+    string $details = ''
+): bool {
+    $action = "Login {$status}: User '{$username}'";
 
-// Build action description
-$action = "Login $status: User '$username'";
-if (!empty($details)) {
-    $action .= " - $details";
-}
-    // If user_id is provided, get branch_id
-    $branch_id = null;
-    if ($user_id) {
-        $user_sql = "SELECT branch_id FROM users WHERE user_id = ?";
-        $user_stmt = $conn->prepare($user_sql);
-        if ($user_stmt) {
-            $user_stmt->bind_param("i", $user_id);
-            $user_stmt->execute();
-            $user_result = $user_stmt->get_result();
-            if ($user_row = $user_result->fetch_assoc()) {
-                $branch_id = $user_row['branch_id'];
-            }
-            $user_stmt->close();
+    if ($details !== '') {
+        $action .= " - {$details}";
+    }
+
+    /*
+     * Unknown usernames have no valid user_id and branch_id. The audit_logs
+     * table requires both values, so store this event in the Apache/PHP log
+     * instead of allowing the audit insert to stop the login page.
+     */
+    if ($userId === null || $userId < 1) {
+        error_log($action);
+        return false;
+    }
+
+    try {
+        $userStmt = $conn->prepare(
+            'SELECT branch_id
+             FROM users
+             WHERE user_id = ?
+             LIMIT 1'
+        );
+        $userStmt->bind_param('i', $userId);
+        $userStmt->execute();
+        $user = $userStmt->get_result()->fetch_assoc();
+        $userStmt->close();
+
+        if (!$user || empty($user['branch_id'])) {
+            error_log($action . ' - Login audit skipped: no branch assigned.');
+            return false;
         }
+
+        $branchId = (string)$user['branch_id'];
+        $module = 'Login System';
+        $logStmt = $conn->prepare(
+            'INSERT INTO audit_logs (user_id, branch_id, action, module)
+             VALUES (?, ?, ?, ?)'
+        );
+        $logStmt->bind_param('isss', $userId, $branchId, $action, $module);
+        $success = $logStmt->execute();
+        $logStmt->close();
+
+        return $success;
+    } catch (mysqli_sql_exception $exception) {
+        // Audit logging must never prevent the login form from responding.
+        error_log('Login audit error: ' . $exception->getMessage());
+        return false;
     }
-    
-    // Insert audit log
-    $log_sql = "INSERT INTO audit_logs (user_id, branch_id, action, module) VALUES (?, ?, ?, ?)";
-    $log_stmt = $conn->prepare($log_sql);
-    if ($log_stmt) {
-        // If user_id is null, use 0 as placeholder
-        $log_user_id = $user_id ?? 0;
-        $module = 'Login System'; // Define the module variable
-        $log_stmt->bind_param("isss", $log_user_id, $branch_id, $action, $module);
-        $log_stmt->execute();
-        $log_stmt->close();
-        return true;
-    }
-    return false;
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $username = trim($_POST['username']);
-    $password = $_POST['password'];
+    $username = trim((string)($_POST['username'] ?? ''));
+    $password = (string)($_POST['password'] ?? '');
     
     if (!empty($username) && !empty($password)) {
         // Prepare statement to prevent SQL injection
@@ -55,7 +75,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 FROM users u 
                                 LEFT JOIN roles r ON u.role_id = r.role_id 
                                 LEFT JOIN branches b ON u.branch_id = b.branch_id 
-                                WHERE u.username = ?");
+                                WHERE u.username = ?
+                                LIMIT 1");
         $stmt->bind_param("s", $username);
         $stmt->execute();
         $result = $stmt->get_result();
@@ -72,6 +93,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             // Verify password
             elseif (password_verify($password, $user['password'])) {
+                // Prevent session fixation after successful authentication.
+                session_regenerate_id(true);
+
                 // Update last login
                 $updateStmt = $conn->prepare("UPDATE users SET last_login = NOW() WHERE user_id = ?");
                 $updateStmt->bind_param("i", $user['user_id']);
@@ -413,11 +437,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         /* Alert styling */
         .alert-custom {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding: 13px 16px;
+            color: #a61b29;
+            background: #fff0f2;
+            border: 1px solid #ffcbd1;
+            border-left: 5px solid var(--accent);
             border-radius: 12px;
-            border: none;
-            padding: 12px 16px;
             font-size: 14px;
-            font-weight: 500;
+            font-weight: 600;
+            line-height: 1.4;
+            box-shadow: 0 4px 12px rgba(242, 29, 47, 0.08);
+        }
+
+        .alert-custom i {
+            flex-shrink: 0;
+            margin-top: 1px;
+            color: var(--accent);
+            font-size: 18px;
         }
 
         /* ---- RESPONSIVE ---- */
@@ -469,9 +509,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             <!-- Error Message -->
             <?php if (!empty($error)): ?>
-                <div class="alert alert-danger alert-custom d-flex align-items-center" role="alert">
-                    <i class="bi bi-exclamation-circle-fill me-2"></i>
-                    <?php echo htmlspecialchars($error); ?>
+                <div class="alert-custom" role="alert" aria-live="polite">
+                    <i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i>
+                    <span><?php echo htmlspecialchars($error, ENT_QUOTES, 'UTF-8'); ?></span>
                 </div>
             <?php endif; ?>
 

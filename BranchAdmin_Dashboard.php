@@ -161,14 +161,19 @@ $stmt->execute();
 $missedVaccResult = $stmt->get_result();
 $stats['missed_vaccinations'] = $missedVaccResult->fetch_assoc()['missed'] ?? 0;
 
-// Fetch recent prediction alerts for this branch
+// Fetch recent forecasting alerts for this branch
 $alerts = [];
-$alertQuery = "SELECT pr.*, i.item_name 
-               FROM prediction_results pr 
-               JOIN inventory_items i ON pr.item_id = i.item_id 
-               WHERE pr.branch_id = ? 
-               AND pr.prediction_status = 'High Risk' 
-               ORDER BY pr.prediction_date DESC 
+$alertQuery = "SELECT fr.*, i.item_name
+               FROM forecast_results fr
+               JOIN inventory_items i ON fr.item_id = i.item_id
+               WHERE fr.branch_id = ?
+               AND (
+                    fr.forecast_status = 'Shortage Risk'
+                    OR fr.forecast_status = 'Critical'
+                    OR fr.forecast_status = 'High Risk'
+                    OR fr.shortage_probability >= 0.75
+               )
+               ORDER BY fr.forecast_date DESC
                LIMIT 5";
 $stmt = $conn->prepare($alertQuery);
 $stmt->bind_param("s", $branch_id);
@@ -614,6 +619,398 @@ $username = $userInfo['username'] ?? 'Admin';
             }
         }
     </style>
+
+    <!-- Keep the Branch Administrator dashboard visually consistent with the Nurse dashboard. -->
+    <style id="nurse-dashboard-consistency">
+        :root {
+            --primary: #2B3A8C;
+            --accent: #F21D2F;
+            --bg: #F2F2F2;
+            --card-bg: #ECEEF7;
+            --success: #28a745;
+            --warning: #ffc107;
+            --danger: #dc3545;
+            --info: #17a2b8;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #f0f2f5;
+            font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+
+        .main {
+            margin-left: 260px;
+            min-height: 100vh;
+            background: #f9faff;
+        }
+
+        .topbar {
+            background: #ffffff;
+            height: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 35px;
+            border-bottom: 1px solid #e9edf5;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+
+        .topbar h3 {
+            color: var(--primary);
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+            margin: 0;
+        }
+
+        .topbar h3 small {
+            color: #666666;
+            font-size: 16px;
+            font-weight: 400;
+            margin-left: 10px;
+        }
+
+        .profile {
+            color: var(--primary);
+            cursor: default;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 600;
+        }
+
+        .dashboard {
+            padding: 35px 35px 40px;
+        }
+
+        /* Uniform statistic cards matching the Nurse dashboard. */
+        .stat-card {
+            position: relative;
+            display: grid;
+            grid-template-columns: 42px minmax(0, 1fr);
+            column-gap: 12px;
+            align-items: center;
+            height: 120px;
+            min-height: 120px;
+            padding: 18px 22px;
+            overflow: hidden;
+            background: #ffffff;
+            border: 0;
+            border-left: 5px solid var(--primary);
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .stat-card::before {
+            display: none;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.10);
+        }
+
+        .stat-card .stat-icon {
+            position: static;
+            display: flex;
+            grid-column: 1;
+            align-items: center;
+            justify-content: center;
+            width: auto;
+            height: auto;
+            flex-shrink: 0;
+            color: var(--primary);
+            background: transparent;
+            font-size: 30px;
+            opacity: 1;
+            transform: none;
+        }
+
+        .stat-card .stat-content {
+            display: flex;
+            grid-column: 2;
+            flex-direction: column;
+            justify-content: center;
+            min-width: 0;
+        }
+
+        .stat-card .stat-label,
+        .stat-card .stat-title {
+            overflow: hidden;
+            color: #2f3b4d;
+            font-size: 14px;
+            font-weight: 500;
+            letter-spacing: 0;
+            line-height: 1.2;
+            margin: 0 0 2px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .stat-card .stat-number {
+            color: #111827;
+            font-size: 28px;
+            font-weight: 700;
+            line-height: 1.05;
+            margin: 0;
+        }
+
+        .stat-card .stat-description,
+        .stat-card .stat-sub {
+            overflow: hidden;
+            color: #71809d;
+            font-size: 12px;
+            line-height: 1.2;
+            margin-top: 3px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .stat-primary {
+            border-left-color: var(--primary);
+        }
+
+        .stat-success {
+            border-left-color: var(--success);
+        }
+
+        .stat-info {
+            border-left-color: var(--info);
+        }
+
+        .stat-warning {
+            border-left-color: var(--warning);
+        }
+
+        .stat-danger {
+            border-left-color: var(--danger);
+        }
+
+        .stat-primary .stat-icon {
+            color: var(--primary);
+        }
+
+        .stat-success .stat-icon {
+            color: var(--success);
+        }
+
+        .stat-info .stat-icon {
+            color: var(--info);
+        }
+
+        .stat-warning .stat-icon {
+            color: var(--warning);
+        }
+
+        .stat-danger .stat-icon {
+            color: var(--danger);
+        }
+
+        /* Content cards matching the Nurse dashboard. */
+        .large-card {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            min-height: 340px;
+            padding: 22px 24px;
+            margin-top: 0;
+            background: #ffffff;
+            border-radius: 18px;
+            box-shadow: 0 3px 8px rgba(0, 0, 0, 0.06);
+            transition: transform 0.2s ease;
+        }
+
+        .large-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .section-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--primary);
+            font-size: 20px;
+            font-weight: 700;
+            line-height: 1.25;
+            margin-bottom: 16px;
+        }
+
+        .section-title small {
+            color: #666666;
+            font-size: 14px;
+            font-weight: 400;
+        }
+
+        .section-title .badge {
+            margin-left: auto;
+        }
+
+        .chart-container {
+            position: relative;
+            flex: 1;
+            width: 100%;
+            height: 200px;
+            min-height: 200px;
+        }
+
+        .activity-item,
+        .alert-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 10px 0;
+            border-bottom: 1px solid #d7def0;
+            color: #1f2a4a;
+        }
+
+        .activity-item:last-child,
+        .alert-item:last-child {
+            border-bottom: none;
+        }
+
+        .activity-item i {
+            width: 20px;
+            flex: 0 0 20px;
+            color: var(--accent);
+        }
+
+        .alert-item i {
+            flex: 0 0 auto;
+            color: var(--warning);
+            font-size: 20px;
+        }
+
+        .alert-item .alert-high {
+            color: var(--danger);
+            font-weight: 600;
+        }
+
+        .large-card > .text-end {
+            margin-top: auto !important;
+            padding-top: 14px;
+        }
+
+        .btn-custom,
+        .btn-view {
+            padding: 8px 28px;
+            color: #ffffff;
+            background: var(--primary);
+            border: none;
+            border-radius: 40px;
+            font-size: 14px;
+            font-weight: 600;
+            transition: background 0.15s ease;
+        }
+
+        .btn-custom:hover,
+        .btn-custom:focus,
+        .btn-view:hover,
+        .btn-view:focus {
+            color: #ffffff;
+            background: #1d2863;
+        }
+
+        .btn-custom-outline {
+            padding: 7px 27px;
+            color: var(--primary);
+            background: transparent;
+            border: 2px solid var(--primary);
+            border-radius: 40px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .btn-custom-outline:hover,
+        .btn-custom-outline:focus {
+            color: #ffffff;
+            background: var(--primary);
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-badge.ongoing {
+            color: #000000;
+            background: var(--warning);
+        }
+
+        .status-badge.completed {
+            color: #ffffff;
+            background: var(--success);
+        }
+
+        .status-badge.scheduled {
+            color: #ffffff;
+            background: var(--info);
+        }
+
+        .status-badge.missed {
+            color: #ffffff;
+            background: var(--danger);
+        }
+
+        @media (max-width: 991px) {
+            .main {
+                margin-left: 90px;
+            }
+        }
+
+        @media (max-width: 576px) {
+            .topbar {
+                height: 70px;
+                padding: 0 16px;
+            }
+
+            .topbar h3 {
+                font-size: 22px;
+            }
+
+            .topbar h3 small {
+                display: block;
+                margin: 2px 0 0;
+                font-size: 13px;
+            }
+
+            .dashboard {
+                padding: 20px 16px;
+            }
+
+            .stat-card {
+                height: 100px;
+                min-height: 100px;
+                padding: 14px 16px;
+            }
+
+            .stat-card .stat-icon {
+                font-size: 28px;
+            }
+
+            .stat-card .stat-number {
+                font-size: 26px;
+            }
+
+            .stat-card .stat-description {
+                display: none;
+            }
+
+            .large-card {
+                min-height: 280px;
+                padding: 16px;
+            }
+        }
+    </style>
 </head>
 <body>
     <!-- SIDEBAR -->
@@ -632,7 +1029,9 @@ $username = $userInfo['username'] ?? 'Admin';
                 <li><a class="active" href="BranchAdmin_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
                 <li><a href="BranchAdmin_UserManagement.php"><i class="bi bi-people-fill"></i><span>User Management</span></a></li>
                 <li><a href="BranchAdmin_PatientMonitoring.php"><i class="bi bi-heart-pulse-fill"></i><span>Patient Monitoring</span></a></li>
-                <li><a href="BranchAdmin_MedicalSupplies.php"><i class="bi bi-box-seam"></i><span>Medical Supplies</span></a></li>
+                <li><a href="BranchAdmin_PhilhealthWorkflow.php"><i class="bi bi-file-medical-fill"></i><span>PhilHealth Processing</span></a></li>
+                <li><a href="BranchAdmin_InventoryOverview.php"><i class="bi bi-box-seam"></i><span>Inventory Overview</span></a></li>
+                <li><a href="BranchAdmin_Forecasting.php"><i class="bi bi-graph-up-arrow"></i><span>Supply Forecasting</span></a></li>
                 <li><a href="BranchAdmin_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
                 <li><a href="BranchAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
                 <li><a href="BranchAdmin_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
@@ -651,7 +1050,11 @@ $username = $userInfo['username'] ?? 'Admin';
     <div class="main">
         <div class="topbar">
             <h3>Dashboard <small><?php echo htmlspecialchars($branch_name); ?></small></h3>
-             <div class="profile"><?php echo htmlspecialchars($username); ?></div>
+            <div class="profile">
+                <i class="bi bi-person-circle"></i>
+                <span><?php echo htmlspecialchars($username); ?></span>
+                <span>| Branch Administrator</span>
+            </div>
         </div>
 
         <div class="dashboard">
@@ -976,13 +1379,13 @@ $username = $userInfo['username'] ?? 'Admin';
                 <div class="col-lg-4">
                     <div class="large-card">
                         <div class="section-title">
-                            Prediction Alerts
+                            Forecast Alerts
                             <span class="badge bg-warning float-end"><?php echo count($alerts); ?></span>
                         </div>
                         <?php if (empty($alerts)): ?>
                             <div class="alert-item">
                                 <i class="bi bi-check-circle-fill" style="color: #28a745;"></i>
-                                No high-risk predictions at this time.
+                                No high-risk forecasts at this time.
                             </div>
                         <?php else: ?>
                             <?php foreach ($alerts as $alert): ?>
@@ -991,14 +1394,22 @@ $username = $userInfo['username'] ?? 'Admin';
                                     <div>
                                         <strong><?php echo htmlspecialchars($alert['item_name']); ?></strong>
                                         <br>
-                                        <small class="alert-high">Risk Score: <?php echo $alert['probability_score']; ?>%</small>
+                                        <small class="alert-high">
+                                            Shortage Risk:
+                                            <?php
+                                            echo number_format(
+                                                ((float) $alert['shortage_probability']) * 100,
+                                                1
+                                            );
+                                            ?>%
+                                        </small>
                                     </div>
                                 </div>
                             <?php endforeach; ?>
                         <?php endif; ?>
                         <div class="text-end mt-3">
-                            <button class="btn btn-custom" onclick="window.location.href='BranchAdmin_PredictionModule.php'">
-                                View All Predictions
+                            <button class="btn btn-custom" onclick="window.location.href='BranchAdmin_Forecasting.php'">
+                                View All Forecasts
                             </button>
                         </div>
                     </div>

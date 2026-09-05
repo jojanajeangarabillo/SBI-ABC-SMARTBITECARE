@@ -1001,11 +1001,12 @@ if ($isAjax) {
 
             /*
             |--------------------------------------------------------------------------
-            | DELETE DATABASE RECORD
+            | ARCHIVE DATABASE RECORD
             |--------------------------------------------------------------------------
             */
             $deleteQuery = "
-                DELETE FROM medical_documents
+                UPDATE medical_documents
+                SET status = 'Archived', updated_at = NOW()
                 WHERE document_id = ?
                   AND branch_id = ?
             ";
@@ -1014,7 +1015,7 @@ if ($isAjax) {
 
             if (!$stmt) {
                 throw new Exception(
-                    'Unable to prepare delete query: ' . $conn->error
+                    'Unable to prepare archive query: ' . $conn->error
                 );
             }
 
@@ -1030,7 +1031,7 @@ if ($isAjax) {
                 $stmt->close();
 
                 throw new Exception(
-                    'Failed to delete document: ' . $error
+                    'Failed to archive document: ' . $error
                 );
             }
 
@@ -1040,27 +1041,13 @@ if ($isAjax) {
 
             if ($deletedRows <= 0) {
                 throw new Exception(
-                    'Document could not be deleted.'
-                );
-            }
-
-            /*
-            |--------------------------------------------------------------------------
-            | DELETE PHYSICAL FILE
-            |--------------------------------------------------------------------------
-            */
-            if (
-                !empty($document['file_path']) &&
-                file_exists($document['file_path'])
-            ) {
-                @unlink(
-                    $document['file_path']
+                    'Document could not be archived.'
                 );
             }
 
             jsonResponse(
                 true,
-                'Document deleted successfully.'
+                'Document archived successfully. The file was retained for audit purposes.'
             );
         }
 
@@ -1798,58 +1785,18 @@ if ($branch_id) {
 
     </div>
 
-    <nav class="nav-menu">
-
-        <ul>
-
-            <li>
-                <a href="AdminStaff_Dashboard.php">
-                    <i class="bi bi-grid-fill"></i>
-                    <span>Dashboard</span>
-                </a>
-            </li>
-
-            <li>
-                <a href="AdminStaff_Calendar.php">
-                    <i class="bi bi-calendar-fill"></i>
-                    <span>Calendar</span>
-                </a>
-            </li>
-
-            <li>
-                <a href="AdminStaff_PatientRecord.php">
-                    <i class="bi bi-people-fill"></i>
-                    <span>Patient Record Management</span>
-                </a>
-            </li>
-
-            <li>
-                <a href="AdminStaff_PhilhealthStatus.php">
-                    <i class="bi bi-check2-all"></i>
-                    <span>PhilHealth Patient Status</span>
-                </a>
-            </li>
-
-            <li>
-                <a
-                    class="active"
-                    href="AdminStaff_MedicalDocuments.php"
-                >
-                    <i class="bi bi-file-earmark-ruled"></i>
-                    <span>Medical Documents</span>
-                </a>
-            </li>
-
-            <li>
-                <a href="AdminStaff_Notifications.php">
-                    <i class="bi bi-bell-fill"></i>
-                    <span>Notifications</span>
-                </a>
-            </li>
-
-        </ul>
-
-    </nav>
+   <nav class="nav-menu">
+            <ul>
+                <li><a href="AdminStaff_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
+                <li><a href="AdminStaff_Calendar.php"><i class="bi bi-calendar-fill"></i><span>Calendar</span></a></li>
+                <li><a href="AdminStaff_PatientRecord.php"><i class="bi bi-people-fill"></i><span>Patient Record Management</span></a></li>
+                <li><a href="AdminStaff_VisitQueue.php"><i class="bi bi-person-check-fill"></i><span>Visit Check-in</span></a></li>
+                <li><a href="AdminStaff_Registry.php"><i class="bi bi-journal-check"></i><span>Registry Queue</span></a></li>
+                <li><a href="AdminStaff_PhilhealthWorkflow.php"><i class="bi bi-check2-all"></i><span>PhilHealth Workflow</span></a></li>
+                <li><a class="active" href="AdminStaff_MedicalDocuments.php"><i class="bi bi-file-earmark-ruled"></i><span>Medical Documents</span></a></li>
+                <li><a href="AdminStaff_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+            </ul>
+        </nav>
 
     <div class="logout">
 

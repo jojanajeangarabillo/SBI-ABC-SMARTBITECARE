@@ -349,10 +349,11 @@ function validatePatientData(array $data): array {
         $errors[] = "Contact number is required.";
     }
 
+    // Administrative Staff owns demographic intake. Clinical exposure fields
+    // are optional here and are confirmed later by the Nurse.
     $requiredDates = [
         'dob' => 'Date of birth',
-        'admission_date' => 'Admission date',
-        'date_of_bite' => 'Date of bite'
+        'admission_date' => 'Admission date'
     ];
 
     foreach ($requiredDates as $key => $label) {
@@ -371,26 +372,9 @@ function validatePatientData(array $data): array {
         $errors[] = "Please select a valid gender.";
     }
 
-    if (empty(trim((string)($data['site_of_bite'] ?? '')))) {
-        $errors[] = "Site of bite is required.";
-    }
-    if (empty(trim((string)($data['biting_animal'] ?? '')))) {
-        $errors[] = "Biting animal is required.";
-    }
-    if (
-        trim((string)($data['biting_animal'] ?? '')) === 'Others'
-        && empty(trim((string)($data['custom_animal'] ?? '')))
-    ) {
-        $errors[] = "Please specify the biting animal.";
-    }
-    if (empty(trim((string)($data['animal_status'] ?? '')))) {
-        $errors[] = "Animal status is required.";
-    }
-    if (empty(trim((string)($data['active_regimen'] ?? '')))) {
-        $errors[] = "Active regimen is required.";
-    }
-    if (empty(trim((string)($data['vacc_category'] ?? '')))) {
-        $errors[] = "Vaccination category is required.";
+    $optionalBiteDate = trim((string)($data['date_of_bite'] ?? ''));
+    if ($optionalBiteDate !== '' && !frontToDbDate($optionalBiteDate)) {
+        $errors[] = 'Invalid date of bite format.';
     }
 
     return $errors;
@@ -1323,7 +1307,7 @@ if ($action) {
                    4. PHILHEALTH
                    ----------------------------------------------------- */
                 $phExists = $conn->prepare("
-                    SELECT philhealth_record_id
+                    SELECT philhealth_record_id, status
                     FROM philhealth_records
                     WHERE case_id = ?
                       AND is_archived = 0
@@ -1335,6 +1319,7 @@ if ($action) {
                 $phExists->close();
 
                 $phRecId = $phRow['philhealth_record_id'] ?? null;
+                $existingPhStatus = $phRow['status'] ?? null;
                 $dbHasPhilhealth = ($hasPhilhealth === 'Yes') ? 'Yes' : 'No';
                 $dbPhilhealthMembership = ($dbHasPhilhealth === 'Yes')
                     ? ($philhealthMembership !== '' ? $philhealthMembership : null)
@@ -1343,12 +1328,16 @@ if ($action) {
                 $allowedPhilhealthStatuses = [
                     'For Writing',
                     'For Screening',
-                    'For Signing/Transmittal',
-                    'Completed'
+                    'Ready for Main Branch',
+                    'Sent to Main Branch',
+                    'Returned for Correction'
                 ];
-                $dbPhilhealthStatus = ($dbHasPhilhealth === 'Yes' && in_array($status, $allowedPhilhealthStatuses, true))
-                    ? $status
-                    : null;
+                $dbPhilhealthStatus = null;
+                if ($dbHasPhilhealth === 'Yes') {
+                    $dbPhilhealthStatus = in_array($status, $allowedPhilhealthStatuses, true)
+                        ? $status
+                        : $existingPhStatus;
+                }
 
                 if ($phRecId) {
                     $updPh = $conn->prepare("
@@ -1402,7 +1391,10 @@ if ($action) {
                    - item_id, vaccine_name and unit_id stay NULL until Nurse administration.
                    - Completed/Missed/Nurse-created records are preserved.
                    ----------------------------------------------------- */
-                $requiredDoseKeys = getDosesForCategory($vaccCategory, $route);
+                // Scheduling is Nurse-owned in the aligned workflow. The
+                // legacy fields remain readable for old records, but saving
+                // an intake record must not create or replace dose schedules.
+                $requiredDoseKeys = [];
                 $requiredDoseNumbers = [];
                 foreach ($requiredDoseKeys as $key) {
                     $num = doseKeyToNumber($key);
@@ -1412,6 +1404,10 @@ if ($action) {
                     $doseKey = doseNumberToKey($doseNumber);
                     if (!$doseKey) continue;
 
+                    if (!in_array($doseNumber, $requiredDoseNumbers, true)) {
+                        continue;
+                    }
+
                     // Soft-archive only old Admin Staff schedule placeholders.
                     archiveAdminScheduleRows(
                         $conn,
@@ -1420,10 +1416,6 @@ if ($action) {
                         $doseNumber,
                         (int)$logged_user_id
                     );
-
-                    if (!in_array($doseNumber, $requiredDoseNumbers, true)) {
-                        continue;
-                    }
 
                     // A dose already completed by a nurse must never be recreated
                     // as a pending schedule by Admin Staff.
@@ -1546,20 +1538,9 @@ if ($action) {
                     $insertSchedule->close();
                 }
 
-                if ($isNewCase) {
-                    notifyNursesOnNewPatient(
-                        $conn,
-                        (int)$caseId,
-                        $fullName,
-                        $caseNo,
-                        (string)$logged_branch_id,
-                        (int)$logged_user_id
-                    );
-                }
-
                 $actionText = $isNewCase
-                    ? "Created patient record and vaccination schedule: {$fullName} (Case: {$caseNo})"
-                    : "Updated patient information/schedule: {$fullName} (Case: {$caseNo})";
+                    ? "Created patient intake record: {$fullName} (Case: {$caseNo})"
+                    : "Updated patient intake record: {$fullName} (Case: {$caseNo})";
 
                 auditLog(
                     $conn,
@@ -2816,7 +2797,9 @@ if ($action) {
                 <li><a href="AdminStaff_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
                 <li><a href="AdminStaff_Calendar.php"><i class="bi bi-calendar-fill"></i><span>Calendar</span></a></li>
                 <li><a class="active" href="AdminStaff_PatientRecord.php"><i class="bi bi-people-fill"></i><span>Patient Record Management</span></a></li>
-                <li><a href="AdminStaff_PhilhealthStatus.php"><i class="bi bi-check2-all"></i><span>PhilHealth Patient Status</span></a></li>
+                <li><a href="AdminStaff_VisitQueue.php"><i class="bi bi-person-check-fill"></i><span>Visit Check-in</span></a></li>
+                <li><a href="AdminStaff_Registry.php"><i class="bi bi-journal-check"></i><span>Registry Queue</span></a></li>
+                <li><a href="AdminStaff_PhilhealthWorkflow.php"><i class="bi bi-check2-all"></i><span>PhilHealth Workflow</span></a></li>
                 <li><a href="AdminStaff_MedicalDocuments.php"><i class="bi bi-file-earmark-ruled"></i><span>Medical Documents</span></a></li>
                 <li><a href="AdminStaff_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
             </ul>
@@ -3029,22 +3012,25 @@ if ($action) {
                         </div>
 
                         <hr>
-                        <div class="section-title">Bite & Animal Details</div>
+                        <div class="section-title">Initial Incident Information</div>
+                        <div class="alert alert-info border-0 mb-3" style="background:#eef3ff;color:#2B3A8C;">
+                            Administrative Staff may encode information stated by the patient. The Nurse verifies the clinical assessment and creates the treatment schedule.
+                        </div>
                         <div class="row">
                             <div class="col-md-6">
                                 <div class="mb-3">
-                                    <label class="form-label">Date of Bite <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control flatpickr-date" id="dateOfBite" required>
+                                    <label class="form-label">Date of Bite</label>
+                                    <input type="text" class="form-control flatpickr-date" id="dateOfBite">
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label">Site of Bite <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="siteOfBite" placeholder="e.g., Right arm, Left leg" required>
+                                    <label class="form-label">Site of Bite</label>
+                                    <input type="text" class="form-control" id="siteOfBite" placeholder="Nurse will verify">
                                 </div>
                             </div>
                             <div class="col-md-6">
                                 <div class="mb-3">
-                                    <label class="form-label">Biting Animal <span class="text-danger">*</span></label>
-                                    <select class="form-select" id="bitingAnimal" required>
+                                    <label class="form-label">Biting Animal</label>
+                                    <select class="form-select" id="bitingAnimal">
                                         <option value="Dog">Dog</option>
                                         <option value="Cat">Cat</option>
                                         <option value="Not Applicable">Not Applicable</option>
@@ -3052,12 +3038,12 @@ if ($action) {
                                     </select>
                                 </div>
                                 <div id="customAnimalContainer" style="display:none;">
-                                    <label class="form-label">Specify Animal <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="customAnimal" required>
+                                    <label class="form-label">Specify Animal</label>
+                                    <input type="text" class="form-control" id="customAnimal">
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label">Status of the Biting Animal <span class="text-danger">*</span></label>
-                                    <select class="form-select" id="animalStatus" required>
+                                    <label class="form-label">Status of the Biting Animal</label>
+                                    <select class="form-select" id="animalStatus">
                                         <option value="Alive/Healthy">Alive/Healthy</option>
                                         <option value="Sick">Sick</option>
                                         <option value="Died">Died</option>
@@ -3068,6 +3054,7 @@ if ($action) {
                             </div>
                         </div>
 
+                        <div class="d-none" aria-hidden="true">
                         <hr>
                         <div class="section-title">Vaccination Scheduling</div>
 
@@ -3143,6 +3130,7 @@ if ($action) {
                                           placeholder="Enter schedule remarks (optional)..."></textarea>
                             </div>
                         </div>
+                        </div>
 
                         <hr>
                         <div class="row">
@@ -3153,8 +3141,9 @@ if ($action) {
                                         <option value="">Not Applicable</option>
                                         <option value="For Writing">For Writing</option>
                                         <option value="For Screening">For Screening</option>
-                                        <option value="For Signing/Transmittal">For Signing/Transmittal</option>
-                                        <option value="Completed">Completed</option>
+                                        <option value="Ready for Main Branch">Ready for Main Branch</option>
+                                        <option value="Sent to Main Branch">Sent to Main Branch</option>
+                                        <option value="Returned for Correction">Returned for Correction</option>
                                     </select>
                                 </div>
                             </div>
@@ -3163,7 +3152,7 @@ if ($action) {
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-primary" id="savePatientBtn">Save Patient & Schedule</button>
+                    <button type="button" class="btn btn-primary" id="savePatientBtn">Save Patient Intake</button>
                 </div>
             </div>
         </div>
@@ -4037,15 +4026,6 @@ if ($action) {
             custom_vacc_category: document.getElementById('customVaccCategory').value.trim()
         };
 
-        if (formData.vacc_category === 'Others') {
-            const customCat = formData.custom_vacc_category;
-            if (!customCat) {
-                showToast('Error', 'Please specify the vaccination category.', true);
-                document.getElementById('customVaccCategory').focus();
-                return;
-            }
-        }
-
         if (!formData.patient_name) {
             showToast('Error', 'Patient name is required.', true);
             document.getElementById('patientName').focus();
@@ -4075,42 +4055,6 @@ if ($action) {
             document.getElementById('admissionDate').focus();
             return;
         }
-        if (!formData.date_of_bite) {
-            showToast('Error', 'Date of bite is required.', true);
-            document.getElementById('dateOfBite').focus();
-            return;
-        }
-        if (!formData.site_of_bite) {
-            showToast('Error', 'Site of bite is required.', true);
-            document.getElementById('siteOfBite').focus();
-            return;
-        }
-        if (!formData.biting_animal) {
-            showToast('Error', 'Biting animal is required.', true);
-            document.getElementById('bitingAnimal').focus();
-            return;
-        }
-        if (formData.biting_animal === 'Others' && !formData.custom_animal) {
-            showToast('Error', 'Please specify the biting animal.', true);
-            document.getElementById('customAnimal').focus();
-            return;
-        }
-        if (!formData.animal_status) {
-            showToast('Error', 'Animal status is required.', true);
-            document.getElementById('animalStatus').focus();
-            return;
-        }
-        if (!formData.active_regimen) {
-            showToast('Error', 'Active regimen is required.', true);
-            document.getElementById('activeRegimen').focus();
-            return;
-        }
-        if (!formData.vacc_category) {
-            showToast('Error', 'Vaccination category is required.', true);
-            document.getElementById('vaccCategory').focus();
-            return;
-        }
-
         const saveBtn = this;
         const originalText = saveBtn.innerHTML;
         saveBtn.disabled = true;

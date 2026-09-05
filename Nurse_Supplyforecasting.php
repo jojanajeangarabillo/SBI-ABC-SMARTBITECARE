@@ -1,548 +1,234 @@
+<?php
+session_start();
+require_once 'sources/db_connect.php';
+require_once 'sources/workflow_helpers.php';
+
+$user = workflowRequireUser($conn, 3);
+$branchId = (string)$user['branch_id'];
+$username = (string)($user['username'] ?? 'Nurse');
+$branchName = (string)($user['branch_name'] ?? $branchId);
+
+function nurseForecastRiskClass(float $probability): string
+{
+    if ($probability >= 0.80) return 'danger';
+    if ($probability >= 0.60) return 'warning';
+    return 'success';
+}
+
+function nurseForecastRiskLabel(float $probability): string
+{
+    if ($probability >= 0.80) return 'High Risk';
+    if ($probability >= 0.60) return 'Moderate Risk';
+    return 'Low Risk';
+}
+
+$latestDate = null;
+$latestStmt = $conn->prepare(
+    'SELECT MAX(forecast_date) AS latest_date FROM forecast_results WHERE branch_id=?'
+);
+$latestStmt->bind_param('s', $branchId);
+$latestStmt->execute();
+$latestDate = $latestStmt->get_result()->fetch_assoc()['latest_date'] ?? null;
+$latestStmt->close();
+
+$forecasts = [];
+if ($latestDate !== null) {
+    $forecastStmt = $conn->prepare(
+        "SELECT fr.item_id,fr.forecast_date,fr.shortage_probability,fr.forecast_status,
+                fr.recommended_reorder,fr.forecasted_consumption,fr.forecast_days,
+                i.item_name,i.minimum_stock,u.unit_name,
+                COALESCE(stock.current_stock,0) AS current_stock
+         FROM forecast_results fr
+         INNER JOIN inventory_items i ON i.item_id=fr.item_id
+         LEFT JOIN units u ON u.unit_id=i.unit_id
+         LEFT JOIN (
+             SELECT item_id,branch_id,SUM(quantity_available) AS current_stock
+             FROM inventory_stocks
+             GROUP BY item_id,branch_id
+         ) stock ON stock.item_id=fr.item_id AND stock.branch_id=fr.branch_id
+         WHERE fr.branch_id=? AND fr.forecast_date=?
+         ORDER BY fr.shortage_probability DESC,fr.recommended_reorder DESC,i.item_name"
+    );
+    $forecastStmt->bind_param('ss', $branchId, $latestDate);
+    $forecastStmt->execute();
+    $forecasts = $forecastStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $forecastStmt->close();
+}
+
+$totalItems = count($forecasts);
+$highRiskCount = 0;
+$moderateRiskCount = 0;
+$totalRecommendedReorder = 0;
+$forecastDays = 30;
+
+foreach ($forecasts as $forecast) {
+    $probability = (float)$forecast['shortage_probability'];
+    if ($probability >= 0.80) {
+        $highRiskCount++;
+    } elseif ($probability >= 0.60) {
+        $moderateRiskCount++;
+    }
+    $totalRecommendedReorder += max(0, (int)$forecast['recommended_reorder']);
+    if ((int)$forecast['forecast_days'] > 0) {
+        $forecastDays = (int)$forecast['forecast_days'];
+    }
+}
+
+$chartForecasts = array_slice($forecasts, 0, 8);
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Nurse - Supply Prediction</title>
-    <!-- Bootstrap 5 & Icons -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
-    <!-- Reusable Sidebar CSS (simulated) -->
-    <link rel="stylesheet" href="sidebar.css" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Supply Forecasting - Smart Bite Care</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="sidebar.css">
     <style>
-        /* =========================================
-           INTERNAL CSS – matches image style
-           ========================================= */
         :root {
             --primary: #2B3A8C;
-            --accent: #F21D2F;
-            --bg: #F2F2F2;
-            --card-bg: #ECEEF7;
+            --primary-dark: #1f2d6e;
+            --success: #28a745;
+            --warning: #e4a300;
+            --danger: #dc3545;
+            --text: #1f2a44;
+            --muted: #6f7b91;
+            --border: #e6eaf2;
         }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #f9faff; color: var(--text); font-family: 'Segoe UI', Roboto, system-ui, sans-serif; }
+        .main { min-height: 100vh; margin-left: 260px; }
+        .topbar { height: 80px; padding: 0 35px; display: flex; align-items: center; justify-content: space-between; background: #fff; border-bottom: 1px solid #e9edf5; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+        .topbar h3 { margin: 0; color: var(--primary); font-size: 28px; font-weight: 700; letter-spacing: -.3px; }
+        .topbar h3 small { margin-left: 10px; color: #666; font-size: 16px; font-weight: 400; }
+        .profile { display: flex; align-items: center; gap: 6px; color: var(--primary); font-weight: 600; }
+        .profile-role { margin-left: 3px; color: #adb5bd; font-size: 12px; font-weight: 400; }
+        .content { padding: 35px 35px 40px; }
 
-        * {
-            box-sizing: border-box;
-        }
+        .notice { display: flex; align-items: flex-start; gap: 11px; margin-bottom: 23px; padding: 15px 18px; color: #314269; background: #edf1ff; border: 1px solid #dce3fb; border-radius: 12px; }
+        .notice i { color: var(--primary); font-size: 21px; }
+        .notice strong { display: block; color: var(--primary); }
+        .notice p { margin: 2px 0 0; color: #64708b; font-size: 13px; }
 
-        body {
-            background: white;
-            font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
-            margin: 0;
-            padding: 0;
-        }
+        .stats-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 18px; margin-bottom: 24px; }
+        .stat-card { min-height: 112px; padding: 18px 20px; display: grid; grid-template-columns: 42px 1fr; grid-template-rows: auto auto; column-gap: 12px; align-items: center; background: #fff; border: 0; border-left: 5px solid var(--primary); border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,.08); }
+        .stat-card.danger { border-left-color: var(--danger); }.stat-card.warning { border-left-color: var(--warning); }.stat-card.success { border-left-color: var(--success); }
+        .stat-icon { grid-row: 1/3; color: var(--primary); font-size: 28px; }.stat-card.danger .stat-icon { color: var(--danger); }.stat-card.warning .stat-icon { color: var(--warning); }.stat-card.success .stat-icon { color: var(--success); }
+        .stat-label { color: #526078; font-size: 13px; font-weight: 550; }.stat-value { color: #111827; font-size: 27px; font-weight: 700; line-height: 1.05; }
 
-        /* ---- main content ---- */
-        .main {
-            margin-left: 260px;
-            min-height: 100vh;
-            background: #f9faff;
-        }
+        .content-card { overflow: hidden; margin-bottom: 24px; background: #fff; border: 0; border-radius: 18px; box-shadow: 0 3px 8px rgba(0,0,0,.08); }
+        .content-card-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 20px 24px; border-bottom: 1px solid #edf0f5; }
+        .content-card-header h2 { display: flex; align-items: center; gap: 9px; margin: 0; color: var(--primary); font-size: 19px; font-weight: 700; }
+        .content-card-header p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+        .section-icon { width: 35px; height: 35px; display: inline-flex; align-items: center; justify-content: center; color: #fff; background: var(--primary); border-radius: 9px; }
+        .period-pill { padding: 6px 11px; color: var(--primary); background: #edf1ff; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 
-        .topbar {
-            background: white;
-            height: 80px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 35px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-            border-bottom: 1px solid #e9edf5;
-        }
-        .topbar h3 {
-            font-size: 28px;
-            font-weight: 700;
-            color: var(--primary);
-            margin: 0;
-            letter-spacing: -0.3px;
-        }
-        .profile {
-            font-weight: 600;
-            color: var(--primary);
-            cursor: default;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
+        .forecast-table { min-width: 1120px; margin: 0; }
+        .forecast-table thead th { padding: 13px 16px; color: #667085; background: #f8f9fc; border-bottom: 1px solid var(--border); font-size: 11px; font-weight: 700; letter-spacing: .25px; text-transform: uppercase; white-space: nowrap; }
+        .forecast-table tbody td { padding: 13px 16px; color: #34405d; border-color: #edf0f5; font-size: 13px; vertical-align: middle; }
+        .forecast-table tbody tr:hover { background: #fafbff; }
+        .item-name { display: block; color: var(--primary); font-weight: 700; }.item-unit { color: var(--muted); font-size: 11px; }
+        .risk-badge { display: inline-block; min-width: 91px; padding: 5px 9px; text-align: center; border-radius: 999px; font-size: 11px; font-weight: 700; }
+        .risk-badge.danger { color: #b42318; background: #feeceb; }.risk-badge.warning { color: #9a6700; background: #fff4d6; }.risk-badge.success { color: #18794e; background: #e8f7ef; }
+        .probability { min-width: 125px; }.probability-top { display: flex; justify-content: space-between; margin-bottom: 5px; color: #4d5870; font-size: 12px; font-weight: 700; }
+        .probability-track { height: 6px; overflow: hidden; background: #edf0f5; border-radius: 999px; }.probability-fill { height: 100%; border-radius: inherit; }.probability-fill.danger { background: var(--danger); }.probability-fill.warning { background: var(--warning); }.probability-fill.success { background: var(--success); }
+        .reorder-value { color: var(--primary); font-weight: 700; }.no-reorder { color: var(--success); font-weight: 650; }
+        .empty-state { padding: 52px 20px !important; color: #8a94a6 !important; text-align: center; }.empty-state i { display: block; margin-bottom: 8px; color: #b0b8ca; font-size: 40px; }
 
-        .content {
-            padding: 35px 35px 40px;
-        }
+        .chart-body { padding: 24px; }.chart-scroll { overflow-x: auto; }.chart { min-width: 640px; height: 245px; padding: 20px 14px 0; display: flex; align-items: flex-end; gap: 18px; border-bottom: 2px solid #dce1eb; }
+        .bar-column { min-width: 58px; height: 100%; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }.bar-value { margin-bottom: 5px; color: #46526c; font-size: 11px; font-weight: 700; }
+        .bar { width: 44px; min-height: 4px; border-radius: 7px 7px 0 0; }.bar.danger { background: var(--danger); }.bar.warning { background: var(--warning); }.bar.success { background: var(--success); }
+        .bar-label { width: 100%; min-height: 46px; padding-top: 7px; color: #39455e; font-size: 10px; font-weight: 650; line-height: 1.2; text-align: center; overflow-wrap: anywhere; }
+        .chart-legend { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 14px; color: #59647b; font-size: 12px; }.legend-dot { width: 10px; height: 10px; display: inline-block; margin-right: 5px; border-radius: 50%; }
 
-        /* ---- page header ---- */
-        .page-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            margin-bottom: 28px;
-        }
-        .page-header h2 {
-            font-size: 26px;
-            font-weight: 700;
-            color: var(--primary);
-            margin: 0;
-        }
-        .page-header .badge-role {
-            background: var(--primary);
-            color: #fff;
-            font-size: 14px;
-            font-weight: 600;
-            padding: 6px 16px;
-            border-radius: 30px;
-            letter-spacing: 0.3px;
-            margin-left: 12px;
-        }
-
-        /* ---- prediction period ---- */
-        .period-badge {
-            display: inline-block;
-            background: var(--card-bg);
-            color: var(--primary);
-            font-weight: 600;
-            padding: 8px 24px;
-            border-radius: 40px;
-            font-size: 15px;
-            margin-bottom: 24px;
-        }
-        .period-badge i {
-            margin-right: 8px;
-        }
-
-        /* ---- table ---- */
-        .table-wrap {
-            background: white;
-            border-radius: 18px;
-            box-shadow: 0 3px 12px rgba(0, 0, 0, 0.05);
-            overflow: hidden;
-            margin-bottom: 20px;
-        }
-        .table {
-            margin-bottom: 0;
-            border-collapse: separate;
-            border-spacing: 0;
-        }
-        .table thead th {
-            background: var(--primary);
-            color: white;
-            font-weight: 700;
-            font-size: 15px;
-            padding: 16px 20px;
-            border-bottom: 1px solid #e2e7f2;
-            letter-spacing: 0.3px;
-        }
-        .table tbody td {
-            padding: 16px 20px;
-            vertical-align: middle;
-            border-bottom: 1px solid #edf1f8;
-            color: #1f2a4a;
-            font-weight: 500;
-        }
-        .table tbody tr:last-child td {
-            border-bottom: none;
-        }
-        .prob-high {
-            color: var(--accent);
-            font-weight: 700;
-        }
-        .prob-high-bg {
-            background: #fde8e8;
-            padding: 2px 12px;
-            border-radius: 30px;
-            font-weight: 600;
-            font-size: 13px;
-            color: var(--accent);
-        }
-        .reorder-qty {
-            font-weight: 600;
-            color: var(--primary);
-        }
-
-        /* ---- note ---- */
-        .note-box {
-            background: #f0f3fc;
-            border-radius: 12px;
-            padding: 14px 20px;
-            margin-bottom: 28px;
-            color: #2a3a5a;
-            font-size: 14px;
-            border-left: 4px solid var(--primary);
-        }
-        .note-box i {
-            color: var(--primary);
-            margin-right: 8px;
-        }
-        .note-box strong {
-            color: var(--primary);
-        }
-
-        /* ---- chart card ---- */
-        .chart-card {
-            background: white;
-            border-radius: 18px;
-            box-shadow: 0 3px 12px rgba(0, 0, 0, 0.05);
-            padding: 24px 28px 28px;
-            margin-bottom: 20px;
-        }
-        .chart-card .chart-title {
-            font-size: 18px;
-            font-weight: 700;
-            color: var(--primary);
-            margin-bottom: 18px;
-        }
-
-        /* ---- bar chart ---- */
-        .bar-chart-wrapper {
-            display: flex;
-            height: 200px;
-            align-items: flex-end;
-            gap: 16px;
-            padding: 0 4px 8px 4px;
-            border-bottom: 2px solid #d7def0;
-            margin-bottom: 12px;
-        }
-        .bar-container {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            height: 100%;
-            justify-content: flex-end;
-        }
-        .bar {
-            width: 55%;
-            max-width: 48px;
-            min-height: 6px;
-            border-radius: 6px 6px 0 0;
-            transition: 0.2s;
-            position: relative;
-        }
-        .bar.bar-primary {
-            background: var(--primary);
-        }
-        .bar.bar-accent {
-            background: var(--accent);
-        }
-        .bar.bar-success {
-            background: #28a745;
-        }
-        .bar-label {
-            margin-top: 8px;
-            font-weight: 600;
-            font-size: 12px;
-            color: #1f2a4a;
-            text-align: center;
-            line-height: 1.2;
-        }
-        .bar-value {
-            font-weight: 700;
-            font-size: 13px;
-            color: var(--primary);
-            margin-bottom: 4px;
-        }
-
-        /* ---- legend ---- */
-        .legend-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 16px 32px;
-            padding-top: 14px;
-            border-top: 1px solid #edf1f8;
-            margin-top: 6px;
-        }
-        .legend-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .legend-dot {
-            width: 14px;
-            height: 14px;
-            border-radius: 4px;
-            flex-shrink: 0;
-        }
-        .legend-item .legend-label {
-            font-weight: 500;
-            color: #3a4a6a;
-            font-size: 14px;
-        }
-
-        /* ---- shortage levels ---- */
-        .shortage-levels {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px 30px;
-            margin: 16px 0 20px 0;
-        }
-        .shortage-levels .level-item {
-            font-weight: 500;
-            color: #2a3a5a;
-            font-size: 14px;
-        }
-        .shortage-levels .level-item .level-badge {
-            display: inline-block;
-            padding: 2px 14px;
-            border-radius: 30px;
-            font-weight: 600;
-            font-size: 13px;
-            margin-left: 6px;
-        }
-        .level-badge.high {
-            background: #fde8e8;
-            color: var(--accent);
-        }
-
-        /* ---- view report button ---- */
-        .btn-report {
-            background: var(--primary);
-            color: white;
-            border: none;
-            border-radius: 40px;
-            padding: 10px 32px;
-            font-weight: 600;
-            transition: 0.15s;
-        }
-        .btn-report:hover {
-            background: #1d2863;
-            color: #fff;
-        }
-
-        /* responsive */
-        @media (max-width: 991px) {
-            .main {
-                margin-left: 90px;
-            }
-            .sidebar {
-                width: 90px;
-                padding: 16px 10px;
-            }
-            .system-name,
-            .nav-menu span,
-            .logout span {
-                display: none;
-            }
-            .logo-area {
-                justify-content: center;
-            }
-            .nav-menu a {
-                justify-content: center;
-                padding: 12px 8px;
-            }
-            .nav-menu a i {
-                font-size: 26px;
-                margin: 0;
-            }
-            .logout a {
-                justify-content: center;
-            }
-        }
-
-        @media (max-width: 576px) {
-            .topbar {
-                padding: 0 16px;
-                height: 70px;
-            }
-            .content {
-                padding: 20px 16px;
-            }
-            .page-header h2 {
-                font-size: 22px;
-            }
-            .table-wrap {
-                overflow-x: auto;
-            }
-            .table thead th,
-            .table tbody td {
-                padding: 12px 14px;
-                font-size: 13px;
-            }
-            .bar-chart-wrapper {
-                height: 150px;
-                gap: 10px;
-            }
-            .bar {
-                width: 50%;
-            }
-            .chart-card {
-                padding: 16px;
-            }
-            .legend-row {
-                gap: 10px 18px;
-            }
-            .shortage-levels {
-                flex-direction: column;
-                gap: 6px;
-            }
-            .btn-report {
-                width: 100%;
-                justify-content: center;
-            }
-        }
+        @media (max-width: 1199px) { .stats-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+        @media (max-width: 991px) { .main { margin-left: 90px; }.topbar { padding: 0 22px; }.content { padding: 28px 22px 35px; }.topbar h3 small,.profile-role { display: none; } }
+        @media (max-width: 767px) { .topbar { height: 70px; padding: 0 16px; }.topbar h3 { font-size: 20px; }.content { padding: 20px 14px 30px; }.stats-grid { grid-template-columns: 1fr; }.content-card-header { align-items: flex-start; padding: 17px; flex-direction: column; }.chart-body { padding: 16px; } }
+        @media (max-width: 520px) { .profile span { display: none; } }
     </style>
 </head>
 <body>
+<aside class="sidebar">
+    <div class="logo-area"><div class="logo-frame"><img src="logo.png" alt="Smart Bite Care Logo" class="logo"></div><div class="system-name">Smart Bite Care</div></div>
+    <nav class="nav-menu" aria-label="Nurse navigation"><ul>
+        <li><a href="Nurse_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
+        <li><a href="Nurse_Patients.php"><i class="bi bi-heart-pulse-fill"></i><span>Patients</span></a></li>
+        <li><a href="Nurse_Assessment.php"><i class="bi bi-clipboard2-pulse-fill"></i><span>Assessment Queue</span></a></li>
+        <li><a href="Nurse_Vaccination.php"><i class="bi bi-shield-plus"></i><span>Vaccination</span></a></li>
+        <li><a href="Nurse_DailyInventory.php"><i class="bi bi-clipboard-data-fill"></i><span>Daily Inventory</span></a></li>
+        <li><a href="Nurse_MedicalSuppliesManagement.php"><i class="bi bi-calendar-check"></i><span>Medical Supplies Management</span></a></li>
+        <li><a class="active" href="Nurse_Supplyforecasting.php" aria-current="page"><i class="bi bi-box-seam"></i><span>Supply Forecasting</span></a></li>
+        <li><a href="Nurse_Notification.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+    </ul></nav>
+    <div class="logout"><a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a></div>
+</aside>
 
-<!-- ========== SIDEBAR (Nurse) ========== -->
-<div class="sidebar">
-    <div class="logo-area">
-        <div class="logo-frame">
-            <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
-        </div>
-        <div class="system-name">Smart Bite Care</div>
-    </div>
-
-   <nav class="nav-menu">
-        <ul>
-            <li><a href="Nurse_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
-            <li><a href="Nurse_Patients.php"><i class="bi bi-heart-pulse-fill"></i><span>Patients</span></a></li>
-            <li><a href="Nurse_Vaccination.php"><i class="bi-shield-plus"></i><span>Vaccination</span></a></li>
-            <li><a href="Nurse_MedicalSuppliesManagement.php"><i class="bi bi-calendar-check"></i><span>Medical Supplies Management</span></a></li>
-            <li><a class="active" href="Nurse_Supplyforecasting.php"><i class="bi bi-box-seam"></i><span>Supply Forecasting</span></a></li>
-            <li><a href="Nurse_Notification.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
-        </ul>
-    </nav>
-    <div class="logout">
-        <a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
-    </div>
-</div>
-
-<!-- ========== MAIN CONTENT ========== -->
-<div class="main">
-
-    <!-- TOP BAR -->
+<main class="main">
     <div class="topbar">
-        <h3>Prediction Viewer</h3>
-        <div class="profile">NURSE</i></div>
+        <h3>Supply Forecasting <small><?= workflowH($branchName) ?></small></h3>
+        <div class="profile"><i class="bi bi-person-circle"></i><span><?= workflowH($username) ?></span><span class="profile-role">| Nurse</span></div>
     </div>
 
-    <!-- PAGE CONTENT -->
     <div class="content">
+        <div class="notice"><i class="bi bi-info-circle-fill"></i><div><strong>Read-only forecasting view</strong><p>Forecasts are generated automatically by the Branch Admin process. Nurses use these results to monitor possible shortages and support inventory reporting.</p></div></div>
 
-        <!-- Prediction Period -->
-        <div class="period-badge">
-            <i class="bi bi-calendar-range"></i> Prediction Period: Next 30 Days
-        </div>
+        <section class="stats-grid" aria-label="Forecast summary">
+            <div class="stat-card"><div class="stat-icon"><i class="bi bi-boxes"></i></div><div class="stat-label">Forecasted Items</div><div class="stat-value"><?= number_format($totalItems) ?></div></div>
+            <div class="stat-card danger"><div class="stat-icon"><i class="bi bi-exclamation-triangle-fill"></i></div><div class="stat-label">High Risk</div><div class="stat-value"><?= number_format($highRiskCount) ?></div></div>
+            <div class="stat-card warning"><div class="stat-icon"><i class="bi bi-exclamation-circle-fill"></i></div><div class="stat-label">Moderate Risk</div><div class="stat-value"><?= number_format($moderateRiskCount) ?></div></div>
+            <div class="stat-card success"><div class="stat-icon"><i class="bi bi-cart-plus-fill"></i></div><div class="stat-label">Recommended Reorder</div><div class="stat-value"><?= number_format($totalRecommendedReorder) ?></div></div>
+        </section>
 
-        <!-- Prediction Summary Table -->
-        <div class="table-wrap">
-            <table class="table align-middle">
-                <thead>
-                    <tr>
-                        <th>Item</th>
-                        <th>Probability</th>
-                        <th>Predicted Shortage</th>
-                        <th>Recommended Reorder</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td><strong>SPEEDA</strong></td>
-                        <td><span class="prob-high">82%</span></td>
-                        <td><span class="prob-high-bg">High</span></td>
-                        <td><span class="reorder-qty">30 Vials</span></td>
-                    </tr>
-                    <tr>
-                        <td><strong>SPEEDA</strong></td>
-                        <td><span class="prob-high">82%</span></td>
-                        <td><span class="prob-high-bg">High</span></td>
-                        <td><span class="reorder-qty">50 Vials</span></td>
-                    </tr>
-                    <tr>
-                        <td><strong>SPEEDA</strong></td>
-                        <td><span class="prob-high">82%</span></td>
-                        <td><span class="prob-high-bg">High</span></td>
-                        <td><span class="reorder-qty">*</span></td>
-                    </tr>
-                    <tr>
-                        <td><strong>SPEEDA</strong></td>
-                        <td><span class="prob-high">82%</span></td>
-                        <td><span class="prob-high-bg">High</span></td>
-                        <td><span class="reorder-qty">*</span></td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-
-        <!-- Note -->
-        <div class="note-box">
-            <i class="bi bi-info-circle"></i>
-            <strong>Note:</strong> Nurses can only view prediction results. Prediction generation is managed by Branch Admin.
-        </div>
-
-        <!-- Shortage Probability Chart -->
-        <div class="chart-card">
-            <div class="chart-title">Shortage Probability (%)</div>
-
-            <!-- Bar Chart -->
-            <div class="bar-chart-wrapper">
-                <!-- SPEEDA: 82% -->
-                <div class="bar-container">
-                    <div class="bar-value">82%</div>
-                    <div class="bar bar-primary" style="height: 82%;"></div>
-                    <div class="bar-label">SPEEDA</div>
-                </div>
-                <!-- ERIG: 75% -->
-                <div class="bar-container">
-                    <div class="bar-value">75%</div>
-                    <div class="bar bar-accent" style="height: 75%;"></div>
-                    <div class="bar-label">ERIG</div>
-                </div>
-                <!-- ATS: 70% -->
-                <div class="bar-container">
-                    <div class="bar-value">70%</div>
-                    <div class="bar bar-primary" style="height: 70%;"></div>
-                    <div class="bar-label">ATS</div>
-                </div>
-                <!-- SYRINGES: 45% -->
-                <div class="bar-container">
-                    <div class="bar-value">45%</div>
-                    <div class="bar bar-success" style="height: 45%;"></div>
-                    <div class="bar-label">SYRINGES</div>
-                </div>
-                <!-- BETT: 30% -->
-                <div class="bar-container">
-                    <div class="bar-value">30%</div>
-                    <div class="bar bar-success" style="height: 30%;"></div>
-                    <div class="bar-label">BETT</div>
-                </div>
+        <section class="content-card">
+            <div class="content-card-header">
+                <div><h2><span class="section-icon"><i class="bi bi-graph-up-arrow"></i></span>Latest Supply Forecast</h2><p><?= $latestDate ? 'Generated on '.workflowH(date('F j, Y',strtotime($latestDate))) : 'No forecast has been generated for this branch.' ?></p></div>
+                <span class="period-pill"><i class="bi bi-calendar-range me-1"></i>Next <?= $forecastDays ?> Days</span>
             </div>
-
-            <!-- Legend -->
-            <div class="legend-row">
-                <div class="legend-item">
-                    <span class="legend-dot" style="background: var(--primary);"></span>
-                    <span class="legend-label">Shortage Prediction</span>
-                </div>
-                <div class="legend-item">
-                    <span class="legend-dot" style="background: var(--accent);"></span>
-                    <span class="legend-label">Usage Trends</span>
-                </div>
-                <div class="legend-item">
-                    <span class="legend-dot" style="background: #28a745;"></span>
-                    <span class="legend-label">Patient Trends</span>
-                </div>
+            <div class="table-responsive">
+                <table class="table forecast-table align-middle">
+                    <thead><tr><th>Item</th><th>Current Stock</th><th>Minimum Stock</th><th>Forecasted Use</th><th>Shortage Probability</th><th>Risk Level</th><th>Recommended Reorder</th></tr></thead>
+                    <tbody>
+                    <?php if (!$forecasts): ?>
+                        <tr><td colspan="7" class="empty-state"><i class="bi bi-graph-up"></i>No forecasting results are available yet. The Branch Admin forecasting page will generate them automatically.</td></tr>
+                    <?php endif; ?>
+                    <?php foreach ($forecasts as $forecast): ?>
+                        <?php
+                            $probability = max(0.0,min(1.0,(float)$forecast['shortage_probability']));
+                            $percentage = $probability * 100;
+                            $riskClass = nurseForecastRiskClass($probability);
+                            $riskLabel = nurseForecastRiskLabel($probability);
+                            $unit = trim((string)($forecast['unit_name'] ?? '')) ?: 'unit(s)';
+                            $reorder = max(0, (int)$forecast['recommended_reorder']);
+                        ?>
+                        <tr>
+                            <td><span class="item-name"><?= workflowH((string)$forecast['item_name']) ?></span><span class="item-unit"><?= workflowH($unit) ?></span></td>
+                            <td><?= number_format((float)$forecast['current_stock'],2) ?></td>
+                            <td><?= number_format((float)$forecast['minimum_stock'],2) ?></td>
+                            <td><?= number_format((float)$forecast['forecasted_consumption'],2) ?></td>
+                            <td><div class="probability"><div class="probability-top"><span><?= number_format($percentage,1) ?>%</span></div><div class="probability-track"><div class="probability-fill <?= $riskClass ?>" style="width:<?= min(100,$percentage) ?>%"></div></div></div></td>
+                            <td><span class="risk-badge <?= $riskClass ?>"><?= workflowH($riskLabel) ?></span></td>
+                            <td><?php if ($reorder > 0): ?><span class="reorder-value"><?= number_format($reorder).' '.workflowH($unit) ?></span><?php else: ?><span class="no-reorder"><i class="bi bi-check-circle-fill me-1"></i>No reorder</span><?php endif; ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
             </div>
-        </div>
+        </section>
 
-        <!-- Predicted Shortage Level -->
-        <div class="shortage-levels">
-            <div class="level-item">
-                Predicted Shortage Level
-                <span class="level-badge high">High (≥ 70%)</span>
-            </div>
-            <div class="level-item">
-                <span class="level-badge high">High (≥ 70%)</span>
-            </div>
-            <div class="level-item">
-                <span class="level-badge high">High (≥ 70%)</span>
-            </div>
-        </div>
-
-        <!-- View Full Report Button -->
-        <button class="btn-report"><i class="bi bi-file-earmark-text me-2"></i> View Full Prediction Report</button>
-
-    </div> <!-- /content -->
-</div> <!-- /main -->
-
+        <?php if ($chartForecasts): ?>
+            <section class="content-card mb-0">
+                <div class="content-card-header"><div><h2><span class="section-icon"><i class="bi bi-bar-chart-fill"></i></span>Shortage Probability</h2><p>Top <?= count($chartForecasts) ?> items with the highest calculated shortage probability.</p></div></div>
+                <div class="chart-body"><div class="chart-scroll"><div class="chart">
+                    <?php foreach ($chartForecasts as $forecast): ?>
+                        <?php $probability=max(0.0,min(1.0,(float)$forecast['shortage_probability']));$percentage=$probability*100;$riskClass=nurseForecastRiskClass($probability); ?>
+                        <div class="bar-column"><div class="bar-value"><?= number_format($percentage,1) ?>%</div><div class="bar <?= $riskClass ?>" style="height:<?= max(4,$percentage) ?>%"></div><div class="bar-label"><?= workflowH((string)$forecast['item_name']) ?></div></div>
+                    <?php endforeach; ?>
+                </div></div><div class="chart-legend"><span><i class="legend-dot" style="background:var(--danger)"></i>High: 80% and above</span><span><i class="legend-dot" style="background:var(--warning)"></i>Moderate: 60–79.9%</span><span><i class="legend-dot" style="background:var(--success)"></i>Low: below 60%</span></div></div>
+            </section>
+        <?php endif; ?>
+    </div>
+</main>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
