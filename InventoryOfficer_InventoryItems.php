@@ -285,8 +285,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ?? ''
             );
 
-        $is_predictable =
-            isset($_POST['is_predictable'])
+        $is_forecastable =
+            isset($_POST['is_forecastable'])
             ? 1
             : 0;
 
@@ -490,7 +490,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 item_name,
                 minimum_stock,
                 description,
-                is_predictable
+                is_forecastable
             )
             VALUES
             (
@@ -522,7 +522,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $item_name,
             $minimum_stock,
             $description,
-            $is_predictable
+            $is_forecastable
         );
 
 
@@ -607,8 +607,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ?? ''
             );
 
-        $is_predictable =
-            isset($_POST['is_predictable'])
+        $is_forecastable =
+            isset($_POST['is_forecastable'])
             ? 1
             : 0;
 
@@ -680,7 +680,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     unit_id,
                     minimum_stock,
                     description,
-                    is_predictable
+                    is_forecastable
                 FROM inventory_items
                 WHERE item_id = ?
                 LIMIT 1
@@ -877,7 +877,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 item_name = ?,
                 minimum_stock = ?,
                 description = ?,
-                is_predictable = ?
+                is_forecastable = ?
 
             WHERE item_id = ?
         ";
@@ -901,7 +901,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $item_name,
             $minimum_stock,
             $description,
-            $is_predictable,
+            $is_forecastable,
             $item_id
         );
 
@@ -957,11 +957,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 
             if (
-                (int)$oldItem['is_predictable']
-                !== $is_predictable
+                (int)$oldItem['is_forecastable']
+                !== $is_forecastable
             ) {
                 $changes[] =
-                    'prediction setting changed';
+                    'forecasting setting changed';
             }
 
 
@@ -1346,7 +1346,7 @@ if (!empty($branch_id)) {
             i.item_name,
             i.minimum_stock,
             i.description,
-            i.is_predictable,
+            i.is_forecastable,
 
             c.category_name,
 
@@ -1430,7 +1430,7 @@ if (!empty($branch_id)) {
             i.item_name,
             i.minimum_stock,
             i.description,
-            i.is_predictable,
+            i.is_forecastable,
             c.category_name,
             u.unit_name
 
@@ -2551,8 +2551,8 @@ body {
                                                 'description' =>
                                                     $item['description'],
 
-                                                'is_predictable' =>
-                                                    (int)$item['is_predictable'],
+                                                'is_forecastable' =>
+                                                    (int)$item['is_forecastable'],
 
                                                 'quantity_available' =>
                                                     (int)$item['quantity_available'],
@@ -2607,8 +2607,8 @@ body {
                                                 'description' =>
                                                     $item['description'],
 
-                                                'is_predictable' =>
-                                                    (int)$item['is_predictable']
+                                                'is_forecastable' =>
+                                                    (int)$item['is_forecastable']
                                             ],
 
                                             JSON_HEX_TAG |
@@ -2916,25 +2916,24 @@ body {
                     </div>
 
 
-                    <!-- SHORTAGE PREDICTION -->
+                    <!-- SHORTAGE FORECASTING -->
 
                     <div class="form-check">
 
                         <input
                             class="form-check-input"
                             type="checkbox"
-                            name="is_predictable"
-                            id="addPredictable"
+                            name="is_forecastable"
+                            id="addForecastable"
                             value="1"
-                            checked
                         >
 
 
                         <label
                             class="form-check-label"
-                            for="addPredictable"
+                            for="addForecastable"
                         >
-                            Include in shortage prediction model
+                            Include in shortage forecasting model
                         </label>
 
                     </div>
@@ -3205,24 +3204,24 @@ body {
                     </div>
 
 
-                    <!-- PREDICTION -->
+                    <!-- FORECASTING -->
 
                     <div class="form-check">
 
                         <input
                             class="form-check-input"
                             type="checkbox"
-                            name="is_predictable"
-                            id="editPredictable"
+                            name="is_forecastable"
+                            id="editForecastable"
                             value="1"
                         >
 
 
                         <label
                             class="form-check-label"
-                            for="editPredictable"
+                            for="editForecastable"
                         >
-                            Include in shortage prediction model
+                            Include in shortage forecasting model
                         </label>
 
                     </div>
@@ -3414,10 +3413,10 @@ body {
                         <label
                             class="text-muted small fw-bold"
                         >
-                            Shortage Prediction
+                            Shortage Forecasting
                         </label>
 
-                        <div id="viewPredictable"></div>
+                        <div id="viewForecastable"></div>
 
                     </div>
 
@@ -3617,10 +3616,10 @@ function viewItem(item)
 
 
     document
-        .getElementById('viewPredictable')
+        .getElementById('viewForecastable')
         .textContent =
             Number(
-                item.is_predictable
+                item.is_forecastable
             ) === 1
             ? 'Included'
             : 'Not Included';
@@ -3688,10 +3687,10 @@ function editItem(item)
 
 
     document
-        .getElementById('editPredictable')
+        .getElementById('editForecastable')
         .checked =
             Number(
-                item.is_predictable
+                item.is_forecastable
             ) === 1;
 
 

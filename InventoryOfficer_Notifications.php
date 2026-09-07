@@ -23,7 +23,9 @@ function notificationTypeClass(string $type): string {
     return match ($type) {
         'low_stock','critical_stock' => 'low_stock',
         'expiring','expired_stock' => 'expiring',
-        'prediction','shortage_prediction' => 'prediction',
+        // The last two values are retained only so older saved notifications
+        // continue to display correctly after the forecasting rename.
+        'forecast','shortage_forecast','prediction','shortage_prediction' => 'forecast',
         'stock_in' => 'stock_in',
         'stock_out' => 'stock_out',
         'stock_adjustment' => 'stock_adjustment',
@@ -32,7 +34,7 @@ function notificationTypeClass(string $type): string {
 }
 function notifIconClass(string $type): string {
     return match (notificationTypeClass($type)) {
-        'low_stock' => 'icon-low', 'expiring' => 'icon-expiring', 'prediction' => 'icon-prediction',
+        'low_stock' => 'icon-low', 'expiring' => 'icon-expiring', 'forecast' => 'icon-forecast',
         'stock_in' => 'icon-in', 'stock_out' => 'icon-out', 'stock_adjustment' => 'icon-adjustment',
         default => 'icon-low'
     };
@@ -40,7 +42,7 @@ function notifIconClass(string $type): string {
 function notifIcon(string $type): string {
     return match (notificationTypeClass($type)) {
         'low_stock' => 'bi-exclamation-triangle-fill', 'expiring' => 'bi-hourglass-split',
-        'prediction' => 'bi-graph-up-arrow', 'stock_in' => 'bi-box-arrow-in-down',
+        'forecast' => 'bi-graph-up-arrow', 'stock_in' => 'bi-box-arrow-in-down',
         'stock_out' => 'bi-box-arrow-up', 'stock_adjustment' => 'bi-sliders', default => 'bi-bell-fill'
     };
 }
@@ -54,7 +56,7 @@ function formatNotificationTime(string $createdAt): string {
 }
 function badgeText(string $type): string {
     return match (notificationTypeClass($type)) {
-        'low_stock' => 'Low Stock', 'expiring' => 'Expiring', 'prediction' => 'Alert',
+        'low_stock' => 'Low Stock', 'expiring' => 'Expiring', 'forecast' => 'Forecast',
         'stock_in' => 'Stock In', 'stock_out' => 'Stock Out', 'stock_adjustment' => 'Adjusted', default => 'Update'
     };
 }
@@ -133,7 +135,7 @@ function saveNotification(mysqli $conn,int $userId,string $type,string $title,st
  * them would mix stale duplicates with the synchronized notifications below.
  * Other notification types (vaccination, patient records, etc.) are untouched.
  */
-$generatedTypes=['low_stock','critical_stock','expiring','expired_stock','prediction','shortage_prediction','stock_in','stock_out','stock_adjustment'];
+$generatedTypes=['low_stock','critical_stock','expiring','expired_stock','forecast','shortage_forecast','prediction','shortage_prediction','stock_in','stock_out','stock_adjustment'];
 $typePlaceholders=implode(',',array_fill(0,count($generatedTypes),'?'));
 $cleanupSql="DELETE n FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE n.user_id=? AND u.branch_id=? AND u.status='Active' AND n.source_key IS NULL AND n.notification_type IN ($typePlaceholders)";
 $cleanup=$conn->prepare($cleanupSql);
@@ -160,13 +162,62 @@ if($stmt){$stmt->bind_param('s',$branch_id);if($stmt->execute()){ $r=$stmt->get_
     saveNotification($conn,$user_id,$days<0?'expired_stock':'expiring',$title,$message,'condition:expiry:'.$row['stock_id'].':'.$row['expiration_date']);
 }}}$stmt->close();
 
-/* PREDICTION: exact prediction_id prevents duplicate alerts. */
-$sql="SELECT p.prediction_id,i.item_name,p.prediction_date,p.probability_score,p.prediction_status,p.recommended_reorder,p.predicted_consumption,p.forecast_days FROM prediction_results p INNER JOIN inventory_items i ON i.item_id=p.item_id WHERE p.branch_id=? AND (LOWER(COALESCE(p.prediction_status,'')) LIKE '%high%' OR LOWER(COALESCE(p.prediction_status,'')) LIKE '%shortage%' OR LOWER(COALESCE(p.prediction_status,'')) LIKE '%risk%') ORDER BY p.prediction_date DESC,p.prediction_id DESC";
-$stmt=$conn->prepare($sql);
-if($stmt){$stmt->bind_param('s',$branch_id);if($stmt->execute()){ $r=$stmt->get_result();while($row=$r->fetch_assoc()){
-    $message='Shortage risk detected for '.$row['item_name'].'.'; if(trim((string)$row['prediction_status'])!=='')$message.=' Status: '.trim($row['prediction_status']).'.'; if($row['forecast_days']!==null)$message.=' Forecast: '.(int)$row['forecast_days'].' days.'; if($row['recommended_reorder']!==null)$message.=' Recommended reorder: '.number_format((int)$row['recommended_reorder']).'.';
-    saveNotification($conn,$user_id,'prediction','Shortage Prediction Alert',$message,'prediction:'.$row['prediction_id']);
-}}}$stmt->close();
+/*
+ * SUPPLY FORECAST: one alert per item and forecast run date.
+ * forecast_results is the renamed forecasting table. The source key uses the
+ * item and forecast date because those columns are stable across the rename.
+ */
+$sql="SELECT fr.item_id,i.item_name,fr.forecast_date,fr.shortage_probability,
+             fr.forecast_status,fr.recommended_reorder,
+             fr.forecasted_consumption,fr.forecast_days
+      FROM forecast_results fr
+      INNER JOIN inventory_items i ON i.item_id=fr.item_id
+      WHERE fr.branch_id=?
+        AND i.is_forecastable=1
+        AND (
+            fr.shortage_probability>=0.75
+            OR LOWER(COALESCE(fr.forecast_status,'')) LIKE '%high%'
+            OR LOWER(COALESCE(fr.forecast_status,'')) LIKE '%shortage%'
+            OR LOWER(COALESCE(fr.forecast_status,'')) LIKE '%risk%'
+        )
+      ORDER BY fr.forecast_date DESC,fr.shortage_probability DESC,i.item_name ASC";
+
+try {
+    $stmt=$conn->prepare($sql);
+    $stmt->bind_param('s',$branch_id);
+    if($stmt->execute()){
+        $r=$stmt->get_result();
+        while($row=$r->fetch_assoc()){
+            $message='Forecasted shortage risk for '.$row['item_name'].'.';
+            if(trim((string)$row['forecast_status'])!==''){
+                $message.=' Status: '.trim((string)$row['forecast_status']).'.';
+            }
+            $message.=' Risk: '.number_format(((float)$row['shortage_probability'])*100,1).'%. ';
+            if($row['forecast_days']!==null){
+                $message.='Forecast period: '.(int)$row['forecast_days'].' days. ';
+            }
+            if($row['forecasted_consumption']!==null){
+                $message.='Forecasted consumption: '.number_format((float)$row['forecasted_consumption'],2).'. ';
+            }
+            if($row['recommended_reorder']!==null){
+                $message.='Recommended reorder: '.number_format((int)$row['recommended_reorder']).'.';
+            }
+            saveNotification(
+                $conn,
+                $user_id,
+                'forecast',
+                'Supply Forecast Alert',
+                trim($message),
+                'forecast:'.$row['item_id'].':'.$row['forecast_date']
+            );
+        }
+    }
+    $stmt->close();
+} catch (mysqli_sql_exception $e) {
+    // Inventory notifications should remain usable even before the forecasting
+    // migration is installed. Other notification sources continue to load.
+    error_log('Forecast notification query failed: '.$e->getMessage());
+}
 
 /* STOCK MOVEMENTS: each transaction_id is a unique real inventory event. */
 $sql="SELECT t.transaction_id,t.quantity,t.transaction_type,t.transaction_date,t.remarks,i.item_name,u.unit_name,COALESCE(actor.username,'Inventory User') actor_name FROM stock_transactions t INNER JOIN inventory_items i ON i.item_id=t.item_id INNER JOIN units u ON u.unit_id=i.unit_id LEFT JOIN users actor ON actor.user_id=t.user_id WHERE t.branch_id=? AND t.transaction_date>=DATE_SUB(NOW(),INTERVAL 7 DAY) AND t.transaction_type IN ('IN','OUT','ADJUSTMENT') ORDER BY t.transaction_date DESC,t.transaction_id DESC";
@@ -183,13 +234,18 @@ if($stmt){$stmt->bind_param('s',$branch_id);if($stmt->execute()){ $r=$stmt->get_
 /* FILTERS + PAGINATION */
 $search=trim((string)($_GET['search']??''));
 $filter=(string)($_GET['filter']??'all');
-$allowedFilters=['all','low_stock','critical_stock','expiring','expired_stock','prediction','stock_in','stock_out','stock_adjustment'];
+$allowedFilters=['all','low_stock','critical_stock','expiring','expired_stock','forecast','stock_in','stock_out','stock_adjustment'];
 if(!in_array($filter,$allowedFilters,true))$filter='all';
 $page=filter_var($_GET['page']??1,FILTER_VALIDATE_INT); if($page===false||$page<1)$page=1;
 $perPage=10;
 $where="n.user_id=? AND u.user_id=? AND u.branch_id=? AND u.status='Active'";
 $params=[$user_id,$user_id,$branch_id];$types='iis';
-if($filter!=='all'){$where.=' AND n.notification_type=?';$types.='s';$params[]=$filter;}
+if($filter==='forecast'){
+    // Include notification rows saved before prediction terminology was retired.
+    $where.=" AND n.notification_type IN ('forecast','shortage_forecast','prediction','shortage_prediction')";
+} elseif($filter!=='all'){
+    $where.=' AND n.notification_type=?';$types.='s';$params[]=$filter;
+}
 if($search!==''){$where.=" AND (n.title LIKE CONCAT('%',?,'%') OR n.message LIKE CONCAT('%',?,'%') OR n.notification_type LIKE CONCAT('%',?,'%'))";$types.='sss';array_push($params,$search,$search,$search);}
 $countStmt=$conn->prepare("SELECT COUNT(*) total FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE $where");
 $total=0;if($countStmt){bindDynamic($countStmt,$types,$params);if($countStmt->execute())$total=(int)($countStmt->get_result()->fetch_assoc()['total']??0);$countStmt->close();}
@@ -452,7 +508,7 @@ margin-top:0;
 /* Left accent borders based on type. */
 .border-low_stock{ border-left:6px solid #ef4444; }
 .border-expiring{ border-left:6px solid #eab308; }
-.border-prediction{ border-left:6px solid #3b82f6; }
+.border-forecast{ border-left:6px solid #3b82f6; }
 .border-stock_in{ border-left:6px solid #22c55e; }
 
 .notif-icon-wrap{
@@ -474,7 +530,7 @@ margin-top:0;
 
 .icon-low{ background:#fee2e2; color:#dc2626; }
 .icon-expiring{ background:#fef9c3; color:#ca8a04; }
-.icon-prediction{ background:#dbeafe; color:#2563eb; }
+.icon-forecast{ background:#dbeafe; color:#2563eb; }
 .icon-in{ background:#dcfce7; color:#16a34a; }
 
 .notif-content{
@@ -522,7 +578,7 @@ margin-top:0;
 
 .badge-low_stock{ background:#fee2e2; color:#dc2626; }
 .badge-expiring{ background:#fef9c3; color:#ca8a04; }
-.badge-prediction{ background:#dbeafe; color:#2563eb; }
+.badge-forecast{ background:#dbeafe; color:#2563eb; }
 .badge-stock_in{ background:#dcfce7; color:#16a34a; }
 
 .unread-dot{
@@ -649,7 +705,7 @@ margin-top:0;
             <option value="all" <?php echo $filter === 'all' ? 'selected' : ''; ?>>All Notifications</option>
             <option value="low_stock" <?php echo $filter === 'low_stock' ? 'selected' : ''; ?>>Low Stock</option>
             <option value="expiring" <?php echo $filter === 'expiring' ? 'selected' : ''; ?>>Expiring</option>
-            <option value="prediction" <?php echo $filter === 'prediction' ? 'selected' : ''; ?>>Predicted Shortage</option>
+            <option value="forecast" <?php echo $filter === 'forecast' ? 'selected' : ''; ?>>Supply Forecast</option>
             <option value="stock_in" <?php echo $filter === 'stock_in' ? 'selected' : ''; ?>>Stock In</option>
         </select>
 
@@ -680,7 +736,7 @@ margin-top:0;
 <!-- Paginated Notifications -->
 <?php if (empty($notifications)): ?>
     <div class="notif-item is-read" style="cursor:default;">
-        <div class="notif-icon-wrap"><div class="notif-icon icon-prediction"><i class="bi bi-bell-slash"></i></div></div>
+        <div class="notif-icon-wrap"><div class="notif-icon icon-forecast"><i class="bi bi-bell-slash"></i></div></div>
         <div class="notif-content">
             <div class="notif-title">No Notifications Found</div>
             <div class="notif-message">There are no notifications matching the current search or filter for <?php echo h($branch_name); ?>.</div>
@@ -741,7 +797,7 @@ margin-top:0;
         <div class="modal-content" style="border:0;border-radius:14px;overflow:hidden;">
             <div class="modal-header">
                 <div class="d-flex align-items-center gap-3">
-                    <div id="notificationModalIcon" class="notification-modal-icon icon-prediction">
+                    <div id="notificationModalIcon" class="notification-modal-icon icon-forecast">
                         <i id="notificationModalIconGlyph" class="bi bi-bell-fill"></i>
                     </div>
                     <div>
@@ -782,7 +838,7 @@ const topBadge=document.getElementById('topUnreadBadge');
 const unreadText=document.querySelector('.unread-summary');
 function updateUnreadCount(count){count=Math.max(0,parseInt(count,10)||0);if(topBadge){topBadge.textContent=count;topBadge.hidden=count===0;}if(unreadText){unreadText.textContent=count+' unread notification'+(count===1?'':'s');unreadText.style.display=count?'':'none';}const btn=document.querySelector('.btn-mark-all');if(btn)btn.disabled=count===0;}
 function setRead(card){card.classList.remove('is-unread');card.classList.add('is-read');card.dataset.isRead='1';card.setAttribute('aria-label','Read: '+(card.dataset.title||'Notification'));const dot=card.querySelector('.unread-dot');if(dot)dot.hidden=true;}
-function fillModal(card){if(!modalEl)return;document.getElementById('notificationModalIcon').className='notification-modal-icon '+(card.dataset.iconClass||'icon-prediction');document.getElementById('notificationModalIconGlyph').className='bi '+(card.dataset.icon||'bi-bell-fill');document.getElementById('notificationDetailsModalLabel').textContent=card.dataset.title||'Notification';document.getElementById('notificationModalMessage').textContent=card.dataset.message||'';document.getElementById('notificationModalType').textContent=card.dataset.type||'Update';document.getElementById('notificationModalDate').textContent=card.dataset.createdAt||'';document.getElementById('notificationModalBranch').textContent=card.dataset.branch||'';const read=card.dataset.isRead==='1';document.getElementById('notificationModalStatus').textContent=read?'Read':'Unread';document.getElementById('notificationModalReadState').textContent=read?'Read':'Unread';}
+function fillModal(card){if(!modalEl)return;document.getElementById('notificationModalIcon').className='notification-modal-icon '+(card.dataset.iconClass||'icon-forecast');document.getElementById('notificationModalIconGlyph').className='bi '+(card.dataset.icon||'bi-bell-fill');document.getElementById('notificationDetailsModalLabel').textContent=card.dataset.title||'Notification';document.getElementById('notificationModalMessage').textContent=card.dataset.message||'';document.getElementById('notificationModalType').textContent=card.dataset.type||'Update';document.getElementById('notificationModalDate').textContent=card.dataset.createdAt||'';document.getElementById('notificationModalBranch').textContent=card.dataset.branch||'';const read=card.dataset.isRead==='1';document.getElementById('notificationModalStatus').textContent=read?'Read':'Unread';document.getElementById('notificationModalReadState').textContent=read?'Read':'Unread';}
 async function markRead(card){if(card.dataset.isRead==='1')return true;const id=Number(card.dataset.notificationId);if(!Number.isInteger(id)||id<=0){console.error('Invalid notification ID');return false;}const body=new URLSearchParams({csrf_token:csrfToken,action:'mark_read',notification_id:String(id)});try{const response=await fetch(pageUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','X-Requested-With':'XMLHttpRequest'},body});const data=await response.json();if(!response.ok||!data.success)throw new Error(data.message||'Unable to mark notification as read.');setRead(card);updateUnreadCount(data.unread_count);return true;}catch(e){console.error(e);return false;}}
 async function openCard(card){if(card.dataset.busy==='1')return;card.dataset.busy='1';try{if(!(await markRead(card)))return;fillModal(card);if(modal)modal.show();}finally{card.dataset.busy='0';}}
 document.addEventListener('click',e=>{const card=e.target.closest('.notif-item[data-notification-id]');if(card)openCard(card);});
