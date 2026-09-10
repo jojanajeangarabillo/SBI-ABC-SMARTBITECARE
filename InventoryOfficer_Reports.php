@@ -2,23 +2,6 @@
 session_start();
 require_once 'sources/db_connect.php';
 
-/*
- * InventoryOfficer_Reports.php
- * --------------------------------
- * Report data is generated from the same inventory tables used by the
- * Inventory Officer module:
- *   inventory_items
- *   inventory_categories
- *   units
- *   inventory_stocks
- *   stock_transactions
- *   inventory_usage_history
- *   prediction_results
- *
- * Branch scope is ALWAYS taken from the authenticated user's session/user
- * record. A branch_id supplied by the browser is never trusted.
- */
-
 if (
     !isset($_SESSION['user_id']) ||
     !isset($_SESSION['role_id']) ||
@@ -153,7 +136,7 @@ if ($date_from > $date_to) {
 
 /*
  * Expiration monitoring uses the selected date range against expiration_date.
- * Transaction/usage/prediction reports use their respective event dates.
+ * Transaction/usage/forecast reports use their respective event dates.
  * Low-stock is a current-stock snapshot, so its stock quantity is not
  * artificially filtered by transaction date.
  */
@@ -381,18 +364,18 @@ function fetchReportRows(
         case 'shortage':
             $sql = "
                 SELECT
-                    p.prediction_id,
-                    p.prediction_date,
+                    p.forecast_id,
+                    p.forecast_date,
                     i.item_name,
                     c.category_name,
                     u.unit_name,
-                    p.probability_score,
-                    p.prediction_status,
+                    p.shortage_probability,
+                    p.forecast_status,
                     p.recommended_reorder,
                     p.predicted_consumption,
                     p.forecast_days,
                     usr.username AS generated_by_name
-                FROM prediction_results p
+                FROM forecast_results p
                 INNER JOIN inventory_items i
                     ON i.item_id = p.item_id
                 INNER JOIN inventory_categories c
@@ -402,14 +385,14 @@ function fetchReportRows(
                 LEFT JOIN users usr
                     ON usr.user_id = p.generated_by
                 WHERE p.branch_id = ?
-                  AND p.prediction_date BETWEEN ? AND ?
+                  AND p.forecast_date BETWEEN ? AND ?
                   AND (
                       ? = ''
                       OR i.item_name LIKE CONCAT('%', ?, '%')
                       OR c.category_name LIKE CONCAT('%', ?, '%')
-                      OR p.prediction_status LIKE CONCAT('%', ?, '%')
+                      OR p.forecast_status LIKE CONCAT('%', ?, '%')
                   )
-                ORDER BY p.prediction_date DESC, p.probability_score DESC, i.item_name ASC
+                ORDER BY p.forecast_date DESC, p.shortage_probability DESC, i.item_name ASC
             ";
 
             $stmt = $conn->prepare($sql);
@@ -678,13 +661,13 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
 
         foreach ($exportRows as $row) {
             fputcsv($output, [
-                $row['prediction_id'],
-                $row['prediction_date'],
+                $row['forecast_id'],
+                $row['forecast_date'],
                 $row['item_name'],
                 $row['category_name'],
                 $row['unit_name'],
-                $row['probability_score'],
-                $row['prediction_status'],
+                $row['shortage_probability'],
+                $row['forecast_status'],
                 $row['recommended_reorder'],
                 $row['predicted_consumption'],
                 $row['forecast_days'],
@@ -1209,6 +1192,7 @@ margin-left:90px;
 <li><a href="InventoryOfficer_Categories.php"><i class="bi bi-tags"></i><span>Categories & Units</span></a></li>
 <li><a href="InventoryOfficer_StockManagement.php"><i class="bi bi-boxes"></i><span>Stock Management</span></a></li>
 <li><a href="InventoryOfficer_StockTransactions.php"><i class="bi bi-arrow-left-right"></i><span>Stock Transactions</span></a></li>
+<li><a href="InventoryOfficer_ReturnManagement.php"><i class="bi bi-arrow-return-left"></i><span>Return Management</span></a></li>
 <li><a class="active" href="InventoryOfficer_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Inventory Reports</span></a></li>
 <li><a href="InventoryOfficer_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
 
@@ -1427,12 +1411,12 @@ No usage data for the selected date range.
 </tr>
 <?php elseif ($report_type === 'shortage'): ?>
 <tr>
-<td><?php echo h($row['prediction_date']); ?></td>
+<td><?php echo h($row['forecast_date']); ?></td>
 <td><?php echo h($row['item_name']); ?></td>
 <td><?php echo h($row['category_name']); ?></td>
 <td><?php echo h($row['unit_name']); ?></td>
-<td><?php echo $row['probability_score'] !== null ? h($row['probability_score']) . '%' : '—'; ?></td>
-<td><span class="report-status <?php echo h(statusClass($row['prediction_status'] ?? '')); ?>"><?php echo h($row['prediction_status'] ?: '—'); ?></span></td>
+<td><?php echo $row['shortage_probability'] !== null ? h($row['shortage_probability']) . '%' : '—'; ?></td>
+<td><span class="report-status <?php echo h(statusClass($row['forecast_status'] ?? '')); ?>"><?php echo h($row['forecast_status'] ?: '—'); ?></span></td>
 <td><?php echo moneylessNumber($row['recommended_reorder']); ?></td>
 <td><?php echo moneylessNumber($row['predicted_consumption']); ?></td>
 <td><?php echo $row['forecast_days'] !== null ? moneylessNumber($row['forecast_days']) : '—'; ?></td>

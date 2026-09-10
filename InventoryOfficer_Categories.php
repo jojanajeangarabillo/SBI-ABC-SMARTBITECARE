@@ -2713,69 +2713,130 @@ if ($view_category) {
         }
 
 
-        .toast-container {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            z-index: 9999;
-        }
+    /* =========================================================
+   CONSISTENT SYSTEM TOAST / ALERT
+   ========================================================= */
 
+.toast-container {
+    width: 100%;
+    margin: 0 0 24px 0;
+    position: relative;
+    z-index: 10;
+}
 
-        .toast-custom {
-            background: white;
-            border-radius: 12px;
-            padding: 16px 24px;
-            box-shadow:
-                0 8px 30px
-                rgba(0,0,0,.15);
-            border-left:
-                6px solid #28a745;
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            min-width: 320px;
-            animation:
-                slideIn .4s ease;
-            margin-bottom: 10px;
-        }
+.toast-custom {
+    width: 100%;
+    min-height: 64px;
+    background: #d1e7dd;
+    border: 1px solid #c3dfd3;
+    border-radius: 12px;
+    padding: 16px 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    box-shadow: none;
+    margin: 0 0 10px 0;
+    animation: fadeSlideDown .25s ease;
+}
 
+.toast-custom.error {
+    background: #f8d7da;
+    border-color: #f1bfc4;
+}
 
-        .toast-custom.error {
-            border-left-color: #dc3545;
-        }
+.toast-custom.warning {
+    background: #fff3cd;
+    border-color: #ffe69c;
+}
 
+.toast-custom.info {
+    background: #cff4fc;
+    border-color: #b6effb;
+}
 
-        .toast-custom .toast-icon {
-            font-size: 28px;
-            color: #28a745;
-        }
+.toast-custom .toast-icon {
+    flex: 0 0 auto;
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: #0f5132;
+}
 
+.toast-custom.error .toast-icon {
+    color: #842029;
+}
 
-        .toast-custom.error .toast-icon {
-            color: #dc3545;
-        }
+.toast-custom.warning .toast-icon {
+    color: #664d03;
+}
 
+.toast-custom.info .toast-icon {
+    color: #055160;
+}
 
-        .toast-custom .toast-msg {
-            font-weight: 500;
-            color: #1f2a4a;
-            flex: 1;
-        }
+.toast-custom .toast-msg {
+    flex: 1;
+    min-width: 0;
+    font-size: 16px;
+    font-weight: 400;
+    line-height: 1.4;
+    color: #073b2a;
+}
 
+.toast-custom.error .toast-msg {
+    color: #58151c;
+}
 
-        .toast-custom .toast-close {
-            background: none;
-            border: none;
-            font-size: 22px;
-            color: #999;
-            cursor: pointer;
-            padding: 0 4px;
-        }
+.toast-custom.warning .toast-msg {
+    color: #664d03;
+}
 
+.toast-custom.info .toast-msg {
+    color: #055160;
+}
 
-        .toast-custom .toast-close:hover {
-            color: #333;
-        }
+.toast-custom .toast-close {
+    display: none;
+}
+
+@keyframes fadeSlideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@media (max-width: 768px) {
+    .toast-container {
+        top: 80px;
+        left: 16px;
+        right: 16px;
+    }
+
+    .toast-custom {
+        min-height: 62px;
+        padding: 14px 16px;
+        gap: 11px;
+    }
+
+    .toast-custom .toast-msg {
+        font-size: 14px;
+    }
+
+    .toast-custom .toast-icon {
+        width: 23px;
+        height: 23px;
+        font-size: 18px;
+    }
+}
 
 
         .stock-detail-list {
@@ -2827,6 +2888,120 @@ if ($view_category) {
         }
 
 
+
+        /* =========================================================
+           DELETE CONFIRMATION MODAL
+           ========================================================= */
+
+        .delete-confirmation-modal .modal-dialog {
+            max-width: 440px;
+        }
+
+        .delete-confirmation-modal .modal-content {
+            border: none;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 14px 45px rgba(0,0,0,.18);
+        }
+
+        .delete-confirmation-modal .modal-header {
+            background: var(--primary);
+            color: white;
+            border-bottom: none;
+            padding: 18px 20px;
+        }
+
+        .delete-confirmation-modal .modal-title {
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .delete-confirmation-modal .btn-close {
+            filter: brightness(0) invert(1);
+            opacity: .9;
+        }
+
+        .delete-confirmation-modal .modal-body {
+            padding: 28px 24px 24px;
+            text-align: center;
+        }
+
+        .delete-confirmation-icon {
+            width: 58px;
+            height: 58px;
+            margin: 0 auto 16px;
+            border-radius: 50%;
+            background: #fde7e9;
+            color: var(--accent);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 25px;
+        }
+
+        .delete-confirmation-message {
+            margin: 0;
+            color: #343d51;
+            font-size: 15px;
+            line-height: 1.55;
+        }
+
+        .delete-confirmation-modal .modal-footer {
+            border-top: 1px solid #edf0f5;
+            padding: 14px 20px;
+            gap: 8px;
+        }
+
+        .delete-confirmation-cancel,
+        .delete-confirmation-confirm {
+            min-width: 95px;
+            border-radius: 8px;
+            font-weight: 600;
+            padding: 9px 16px;
+        }
+
+        .delete-confirmation-cancel {
+            background: white;
+            border: 1px solid #dfe3ec;
+            color: #5d6677;
+        }
+
+        .delete-confirmation-cancel:hover {
+            background: #f6f7fa;
+            color: #495160;
+        }
+
+        .delete-confirmation-confirm {
+            background: var(--accent);
+            border: 1px solid var(--accent);
+            color: white;
+        }
+
+        .delete-confirmation-confirm:hover {
+            background: #d91426;
+            border-color: #d91426;
+            color: white;
+        }
+
+        @media (max-width: 576px) {
+            .delete-confirmation-modal .modal-dialog {
+                margin: 12px;
+            }
+
+            .delete-confirmation-modal .modal-body {
+                padding: 24px 18px 20px;
+            }
+
+            .delete-confirmation-modal .modal-footer {
+                padding: 12px 16px;
+            }
+
+            .delete-confirmation-cancel,
+            .delete-confirmation-confirm {
+                flex: 1 1 0;
+            }
+        }
+
         @media(max-width: 576px) {
 
             .topbar {
@@ -2874,15 +3049,6 @@ if ($view_category) {
 
 <body>
 
-
-<!-- =====================================================
-     TOAST CONTAINER
-     ===================================================== -->
-
-<div
-    class="toast-container"
-    id="toastContainer"
-></div>
 
 
 <!-- =====================================================
@@ -2992,6 +3158,18 @@ if ($view_category) {
 
             </li>
 
+            <li>
+                
+                <a href="InventoryOfficer_ReturnManagement.php">
+                    
+                    <i class="bi bi-arrow-return-left"></i>
+                    
+                    <span>Return Management
+
+                    </span>
+                </a>
+            </li>
+
 
             <li>
 
@@ -3050,6 +3228,7 @@ if ($view_category) {
 
 <div class="main">
 
+   
 
     <!-- TOP BAR -->
 
@@ -3089,6 +3268,16 @@ if ($view_category) {
 
 
     <div class="page-body">
+
+
+    <!-- =====================================================
+         TOAST CONTAINER
+         ===================================================== -->
+
+    <div
+        class="toast-container"
+        id="toastContainer"
+    ></div>
 
 
         <!-- =================================================
@@ -3360,11 +3549,7 @@ if ($view_category) {
                                                 method="POST"
                                                 action="<?php echo h($_SERVER['PHP_SELF']); ?>"
                                                 style="display:inline;"
-                                                onsubmit="
-                                                    return confirm(
-                                                        'Are you sure you want to delete this category?'
-                                                    );
-                                                "
+                                                onsubmit="return openDeleteConfirmation(this, 'Are you sure you want to delete this category?');"
                                             >
 
                                                 <input
@@ -3605,11 +3790,7 @@ if ($view_category) {
                                                 method="POST"
                                                 action="<?php echo h($_SERVER['PHP_SELF']); ?>"
                                                 style="display:inline;"
-                                                onsubmit="
-                                                    return confirm(
-                                                        'Are you sure you want to delete this unit?'
-                                                    );
-                                                "
+                                                onsubmit="return openDeleteConfirmation(this, 'Are you sure you want to delete this unit?');"
                                             >
 
                                                 <input
@@ -4658,12 +4839,133 @@ if ($view_category) {
 <?php endif; ?>
 
 
+
+
+<!-- =====================================================
+     DELETE CONFIRMATION MODAL
+     ===================================================== -->
+<div
+    class="modal fade delete-confirmation-modal"
+    id="deleteConfirmationModal"
+    tabindex="-1"
+    aria-hidden="true"
+>
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-trash3 me-2"></i>
+                    Confirm Deletion
+                </h5>
+
+                <button
+                    type="button"
+                    class="btn-close"
+                    data-bs-dismiss="modal"
+                    aria-label="Close"
+                ></button>
+            </div>
+
+            <div class="modal-body">
+                <div class="delete-confirmation-icon">
+                    <i class="bi bi-trash3"></i>
+                </div>
+
+                <p
+                    class="delete-confirmation-message"
+                    id="deleteConfirmationMessage"
+                >
+                    Are you sure you want to delete this record?
+                </p>
+            </div>
+
+            <div class="modal-footer">
+                <button
+                    type="button"
+                    class="btn delete-confirmation-cancel"
+                    data-bs-dismiss="modal"
+                >
+                    Cancel
+                </button>
+
+                <button
+                    type="button"
+                    class="btn delete-confirmation-confirm"
+                    id="deleteConfirmationConfirmBtn"
+                >
+                    Delete
+                </button>
+            </div>
+
+        </div>
+    </div>
+</div>
+
 <script
     src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
 ></script>
 
 
 <script>
+
+/* =========================================================
+   DELETE CONFIRMATION MODAL
+   ========================================================= */
+
+let pendingDeleteForm = null;
+
+function openDeleteConfirmation(form, message) {
+
+    const modalElement = document.getElementById('deleteConfirmationModal');
+    const messageElement = document.getElementById('deleteConfirmationMessage');
+    const confirmButton = document.getElementById('deleteConfirmationConfirmBtn');
+
+    if (!modalElement || !messageElement || !confirmButton) {
+        return false;
+    }
+
+    pendingDeleteForm = form;
+    messageElement.textContent = message;
+
+    confirmButton.onclick = function () {
+
+        if (!pendingDeleteForm) {
+            return;
+        }
+
+        const formToSubmit = pendingDeleteForm;
+        pendingDeleteForm = null;
+
+        const modalInstance = bootstrap.Modal.getInstance(modalElement);
+
+        if (modalInstance) {
+            modalInstance.hide();
+        }
+
+        formToSubmit.submit();
+    };
+
+    const modal = bootstrap.Modal.getOrCreateInstance(modalElement);
+    modal.show();
+
+    return false;
+}
+
+document
+    .getElementById('deleteConfirmationModal')
+    ?.addEventListener('hidden.bs.modal', function () {
+
+        pendingDeleteForm = null;
+
+        const confirmButton =
+            document.getElementById('deleteConfirmationConfirmBtn');
+
+        if (confirmButton) {
+            confirmButton.onclick = null;
+        }
+    });
+
 
 /* =========================================================
    FILTER TABLE
@@ -4745,131 +5047,64 @@ function filterTable(
    TOAST
    ========================================================= */
 
-function showToast(
-    message,
-    type = 'success'
-) {
 
-    const container =
-        document.getElementById(
-            'toastContainer'
-        );
+function showToast(message, type = 'success') {
 
+    const container = document.getElementById('toastContainer');
 
-    const toast =
-        document.createElement(
-            'div'
-        );
+    if (!container) {
+        return;
+    }
 
+    const toast = document.createElement('div');
 
-    toast.className =
-        'toast-custom' +
-        (
-            type === 'error'
-            ? ' error'
-            : ''
-        );
+    toast.className = 'toast-custom';
 
+    if (type === 'error') {
+        toast.classList.add('error');
+    } else if (type === 'warning') {
+        toast.classList.add('warning');
+    } else if (type === 'info') {
+        toast.classList.add('info');
+    }
 
     const iconMap = {
-
-        success:
-            'bi-check-circle-fill',
-
-        error:
-            'bi-x-circle-fill',
-
-        warning:
-            'bi-exclamation-triangle-fill'
-
+        success: 'bi-check-circle',
+        error: 'bi-x-circle',
+        warning: 'bi-exclamation-circle',
+        info: 'bi-info-circle'
     };
 
+    const icon = iconMap[type] || 'bi-check-circle';
 
-    const icon =
-        iconMap[type]
-        || 'bi-info-circle-fill';
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'toast-icon';
+    iconSpan.innerHTML = `<i class="bi ${icon}"></i>`;
 
+    const msgSpan = document.createElement('span');
+    msgSpan.className = 'toast-msg';
+    msgSpan.textContent = message;
 
-    const iconSpan =
-        document.createElement(
-            'span'
-        );
+    toast.appendChild(iconSpan);
+    toast.appendChild(msgSpan);
 
-    iconSpan.className =
-        'toast-icon';
+    container.appendChild(toast);
 
-    iconSpan.innerHTML =
-        '<i class="bi ' +
-        icon +
-        '"></i>';
+    setTimeout(function () {
+        if (toast.parentElement) {
 
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateY(-8px)';
+            toast.style.transition = 'opacity .2s ease, transform .2s ease';
 
-    const msgSpan =
-        document.createElement(
-            'span'
-        );
-
-    msgSpan.className =
-        'toast-msg';
-
-    msgSpan.textContent =
-        message;
-
-
-    const closeBtn =
-        document.createElement(
-            'button'
-        );
-
-    closeBtn.className =
-        'toast-close';
-
-    closeBtn.type =
-        'button';
-
-    closeBtn.innerHTML =
-        '&times;';
-
-    closeBtn.addEventListener(
-        'click',
-        function()
-        {
-            toast.remove();
+            setTimeout(function () {
+                if (toast.parentElement) {
+                    toast.remove();
+                }
+            }, 200);
         }
-    );
-
-
-    toast.appendChild(
-        iconSpan
-    );
-
-    toast.appendChild(
-        msgSpan
-    );
-
-    toast.appendChild(
-        closeBtn
-    );
-
-
-    container.appendChild(
-        toast
-    );
-
-
-    setTimeout(
-        function()
-        {
-            if (
-                toast.parentElement
-            ) {
-                toast.remove();
-            }
-        },
-        5000
-    );
+    }, 5000);
 }
-
 
 /* =========================================================
    AUTO SHOW FLASH MESSAGE

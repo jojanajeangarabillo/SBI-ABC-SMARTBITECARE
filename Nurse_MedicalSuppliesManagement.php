@@ -3294,25 +3294,10 @@ body {
 
         </div>
 
-
-        <div class="profile">
-
+  <div class="profile">
             <i class="bi bi-person-circle"></i>
-
-
-            <?php
-            echo h(
-                $username
-            );
-            ?>
-
-
-            <span class="text-muted">
-
-                | Nurse
-
-            </span>
-
+            <?php echo htmlspecialchars($username); ?>
+            <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Nurse</span>
         </div>
 
 

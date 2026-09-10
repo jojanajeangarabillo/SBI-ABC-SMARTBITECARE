@@ -234,11 +234,17 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
             color: var(--primary);
             margin: 0;
         }
-        .topbar h3 small {
+          .topbar h3 small {
+            color: #666;
             font-size: 16px;
             font-weight: 400;
-            color: #666;
             margin-left: 10px;
+        }
+        .profile-role {
+            margin-left: 4px;
+            color: #adb5bd;
+            font-size: 12px;
+            font-weight: 400;
         }
 
         .profile {
@@ -861,8 +867,9 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
         <div class="topbar">
             <h3>Patient Monitoring <small><?php echo htmlspecialchars($branchName); ?></small></h3>
             <div class="profile">
-                <?php echo htmlspecialchars($userData['username'] ?? 'ADMIN'); ?> 
-                
+                <i class="bi bi-person-circle"></i>
+                <span><?php echo htmlspecialchars($userData['username'] ?? 'ADMIN'); ?></span>
+                <span class="profile-role">| Branch Admin</span>
             </div>
         </div>
 

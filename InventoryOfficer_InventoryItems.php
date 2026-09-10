@@ -1954,6 +1954,107 @@ body {
 }
 
 
+/* =========================================================
+   DELETE CONFIRMATION MODAL
+   ========================================================= */
+
+.delete-confirmation-modal .modal-dialog {
+    max-width: 430px;
+}
+
+.delete-confirmation-modal .modal-content {
+    border-radius: 16px;
+    border: none;
+    overflow: hidden;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, .18);
+}
+
+.delete-confirmation-modal .modal-header {
+    background: var(--primary);
+    color: #fff;
+    border-bottom: none;
+    padding: 17px 20px;
+}
+
+.delete-confirmation-modal .modal-title {
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.delete-confirmation-modal .modal-body {
+    padding: 26px 24px 22px;
+    text-align: center;
+}
+
+.delete-confirmation-icon {
+    width: 58px;
+    height: 58px;
+    margin: 0 auto 15px;
+    border-radius: 50%;
+    background: #fcebed;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 25px;
+}
+
+.delete-confirmation-message {
+    margin: 0;
+    color: #30394d;
+    font-size: 15px;
+    line-height: 1.5;
+}
+
+.delete-confirmation-modal .modal-footer {
+    border-top: 1px solid #edf0f5;
+    padding: 14px 20px;
+    gap: 8px;
+}
+
+.delete-confirmation-modal .btn-cancel {
+    min-width: 90px;
+    border-radius: 8px;
+    border: 1px solid #dfe3ec;
+    background: #fff;
+    color: #596273;
+    font-weight: 600;
+}
+
+.delete-confirmation-modal .btn-cancel:hover {
+    background: #f6f7fa;
+}
+
+.delete-confirmation-modal .btn-delete {
+    min-width: 90px;
+    border-radius: 8px;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+}
+
+.delete-confirmation-modal .btn-delete:hover {
+    background: #d91627;
+    border-color: #d91627;
+    color: #fff;
+}
+
+@media (max-width: 576px) {
+    .delete-confirmation-modal .modal-dialog {
+        margin: .75rem;
+    }
+
+    .delete-confirmation-modal .modal-body {
+        padding: 22px 18px 18px;
+    }
+
+    .delete-confirmation-modal .modal-footer {
+        padding: 12px 16px;
+    }
+}
+
+
 .form-label {
     color: #333;
 }
@@ -2173,6 +2274,13 @@ body {
 
                 </a>
 
+            </li>
+
+            <li>
+                <a href="InventoryOfficer_ReturnManagement.php">
+                    <i class="bi bi-arrow-return-left"></i>
+                    <span>Return Management</span>
+                </a>
             </li>
 
 
@@ -2631,11 +2739,10 @@ body {
                                     method="POST"
                                     action="<?php echo h($_SERVER['PHP_SELF']); ?>"
                                     style="display: inline;"
-                                    onsubmit="
-                                        return confirm(
-                                            'Are you sure you want to delete this inventory item?'
-                                        );
-                                    "
+                                    onsubmit="return openDeleteConfirmation(
+                                        this,
+                                        'Are you sure you want to delete this inventory item?'
+                                    );"
                                 >
 
                                     <input
@@ -3459,12 +3566,156 @@ body {
 </div>
 
 
+<!-- =====================================================
+     DELETE CONFIRMATION MODAL
+     ===================================================== -->
+
+<div
+    class="modal fade delete-confirmation-modal"
+    id="deleteConfirmationModal"
+    tabindex="-1"
+    aria-hidden="true"
+>
+
+    <div class="modal-dialog modal-dialog-centered">
+
+        <div class="modal-content">
+
+            <div class="modal-header">
+
+                <h5 class="modal-title">
+                    <i class="bi bi-trash3 me-2"></i>
+                    Confirm Deletion
+                </h5>
+
+                <button
+                    type="button"
+                    class="btn-close btn-close-white"
+                    data-bs-dismiss="modal"
+                    aria-label="Close"
+                ></button>
+
+            </div>
+
+            <div class="modal-body">
+
+                <div class="delete-confirmation-icon">
+                    <i class="bi bi-trash3"></i>
+                </div>
+
+                <p
+                    class="delete-confirmation-message"
+                    id="deleteConfirmationMessage"
+                >
+                    Are you sure you want to delete this inventory item?
+                </p>
+
+            </div>
+
+            <div class="modal-footer">
+
+                <button
+                    type="button"
+                    class="btn btn-cancel"
+                    data-bs-dismiss="modal"
+                >
+                    Cancel
+                </button>
+
+                <button
+                    type="button"
+                    class="btn btn-delete"
+                    id="deleteConfirmationButton"
+                >
+                    Delete
+                </button>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+
 <script
     src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
 ></script>
 
 
 <script>
+
+/* =========================================================
+   DELETE CONFIRMATION
+   ========================================================= */
+
+let pendingDeleteForm = null;
+
+function openDeleteConfirmation(form, message)
+{
+    const modalElement =
+        document.getElementById('deleteConfirmationModal');
+
+    const messageElement =
+        document.getElementById('deleteConfirmationMessage');
+
+    const deleteButton =
+        document.getElementById('deleteConfirmationButton');
+
+    if (!modalElement || !messageElement || !deleteButton) {
+        return false;
+    }
+
+    pendingDeleteForm = form;
+    messageElement.textContent = message;
+
+    deleteButton.onclick = function()
+    {
+        if (!pendingDeleteForm) {
+            return;
+        }
+
+        const formToSubmit = pendingDeleteForm;
+        pendingDeleteForm = null;
+
+        const modalInstance =
+            bootstrap.Modal.getInstance(modalElement);
+
+        if (modalInstance) {
+            modalInstance.hide();
+        }
+
+        /* Submit the original delete form exactly as before. */
+        formToSubmit.submit();
+    };
+
+    const modal =
+        bootstrap.Modal.getOrCreateInstance(modalElement);
+
+    modal.show();
+
+    /* Prevent the original form submission until Delete is clicked. */
+    return false;
+}
+
+document
+    .getElementById('deleteConfirmationModal')
+    ?.addEventListener(
+        'hidden.bs.modal',
+        function()
+        {
+            pendingDeleteForm = null;
+
+            const deleteButton =
+                document.getElementById('deleteConfirmationButton');
+
+            if (deleteButton) {
+                deleteButton.onclick = null;
+            }
+        }
+    );
+
 
 /* =========================================================
    VIEW ITEM

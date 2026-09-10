@@ -375,6 +375,12 @@ while ($row = $items_result->fetch_assoc()) {
             font-weight: 400;
             margin-left: 10px;
         }
+         .profile-role {
+            margin-left: 4px;
+            color: #adb5bd;
+            font-size: 12px;
+            font-weight: 400;
+        }
 
         .profile {
             display: flex;
@@ -397,26 +403,144 @@ while ($row = $items_result->fetch_assoc()) {
             padding: 35px 35px 40px;
         }
 
-        .toast-container {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            z-index: 9999;
-        }
+  /* =========================================================
+   SYSTEM TOAST / PAGE ALERT
+   ========================================================= */
 
-        .toast-custom {
-            background: white;
-            border-radius: 12px;
-            padding: 16px 24px;
-            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
-            border-left: 6px solid #28a745;
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            min-width: 320px;
-            animation: slideIn 0.4s ease;
-            margin-bottom: 10px;
-        }
+.toast-container {
+    width: 100%;
+    margin: 0 0 24px 0;
+    position: relative;
+    z-index: 10;
+}
+
+.toast-custom {
+    width: 100%;
+    min-height: 60px;
+    padding: 15px 18px;
+    margin: 0;
+
+    display: flex;
+    align-items: center;
+    gap: 10px;
+
+    border: none;
+    border-radius: 12px;
+    box-shadow: none;
+
+    font-size: 16px;
+    line-height: 1.4;
+
+    animation: toastFadeIn .25s ease;
+}
+
+/* SUCCESS */
+.toast-custom.success {
+    background: #d1e7dd;
+    color: #0f5132;
+}
+
+.toast-custom.success .toast-icon {
+    color: #0f5132;
+}
+
+/* ERROR */
+.toast-custom.error {
+    background: #f8d7da;
+    color: #842029;
+}
+
+.toast-custom.error .toast-icon {
+    color: #842029;
+}
+
+/* WARNING */
+.toast-custom.warning {
+    background: #fff3cd;
+    color: #664d03;
+}
+
+.toast-custom.warning .toast-icon {
+    color: #664d03;
+}
+
+/* INFO */
+.toast-custom.info {
+    background: #cff4fc;
+    color: #055160;
+}
+
+.toast-custom.info .toast-icon {
+    color: #055160;
+}
+
+.toast-custom .toast-icon {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    font-size: 18px;
+}
+
+.toast-custom .toast-msg {
+    flex: 1;
+    min-width: 0;
+
+    font-size: 16px;
+    font-weight: 400;
+    line-height: 1.4;
+}
+
+/* No close X */
+.toast-custom .toast-close {
+    display: none;
+}
+
+@keyframes toastFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes toastFadeOut {
+    from {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    to {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+}
+
+@media (max-width: 768px) {
+    .toast-custom {
+        min-height: 56px;
+        padding: 13px 15px;
+        gap: 9px;
+    }
+
+    .toast-custom .toast-icon {
+        width: 20px;
+        height: 20px;
+        font-size: 17px;
+    }
+
+    .toast-custom .toast-msg {
+        font-size: 14px;
+    }
+}
 
         .toast-custom.error {
             border-left-color: #dc3545;
@@ -710,9 +834,6 @@ while ($row = $items_result->fetch_assoc()) {
 </head>
 <body>
 
-<!-- ========== TOAST CONTAINER ========== -->
-<div class="toast-container" id="toastContainer"></div>
-
 <!-- ========== SIDEBAR ========== -->
 <div class="sidebar">
     <div class="logo-area">
@@ -746,14 +867,18 @@ while ($row = $items_result->fetch_assoc()) {
 <div class="main">
     <div class="topbar">
         <h3>Supply Forecasting <small class="text-muted fs-6"><?php echo htmlspecialchars($branch_name); ?></small></h3>
-        <div class="profile">
-            <i class="bi bi-person-circle"></i>
-            <span><?php echo htmlspecialchars($username); ?></span>
-            <span class="profile-role">| Branch Administrator</span>
+         <div class="profile">
+                <i class="bi bi-person-circle"></i>
+                <span><?php echo htmlspecialchars($user_data['username'] ?? 'Branch Admin'); ?></span>
+                <span class="profile-role">| Branch Admin</span>
         </div>
     </div>
 
     <div class="page-body">
+
+    <!-- ========== TOAST CONTAINER ========== -->
+    <div class="toast-container" id="toastContainer"></div>
+
         <!-- Statistics Cards -->
         <div class="row g-4 mb-4">
             <div class="col-lg-3 col-md-6">
@@ -914,24 +1039,59 @@ while ($row = $items_result->fetch_assoc()) {
 // ============================================
 
 function showToast(message, type = 'success') {
-    const container = document.getElementById('toastContainer');
-    const toast = document.createElement('div');
-    toast.className = `toast-custom ${type}`;
+
+    const container =
+        document.getElementById('toastContainer');
+
+    if (!container) {
+        return;
+    }
+
+    const toast =
+        document.createElement('div');
+
+    toast.className =
+        `toast-custom ${type}`;
+
     const iconMap = {
-        'success': 'bi-check-circle-fill',
-        'error': 'bi-x-circle-fill',
-        'warning': 'bi-exclamation-triangle-fill'
+        success: 'bi-check-circle',
+        error: 'bi-x-circle',
+        warning: 'bi-exclamation-circle',
+        info: 'bi-info-circle'
     };
-    const icon = iconMap[type] || 'bi-info-circle-fill';
+
+    const icon =
+        iconMap[type] || 'bi-info-circle';
+
     toast.innerHTML = `
-        <span class="toast-icon"><i class="bi ${icon}"></i></span>
-        <span class="toast-msg">${message}</span>
-        <button class="toast-close" onclick="this.parentElement.remove()">&times;</button>
+        <span class="toast-icon">
+            <i class="bi ${icon}"></i>
+        </span>
+
+        <span class="toast-msg">
+            ${message}
+        </span>
     `;
+
     container.appendChild(toast);
-    setTimeout(() => {
-        if (toast.parentElement) toast.remove();
-    }, 8000);
+
+    /* Automatically disappear after 4 seconds */
+    setTimeout(function () {
+
+        if (!toast.parentElement) {
+            return;
+        }
+
+        toast.style.animation =
+            'toastFadeOut .3s ease forwards';
+
+        setTimeout(function () {
+            if (toast.parentElement) {
+                toast.remove();
+            }
+        }, 300);
+
+    }, 4000);
 }
 
 <?php if (isset($forecast_message) && !empty($forecast_message)): ?>

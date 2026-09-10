@@ -1208,10 +1208,10 @@ function getStatusBadge($status)
     <div class="topbar">
         <h3>Patients <small><?php echo htmlspecialchars($branch_name); ?></small></h3>
 
-        <div class="profile">
+       <div class="profile">
             <i class="bi bi-person-circle"></i>
-            <span><?php echo htmlspecialchars($username); ?></span>
-            <span class="text-muted fw-normal">| Nurse</span>
+            <?php echo htmlspecialchars($username); ?>
+            <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Nurse</span>
         </div>
     </div>
 

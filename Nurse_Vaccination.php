@@ -1401,13 +1401,12 @@ function getStatusBadge($status)
         .topbar h3 { font-size: 28px; font-weight: 700; color: var(--primary); margin: 0; letter-spacing: -0.3px; }
         .topbar h3 small { font-size: 16px; font-weight: 400; color: #666; margin-left: 10px; }
         .profile {
+            font-weight: 600;
             color: var(--primary);
             cursor: default;
             display: flex;
             align-items: center;
             gap: 6px;
-            font-size: 16px;
-            white-space: nowrap;
         }
         .profile i {
             font-size: 16px;
@@ -1709,9 +1708,8 @@ function getStatusBadge($status)
         <h3>Vaccination Administration <small><?php echo htmlspecialchars($branch_name); ?></small></h3>
         <div class="profile">
             <i class="bi bi-person-circle"></i>
-            <span class="profile-name"><?php echo htmlspecialchars($username); ?></span>
-            <span class="profile-separator">|</span>
-            <span class="profile-role">Nurse</span>
+            <?php echo htmlspecialchars($username); ?>
+            <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Nurse</span>
         </div>
     </div>
 
