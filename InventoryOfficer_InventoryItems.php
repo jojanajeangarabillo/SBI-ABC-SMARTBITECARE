@@ -961,7 +961,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 !== $is_forecastable
             ) {
                 $changes[] =
-                    'prediction setting changed';
+                    'forecasting setting changed';
             }
 
 
@@ -3023,7 +3023,7 @@ body {
                     </div>
 
 
-                    <!-- SHORTAGE PREDICTION -->
+                    <!-- SHORTAGE FORECASTING -->
 
                     <div class="form-check">
 
@@ -3031,17 +3031,16 @@ body {
                             class="form-check-input"
                             type="checkbox"
                             name="is_forecastable"
-                            id="addPredictable"
+                            id="addForecastable"
                             value="1"
-                            checked
                         >
 
 
                         <label
                             class="form-check-label"
-                            for="addPredictable"
+                            for="addForecastable"
                         >
-                            Include in shortage prediction model
+                            Include in shortage forecasting model
                         </label>
 
                     </div>
@@ -3312,7 +3311,7 @@ body {
                     </div>
 
 
-                    <!-- PREDICTION -->
+                    <!-- FORECASTING -->
 
                     <div class="form-check">
 
@@ -3320,16 +3319,16 @@ body {
                             class="form-check-input"
                             type="checkbox"
                             name="is_forecastable"
-                            id="editPredictable"
+                            id="editForecastable"
                             value="1"
                         >
 
 
                         <label
                             class="form-check-label"
-                            for="editPredictable"
+                            for="editForecastable"
                         >
-                            Include in shortage prediction model
+                            Include in shortage forecasting model
                         </label>
 
                     </div>
@@ -3521,10 +3520,10 @@ body {
                         <label
                             class="text-muted small fw-bold"
                         >
-                            Shortage Prediction
+                            Shortage Forecasting
                         </label>
 
-                        <div id="viewPredictable"></div>
+                        <div id="viewForecastable"></div>
 
                     </div>
 
@@ -3868,7 +3867,7 @@ function viewItem(item)
 
 
     document
-        .getElementById('viewPredictable')
+        .getElementById('viewForecastable')
         .textContent =
             Number(
                 item.is_forecastable
@@ -3939,7 +3938,7 @@ function editItem(item)
 
 
     document
-        .getElementById('editPredictable')
+        .getElementById('editForecastable')
         .checked =
             Number(
                 item.is_forecastable
