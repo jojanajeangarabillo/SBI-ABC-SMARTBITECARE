@@ -376,18 +376,30 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
             font-size: 28px;
             font-weight: 700;
             color: var(--primary);
-            margin: 0;
+            margin:
+             0;
         }
-        .topbar h3 small {
+
+          .topbar h3 small {
+            color: #666;
             font-size: 16px;
             font-weight: 400;
-            color: #666;
             margin-left: 10px;
+        }
+        
+        .profile-role {
+            margin-left: 4px;
+            color: #adb5bd;
+            font-size: 12px;
+            font-weight: 400;
         }
         .profile {
             font-weight: 600;
             color: var(--primary);
             cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
         @media(max-width:991px) {
             .main { margin-left: 90px; }
@@ -674,7 +686,12 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
     <div class="main">
         <div class="topbar">
             <h3>User Management <small><?php echo htmlspecialchars($branch_name); ?></small></h3>
-            <div class="profile"><?php echo htmlspecialchars($username); ?></div>
+            
+             <div class="profile">
+                <i class="bi bi-person-circle"></i>
+                <span><?php echo htmlspecialchars($username); ?></span>
+                <span class="profile-role">| Branch Admin</span>
+            </div>
         </div>
         <div class="content-wrapper">
             <?php if ($message): ?>
@@ -710,9 +727,6 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
                                         <div class="empty-state">
                                             <i class="bi bi-people"></i>
                                             <p>No users found for this branch.</p>
-                                            <button class="btn btn-add-user" data-bs-toggle="modal" data-bs-target="#addUserModal">
-                                                <i class="bi bi-person-plus"></i> Add your first user
-                                            </button>
                                         </div>
                                     </td>
                                 </tr>
@@ -777,15 +791,6 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
                     </nav>
                 </div>
             <?php endif; ?>
-
-            <div class="quick-actions-card">
-                <div class="qa-title"><i class="bi bi-lightning-fill"></i> Quick Actions</div>
-                <div class="qa-btn-group">
-                    <button class="btn-qa" data-bs-toggle="modal" data-bs-target="#addUserModal"><i class="bi bi-person-plus"></i> Add Nurse</button>
-                    <button class="btn-qa" data-bs-toggle="modal" data-bs-target="#addUserModal"><i class="bi bi-person-plus"></i> Add Admin Staff</button>
-                    <button class="btn-qa" data-bs-toggle="modal" data-bs-target="#addUserModal"><i class="bi bi-person-plus"></i> Add Inventory Officer</button>
-                </div>
-            </div>
         </div>
     </div>
 

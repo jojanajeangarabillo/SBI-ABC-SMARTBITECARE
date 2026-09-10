@@ -5,6 +5,9 @@ define('DB_USER', 'root'); // Change this to your database username
 define('DB_PASS', ''); // Change this to your database password
 define('DB_NAME', 'smartbitecare');
 
+// Set PHP timezone to Philippines
+date_default_timezone_set('Asia/Manila');
+
 // Create connection
 $conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
 
@@ -15,6 +18,9 @@ if ($conn->connect_error) {
 
 // Set charset to UTF-8
 $conn->set_charset("utf8mb4");
+
+// Set MySQL session timezone to Philippines (UTC+8)
+$conn->query("SET time_zone = '+08:00'");
 
 // Function to check if user is logged in
 function isLoggedIn() {

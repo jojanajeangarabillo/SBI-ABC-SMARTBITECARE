@@ -1,3 +1,45 @@
+<?php
+session_start();
+require_once 'sources/db_connect.php';
+
+// Check if user is Super Admin
+if (
+    !isset($_SESSION['user_id']) ||
+    !isset($_SESSION['role_id']) ||
+    $_SESSION['role_id'] != 1
+) {
+    header("Location: login.php");
+    exit();
+}
+
+// ============================================
+// AUDIT LOG FUNCTION
+// ============================================
+function addAuditLog($conn, $user_id, $action, $module = 'Dashboard') {
+    $branch_id = null;
+    $user_sql = "SELECT branch_id FROM users WHERE user_id = ?";
+    $user_stmt = $conn->prepare($user_sql);
+    if ($user_stmt) {
+        $user_stmt->bind_param("i", $user_id);
+        $user_stmt->execute();
+        $user_result = $user_stmt->get_result();
+        if ($user_row = $user_result->fetch_assoc()) {
+            $branch_id = $user_row['branch_id'];
+        }
+        $user_stmt->close();
+    }
+    
+    $log_sql = "INSERT INTO audit_logs (user_id, branch_id, action, module) VALUES (?, ?, ?, ?)";
+    $log_stmt = $conn->prepare($log_sql);
+    if ($log_stmt) {
+        $log_stmt->bind_param("isss", $user_id, $branch_id, $action, $module);
+        $result = $log_stmt->execute();
+        $log_stmt->close();
+        return $result;
+    }
+    return false;
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -56,7 +98,7 @@
             margin: 0;
             letter-spacing: -0.3px;
         }
-        .profile {
+      .profile {
             font-weight: 600;
             color: var(--primary);
             cursor: default;
@@ -293,8 +335,10 @@
     <!-- TOP BAR -->
     <div class="topbar">
         <h3>Notifications</h3>
-        <div class="profile">
+       <div class="profile">
+            <i class="bi bi-person-circle"></i>
             <?php echo htmlspecialchars($_SESSION['username'] ?? 'SUPER ADMIN'); ?>
+            <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Super Admin</span>
         </div>
     </div>
 

@@ -862,6 +862,12 @@ $stats['low_stock'] = $result->fetch_assoc()['count'] ?? 0;
             align-items: center;
             gap: 6px;
         }
+          .profile-role {
+            margin-left: 4px;
+            color: #adb5bd;
+            font-size: 12px;
+            font-weight: 400;
+        }
 
         .content {
             padding: 35px 35px 40px;
@@ -1314,14 +1320,16 @@ $stats['low_stock'] = $result->fetch_assoc()['count'] ?? 0;
 
     <nav class="nav-menu">
         <ul>
-            <li><a href="BranchAdmin_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
-            <li><a href="BranchAdmin_UserManagement.php"><i class="bi bi-people-fill"></i><span>User Management</span></a></li>
-            <li><a href="BranchAdmin_PatientMonitoring.php"><i class="bi bi-heart-pulse-fill"></i><span>Patient Monitoring</span></a></li>
-            <li><a href="BranchAdmin_InventoryOverview.php"><i class="bi bi-box-seam"></i><span>Inventory Overview</span></a></li>
-            <li><a class="active" href="BranchAdmin_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
-            <li><a href="BranchAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
-            <li><a href="BranchAdmin_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
-            <li><a href="BranchAdmin_Settings.php"><i class="bi bi-gear-fill"></i><span>Settings</span></a></li>
+                <li><a href="BranchAdmin_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
+                <li><a href="BranchAdmin_UserManagement.php"><i class="bi bi-people-fill"></i><span>User Management</span></a></li>
+                <li><a href="BranchAdmin_PatientMonitoring.php"><i class="bi bi-heart-pulse-fill"></i><span>Patient Monitoring</span></a></li>
+                <li><a href="BranchAdmin_PhilhealthWorkflow.php"><i class="bi bi-file-medical-fill"></i><span>PhilHealth Processing</span></a></li>
+                <li><a href="BranchAdmin_InventoryOverview.php"><i class="bi bi-box-seam"></i><span>Inventory Overview</span></a></li>
+                <li><a href="BranchAdmin_Forecasting.php"><i class="bi bi-graph-up-arrow"></i><span>Supply Forecasting</span></a></li>
+                <li><a class="active" href="BranchAdmin_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
+                <li><a href="BranchAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
+                <li><a href="BranchAdmin_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+                <li><a href="BranchAdmin_Settings.php"><i class="bi bi-gear-fill"></i><span>Settings</span></a></li>
         </ul>
     </nav>
 
@@ -1334,11 +1342,13 @@ $stats['low_stock'] = $result->fetch_assoc()['count'] ?? 0;
 <div class="main">
     <div class="topbar">
         <h3>Reports <small><?php echo htmlspecialchars($branch_name); ?></small></h3>
+
         <div class="profile">
-            
-            <?php echo htmlspecialchars($username); ?>
-            
+                <i class="bi bi-person-circle"></i>
+                <span><?php echo htmlspecialchars($username); ?></span>
+                <span class="profile-role">| Branch Admin</span>
         </div>
+        
     </div>
 
     <div class="content">

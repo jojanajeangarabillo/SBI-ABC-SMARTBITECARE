@@ -623,7 +623,7 @@ $flash = workflowTakeFlash();
     <div class="main">
         <div class="topbar">
             <h3>PhilHealth Processing <small><?php echo workflowH($branchName); ?></small></h3>
-            <div class="profile">
+             <div class="profile">
                 <i class="bi bi-person-circle"></i>
                 <span><?php echo workflowH($username); ?></span>
                 <span class="profile-role">| Branch Admin</span>

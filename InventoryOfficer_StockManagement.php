@@ -648,13 +648,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+/* -------------------------------------------------------------
+ * GET PARAMETERS
+ * ----------------------------------------------------------- */
+
 if (isset($_GET['msg'])) {
     $message = $_GET['msg'];
-    $messageType = ($_GET['type'] ?? 'success') === 'error' ? 'error' : 'success';
-    $activePanel = $_GET['panel'] ?? 'stockIn';
+    $messageType = ($_GET['type'] ?? 'success') === 'error'
+        ? 'error'
+        : 'success';
 }
 
-if (!in_array($activePanel, ['stockIn', 'stockOut', 'adjustment', 'expiration', 'archived'], true)) {
+/* Always read the requested Stock Management panel. */
+if (isset($_GET['panel'])) {
+    $activePanel = $_GET['panel'];
+}
+
+if (!in_array(
+    $activePanel,
+    ['stockIn', 'stockOut', 'adjustment', 'expiration', 'archived'],
+    true
+)) {
     $activePanel = 'stockIn';
 }
 
@@ -1066,6 +1080,149 @@ body{
     display:block;
 }
 
+/* =========================================================
+   CONFIRMATION MODAL
+   ========================================================= */
+.confirmation-modal .modal-dialog{
+    max-width:460px;
+    margin:1.75rem auto;
+}
+
+.confirmation-modal .modal-content{
+    border:0;
+    border-radius:16px;
+    overflow:hidden;
+    box-shadow:0 18px 50px rgba(31,42,68,.20);
+    background:#fff;
+}
+
+.confirmation-modal .modal-header{
+    background:#2B3A8C;
+    color:#fff;
+    border:0;
+    padding:18px 22px;
+    min-height:68px;
+    display:flex;
+    align-items:center;
+}
+
+.confirmation-modal .modal-title{
+    margin:0;
+    font-size:19px;
+    font-weight:700;
+    display:flex;
+    align-items:center;
+    gap:8px;
+}
+
+.confirmation-modal .modal-title i{
+    font-size:20px;
+}
+
+.confirmation-modal .btn-close{
+    opacity:1;
+    filter:brightness(0) invert(1);
+    box-shadow:none;
+}
+
+.confirmation-modal .btn-close:focus{
+    box-shadow:none;
+}
+
+.confirmation-modal .modal-body{
+    padding:30px 28px 26px;
+    text-align:center;
+}
+
+.confirmation-icon{
+    width:58px;
+    height:58px;
+    margin:0 auto 18px;
+    border-radius:50%;
+    background:#eef1fb;
+    color:#2B3A8C;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:27px;
+}
+
+.confirmation-message{
+    margin:0;
+    color:#2d3748;
+    font-size:15px;
+    line-height:1.55;
+    font-weight:500;
+}
+
+.confirmation-modal .modal-footer{
+    border-top:1px solid #edf0f5;
+    padding:15px 22px;
+    display:flex;
+    justify-content:flex-end;
+    gap:10px;
+    background:#fff;
+}
+
+.confirmation-modal .btn-cancel,
+.confirmation-modal .btn-confirm{
+    min-width:100px;
+    min-height:40px;
+    border-radius:8px;
+    padding:8px 16px;
+    font-size:13px;
+    font-weight:600;
+    transition:all .15s ease;
+}
+
+.confirmation-modal .btn-cancel{
+    background:#fff;
+    color:#5f6877;
+    border:1px solid #dfe3ec;
+}
+
+.confirmation-modal .btn-cancel:hover{
+    background:#f5f6f9;
+    border-color:#cfd5e1;
+    color:#3f4858;
+}
+
+.confirmation-modal .btn-confirm{
+    background:#2B3A8C;
+    color:#fff;
+    border:1px solid #2B3A8C;
+}
+
+.confirmation-modal .btn-confirm:hover{
+    background:#1d2863;
+    border-color:#1d2863;
+    color:#fff;
+    transform:translateY(-1px);
+}
+
+@media(max-width:576px){
+    .confirmation-modal .modal-dialog{
+        width:calc(100% - 24px);
+        margin:.75rem auto;
+    }
+
+    .confirmation-modal .modal-header{
+        padding:16px 18px;
+    }
+
+    .confirmation-modal .modal-title{
+        font-size:17px;
+    }
+
+    .confirmation-modal .modal-body{
+        padding:24px 20px 22px;
+    }
+
+    .confirmation-modal .modal-footer{
+        padding:13px 16px;
+    }
+}
+
 @media(max-width:991px){
     .main{margin-left:90px;}
 }
@@ -1089,6 +1246,7 @@ body{
             <li><a href="InventoryOfficer_Categories.php"><i class="bi bi-tags"></i><span>Categories & Units</span></a></li>
             <li><a class="active" href="InventoryOfficer_StockManagement.php"><i class="bi bi-boxes"></i><span>Stock Management</span></a></li>
             <li><a href="InventoryOfficer_StockTransactions.php"><i class="bi bi-arrow-left-right"></i><span>Stock Transactions</span></a></li>
+            <li><a href="InventoryOfficer_ReturnManagement.php"><i class="bi bi-arrow-return-left"></i><span>Return Management</span></a></li>
             <li><a href="InventoryOfficer_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Inventory Reports</span></a></li>
             <li><a href="InventoryOfficer_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
         </ul>
@@ -1201,7 +1359,7 @@ body{
             <div class="form-card">
                 <div class="section-title">Record Stock Out</div>
 
-                <form method="POST" action="InventoryOfficer_StockManagement.php" onsubmit="return confirm('Save this Stock Out transaction?');">
+                <form method="POST" action="InventoryOfficer_StockManagement.php" onsubmit="return openConfirmationModal(this, 'Save this Stock Out transaction?');">
                     <input type="hidden" name="csrf_token" value="<?php echo h($csrfToken); ?>">
                     <input type="hidden" name="action" value="stock_out">
                     <input type="hidden" name="panel" value="stockOut">
@@ -1259,7 +1417,7 @@ body{
             <div class="form-card">
                 <div class="section-title">Record Stock Adjustment</div>
 
-                <form method="POST" action="InventoryOfficer_StockManagement.php" onsubmit="return confirm('Save this Stock Adjustment?');">
+                <form method="POST" action="InventoryOfficer_StockManagement.php" onsubmit="return openConfirmationModal(this, 'Save this Stock Adjustment?');">
                     <input type="hidden" name="csrf_token" value="<?php echo h($csrfToken); ?>">
                     <input type="hidden" name="action" value="adjustment">
                     <input type="hidden" name="panel" value="adjustment">
@@ -1374,7 +1532,7 @@ body{
                                         </a>
 
                                         <?php if ($days !== null && $days < 0 && (int)$row['quantity_available'] > 0): ?>
-                                            <form method="POST" action="InventoryOfficer_StockManagement.php" style="display:inline;" onsubmit="return confirm('Dispose the remaining expired stock and move this batch to Archived Stocks? This action cannot be undone.');">
+                                            <form method="POST" action="InventoryOfficer_StockManagement.php" style="display:inline;" onsubmit="return openConfirmationModal(this, 'Dispose the remaining expired stock and move this batch to Archived Stocks? This action cannot be undone.');">
                                                 <input type="hidden" name="csrf_token" value="<?php echo h($csrfToken); ?>">
                                                 <input type="hidden" name="action" value="archive_expired">
                                                 <input type="hidden" name="panel" value="expiration">
@@ -1475,7 +1633,7 @@ body{
                 </div>
                 <div class="modal-footer">
                     <?php if ($viewDays !== null && $viewDays < 0 && (int)$viewStock['quantity_available'] > 0): ?>
-                        <form method="POST" action="InventoryOfficer_StockManagement.php" class="me-auto" onsubmit="return confirm('Dispose the remaining expired stock and archive this batch? This action cannot be undone.');">
+                        <form method="POST" action="InventoryOfficer_StockManagement.php" class="me-auto" onsubmit="return openConfirmationModal(this, 'Dispose the remaining expired stock and archive this batch? This action cannot be undone.');">
                             <input type="hidden" name="csrf_token" value="<?php echo h($csrfToken); ?>">
                             <input type="hidden" name="action" value="archive_expired">
                             <input type="hidden" name="panel" value="expiration">
@@ -1492,8 +1650,79 @@ body{
     </div>
 <?php endif; ?>
 
+<!-- CONFIRMATION MODAL -->
+<div class="modal fade confirmation-modal" id="confirmationModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-question-circle me-2"></i>
+                    Confirm Action
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="confirmation-icon">
+                    <i class="bi bi-question-lg"></i>
+                </div>
+                <p class="confirmation-message" id="confirmationMessage">Are you sure you want to continue?</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-cancel" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-confirm" id="confirmationConfirmBtn">Confirm</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+/* REUSABLE CONFIRMATION MODAL */
+let pendingConfirmationForm = null;
+
+function openConfirmationModal(form, message) {
+    const modalElement = document.getElementById('confirmationModal');
+    const messageElement = document.getElementById('confirmationMessage');
+    const confirmButton = document.getElementById('confirmationConfirmBtn');
+
+    if (!modalElement || !messageElement || !confirmButton) {
+        return false;
+    }
+
+    pendingConfirmationForm = form;
+    messageElement.textContent = message;
+
+    confirmButton.onclick = function () {
+        if (!pendingConfirmationForm) {
+            return;
+        }
+
+        const formToSubmit = pendingConfirmationForm;
+        pendingConfirmationForm = null;
+
+        const modalInstance = bootstrap.Modal.getInstance(modalElement);
+        if (modalInstance) {
+            modalInstance.hide();
+        }
+
+        formToSubmit.submit();
+    };
+
+    const modal = bootstrap.Modal.getOrCreateInstance(modalElement);
+    modal.show();
+
+    return false;
+}
+
+document.getElementById('confirmationModal')?.addEventListener('hidden.bs.modal', function () {
+    pendingConfirmationForm = null;
+
+    const confirmButton = document.getElementById('confirmationConfirmBtn');
+    if (confirmButton) {
+        confirmButton.onclick = null;
+    }
+});
+
 function showPanel(id, btn) {
     document.querySelectorAll('.panel').forEach(function(panel) {
         panel.classList.remove('active');
@@ -1630,7 +1859,7 @@ function validateStockInForm() {
         }
     }
 
-    return confirm('Save this Stock In transaction?');
+    return openConfirmationModal(document.getElementById('stockInForm'), 'Save this Stock In transaction?');
 }
 
 /* -------------------------------------------------------------

@@ -802,6 +802,12 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
             align-items: center;
             gap: 8px;
         }
+          .profile-role {
+            margin-left: 4px;
+            color: #adb5bd;
+            font-size: 12px;
+            font-weight: 400;
+        }
 
         .content-wrapper {
             padding: 28px 35px 40px 35px;
@@ -1434,7 +1440,7 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
                 <li><a href="BranchAdmin_InventoryOverview.php"><i class="bi bi-box-seam"></i><span>Inventory Overview</span></a></li>
                 <li><a href="BranchAdmin_Forecasting.php"><i class="bi bi-graph-up-arrow"></i><span>Supply Forecasting</span></a></li>
                 <li><a href="BranchAdmin_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
-                <li><a class="active" href="BranchAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
+                <li><a class="active"href="BranchAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
                 <li><a href="BranchAdmin_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
                 <li><a href="BranchAdmin_Settings.php"><i class="bi bi-gear-fill"></i><span>Settings</span></a></li>
             </ul>
@@ -1452,10 +1458,10 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
         <!-- Top Header -->
         <div class="topbar">
             <h3>Audit Logs <small><?php echo htmlspecialchars($branch_name); ?></small></h3>
-            <div class="profile">
-                
-                <?php echo htmlspecialchars($username); ?>
-               
+             <div class="profile">
+                <i class="bi bi-person-circle"></i>
+                <span><?php echo htmlspecialchars($userData['username'] ?? 'ADMIN'); ?></span>
+                <span class="profile-role">| Branch Admin</span>
             </div>
         </div>
 

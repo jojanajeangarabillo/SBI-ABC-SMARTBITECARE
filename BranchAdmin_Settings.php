@@ -152,11 +152,23 @@ $lastUpdate = $logResult->fetch_assoc();
             color: var(--primary);
             margin: 0;
         }
+           .topbar h3 small {
+            font-size: 16px;
+            font-weight: 400;
+            color: #666;
+            margin-left: 10px;
+        }
 
         .profile {
             font-weight: 600;
             color: var(--primary);
             cursor: pointer;
+        }
+           .profile-role {
+            margin-left: 4px;
+            color: #adb5bd;
+            font-size: 12px;
+            font-weight: 400;
         }
 
         @media (max-width:991px) {
@@ -530,11 +542,13 @@ $lastUpdate = $logResult->fetch_assoc();
     <div class="main">
         <!-- Top Header -->
         <div class="topbar">
-            <h3>Settings</h3>
+            <h3>Settings<small><?php echo htmlspecialchars($branch['branch_name'] ?? 'Unknown Branch'); ?></small></h3>
             <div class="profile">
-                <?php echo htmlspecialchars($userData['username'] ?? 'ADMIN'); ?> 
-                
+                <i class="bi bi-person-circle"></i>
+                <span><?php echo htmlspecialchars($userData['username'] ?? 'ADMIN'); ?></span>
+                <span class="profile-role">| Branch Admin</span>
             </div>
+            
         </div>
 
         <!-- Toast Container -->

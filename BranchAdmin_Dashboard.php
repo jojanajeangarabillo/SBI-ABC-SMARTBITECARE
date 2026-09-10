@@ -319,12 +319,11 @@ $username = $userInfo['username'] ?? 'Admin';
         }
 
         .topbar h3 small {
+            margin-left: 10px;
+            color: #666;
             font-size: 16px;
             font-weight: 400;
-            color: #666;
-            margin-left: 10px;
         }
-
         .profile {
             font-weight: 600;
             color: var(--primary);
@@ -683,6 +682,12 @@ $username = $userInfo['username'] ?? 'Admin';
             align-items: center;
             gap: 6px;
             font-weight: 600;
+        }
+          .profile-role {
+            margin-left: 4px;
+            color: #adb5bd;
+            font-size: 12px;
+            font-weight: 400;
         }
 
         .dashboard {
@@ -1053,7 +1058,7 @@ $username = $userInfo['username'] ?? 'Admin';
             <div class="profile">
                 <i class="bi bi-person-circle"></i>
                 <span><?php echo htmlspecialchars($username); ?></span>
-                <span>| Branch Administrator</span>
+                <span class="profile-role">| Branch Admin</span>
             </div>
         </div>
 

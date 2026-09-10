@@ -505,9 +505,10 @@ $today_data = $today_result->fetch_assoc();
     <!-- TOP BAR -->
     <div class="topbar">
         <h3>Dashboard</h3>
-        <div class="profile">
+         <div class="profile">
+            <i class="bi bi-person-circle"></i>
             <?php echo htmlspecialchars($_SESSION['username'] ?? 'SUPER ADMIN'); ?>
-            
+            <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Super Admin</span>
         </div>
     </div>
 

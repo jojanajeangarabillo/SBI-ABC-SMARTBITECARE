@@ -161,8 +161,8 @@ $flash = workflowTakeFlash();
         .notification-card:hover{transform:translateY(-1px);box-shadow:0 7px 18px rgba(31,42,68,.08)}.notification-card.unread{background:#f7f8ff;border-left:4px solid var(--primary)}
         .notification-icon{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;color:#fff;font-size:17px;background:#64748b}.notification-icon.inventory{background:#e48b16}.notification-icon.forecast{background:#6f42c1}.notification-icon.philhealth{background:#167a5b}.notification-icon.patient{background:#d64555}.notification-icon.user{background:#2775c9}
         .notification-content{min-width:0}.notification-content h2{margin:0 0 3px;color:#26345f;font-size:15px;font-weight:700}
-        .notification-message{display:-webkit-box;margin:0;color:#515d79;font-size:13px;line-height:1.4;white-space:pre-line;overflow:hidden;overflow-wrap:anywhere;-webkit-box-orient:vertical;-webkit-line-clamp:2}
-        .notification-message.expanded{display:block;overflow:visible;-webkit-line-clamp:unset}.view-more-btn{display:none;margin:4px 0 0;padding:0;border:0;background:transparent;color:var(--primary);font-size:12px;font-weight:700}.view-more-btn:hover{text-decoration:underline}
+        .notification-message{display:-webkit-box;margin:0;color:#515d79;font-size:13px;line-height:1.4;white-space:pre-line;overflow:hidden;overflow-wrap:anywhere;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
+        .notification-message.expanded{display:block;overflow:visible;-webkit-line-clamp:unset;line-clamp:unset}.view-more-btn{display:none;margin:4px 0 0;padding:0;border:0;background:transparent;color:var(--primary);font-size:12px;font-weight:700}.view-more-btn:hover{text-decoration:underline}
         .notification-meta{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:5px;color:#7b849d;font-size:11px}.type-pill{background:#edf0f7;color:#4b5675;border-radius:999px;padding:2px 8px;font-weight:650}
         .notification-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px}.notification-actions .btn{white-space:nowrap}
         .empty-state{padding:50px 20px;text-align:center;color:var(--muted)}.empty-state>i{display:block;color:#b0b8cc;font-size:44px;margin-bottom:10px}.empty-state h2{color:var(--primary);font-size:18px}
@@ -176,16 +176,16 @@ $flash = workflowTakeFlash();
 <aside class="sidebar">
     <div class="logo-area"><div class="logo-frame"><img src="logo.png" alt="Smart Bite Care Logo" class="logo"></div><div class="system-name">Smart Bite Care</div></div>
     <nav class="nav-menu" aria-label="Branch Admin navigation"><ul>
-        <li><a href="BranchAdmin_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
-        <li><a href="BranchAdmin_UserManagement.php"><i class="bi bi-people-fill"></i><span>User Management</span></a></li>
-        <li><a href="BranchAdmin_PatientMonitoring.php"><i class="bi bi-heart-pulse-fill"></i><span>Patient Monitoring</span></a></li>
-        <li><a href="BranchAdmin_PhilhealthWorkflow.php"><i class="bi bi-file-medical-fill"></i><span>PhilHealth Processing</span></a></li>
-        <li><a href="BranchAdmin_InventoryOverview.php"><i class="bi bi-box-seam"></i><span>Inventory Overview</span></a></li>
-        <li><a href="BranchAdmin_Forecasting.php"><i class="bi bi-graph-up-arrow"></i><span>Supply Forecasting</span></a></li>
-        <li><a href="BranchAdmin_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
-        <li><a href="BranchAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
-        <li><a class="active" href="BranchAdmin_Notifications.php" aria-current="page"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
-        <li><a href="BranchAdmin_Settings.php"><i class="bi bi-gear-fill"></i><span>Settings</span></a></li>
+         <li><a href="BranchAdmin_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
+                <li><a href="BranchAdmin_UserManagement.php"><i class="bi bi-people-fill"></i><span>User Management</span></a></li>
+                <li><a href="BranchAdmin_PatientMonitoring.php"><i class="bi bi-heart-pulse-fill"></i><span>Patient Monitoring</span></a></li>
+                <li><a href="BranchAdmin_PhilhealthWorkflow.php"><i class="bi bi-file-medical-fill"></i><span>PhilHealth Processing</span></a></li>
+                <li><a href="BranchAdmin_InventoryOverview.php"><i class="bi bi-box-seam"></i><span>Inventory Overview</span></a></li>
+                <li><a href="BranchAdmin_Forecasting.php"><i class="bi bi-graph-up-arrow"></i><span>Supply Forecasting</span></a></li>
+                <li><a href="BranchAdmin_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
+                <li><a href="BranchAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
+                <li><a class="active" href="BranchAdmin_Notifications.php" aria-current="page"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+                <li><a href="BranchAdmin_Settings.php"><i class="bi bi-gear-fill"></i><span>Settings</span></a></li>
     </ul></nav>
     <div class="logout"><a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a></div>
 </aside>
