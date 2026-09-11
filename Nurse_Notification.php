@@ -988,9 +988,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         </ul>
     </nav>
 
-    <div class="logout">
-        <a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
-    </div>
+    
 </div>
 
 <!-- ========== MAIN CONTENT ========== -->
@@ -1004,10 +1002,30 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             <span class="badge-unread"><?php echo $unreadCount; ?> unread</span>
             <?php endif; ?>
         </h3>
-        <div class="profile">
-            <i class="bi bi-person-circle"></i>
-            <?php echo htmlspecialchars($username); ?>
-            <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Nurse</span>
+        <div class="dropdown">
+            <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
+                    type="button" id="nurseProfileMenu"
+                    data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="bi bi-person-circle"></i>
+                <span><?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?></span>
+                <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Nurse</span>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2"
+                aria-labelledby="nurseProfileMenu">
+                <li><h6 class="dropdown-header">Account options</h6></li>
+                <li>
+                    <a class="dropdown-item rounded-2 py-2" href="Account_ChangePassword.php">
+                        <i class="bi bi-key-fill me-2"></i>Change Password
+                    </a>
+                </li>
+                <li><hr class="dropdown-divider"></li>
+                <li>
+                    <a class="dropdown-item rounded-2 py-2 text-danger" href="logout.php"
+                       onclick="return window.confirm('Are you sure you want to log out?');">
+                        <i class="bi bi-box-arrow-right me-2"></i>Logout
+                    </a>
+                </li>
+            </ul>
         </div>
     </div>
 

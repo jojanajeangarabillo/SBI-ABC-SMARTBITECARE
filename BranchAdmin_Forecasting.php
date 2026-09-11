@@ -867,11 +867,30 @@ while ($row = $items_result->fetch_assoc()) {
 <div class="main">
     <div class="topbar">
         <h3>Supply Forecasting <small class="text-muted fs-6"><?php echo htmlspecialchars($branch_name); ?></small></h3>
-         <div class="profile">
-                <i class="bi bi-person-circle"></i>
-                <span><?php echo htmlspecialchars($user_data['username'] ?? 'Branch Admin'); ?></span>
-                <span class="profile-role">| Branch Admin</span>
-        </div>
+         <div class="dropdown">
+                <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
+                        type="button" id="branchAdminProfileMenu"
+                        data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="bi bi-person-circle"></i>
+                    <span><?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?></span>
+                    <span class="profile-role">| Branch Admin</span>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2"
+                    aria-labelledby="branchAdminProfileMenu">
+                    <li><h6 class="dropdown-header">Account options</h6></li>
+                    <li>
+                        <a class="dropdown-item rounded-2 py-2" href="Account_ChangePassword.php">
+                            <i class="bi bi-key-fill me-2"></i>Change Password
+                        </a>
+                    </li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li>
+                        <a class="dropdown-item rounded-2 py-2 text-danger" href="logout.php">
+                            <i class="bi bi-box-arrow-right me-2"></i>Logout
+                        </a>
+                    </li>
+                </ul>
+            </div>
     </div>
 
     <div class="page-body">

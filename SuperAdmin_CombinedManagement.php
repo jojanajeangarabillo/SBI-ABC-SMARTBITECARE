@@ -1,7 +1,8 @@
 <?php
 session_start();
-require_once 'sources/db_connect.php';
-require_once 'sources/mailer.php';
+require_once __DIR__ . '/sources/db_connect.php';
+require_once __DIR__ . '/sources/app_config.php';
+require_once __DIR__ . '/sources/mailer.php';
 
 // Check if user is logged in and is super admin
 if (
@@ -15,30 +16,36 @@ if (
 
 // ========== AUDIT LOG FUNCTION ==========
 function addAuditLog($conn, $user_id, $action, $module = 'Branch & Admin Management') {
-    // Get user's branch_id
-    $branch_id = null;
-    $user_sql = "SELECT branch_id FROM users WHERE user_id = ?";
-    $user_stmt = $conn->prepare($user_sql);
-    if ($user_stmt) {
-        $user_stmt->bind_param("i", $user_id);
+    try {
+        // Read the acting user's branch so every audit entry remains traceable.
+        $branch_id = null;
+        $user_stmt = $conn->prepare(
+            'SELECT branch_id FROM users WHERE user_id = ? LIMIT 1'
+        );
+        $user_stmt->bind_param('i', $user_id);
         $user_stmt->execute();
-        $user_result = $user_stmt->get_result();
-        if ($user_row = $user_result->fetch_assoc()) {
+        $user_row = $user_stmt->get_result()->fetch_assoc();
+        $user_stmt->close();
+
+        if ($user_row) {
             $branch_id = $user_row['branch_id'];
         }
-        $user_stmt->close();
-    }
-    
-    // Insert audit log
-    $log_sql = "INSERT INTO audit_logs (user_id, branch_id, action, module) VALUES (?, ?, ?, ?)";
-    $log_stmt = $conn->prepare($log_sql);
-    if ($log_stmt) {
-        $log_stmt->bind_param("isss", $user_id, $branch_id, $action, $module);
+
+        // An audit failure must not crash the management page after the main
+        // database operation has already succeeded.
+        $log_stmt = $conn->prepare(
+            'INSERT INTO audit_logs (user_id, branch_id, action, module)
+             VALUES (?, ?, ?, ?)'
+        );
+        $log_stmt->bind_param('isss', $user_id, $branch_id, $action, $module);
         $result = $log_stmt->execute();
         $log_stmt->close();
+
         return $result;
+    } catch (Throwable $e) {
+        error_log('SmartBiteCare audit-log error: ' . $e->getMessage());
+        return false;
     }
-    return false;
 }
 
 // ========== FUNCTION TO GET BRANCH NAME ==========
@@ -59,102 +66,227 @@ function getBranchName($conn, $branch_id) {
 
 // Handle Add Branch
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_branch'])) {
-    $branch_id = $conn->real_escape_string($_POST['branch_id']);
-    $branch_name = $conn->real_escape_string($_POST['branch_name']);
-    $branch_address = $conn->real_escape_string($_POST['branch_address']);
-    $contact_number = $conn->real_escape_string($_POST['contact_number']);
-    $email = $conn->real_escape_string($_POST['email']);
-    $status = $conn->real_escape_string($_POST['status']);
+    $branch_id = trim((string)($_POST['branch_id'] ?? ''));
+    $branch_name = trim((string)($_POST['branch_name'] ?? ''));
+    $branch_address = trim((string)($_POST['branch_address'] ?? ''));
+    $contact_number = trim((string)($_POST['contact_number'] ?? ''));
+    $email = trim((string)($_POST['email'] ?? ''));
+    $status = trim((string)($_POST['status'] ?? 'Active'));
 
-    $sql = "INSERT INTO branches (branch_id, branch_name, branch_address, contact_number, email, status) 
-            VALUES ('$branch_id', '$branch_name', '$branch_address', '$contact_number', '$email', '$status')";
+    try {
+        if ($branch_id === '' || $branch_name === '' || $branch_address === '') {
+            throw new RuntimeException('Branch ID, name, and address are required.');
+        }
 
-    if ($conn->query($sql) === TRUE) {
-        $action_detail = "Added new branch: $branch_name (ID: $branch_id)";
-        addAuditLog($conn, $_SESSION['user_id'], $action_detail);
-        $_SESSION['success'] = "Branch added successfully!";
-    } else {
-        $_SESSION['error'] = "Error adding branch: " . $conn->error;
-        addAuditLog($conn, $_SESSION['user_id'], "Failed to add branch: $branch_name (ID: $branch_id) - " . $conn->error);
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new RuntimeException('Enter a valid branch email address.');
+        }
+
+        if (!in_array($status, ['Active', 'Inactive'], true)) {
+            throw new RuntimeException('Select a valid branch status.');
+        }
+
+        $duplicate_stmt = $conn->prepare(
+            'SELECT branch_id FROM branches WHERE branch_id = ? LIMIT 1'
+        );
+        $duplicate_stmt->bind_param('s', $branch_id);
+        $duplicate_stmt->execute();
+        $duplicate = $duplicate_stmt->get_result()->fetch_assoc();
+        $duplicate_stmt->close();
+
+        if ($duplicate) {
+            throw new RuntimeException('The Branch ID already exists.');
+        }
+
+        $insert_stmt = $conn->prepare(
+            'INSERT INTO branches
+                (branch_id, branch_name, branch_address, contact_number, email, status)
+             VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        $insert_stmt->bind_param(
+            'ssssss',
+            $branch_id,
+            $branch_name,
+            $branch_address,
+            $contact_number,
+            $email,
+            $status
+        );
+        $insert_stmt->execute();
+        $insert_stmt->close();
+
+        addAuditLog(
+            $conn,
+            (int)$_SESSION['user_id'],
+            "SUCCESS | Added branch: $branch_name (ID: $branch_id, Status: $status)"
+        );
+        $_SESSION['success'] = 'Branch added successfully!';
+    } catch (Throwable $e) {
+        addAuditLog(
+            $conn,
+            (int)$_SESSION['user_id'],
+            "FAILED | Add branch attempt: $branch_name (ID: $branch_id) - " . $e->getMessage()
+        );
+        $_SESSION['error'] = 'Unable to add branch: ' . $e->getMessage();
     }
+
     header("Location: SuperAdmin_CombinedManagement.php?tab=branches");
     exit();
 }
 
 // Handle Edit Branch
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_branch'])) {
-    $branch_id = $conn->real_escape_string($_POST['edit_branch_id']);
-    $branch_name = $conn->real_escape_string($_POST['edit_branch_name']);
-    $branch_address = $conn->real_escape_string($_POST['edit_branch_address']);
-    $contact_number = $conn->real_escape_string($_POST['edit_contact_number']);
-    $email = $conn->real_escape_string($_POST['edit_email']);
-    $status = $conn->real_escape_string($_POST['edit_status']);
+    $branch_id = trim((string)($_POST['edit_branch_id'] ?? ''));
+    $branch_name = trim((string)($_POST['edit_branch_name'] ?? ''));
+    $branch_address = trim((string)($_POST['edit_branch_address'] ?? ''));
+    $contact_number = trim((string)($_POST['edit_contact_number'] ?? ''));
+    $email = trim((string)($_POST['edit_email'] ?? ''));
+    $status = trim((string)($_POST['edit_status'] ?? 'Active'));
 
-    // Get old data for audit log
-    $old_sql = "SELECT branch_name, branch_address, contact_number, email, status FROM branches WHERE branch_id = '$branch_id'";
-    $old_result = $conn->query($old_sql);
-    $old_data = $old_result->fetch_assoc();
+    try {
+        if ($branch_id === '' || $branch_name === '' || $branch_address === '') {
+            throw new RuntimeException('Branch ID, name, and address are required.');
+        }
 
-    $sql = "UPDATE branches SET 
-            branch_name = '$branch_name',
-            branch_address = '$branch_address',
-            contact_number = '$contact_number',
-            email = '$email',
-            status = '$status'
-            WHERE branch_id = '$branch_id'";
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new RuntimeException('Enter a valid branch email address.');
+        }
 
-    if ($conn->query($sql) === TRUE) {
+        if (!in_array($status, ['Active', 'Inactive'], true)) {
+            throw new RuntimeException('Select a valid branch status.');
+        }
+
+        $old_stmt = $conn->prepare(
+            'SELECT branch_name, branch_address, contact_number, email, status
+             FROM branches WHERE branch_id = ? LIMIT 1'
+        );
+        $old_stmt->bind_param('s', $branch_id);
+        $old_stmt->execute();
+        $old_data = $old_stmt->get_result()->fetch_assoc();
+        $old_stmt->close();
+
+        if (!$old_data) {
+            throw new RuntimeException('Branch record was not found.');
+        }
+
         $changes = [];
-        if ($old_data['branch_name'] != $branch_name) {
-            $changes[] = "Name: '{$old_data['branch_name']}' → '$branch_name'";
+        if ((string)$old_data['branch_name'] !== $branch_name) {
+            $changes[] = "Name: '{$old_data['branch_name']}' -> '$branch_name'";
         }
-        if ($old_data['branch_address'] != $branch_address) {
-            $changes[] = "Address: '{$old_data['branch_address']}' → '$branch_address'";
+        if ((string)$old_data['branch_address'] !== $branch_address) {
+            $changes[] = "Address: '{$old_data['branch_address']}' -> '$branch_address'";
         }
-        if ($old_data['contact_number'] != $contact_number) {
-            $changes[] = "Contact: '{$old_data['contact_number']}' → '$contact_number'";
+        if ((string)$old_data['contact_number'] !== $contact_number) {
+            $changes[] = "Contact: '{$old_data['contact_number']}' -> '$contact_number'";
         }
-        if ($old_data['email'] != $email) {
-            $changes[] = "Email: '{$old_data['email']}' → '$email'";
+        if ((string)$old_data['email'] !== $email) {
+            $changes[] = "Email: '{$old_data['email']}' -> '$email'";
         }
-        if ($old_data['status'] != $status) {
-            $changes[] = "Status: '{$old_data['status']}' → '$status'";
+        if ((string)$old_data['status'] !== $status) {
+            $changes[] = "Status: '{$old_data['status']}' -> '$status'";
         }
 
-        if (!empty($changes)) {
-            $action_detail = "Updated branch: $branch_id ($branch_name) - Changes: " . implode(", ", $changes);
+        if ($changes) {
+            $update_stmt = $conn->prepare(
+                'UPDATE branches
+                 SET branch_name = ?, branch_address = ?, contact_number = ?,
+                     email = ?, status = ?
+                 WHERE branch_id = ?'
+            );
+            $update_stmt->bind_param(
+                'ssssss',
+                $branch_name,
+                $branch_address,
+                $contact_number,
+                $email,
+                $status,
+                $branch_id
+            );
+            $update_stmt->execute();
+            $update_stmt->close();
+
+            addAuditLog(
+                $conn,
+                (int)$_SESSION['user_id'],
+                "SUCCESS | Updated branch: $branch_id ($branch_name) - Changes: "
+                . implode(', ', $changes)
+            );
+            $_SESSION['success'] = 'Branch updated successfully!';
         } else {
-            $action_detail = "Updated branch: $branch_id ($branch_name) - No changes made";
+            addAuditLog(
+                $conn,
+                (int)$_SESSION['user_id'],
+                "NO CHANGE | Edit branch submitted: $branch_id ($branch_name)"
+            );
+            $_SESSION['success'] = 'No branch changes were necessary.';
         }
-        addAuditLog($conn, $_SESSION['user_id'], $action_detail);
-        $_SESSION['success'] = "Branch updated successfully!";
-    } else {
-        $_SESSION['error'] = "Error updating branch: " . $conn->error;
-        addAuditLog($conn, $_SESSION['user_id'], "Failed to update branch: $branch_id - " . $conn->error);
+    } catch (Throwable $e) {
+        addAuditLog(
+            $conn,
+            (int)$_SESSION['user_id'],
+            "FAILED | Update branch attempt: $branch_id ($branch_name) - " . $e->getMessage()
+        );
+        $_SESSION['error'] = 'Unable to update branch: ' . $e->getMessage();
     }
+
     header("Location: SuperAdmin_CombinedManagement.php?tab=branches");
     exit();
 }
 
 // Handle Archive Branch (set status to Inactive)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['archive_branch'])) {
-    $branch_id = $conn->real_escape_string($_POST['archive_branch_id']);
-    
-    $name_sql = "SELECT branch_name FROM branches WHERE branch_id = '$branch_id'";
-    $name_result = $conn->query($name_sql);
-    $branch_data = $name_result->fetch_assoc();
-    $branch_name = $branch_data['branch_name'] ?? $branch_id;
-    
-    $sql = "UPDATE branches SET status = 'Inactive' WHERE branch_id = '$branch_id'";
-    
-    if ($conn->query($sql) === TRUE) {
-        $action_detail = "Archived branch: $branch_name (ID: $branch_id)";
-        addAuditLog($conn, $_SESSION['user_id'], $action_detail);
-        $_SESSION['success'] = "Branch archived successfully!";
-    } else {
-        $_SESSION['error'] = "Error archiving branch: " . $conn->error;
-        addAuditLog($conn, $_SESSION['user_id'], "Failed to archive branch: $branch_id - " . $conn->error);
+    $branch_id = trim((string)($_POST['archive_branch_id'] ?? ''));
+
+    try {
+        if ($branch_id === '') {
+            throw new RuntimeException('A Branch ID is required.');
+        }
+
+        $branch_stmt = $conn->prepare(
+            'SELECT branch_name, status FROM branches WHERE branch_id = ? LIMIT 1'
+        );
+        $branch_stmt->bind_param('s', $branch_id);
+        $branch_stmt->execute();
+        $branch_data = $branch_stmt->get_result()->fetch_assoc();
+        $branch_stmt->close();
+
+        if (!$branch_data) {
+            throw new RuntimeException('Branch record was not found.');
+        }
+
+        $branch_name = (string)$branch_data['branch_name'];
+
+        if ((string)$branch_data['status'] === 'Inactive') {
+            addAuditLog(
+                $conn,
+                (int)$_SESSION['user_id'],
+                "NO CHANGE | Archive branch submitted for already inactive branch: $branch_name (ID: $branch_id)"
+            );
+            $_SESSION['success'] = 'The branch is already inactive.';
+        } else {
+            $archive_stmt = $conn->prepare(
+                "UPDATE branches SET status = 'Inactive' WHERE branch_id = ?"
+            );
+            $archive_stmt->bind_param('s', $branch_id);
+            $archive_stmt->execute();
+            $archive_stmt->close();
+
+            addAuditLog(
+                $conn,
+                (int)$_SESSION['user_id'],
+                "SUCCESS | Archived branch: $branch_name (ID: $branch_id, Previous status: {$branch_data['status']})"
+            );
+            $_SESSION['success'] = 'Branch archived successfully!';
+        }
+    } catch (Throwable $e) {
+        addAuditLog(
+            $conn,
+            (int)$_SESSION['user_id'],
+            "FAILED | Archive branch attempt: $branch_id - " . $e->getMessage()
+        );
+        $_SESSION['error'] = 'Unable to archive branch: ' . $e->getMessage();
     }
+
     header("Location: SuperAdmin_CombinedManagement.php?tab=branches");
     exit();
 }
@@ -163,177 +295,300 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['archive_branch'])) {
 
 // Handle Add Admin
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_admin') {
-    $username = trim($_POST['username']);
-    $email = trim($_POST['email']);
-    $branch_id = trim($_POST['branch_id']);
-    $role_id = 2; // Branch Admin role
-    
-    // Validate inputs
-    if (empty($username) || empty($email) || empty($branch_id)) {
-        $_SESSION['error'] = 'All fields are required.';
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $_SESSION['error'] = 'Invalid email address.';
-    } else {
-        // Check if username or email already exists
-        $check_sql = "SELECT user_id FROM users WHERE username = ? OR email = ?";
-        $check_stmt = $conn->prepare($check_sql);
-        $check_stmt->bind_param("ss", $username, $email);
+    $username = trim((string)($_POST['username'] ?? ''));
+    $email = trim((string)($_POST['email'] ?? ''));
+    $branch_id = trim((string)($_POST['branch_id'] ?? ''));
+    $role_id = 2;
+    $transaction_started = false;
+
+    try {
+        if ($username === '' || $email === '' || $branch_id === '') {
+            throw new RuntimeException('All fields are required.');
+        }
+
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new RuntimeException('Enter a valid email address.');
+        }
+
+        // Confirm that the selected branch exists and is active.
+        $branch_stmt = $conn->prepare(
+            "SELECT branch_id FROM branches WHERE branch_id = ? AND status = 'Active' LIMIT 1"
+        );
+        $branch_stmt->bind_param('s', $branch_id);
+        $branch_stmt->execute();
+        $branch_exists = $branch_stmt->get_result()->fetch_assoc();
+        $branch_stmt->close();
+
+        if (!$branch_exists) {
+            throw new RuntimeException('Select a valid active branch.');
+        }
+
+        // Usernames and email addresses must be unique.
+        $check_stmt = $conn->prepare(
+            'SELECT user_id FROM users WHERE username = ? OR email = ? LIMIT 1'
+        );
+        $check_stmt->bind_param('ss', $username, $email);
         $check_stmt->execute();
-        $check_result = $check_stmt->get_result();
-        
-        if ($check_result->num_rows > 0) {
-            $_SESSION['error'] = 'Username or email already exists.';
-            addAuditLog($conn, $_SESSION['user_id'], "Failed to create branch admin - Username or email already exists: $username, $email");
-        } else {
-            // Generate temporary password
-            $temp_password = bin2hex(random_bytes(6));
-            $hashed_password = password_hash($temp_password, PASSWORD_DEFAULT);
-            
-            // Insert user
-            $insert_sql = "INSERT INTO users (branch_id, role_id, username, email, password, status) 
-                          VALUES (?, ?, ?, ?, ?, 'Active')";
-            $insert_stmt = $conn->prepare($insert_sql);
-            $insert_stmt->bind_param("sisss", $branch_id, $role_id, $username, $email, $hashed_password);
-            
-            if ($insert_stmt->execute()) {
-                $user_id = $conn->insert_id;
-                
-                $action_detail = "Created new branch admin: $username (ID: $user_id) for branch ID: $branch_id";
-                addAuditLog($conn, $_SESSION['user_id'], $action_detail);
-                
-                // Generate password reset token
-                $token = bin2hex(random_bytes(32));
-                $expires_at = date('Y-m-d H:i:s', strtotime('+24 hours'));
-                
-                $token_sql = "INSERT INTO user_tokens (user_id, token, token_type, expires_at) 
-                              VALUES (?, ?, 'password_reset', ?)";
-                $token_stmt = $conn->prepare($token_sql);
-                $token_stmt->bind_param("iss", $user_id, $token, $expires_at);
-                $token_stmt->execute();
-                
-                // ========== FIXED: Email link generation ==========
-                $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http';
-                $host = $_SERVER['HTTP_HOST'];
-                
-                // Build the URL properly using http_build_query()
-                $reset_link = "http://" . $_SERVER['HTTP_HOST'] . "/change_password.php";
-$reset_link .= "?" . http_build_query(['token' => $token, 'email' => $email]);
-                // ========== END FIX ==========
-                
-                $email_body = "
-                <html>
-                <head>
-                    <style>
-                        body { font-family: Arial, sans-serif; color: #333; }
-                        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-                        .header { background: #2B3A8C; color: white; padding: 20px; text-align: center; }
-                        .content { padding: 20px; background: #f9faff; }
-                        .credentials { background: #ECEEF7; padding: 15px; border-radius: 8px; margin: 20px 0; }
-                        .button { display: inline-block; background: #2B3A8C; color: white; padding: 12px 30px; text-decoration: none; border-radius: 40px; }
-                        .footer { margin-top: 20px; font-size: 12px; color: #888; text-align: center; }
-                    </style>
-                </head>
-                <body>
-                    <div class='container'>
-                        <div class='header'>
-                            <h2>Welcome to Smart Bite Care</h2>
-                        </div>
-                        <div class='content'>
-                            <h3>Hello, " . htmlspecialchars($username) . "!</h3>
-                            <p>Your Branch Admin account has been created. Please use the credentials below to log in.</p>
-                            
-                            <div class='credentials'>
-                                <p><strong>Username:</strong> " . htmlspecialchars($username) . "</p>
-                                <p><strong>Email:</strong> " . htmlspecialchars($email) . "</p>
-                                <p><strong>Temporary Password:</strong> " . htmlspecialchars($temp_password) . "</p>
-                            </div>
-                            
-                            <p><strong>Important:</strong> This temporary password will expire in 24 hours. You must change it upon your first login.</p>
-                            
-                            <p style='text-align: center; margin-top: 30px;'>
-                                <a href='" . $reset_link . "' class='button'>Set Your Password</a>
-                            </p>
-                            
-                            <p><small>If the button doesn't work, copy and paste this link into your browser:</small></p>
-                            <p><small>" . $reset_link . "</small></p>
-                            
-                            <p style='margin-top: 20px;'>
-                                <strong>Branch:</strong> " . getBranchName($conn, $branch_id) . "<br>
-                            </p>
-                        </div>
-                        <div class='footer'>
-                            <p>This is an automated message from Smart Bite Care System.</p>
-                            <p>&copy; 2026 Smart Bite Care. All rights reserved.</p>
-                        </div>
+        $duplicate_user = $check_stmt->get_result()->fetch_assoc();
+        $check_stmt->close();
+
+        if ($duplicate_user) {
+            throw new RuntimeException('Username or email already exists.');
+        }
+
+        $temp_password = bin2hex(random_bytes(6));
+        $hashed_password = password_hash($temp_password, PASSWORD_DEFAULT);
+        $token = bin2hex(random_bytes(32));
+        $expires_at = date('Y-m-d H:i:s', strtotime('+24 hours'));
+
+        // Keep the account and its initial reset token as one database operation.
+        $conn->begin_transaction();
+        $transaction_started = true;
+
+        $insert_stmt = $conn->prepare(
+            "INSERT INTO users
+                (branch_id, role_id, username, email, password, status)
+             VALUES (?, ?, ?, ?, ?, 'Active')"
+        );
+        $insert_stmt->bind_param(
+            'sisss',
+            $branch_id,
+            $role_id,
+            $username,
+            $email,
+            $hashed_password
+        );
+        $insert_stmt->execute();
+        $user_id = (int)$conn->insert_id;
+        $insert_stmt->close();
+
+        if ($user_id < 1) {
+            throw new RuntimeException(
+                'The users.user_id column is not generating a valid ID. Confirm that it uses AUTO_INCREMENT.'
+            );
+        }
+
+        $token_stmt = $conn->prepare(
+            "INSERT INTO user_tokens
+                (user_id, token, token_type, expires_at)
+             VALUES (?, ?, 'password_reset', ?)"
+        );
+        $token_stmt->bind_param('iss', $user_id, $token, $expires_at);
+        $token_stmt->execute();
+        $token_stmt->close();
+
+        $conn->commit();
+        $transaction_started = false;
+
+        $action_detail = "SUCCESS | Created Branch Admin account and initial password-reset token: $username (ID: $user_id) for branch ID: $branch_id";
+        addAuditLog($conn, (int)$_SESSION['user_id'], $action_detail);
+
+        // APP_URL is configured once in sources/app_config.php. This prevents
+        // emailed links from incorrectly using localhost or an untrusted Host header.
+        $reset_link = APP_URL
+            . '/change_password.php?'
+            . http_build_query([
+                'token' => $token,
+                'email' => $email
+            ]);
+
+        $safe_username = htmlspecialchars($username, ENT_QUOTES, 'UTF-8');
+        $safe_email = htmlspecialchars($email, ENT_QUOTES, 'UTF-8');
+        $safe_password = htmlspecialchars($temp_password, ENT_QUOTES, 'UTF-8');
+        $safe_reset_link = htmlspecialchars($reset_link, ENT_QUOTES, 'UTF-8');
+        $safe_branch_name = htmlspecialchars(
+            getBranchName($conn, $branch_id),
+            ENT_QUOTES,
+            'UTF-8'
+        );
+
+        $email_body = "
+        <html>
+        <head>
+            <style>
+                body { font-family: Arial, sans-serif; color: #333; }
+                .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                .header { background: #2B3A8C; color: white; padding: 20px; text-align: center; }
+                .content { padding: 20px; background: #f9faff; }
+                .credentials { background: #ECEEF7; padding: 15px; border-radius: 8px; margin: 20px 0; }
+                .button { display: inline-block; background: #2B3A8C; color: white; padding: 12px 30px; text-decoration: none; border-radius: 40px; }
+                .footer { margin-top: 20px; font-size: 12px; color: #888; text-align: center; }
+            </style>
+        </head>
+        <body>
+            <div class='container'>
+                <div class='header'>
+                    <h2>Welcome to Smart Bite Care</h2>
+                </div>
+                <div class='content'>
+                    <h3>Hello, {$safe_username}!</h3>
+                    <p>Your Branch Admin account has been created.</p>
+
+                    <div class='credentials'>
+                        <p><strong>Username:</strong> {$safe_username}</p>
+                        <p><strong>Email:</strong> {$safe_email}</p>
+                        <p><strong>Temporary Password:</strong> {$safe_password}</p>
                     </div>
-                </body>
-                </html>
-                ";
-                
-                if (send_email($email, 'Welcome to Smart Bite Care - Your Branch Admin Account', $email_body)) {
-                    $_SESSION['success'] = 'Branch Admin created successfully! An email with credentials has been sent to ' . htmlspecialchars($email) . '.';
-                    addAuditLog($conn, $_SESSION['user_id'], "Welcome email sent to new branch admin: $username (ID: $user_id, Email: $email)");
-                } else {
-                    $_SESSION['error'] = 'Account created but failed to send email. Please reset password manually.';
-                    addAuditLog($conn, $_SESSION['user_id'], "Failed to send welcome email to new branch admin: $username (ID: $user_id, Email: $email)");
-                }
-            } else {
-                $_SESSION['error'] = 'Failed to create admin account. Please try again.';
-                addAuditLog($conn, $_SESSION['user_id'], "Failed to create branch admin: $username - Database error: " . $conn->error);
+
+                    <p><strong>Important:</strong> The password-reset link expires in 24 hours.</p>
+
+                    <p style='text-align:center; margin-top:30px;'>
+                        <a href='{$safe_reset_link}' class='button'>Set Your Password</a>
+                    </p>
+
+                    <p><small>If the button does not work, copy and paste this link into your browser:</small></p>
+                    <p><small>{$safe_reset_link}</small></p>
+
+                    <p style='margin-top:20px;'>
+                        <strong>Branch:</strong> {$safe_branch_name}
+                    </p>
+                </div>
+                <div class='footer'>
+                    <p>This is an automated message from Smart Bite Care System.</p>
+                    <p>&copy; 2026 Smart Bite Care. All rights reserved.</p>
+                </div>
+            </div>
+        </body>
+        </html>";
+
+        try {
+            $email_sent = send_email(
+                $email,
+                'Welcome to Smart Bite Care - Your Branch Admin Account',
+                $email_body
+            );
+        } catch (Throwable $mail_error) {
+            $email_sent = false;
+        }
+
+        if ($email_sent) {
+            $_SESSION['success'] =
+                'Branch Admin created successfully! Credentials were sent to '
+                . $safe_email
+                . '.';
+            addAuditLog(
+                $conn,
+                (int)$_SESSION['user_id'],
+                "SUCCESS | Welcome email sent to new Branch Admin: $username (ID: $user_id, Email: $email)"
+            );
+        } else {
+            $_SESSION['error'] =
+                'The account and password-reset token were created, but the email could not be sent. '
+                . 'Use the password-reset process to send a new link.';
+            addAuditLog(
+                $conn,
+                (int)$_SESSION['user_id'],
+                "FAILED | Welcome email to new Branch Admin: $username (ID: $user_id, Email: $email)"
+            );
+        }
+    } catch (Throwable $e) {
+        if ($transaction_started) {
+            try {
+                $conn->rollback();
+            } catch (Throwable $rollback_error) {
+                // Preserve the original error message.
             }
         }
+
+        $_SESSION['error'] = 'Unable to create Branch Admin: ' . $e->getMessage();
+
+        try {
+            addAuditLog(
+                $conn,
+                (int)$_SESSION['user_id'],
+                "FAILED | Create Branch Admin attempt: $username ($email, Branch ID: $branch_id) - " . $e->getMessage()
+            );
+        } catch (Throwable $audit_error) {
+            // The page should still redirect with the original failure message.
+        }
     }
+
     header("Location: SuperAdmin_CombinedManagement.php?tab=admins");
     exit();
 }
 
 // Handle Archive (Deactivate) Admin
 if (isset($_GET['archive_admin_id'])) {
-    $archive_id = intval($_GET['archive_admin_id']);
-    
-    $admin_sql = "SELECT username, email, branch_id FROM users WHERE user_id = ? AND role_id = 2";
-    $admin_stmt = $conn->prepare($admin_sql);
-    $admin_stmt->bind_param("i", $archive_id);
-    $admin_stmt->execute();
-    $admin_result = $admin_stmt->get_result();
-    $admin_details = $admin_result->fetch_assoc();
-    $admin_stmt->close();
-    
-    if ($admin_details) {
-        $check_sql = "SELECT user_id, role_id FROM users WHERE user_id = ? AND role_id = 2";
-        $check_stmt = $conn->prepare($check_sql);
-        $check_stmt->bind_param("i", $archive_id);
-        $check_stmt->execute();
-        $check_result = $check_stmt->get_result();
-        
-        if ($check_result->num_rows > 0) {
-            $archive_sql = "UPDATE users SET status = 'Inactive' WHERE user_id = ?";
-            $archive_stmt = $conn->prepare($archive_sql);
-            $archive_stmt->bind_param("i", $archive_id);
-            
-            if ($archive_stmt->execute()) {
-                $token_delete_sql = "DELETE FROM user_tokens WHERE user_id = ?";
-                $token_delete_stmt = $conn->prepare($token_delete_sql);
-                $token_delete_stmt->bind_param("i", $archive_id);
-                $token_delete_stmt->execute();
-                
-                $action_detail = "Archived (deactivated) branch admin: " . $admin_details['username'] . 
-                                " (ID: $archive_id, Email: " . $admin_details['email'] . 
-                                ", Branch ID: " . $admin_details['branch_id'] . ")";
-                addAuditLog($conn, $_SESSION['user_id'], $action_detail);
-                $_SESSION['success'] = 'Admin has been archived successfully.';
-            } else {
-                $_SESSION['error'] = 'Failed to archive admin.';
-                addAuditLog($conn, $_SESSION['user_id'], "Failed to archive branch admin: " . $admin_details['username'] . " (ID: $archive_id) - Database error");
-            }
-            $archive_stmt->close();
-        } else {
-            $_SESSION['error'] = 'Admin not found.';
-            addAuditLog($conn, $_SESSION['user_id'], "Failed to archive branch admin - User ID: $archive_id not found");
+    $archive_id = (int)($_GET['archive_admin_id'] ?? 0);
+    $archive_transaction_started = false;
+
+    try {
+        if ($archive_id < 1) {
+            throw new RuntimeException('Select a valid Branch Admin.');
         }
-    } else {
-        $_SESSION['error'] = 'Admin not found.';
-        addAuditLog($conn, $_SESSION['user_id'], "Failed to archive branch admin - User ID: $archive_id not found");
+
+        $admin_stmt = $conn->prepare(
+            'SELECT username, email, branch_id, status
+             FROM users
+             WHERE user_id = ? AND role_id = 2
+             LIMIT 1'
+        );
+        $admin_stmt->bind_param('i', $archive_id);
+        $admin_stmt->execute();
+        $admin_details = $admin_stmt->get_result()->fetch_assoc();
+        $admin_stmt->close();
+
+        if (!$admin_details) {
+            throw new RuntimeException('Branch Admin record was not found.');
+        }
+
+        if ((string)$admin_details['status'] === 'Inactive') {
+            addAuditLog(
+                $conn,
+                (int)$_SESSION['user_id'],
+                'NO CHANGE | Archive submitted for already inactive Branch Admin: '
+                . $admin_details['username']
+                . " (ID: $archive_id)"
+            );
+            $_SESSION['success'] = 'The Branch Admin is already inactive.';
+        } else {
+            // Deactivation and token invalidation must succeed or fail together.
+            $conn->begin_transaction();
+            $archive_transaction_started = true;
+
+            $archive_stmt = $conn->prepare(
+                "UPDATE users SET status = 'Inactive' WHERE user_id = ? AND role_id = 2"
+            );
+            $archive_stmt->bind_param('i', $archive_id);
+            $archive_stmt->execute();
+            $archive_stmt->close();
+
+            $token_delete_stmt = $conn->prepare(
+                'DELETE FROM user_tokens WHERE user_id = ?'
+            );
+            $token_delete_stmt->bind_param('i', $archive_id);
+            $token_delete_stmt->execute();
+            $deleted_tokens = $token_delete_stmt->affected_rows;
+            $token_delete_stmt->close();
+
+            $conn->commit();
+            $archive_transaction_started = false;
+
+            addAuditLog(
+                $conn,
+                (int)$_SESSION['user_id'],
+                'SUCCESS | Archived Branch Admin: '
+                . $admin_details['username']
+                . " (ID: $archive_id, Email: {$admin_details['email']}, "
+                . "Branch ID: {$admin_details['branch_id']}, Invalidated tokens: $deleted_tokens)"
+            );
+            $_SESSION['success'] = 'Branch Admin archived successfully.';
+        }
+    } catch (Throwable $e) {
+        if ($archive_transaction_started) {
+            try {
+                $conn->rollback();
+            } catch (Throwable $rollback_error) {
+                // Preserve the original failure message.
+            }
+        }
+
+        addAuditLog(
+            $conn,
+            (int)$_SESSION['user_id'],
+            "FAILED | Archive Branch Admin attempt for user ID $archive_id - " . $e->getMessage()
+        );
+        $_SESSION['error'] = 'Unable to archive Branch Admin: ' . $e->getMessage();
     }
     
     header('Location: SuperAdmin_CombinedManagement.php?tab=admins');
@@ -341,65 +596,95 @@ if (isset($_GET['archive_admin_id'])) {
 }
 
 // Handle Send Email (with custom message)
-if (isset($_POST['send_email']) && isset($_POST['user_id'])) {
-    $user_id = intval($_POST['user_id']);
-    $subject = trim($_POST['email_subject']);
-    $message = trim($_POST['email_message']);
-    
-    $user_sql = "SELECT username, email FROM users WHERE user_id = ? AND role_id = 2";
-    $user_stmt = $conn->prepare($user_sql);
-    $user_stmt->bind_param("i", $user_id);
-    $user_stmt->execute();
-    $user_result = $user_stmt->get_result();
-    
-    if ($user_row = $user_result->fetch_assoc()) {
-        if (empty($subject) || empty($message)) {
-            $_SESSION['error'] = 'Please fill in both subject and message.';
-            addAuditLog($conn, $_SESSION['user_id'], "Failed to send email to branch admin: " . $user_row['username'] . " - Missing subject or message");
-        } else {
-            $email_body = "
-            <html>
-            <head>
-                <style>
-                    body { font-family: Arial, sans-serif; color: #333; }
-                    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-                    .header { background: #2B3A8C; color: white; padding: 20px; text-align: center; }
-                    .content { padding: 20px; background: #f9faff; }
-                    .footer { margin-top: 20px; font-size: 12px; color: #888; text-align: center; }
-                </style>
-            </head>
-            <body>
-                <div class='container'>
-                    <div class='header'>
-                        <h2>Smart Bite Care</h2>
-                    </div>
-                    <div class='content'>
-                        <h3>Hello, " . htmlspecialchars($user_row['username']) . "!</h3>
-                        <p>" . nl2br(htmlspecialchars($message)) . "</p>
-                    </div>
-                    <div class='footer'>
-                        <p>This is an automated message from Smart Bite Care System.</p>
-                        <p>&copy; 2026 Smart Bite Care. All rights reserved.</p>
-                    </div>
-                </div>
-            </body>
-            </html>
-            ";
-            
-            if (send_email($user_row['email'], $subject, $email_body)) {
-                $_SESSION['success'] = 'Email sent successfully to ' . htmlspecialchars($user_row['email']) . '.';
-                $action_detail = "Sent custom email to branch admin: " . $user_row['username'] . 
-                                " (ID: $user_id, Email: " . $user_row['email'] . 
-                                ") - Subject: " . $subject;
-                addAuditLog($conn, $_SESSION['user_id'], $action_detail);
-            } else {
-                $_SESSION['error'] = 'Failed to send email. Please try again.';
-                addAuditLog($conn, $_SESSION['user_id'], "Failed to send custom email to branch admin: " . $user_row['username'] . " (ID: $user_id)");
-            }
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_email'])) {
+    $user_id = (int)($_POST['user_id'] ?? 0);
+    $subject = trim((string)($_POST['email_subject'] ?? ''));
+    $message = trim((string)($_POST['email_message'] ?? ''));
+    $recipient_label = "user ID $user_id";
+
+    try {
+        if ($user_id < 1) {
+            throw new RuntimeException('Select a valid Branch Admin.');
         }
-    } else {
-        $_SESSION['error'] = 'Admin not found.';
-        addAuditLog($conn, $_SESSION['user_id'], "Failed to send email - Branch admin not found (ID: $user_id)");
+
+        if ($subject === '' || $message === '') {
+            throw new RuntimeException('Fill in both the subject and message.');
+        }
+
+        $user_stmt = $conn->prepare(
+            "SELECT username, email
+             FROM users
+             WHERE user_id = ? AND role_id = 2 AND status = 'Active'
+             LIMIT 1"
+        );
+        $user_stmt->bind_param('i', $user_id);
+        $user_stmt->execute();
+        $user_row = $user_stmt->get_result()->fetch_assoc();
+        $user_stmt->close();
+
+        if (!$user_row) {
+            throw new RuntimeException('Active Branch Admin record was not found.');
+        }
+
+        $recipient_label = $user_row['username']
+            . " (ID: $user_id, Email: {$user_row['email']})";
+        $safe_recipient_name = htmlspecialchars(
+            (string)$user_row['username'],
+            ENT_QUOTES,
+            'UTF-8'
+        );
+        $safe_message = nl2br(
+            htmlspecialchars($message, ENT_QUOTES, 'UTF-8')
+        );
+
+        $email_body = "
+        <html>
+        <head>
+            <style>
+                body { font-family: Arial, sans-serif; color: #333; }
+                .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                .header { background: #2B3A8C; color: white; padding: 20px; text-align: center; }
+                .content { padding: 20px; background: #f9faff; }
+                .footer { margin-top: 20px; font-size: 12px; color: #888; text-align: center; }
+            </style>
+        </head>
+        <body>
+            <div class='container'>
+                <div class='header'>
+                    <h2>Smart Bite Care</h2>
+                </div>
+                <div class='content'>
+                    <h3>Hello, {$safe_recipient_name}!</h3>
+                    <p>{$safe_message}</p>
+                </div>
+                <div class='footer'>
+                    <p>This is an automated message from Smart Bite Care System.</p>
+                    <p>&copy; 2026 Smart Bite Care. All rights reserved.</p>
+                </div>
+            </div>
+        </body>
+        </html>";
+
+        if (!send_email((string)$user_row['email'], $subject, $email_body)) {
+            throw new RuntimeException('The mail service did not accept the message.');
+        }
+
+        addAuditLog(
+            $conn,
+            (int)$_SESSION['user_id'],
+            "SUCCESS | Sent custom email to Branch Admin: $recipient_label - Subject: $subject"
+        );
+        $_SESSION['success'] = 'Email sent successfully to '
+            . htmlspecialchars((string)$user_row['email'], ENT_QUOTES, 'UTF-8')
+            . '.';
+    } catch (Throwable $e) {
+        addAuditLog(
+            $conn,
+            (int)$_SESSION['user_id'],
+            "FAILED | Send custom email attempt to $recipient_label - Subject: $subject - "
+            . $e->getMessage()
+        );
+        $_SESSION['error'] = 'Unable to send email: ' . $e->getMessage();
     }
     
     header('Location: SuperAdmin_CombinedManagement.php?tab=admins');
@@ -422,7 +707,8 @@ $admin_sql = "SELECT u.user_id, u.username, u.email, u.status, u.created_at,
         b.branch_id, b.branch_name 
         FROM users u 
         LEFT JOIN branches b ON u.branch_id = b.branch_id 
-        WHERE u.role_id = 2";
+        WHERE u.role_id = 2
+          AND u.status = 'Active'";
 
 if ($search) {
     $admin_sql .= " AND (u.username LIKE ? OR u.email LIKE ? OR b.branch_name LIKE ?)";
@@ -539,10 +825,67 @@ if (isset($_GET['archive_id'])) {
         .profile {
             font-weight: 600;
             color: var(--primary);
-            cursor: default;
+            cursor: pointer;
             display: flex;
             align-items: center;
             gap: 6px;
+        }
+
+        .profile-button {
+            border: 0;
+            background: transparent;
+            padding: 10px 12px;
+            border-radius: 10px;
+            transition: background-color 0.2s ease;
+        }
+
+
+        .profile-button::after {
+            margin-left: 4px;
+        }
+
+        .profile-role {
+            color: #adb5bd;
+            font-size: 12px;
+            font-weight: 400;
+            margin-left: 4px;
+        }
+
+        .profile-menu {
+            min-width: 220px;
+            padding: 8px;
+            margin-top: 10px !important;
+            border: 1px solid #e4e8f1;
+            border-radius: 12px;
+            box-shadow: 0 10px 28px rgba(32, 45, 110, 0.14);
+        }
+
+        .profile-menu .dropdown-header {
+            padding: 8px 12px 10px;
+            color: #6c757d;
+            font-size: 12px;
+        }
+
+        .profile-menu .dropdown-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            color: #24315f;
+            font-weight: 500;
+        }
+
+        .profile-menu .dropdown-item:hover,
+        .profile-menu .dropdown-item:focus {
+            color: var(--primary);
+            background: #f1f3fb;
+        }
+
+        .profile-menu .dropdown-item.text-danger:hover,
+        .profile-menu .dropdown-item.text-danger:focus {
+            color: #b42332 !important;
+            background: #fff0f2;
         }
 
         .content {
@@ -945,10 +1288,37 @@ if (isset($_GET['archive_id'])) {
     <!-- TOP BAR -->
     <div class="topbar">
         <h3>Branch & Admin Management</h3>
-        <div class="profile">
-            <i class="bi bi-person-circle"></i>
-            <?php echo htmlspecialchars($_SESSION['username'] ?? 'SUPER ADMIN'); ?>
-            <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Super Admin</span>
+        <<div class="dropdown">
+            <button
+                class="profile profile-button dropdown-toggle"
+                type="button"
+                id="superAdminProfileMenu"
+                data-bs-toggle="dropdown"
+                aria-expanded="false"
+            >
+                <i class="bi bi-person-circle"></i>
+                <span><?php echo htmlspecialchars($_SESSION['username'] ?? 'SUPER ADMIN', ENT_QUOTES, 'UTF-8'); ?></span>
+                <span class="profile-role">| Super Admin</span>
+            </button>
+
+            <ul class="dropdown-menu dropdown-menu-end profile-menu" aria-labelledby="superAdminProfileMenu">
+                <li>
+                    <div class="dropdown-header">Account options</div>
+                </li>
+                <li>
+                    <a class="dropdown-item" href="Account_ChangePassword.php">
+                        <i class="bi bi-key-fill"></i>
+                        <span>Change Password</span>
+                    </a>
+                </li>
+                <li><hr class="dropdown-divider"></li>
+                <li>
+                    <a class="dropdown-item text-danger" href="logout.php">
+                        <i class="bi bi-box-arrow-right"></i>
+                        <span>Logout</span>
+                    </a>
+                </li>
+            </ul>
         </div>
     </div>
 

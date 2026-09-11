@@ -7,6 +7,7 @@ ini_set('display_errors', 0);
 
 require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
+require_once 'sources/inventory_unit_helpers.php';
 
 // CSRF protection for vaccination submissions
 if (empty($_SESSION['csrf_token'])) {
@@ -214,7 +215,10 @@ function validYmdDate($date) {
 // Get a Medical Supplies inventory item. Unit is loaded from the database
 // rather than trusted from browser-submitted data.
 function getMedicalSupplyItem($conn, $item_id) {
-    $sql = "SELECT i.item_id, i.item_name, i.unit_id, u.unit_name, c.category_name
+    $sql = "SELECT i.item_id, i.item_name, i.unit_id, u.unit_name, c.category_name,
+                   COALESCE(NULLIF(i.base_unit_label, ''), u.unit_name) AS base_unit_label,
+                   COALESCE(NULLIF(i.display_unit_label, ''), u.unit_name) AS display_unit_label,
+                   COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base
             FROM inventory_items i
             INNER JOIN units u ON i.unit_id = u.unit_id
             INNER JOIN inventory_categories c ON i.category_id = c.category_id
@@ -263,7 +267,7 @@ function deductVaccineStockFEFO($conn, $item_id, $branch_id, $quantity_needed) {
     }
     $stmt->close();
 
-    if ($total_available < $quantity_needed) {
+    if (($total_available + 0.00005) < $quantity_needed) {
         throw new Exception("Insufficient non-expired stock. Available: {$total_available}.");
     }
 
@@ -271,9 +275,9 @@ function deductVaccineStockFEFO($conn, $item_id, $branch_id, $quantity_needed) {
     $used_batches = [];
 
     foreach ($stocks as $stock) {
-        if ($remaining <= 0) break;
+        if ($remaining <= 0.00005) break;
 
-        $take = min((float)$stock['quantity_available'], $remaining);
+        $take = round(min((float)$stock['quantity_available'], $remaining), 4);
         $stock_id = (int)$stock['stock_id'];
 
         $update = $conn->prepare("UPDATE inventory_stocks
@@ -292,17 +296,18 @@ function deductVaccineStockFEFO($conn, $item_id, $branch_id, $quantity_needed) {
             'expiration_date' => $stock['expiration_date']
         ];
 
-        $remaining -= $take;
+        $remaining = round($remaining - $take, 4);
     }
 
     return $used_batches;
 }
 
-function vaccineBatchSummary($batches) {
+function vaccineBatchSummary($batches, array $item = []) {
     $parts = [];
     foreach ($batches as $batch) {
-        $displayQuantity = rtrim(rtrim(number_format((float)$batch['quantity'], 2, '.', ''), '0'), '.');
-        $label = $batch['batch_lot_no'] . ': ' . $displayQuantity;
+        $displayQuantity = inventoryFormatNumber((float)$batch['quantity']);
+        $unitLabel = $item ? inventoryBaseUnitLabel($item) : 'unit';
+        $label = $batch['batch_lot_no'] . ': ' . $displayQuantity . ' ' . $unitLabel;
         if (!empty($batch['expiration_date'])) {
             $label .= ' (exp ' . $batch['expiration_date'] . ')';
         }
@@ -315,27 +320,31 @@ function vaccineBatchSummary($batches) {
 if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_vaccines') {
     header('Content-Type: application/json');
 
-    // One row per Medical Supplies item. Stock is summed across all
-    // positive, non-expired batches in the nurse's branch.
+    // Show every consumable Medical Supplies item. Items with no usable
+    // stock remain visible but are disabled in the browser.
     $sql = "SELECT
                 i.item_id,
                 i.item_name,
                 i.unit_id,
                 u.unit_name,
+                COALESCE(NULLIF(i.base_unit_label, ''), u.unit_name) AS base_unit_label,
+                COALESCE(NULLIF(i.display_unit_label, ''), u.unit_name) AS display_unit_label,
+                COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base,
                 COALESCE(SUM(s.quantity_available), 0) AS quantity_available,
                 MIN(s.expiration_date) AS nearest_expiration
             FROM inventory_items i
             INNER JOIN inventory_categories c ON i.category_id = c.category_id
             INNER JOIN units u ON i.unit_id = u.unit_id
-            INNER JOIN inventory_stocks s
+            LEFT JOIN inventory_stocks s
                 ON i.item_id = s.item_id
                AND s.branch_id = ?
                AND s.quantity_available > 0
                AND (s.expiration_date IS NULL OR s.expiration_date >= CURDATE())
             WHERE c.category_name = 'Medical Supplies'
+              AND i.is_consumable = 1
               AND i.item_name NOT LIKE '%Default%'
-            GROUP BY i.item_id, i.item_name, i.unit_id, u.unit_name
-            HAVING COALESCE(SUM(s.quantity_available), 0) > 0
+            GROUP BY i.item_id, i.item_name, i.unit_id, u.unit_name,
+                     i.base_unit_label, i.display_unit_label, i.conversion_to_base
             ORDER BY i.item_name";
 
     $stmt = $conn->prepare($sql);
@@ -344,6 +353,17 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_vaccines') {
     $result = $stmt->get_result();
     $vaccines = $result->fetch_all(MYSQLI_ASSOC);
     $stmt->close();
+
+    foreach ($vaccines as &$vaccine) {
+        $vaccine['quantity_available_display'] = inventoryStockBreakdown(
+            (float)$vaccine['quantity_available'],
+            $vaccine
+        );
+        $vaccine['quantity_step'] = inventoryInputStep($vaccine);
+        $vaccine['is_site_based'] = inventoryIsSiteBased($vaccine);
+        $vaccine['is_available'] = (float)$vaccine['quantity_available'] > 0;
+    }
+    unset($vaccine);
 
     echo json_encode($vaccines);
     exit;
@@ -436,6 +456,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_scheduled_doses') {
                 COALESCE(vr.vaccine_name, i.item_name, 'Unknown Vaccine') as vaccine_name,
                 vr.unit_id,
                 COALESCE(u.unit_name, 'N/A') as unit_name,
+                vr.quantity_used,
+                COALESCE(NULLIF(vr.quantity_unit_label, ''), NULLIF(i.base_unit_label, ''), u.unit_name, 'unit') AS quantity_unit_label,
+                COALESCE(NULLIF(vr.display_unit_label_snapshot, ''), NULLIF(i.display_unit_label, ''), u.unit_name, 'unit') AS display_unit_label,
+                COALESCE(NULLIF(vr.conversion_to_base_snapshot, 0), NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base,
                 vr.branch_id,
                 vr.dose_number,
                 vr.date_administered,
@@ -667,7 +691,10 @@ if (isset($_POST['submit_vaccination'])) {
         foreach ($vaccine_items as $item) {
             $item_id = intval($item['item_id'] ?? 0);
             $dose_number = intval($item['dose_number'] ?? 0);
-            $quantity = (float)($item['quantity'] ?? 0);
+            // quantity_used is stored in the item's smallest/base unit.
+            // The legacy "quantity" key remains accepted for one transition
+            // release, but the browser now submits quantity_base.
+            $quantity = (float)($item['quantity_base'] ?? $item['quantity'] ?? 0);
             $date_administered = !empty($item['date_administered'])
                 ? trim($item['date_administered'])
                 : date('Y-m-d');
@@ -681,9 +708,6 @@ if (isset($_POST['submit_vaccination'])) {
             }
             if ($dose_number < 1 || $dose_number > 6) {
                 throw new Exception("Invalid dose number: {$dose_number}. Dose must be between 1 and 6.");
-            }
-            if ($quantity <= 0) {
-                throw new Exception('Quantity must be greater than zero.');
             }
             if (!validYmdDate($date_administered)) {
                 throw new Exception('Invalid vaccination date.');
@@ -709,6 +733,21 @@ if (isset($_POST['submit_vaccination'])) {
 
             $vaccine_name = $vaccine['item_name'];
             $unit_id = (int)$vaccine['unit_id'];
+            $base_unit_label = inventoryBaseUnitLabel($vaccine);
+            $display_unit_label = inventoryDisplayUnitLabel($vaccine);
+            $conversion_to_base = inventoryConversionToBase($vaccine);
+
+            if ($vaccination_status === 'Completed' && $quantity <= 0) {
+                throw new Exception("Actual {$base_unit_label} used must be greater than zero for {$vaccine_name}.");
+            }
+            if ($vaccination_status === 'Missed') {
+                $quantity = 0.0;
+            }
+            if ($vaccination_status === 'Completed'
+                && inventoryIsSiteBased($vaccine)
+                && abs($quantity - round($quantity)) > 0.00001) {
+                throw new Exception("{$vaccine_name} usage must be entered as a whole number of sites.");
+            }
             $requiredDoses = getRequiredDoseNumbers($conn, $case_id);
             $is_final_dose = ($dose_number === (int)end($requiredDoses)) ? 1 : 0;
 
@@ -798,6 +837,9 @@ if (isset($_POST['submit_vaccination'])) {
                         vaccine_name = ?,
                         unit_id = ?,
                         quantity_used = ?,
+                        quantity_unit_label = ?,
+                        display_unit_label_snapshot = ?,
+                        conversion_to_base_snapshot = ?,
                         date_administered = ?,
                         administered_datetime = NOW(),
                         vaccination_status = 'Completed',
@@ -809,11 +851,14 @@ if (isset($_POST['submit_vaccination'])) {
                       AND is_archived = 0
                 ");
                 $updateVaccination->bind_param(
-                    "isidsisii",
+                    "isidssdsisii",
                     $item_id,
                     $vaccine_name,
                     $unit_id,
                     $quantity,
+                    $base_unit_label,
+                    $display_unit_label,
+                    $conversion_to_base,
                     $date_administered,
                     $is_final_dose,
                     $remarks,
@@ -896,6 +941,9 @@ if (isset($_POST['submit_vaccination'])) {
                         vaccine_name,
                         unit_id,
                         quantity_used,
+                        quantity_unit_label,
+                        display_unit_label_snapshot,
+                        conversion_to_base_snapshot,
                         branch_id,
                         dose_number,
                         date_administered,
@@ -907,7 +955,7 @@ if (isset($_POST['submit_vaccination'])) {
                         nurse_id
                     )
                     VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                         CASE WHEN ? = 'Completed' THEN NOW() ELSE NULL END,
                         ?, ?, ?, ?, ?
                     )
@@ -915,13 +963,16 @@ if (isset($_POST['submit_vaccination'])) {
 
                 $stmt = $conn->prepare($insertVaccination);
                 $stmt->bind_param(
-                    "iiisidsissssisi",
+                    "iiisidssdsissssisi",
                     $patient_id,
                     $case_id,
                     $item_id,
                     $vaccine_name,
                     $unit_id,
                     $quantity,
+                    $base_unit_label,
+                    $display_unit_label,
+                    $conversion_to_base,
                     $branch_id,
                     $dose_number,
                     $completed_date,
@@ -950,13 +1001,14 @@ if (isset($_POST['submit_vaccination'])) {
                     $branch_id,
                     $quantity
                 );
-                $batch_summary = vaccineBatchSummary($used_batches);
+                $batch_summary = vaccineBatchSummary($used_batches, $vaccine);
 
+                $usageDescription = inventoryUsageDescription($quantity, $vaccine);
                 $transactionRemarks = "Vaccination | Patient ID: {$patient_id}" .
                                       " | Case ID: {$case_id}" .
                                       " | Vaccine: {$vaccine_name}" .
                                       " | Dose #: {$dose_number}" .
-                                      " | Qty Used: {$quantity}" .
+                                      " | Used: {$usageDescription}" .
                                       " | Batch(es): {$batch_summary}" .
                                       " | Date: {$date_administered}";
 
@@ -1060,7 +1112,7 @@ if (isset($_POST['submit_vaccination'])) {
                            ' (' . getDoseLabel($dose_number) . ')' .
                            " | Patient: {$patient_name} (ID: {$patient_id})" .
                            " | Case ID: {$case_id}" .
-                           " | Quantity: {$quantity}" .
+                           " | Used: " . inventoryUsageDescription($quantity, $vaccine) .
                            " | Status: {$vaccination_status}" .
                            " | Batch(es): {$batch_summary}" .
                            " | Date: {$date_administered}";
@@ -1071,6 +1123,7 @@ if (isset($_POST['submit_vaccination'])) {
                 'vaccine_name' => $vaccine_name,
                 'dose_number' => $dose_number,
                 'quantity' => $quantity,
+                'quantity_display' => inventoryUsageDescription($quantity, $vaccine),
                 'status' => $vaccination_status
             ];
 
@@ -1083,7 +1136,10 @@ if (isset($_POST['submit_vaccination'])) {
             $doseList = '';
             foreach ($vaccination_details as $detail) {
                 $doseLabel = getDoseLabel($detail['dose_number']);
-                $doseList .= "• {$detail['vaccine_name']} - {$doseLabel} ({$detail['status']})\n";
+                $usageText = $detail['status'] === 'Completed'
+                    ? ' - ' . $detail['quantity_display']
+                    : '';
+                $doseList .= "• {$detail['vaccine_name']} - {$doseLabel}{$usageText} ({$detail['status']})\n";
             }
 
             $notification_title = 'Vaccination Record Updated';
@@ -1700,16 +1756,35 @@ function getStatusBadge($status)
             <li><a href="Nurse_Notification.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
         </ul>
     </nav>
-    <div class="logout"><a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a></div>
 </div>
 
 <div class="main">
     <div class="topbar">
         <h3>Vaccination Administration <small><?php echo htmlspecialchars($branch_name); ?></small></h3>
-        <div class="profile">
-            <i class="bi bi-person-circle"></i>
-            <?php echo htmlspecialchars($username); ?>
-            <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Nurse</span>
+        <div class="dropdown">
+            <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
+                    type="button" id="nurseProfileMenu"
+                    data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="bi bi-person-circle"></i>
+                <span><?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?></span>
+                <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Nurse</span>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2"
+                aria-labelledby="nurseProfileMenu">
+                <li><h6 class="dropdown-header">Account options</h6></li>
+                <li>
+                    <a class="dropdown-item rounded-2 py-2" href="Account_ChangePassword.php">
+                        <i class="bi bi-key-fill me-2"></i>Change Password
+                    </a>
+                </li>
+                <li><hr class="dropdown-divider"></li>
+                <li>
+                    <a class="dropdown-item rounded-2 py-2 text-danger" href="logout.php"
+                       onclick="return window.confirm('Are you sure you want to log out?');">
+                        <i class="bi bi-box-arrow-right me-2"></i>Logout
+                    </a>
+                </li>
+            </ul>
         </div>
     </div>
 
@@ -2088,6 +2163,28 @@ function escapeHtml(value) {
 
 function getDoseLabel(d) { return DOSE_MAP[d] || 'D' + d; }
 
+function formatInventoryNumber(value, maximumFractionDigits = 4) {
+    return Number(value || 0).toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits
+    });
+}
+
+function formatRecordedUsage(dose) {
+    const quantity = Number(dose.quantity_used || 0);
+    if (quantity <= 0) return 'No stock used';
+
+    const baseUnit = dose.quantity_unit_label || dose.unit_name || 'unit';
+    const displayUnit = dose.display_unit_label || baseUnit;
+    const conversion = Number(dose.conversion_to_base || 1);
+    let text = `${formatInventoryNumber(quantity)} ${escapeHtml(baseUnit)}`;
+
+    if (conversion > 1 && String(baseUnit).toLowerCase() !== String(displayUnit).toLowerCase()) {
+        text += ` (${formatInventoryNumber(quantity / conversion)} ${escapeHtml(displayUnit)} equivalent)`;
+    }
+    return text;
+}
+
 document.addEventListener('DOMContentLoaded', function() { loadVaccines(); });
 
 function loadVaccines() {
@@ -2316,7 +2413,7 @@ function renderScheduledDoses(doses) {
 
         var vaccineList = dosesInGroup.map(function(d) {
             var vName = d.vaccine_name || d.inventory_item_name || 'Unknown';
-            var uName = d.unit_name || 'N/A';
+            var uName = d.quantity_unit_label || d.unit_name || 'N/A';
             var status = d.vaccination_status || 'Scheduled';
             var statusIcon = status === 'Completed'
                 ? '<i class="bi bi-check-circle-fill text-success"></i>'
@@ -2332,7 +2429,7 @@ function renderScheduledDoses(doses) {
 
             return `<div style="border-bottom:1px solid #eee; padding:7px 0;">
                         <strong>${escapeHtml(vName)}</strong> (${escapeHtml(uName)})<br>
-                        <small style="color:#666">Scheduled: ${escapeHtml(schedDate)} | Administered: ${escapeHtml(admDate)} | By: ${escapeHtml(admBy)}</small><br>
+                        <small style="color:#666">Usage: ${formatRecordedUsage(d)} | Scheduled: ${escapeHtml(schedDate)} | Administered: ${escapeHtml(admDate)} | By: ${escapeHtml(admBy)}</small><br>
                         ${statusIcon} ${escapeHtml(status)}
                         <small class="d-block text-muted mt-1">${escapeHtml(remarks)}</small>
                     </div>`;
@@ -2389,9 +2486,25 @@ function addVaccineEntry(autoSuggest = false) {
     doseCounter++;
     var entryId = 'entry_' + doseCounter;
     
-    var vaccineOptions = availableVaccines.map(v => 
-        `<option value="${v.item_id}" data-unit-id="${v.unit_id}" data-unit-name="${v.unit_name}" data-stock="${v.quantity_available}">${v.item_name} (${v.unit_name}) - ${v.quantity_available} available</option>`
-    ).join('');
+    var vaccineOptions = availableVaccines.map(v => {
+        const hasStock = Number(v.quantity_available || 0) > 0;
+        const availabilityLabel = hasStock
+            ? (v.quantity_available_display || (v.quantity_available + ' available'))
+            : 'OUT OF STOCK';
+
+        return `<option value="${Number(v.item_id)}"
+                 data-unit-id="${Number(v.unit_id)}"
+                 data-base-unit="${escapeHtml(v.base_unit_label || v.unit_name || 'unit')}"
+                 data-display-unit="${escapeHtml(v.display_unit_label || v.unit_name || 'unit')}"
+                 data-conversion="${Number(v.conversion_to_base || 1)}"
+                 data-stock="${Number(v.quantity_available || 0)}"
+                 data-stock-display="${escapeHtml(v.quantity_available_display || '')}"
+                 data-step="${escapeHtml(v.quantity_step || '0.0001')}"
+                 data-site-based="${v.is_site_based ? '1' : '0'}"
+                 ${hasStock ? '' : 'disabled'}>
+             ${escapeHtml(v.item_name)} - ${escapeHtml(availabilityLabel)}
+         </option>`;
+    }).join('');
     
     // Determine suggested dose:
     var suggestedDose = 1;
@@ -2413,22 +2526,21 @@ function addVaccineEntry(autoSuggest = false) {
         <button type="button" class="remove-btn" onclick="removeVaccineEntry('${entryId}')" title="Remove"><i class="bi bi-x-circle"></i></button>
         <div class="entry-number">Vaccine #${doseCounter}</div>
         <div class="row g-3">
-            <div class="col-md-5"><label class="form-label fw-semibold">Vaccine <span class="text-danger">*</span></label><select class="form-select vaccine-select" onchange="updateVaccineUnit(this)" required><option value="">-- Select Vaccine --</option>${vaccineOptions}</select></div>
-            <div class="col-md-2"><label class="form-label fw-semibold">Unit</label><input type="text" class="form-control unit-display" readonly value="Select vaccine"></div>
-            <div class="col-md-2"><label class="form-label fw-semibold">Dose # <span class="text-danger">*</span></label><input type="number" class="form-control dose-number" min="1" max="6" value="${suggestedDose}" required><small class="text-muted dose-label-text">Dose ${getDoseLabel(suggestedDose)}</small></div>
-            <div class="col-md-3"><label class="form-label fw-semibold">Quantity <span class="text-danger">*</span></label><input type="number" class="form-control quantity-input" min="1" value="1" required></div>
+            <div class="col-lg-5"><label class="form-label fw-semibold">Vaccine / Product <span class="text-danger">*</span></label><select class="form-select vaccine-select" onchange="updateVaccineUnit(this)" required><option value="">-- Select Vaccine --</option>${vaccineOptions}</select></div>
+            <div class="col-lg-4"><label class="form-label fw-semibold">Available stock</label><input type="text" class="form-control stock-display" readonly value="Select vaccine"></div>
+            <div class="col-lg-3"><label class="form-label fw-semibold">Dose stage <span class="text-danger">*</span></label><input type="number" class="form-control dose-number" min="1" max="6" value="${suggestedDose}" required><small class="text-muted dose-label-text">Dose ${getDoseLabel(suggestedDose)}</small></div>
+            <div class="col-lg-4"><label class="form-label fw-semibold usage-label">Actual amount used <span class="text-danger">*</span></label><div class="input-group"><input type="number" class="form-control quantity-input" min="0.0001" step="0.0001" value="" placeholder="Enter actual usage" required><span class="input-group-text quantity-unit">unit</span></div><div class="site-presets mt-2" style="display:none"><button type="button" class="btn btn-outline-primary btn-sm me-1" onclick="setSiteQuantity(this,2)">Regular: 2 sites</button><button type="button" class="btn btn-outline-primary btn-sm" onclick="setSiteQuantity(this,1)">Booster: 1 site</button></div><small class="text-muted conversion-help d-block mt-1"></small></div>
             <div class="col-md-6"><label class="form-label fw-semibold">Date Administered</label><input type="date" class="form-control date-administered" value="${new Date().toISOString().split('T')[0]}"></div>
-            <div class="col-md-6"><label class="form-label fw-semibold">Status</label><select class="form-select status-select"><option value="Completed" selected>Completed</option><option value="Missed">Missed</option></select></div>
+            <div class="col-md-2"><label class="form-label fw-semibold">Status</label><select class="form-select status-select" onchange="updateUsageForStatus(this)"><option value="Completed" selected>Completed</option><option value="Missed">Missed</option></select></div>
+            <div class="col-md-12"><label class="form-label fw-semibold">Remarks</label><input type="text" class="form-control remarks-input" maxlength="500" placeholder="Optional clinical/inventory note"></div>
         </div>
         <input type="hidden" class="vaccine-item-id" value=""><input type="hidden" class="vaccine-unit-id" value="">
     `;
     
     container.appendChild(entry);
     
-    if (availableVaccines.length > 0) {
-        var select = entry.querySelector('.vaccine-select');
-        if (select) { select.selectedIndex = 1; updateVaccineUnit(select); }
-    }
+    // Do not assume one vial/unit per patient. The nurse must explicitly
+    // select the product and confirm the actual sites or mL administered.
 }
 
 function removeVaccineEntry(entryId) {
@@ -2444,9 +2556,49 @@ function updateVaccineUnit(select) {
     var entry = select.closest('.vaccine-entry');
     if (!entry) return;
     var opt = select.options[select.selectedIndex];
-    entry.querySelector('.unit-display').value = opt.getAttribute('data-unit-name') || 'Unknown';
+    var baseUnit = opt.getAttribute('data-base-unit') || 'unit';
+    var displayUnit = opt.getAttribute('data-display-unit') || baseUnit;
+    var conversion = Number(opt.getAttribute('data-conversion') || 1);
+    var stock = Number(opt.getAttribute('data-stock') || 0);
+    var quantity = entry.querySelector('.quantity-input');
+
+    entry.querySelector('.stock-display').value = opt.getAttribute('data-stock-display') || `${formatInventoryNumber(stock)} ${baseUnit}`;
+    entry.querySelector('.quantity-unit').textContent = baseUnit;
+    entry.querySelector('.usage-label').innerHTML = `Actual ${escapeHtml(baseUnit)} used <span class="text-danger">*</span>`;
+    quantity.step = opt.getAttribute('data-step') || '0.0001';
+    quantity.min = quantity.step;
+    quantity.max = String(stock);
+
+    var isSiteBased = opt.getAttribute('data-site-based') === '1';
+    entry.querySelector('.site-presets').style.display = isSiteBased ? 'block' : 'none';
+    entry.querySelector('.conversion-help').textContent = conversion > 1
+        ? `Inventory rule: 1 ${displayUnit} = ${formatInventoryNumber(conversion)} ${baseUnit}. Enter the actual ${baseUnit} administered.`
+        : `Enter the actual ${baseUnit} administered.`;
     entry.querySelector('.vaccine-item-id').value = opt.value;
     entry.querySelector('.vaccine-unit-id').value = opt.getAttribute('data-unit-id') || '';
+}
+
+function setSiteQuantity(button, sites) {
+    var entry = button.closest('.vaccine-entry');
+    var quantity = entry?.querySelector('.quantity-input');
+    if (quantity && !quantity.disabled) quantity.value = String(sites);
+}
+
+function updateUsageForStatus(select) {
+    var entry = select.closest('.vaccine-entry');
+    var quantity = entry?.querySelector('.quantity-input');
+    if (!quantity) return;
+
+    if (select.value === 'Missed') {
+        quantity.dataset.previousValue = quantity.value;
+        quantity.value = '0';
+        quantity.disabled = true;
+        quantity.required = false;
+    } else {
+        quantity.disabled = false;
+        quantity.required = true;
+        quantity.value = quantity.dataset.previousValue || '';
+    }
 }
 
 function showAlert(message, type = 'success') {
@@ -2477,18 +2629,21 @@ function submitVaccination() {
         var statusSel = entry.querySelector('.status-select');
         var itemId = entry.querySelector('.vaccine-item-id');
         var unitId = entry.querySelector('.vaccine-unit-id');
+        var remarks = entry.querySelector('.remarks-input');
+        var isMissed = statusSel && statusSel.value === 'Missed';
         
         if (!vSelect || !vSelect.value) { showAlert('Please select a vaccine for all entries.', 'warning'); hasError = true; return; }
         if (!dNum || !dNum.value || parseInt(dNum.value) < 1 || parseInt(dNum.value) > 6) { showAlert('Please enter a valid dose number (1-6).', 'warning'); hasError = true; return; }
-        if (!qty || !qty.value || parseInt(qty.value) < 1) { showAlert('Please enter a valid quantity.', 'warning'); hasError = true; return; }
+        if (!isMissed && (!qty || !qty.value || Number(qty.value) <= 0)) { showAlert('Please enter the actual amount used.', 'warning'); hasError = true; return; }
         
         vaccineItems.push({
             item_id: itemId.value,
             unit_id: unitId.value,
             dose_number: dNum.value,
-            quantity: qty.value,
+            quantity_base: isMissed ? 0 : Number(qty.value),
             date_administered: dAdmin.value || new Date().toISOString().split('T')[0],
-            vaccine_status: statusSel.value || 'Completed'
+            vaccine_status: statusSel.value || 'Completed',
+            remarks: remarks ? remarks.value.trim() : ''
         });
     });
     

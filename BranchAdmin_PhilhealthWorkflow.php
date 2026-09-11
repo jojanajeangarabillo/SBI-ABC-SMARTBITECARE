@@ -12,29 +12,42 @@ $csrf = workflowCsrfToken();
 $mainStatuses = ['Returned for Correction','Submitted to PhilHealth','Denied','Reimbursed','Completed'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $recordId = (int)($_POST['record_id'] ?? 0);
+    $newStatus = trim((string)($_POST['status'] ?? ''));
+    $remarks = trim((string)($_POST['remarks'] ?? ''));
+    $transactionStarted = false;
+
     try {
         workflowVerifyCsrf();
-        $recordId = (int)($_POST['record_id'] ?? 0);
-        $newStatus = (string)($_POST['status'] ?? '');
-        $remarks = trim((string)($_POST['remarks'] ?? ''));
+
         if ($recordId < 1 || !in_array($newStatus, $mainStatuses, true)) {
-            throw new RuntimeException('Choose a valid main-branch processing status.');
+            throw new RuntimeException('Choose a valid PhilHealth processing status.');
         }
+
+        // Begin before reading so the owned record remains locked until its
+        // status, history, notification, and audit entry are all committed.
+        $conn->begin_transaction();
+        $transactionStarted = true;
 
         $find = $conn->prepare(
             "SELECT ph.status, p.full_name, c.case_number, c.branch_id
              FROM philhealth_records ph
              INNER JOIN animal_bite_cases c ON c.case_id=ph.case_id
              INNER JOIN patients p ON p.patient_id=c.patient_id
-             WHERE ph.philhealth_record_id=? AND ph.has_philhealth='Yes'
-               AND ph.is_archived=0 LIMIT 1"
+             WHERE ph.philhealth_record_id=?
+               AND c.branch_id=?
+               AND ph.has_philhealth='Yes'
+               AND ph.is_archived=0
+             LIMIT 1
+             FOR UPDATE"
         );
-        $find->bind_param('i', $recordId);
+        $find->bind_param('is', $recordId, $branchId);
         $find->execute();
         $record = $find->get_result()->fetch_assoc();
         $find->close();
+
         if (!$record) {
-            throw new RuntimeException('PhilHealth record was not found.');
+            throw new RuntimeException('PhilHealth record was not found in your branch.');
         }
 
         $oldStatus = (string)($record['status'] ?? '');
@@ -42,14 +55,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'Ready for Main Branch','Sent to Main Branch','Returned for Correction',
             'Submitted to PhilHealth','Denied','Reimbursed','Completed'
         ], true)) {
-            throw new RuntimeException('The originating branch has not sent this record for main-branch processing.');
+            throw new RuntimeException('This branch record is not ready for PhilHealth processing.');
         }
 
         $submitted = $newStatus === 'Submitted to PhilHealth' ? date('Y-m-d') : null;
         $returned = $newStatus === 'Returned for Correction' ? date('Y-m-d') : null;
         $resolved = in_array($newStatus, ['Denied','Reimbursed','Completed'], true) ? date('Y-m-d') : null;
 
-        $conn->begin_transaction();
         $update = $conn->prepare(
             "UPDATE philhealth_records
              SET status=?, remarks=?,
@@ -57,9 +69,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                  date_returned=COALESCE(?,date_returned),
                  date_resolved=COALESCE(?,date_resolved),
                  updated_by=?, updated_at=NOW()
-             WHERE philhealth_record_id=?"
+             WHERE philhealth_record_id=?
+               AND EXISTS (
+                   SELECT 1
+                   FROM animal_bite_cases scope_case
+                   WHERE scope_case.case_id=philhealth_records.case_id
+                     AND scope_case.branch_id=?
+               )"
         );
-        $update->bind_param('sssssii', $newStatus, $remarks, $submitted, $returned, $resolved, $userId, $recordId);
+        $update->bind_param(
+            'sssssiis',
+            $newStatus,
+            $remarks,
+            $submitted,
+            $returned,
+            $resolved,
+            $userId,
+            $recordId,
+            $branchId
+        );
         $update->execute();
         $update->close();
 
@@ -72,39 +100,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $history->execute();
         $history->close();
 
-        $originBranch = (string)$record['branch_id'];
         workflowNotifyRole(
             $conn,
-            $originBranch,
+            $branchId,
             4,
             'PhilHealth Status Updated',
             $record['full_name'] . ' (Case ' . $record['case_number'] . ') is now ' . $newStatus . '.',
             'philhealth'
         );
-        workflowAudit($conn, $userId, $branchId, 'Main-branch PhilHealth update: record ' . $recordId . ' to ' . $newStatus, 'PhilHealth');
+        workflowAudit(
+            $conn,
+            $userId,
+            $branchId,
+            'SUCCESS | Updated PhilHealth record ' . $recordId
+            . ' for ' . $record['full_name']
+            . ' (Case ' . $record['case_number'] . ') from '
+            . $oldStatus . ' to ' . $newStatus,
+            'PhilHealth'
+        );
         $conn->commit();
-        workflowFlash('success', 'PhilHealth status updated and the originating branch was notified.');
+        $transactionStarted = false;
+        workflowFlash('success', 'PhilHealth status updated for ' . $branchName . '.');
     } catch (Throwable $e) {
-        try { $conn->rollback(); } catch (Throwable $ignored) {}
+        if ($transactionStarted) {
+            try { $conn->rollback(); } catch (Throwable $ignored) {}
+        }
+
+        try {
+            workflowAudit(
+                $conn,
+                $userId,
+                $branchId,
+                'FAILED | PhilHealth update attempt for record '
+                . $recordId . ' to ' . $newStatus . ': ' . $e->getMessage(),
+                'PhilHealth'
+            );
+        } catch (Throwable $ignored) {
+            // Keep the original workflow error visible even if auditing fails.
+        }
+
         workflowFlash('danger', $e->getMessage());
     }
     header('Location: BranchAdmin_PhilhealthWorkflow.php');
     exit;
 }
 
-$records = $conn->query(
+$recordsStmt = $conn->prepare(
     "SELECT ph.*, p.full_name, c.case_number, c.branch_id, b.branch_name
      FROM philhealth_records ph
      INNER JOIN animal_bite_cases c ON c.case_id=ph.case_id
      INNER JOIN patients p ON p.patient_id=c.patient_id
      INNER JOIN branches b ON b.branch_id=c.branch_id
-     WHERE ph.has_philhealth='Yes' AND ph.is_archived=0
+     WHERE c.branch_id=?
+       AND ph.has_philhealth='Yes'
+       AND ph.is_archived=0
        AND ph.status IN ('Ready for Main Branch','Sent to Main Branch','Returned for Correction',
                          'Submitted to PhilHealth','Denied','Reimbursed','Completed')
      ORDER BY FIELD(ph.status,'Sent to Main Branch','Ready for Main Branch','Returned for Correction',
                               'Submitted to PhilHealth','Denied','Reimbursed','Completed'),
               ph.updated_at DESC"
-)->fetch_all(MYSQLI_ASSOC);
+);
+$recordsStmt->bind_param('s', $branchId);
+$recordsStmt->execute();
+$records = $recordsStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$recordsStmt->close();
 
 $awaitingCount = 0;
 $submittedCount = 0;
@@ -146,7 +205,7 @@ $flash = workflowTakeFlash();
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Main-Branch PhilHealth Processing - SmartBiteCare</title>
+    <title>Branch PhilHealth Processing - SmartBiteCare</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link rel="stylesheet" href="sidebar.css">
@@ -623,10 +682,29 @@ $flash = workflowTakeFlash();
     <div class="main">
         <div class="topbar">
             <h3>PhilHealth Processing <small><?php echo workflowH($branchName); ?></small></h3>
-             <div class="profile">
-                <i class="bi bi-person-circle"></i>
-                <span><?php echo workflowH($username); ?></span>
-                <span class="profile-role">| Branch Admin</span>
+             <div class="dropdown">
+                <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
+                        type="button" id="branchAdminProfileMenu"
+                        data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="bi bi-person-circle"></i>
+                    <span><?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?></span>
+                    <span class="profile-role">| Branch Admin</span>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2"
+                    aria-labelledby="branchAdminProfileMenu">
+                    <li><h6 class="dropdown-header">Account options</h6></li>
+                    <li>
+                        <a class="dropdown-item rounded-2 py-2" href="Account_ChangePassword.php">
+                            <i class="bi bi-key-fill me-2"></i>Change Password
+                        </a>
+                    </li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li>
+                        <a class="dropdown-item rounded-2 py-2 text-danger" href="logout.php">
+                            <i class="bi bi-box-arrow-right me-2"></i>Logout
+                        </a>
+                    </li>
+                </ul>
             </div>
         </div>
 
@@ -665,14 +743,14 @@ $flash = workflowTakeFlash();
                 <i class="bi bi-info-circle-fill"></i>
                 <div>
                     <strong>Main-branch processing scope</strong>
-                    <p>Review branch handoffs, submit eligible claims to PhilHealth, record claim outcomes, and return incomplete records to their originating branch. Every update is saved in the status history and the originating Administrative Staff is notified.</p>
+                    <p>Review and process only the PhilHealth records assigned to <?php echo workflowH($branchName); ?>. Every update is saved in the status history, audited under this branch, and sent only to this branch's Administrative Staff.</p>
                 </div>
             </div>
 
             <section class="content-card">
                 <div class="content-card-header">
                     <div>
-                        <h5><span class="section-icon"><i class="bi bi-file-earmark-medical-fill"></i></span>Main-Branch PhilHealth Queue</h5>
+                        <h5><span class="section-icon"><i class="bi bi-file-earmark-medical-fill"></i></span><?php echo workflowH($branchName); ?> PhilHealth Queue</h5>
                         <p>Receive branch handoffs, submit claims, and record final processing outcomes.</p>
                     </div>
                     <span class="badge rounded-pill text-bg-light border"><?php echo number_format(count($records)); ?> records</span>
@@ -682,11 +760,11 @@ $flash = workflowTakeFlash();
                     <table class="table philhealth-table align-middle">
                         <thead>
                             <tr>
-                                <th>Origin Branch</th>
+                                <th>Branch</th>
                                 <th>Patient and Case</th>
                                 <th>Current Status</th>
                                 <th>Processing Dates</th>
-                                <th>Main-Branch Action</th>
+                                <th>Branch Action</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -746,7 +824,7 @@ $flash = workflowTakeFlash();
                                                     <input class="form-control form-control-sm" id="remarks-<?php echo (int)$row['philhealth_record_id']; ?>" name="remarks" maxlength="500" value="<?php echo workflowH($row['remarks'] ?? ''); ?>" placeholder="Add processing remarks">
                                                 </div>
                                                 <div class="col-lg-2 d-flex align-items-end">
-                                                    <button type="submit" class="btn-save w-100" onclick="return confirm('Save this main-branch PhilHealth update?');"><i class="bi bi-check2-circle"></i>Save</button>
+                                                    <button type="submit" class="btn-save w-100" onclick="return confirm('Save this branch PhilHealth update?');"><i class="bi bi-check2-circle"></i>Save</button>
                                                 </div>
                                             </div>
                                         </form>

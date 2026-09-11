@@ -74,15 +74,28 @@ function inventoryTransactionQuantity(string $type, $quantity): string
     return ($number > 0 ? '+' : '') . inventoryNumber($number);
 }
 
-// Categories are loaded dynamically so new categories automatically become tabs.
-$categoriesResult = $conn->query(
-    "SELECT category_id, category_name, monitoring_frequency
-     FROM inventory_categories
-     ORDER BY category_name"
+// Only categories represented by inventory records in the logged-in branch
+// become tabs. Global master categories belonging only to another branch are
+// therefore not shown.
+$categoriesStmt = $conn->prepare(
+    "SELECT DISTINCT
+        c.category_id,
+        c.category_name,
+        c.monitoring_frequency
+     FROM inventory_categories c
+     INNER JOIN inventory_items i ON i.category_id = c.category_id
+     INNER JOIN inventory_stocks s ON s.item_id = i.item_id
+     WHERE s.branch_id = ?
+     ORDER BY c.category_name"
 );
-$categories = $categoriesResult->fetch_all(MYSQLI_ASSOC);
+$categoriesStmt->bind_param('s', $branchId);
+$categoriesStmt->execute();
+$categories = $categoriesStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$categoriesStmt->close();
 
-// Read-only, branch-specific inventory snapshot. Items with no stock row are included as zero stock.
+// Read-only branch inventory snapshot. Starting from the branch's stock rows
+// prevents global master items that were never assigned to this branch from
+// appearing as zero-stock records.
 $inventorySql = "
     SELECT
         i.item_id,
@@ -104,7 +117,7 @@ $inventorySql = "
     FROM inventory_items i
     INNER JOIN inventory_categories c ON c.category_id = i.category_id
     INNER JOIN units u ON u.unit_id = i.unit_id
-    LEFT JOIN inventory_stocks s
+    INNER JOIN inventory_stocks s
         ON s.item_id = i.item_id
        AND s.branch_id = ?
     GROUP BY
@@ -679,10 +692,29 @@ $recentStmt->close();
     <div class="main">
         <div class="topbar">
             <h3>Inventory Overview <small><?php echo workflowH($branchName); ?></small></h3>
-            <div class="profile">
-                <i class="bi bi-person-circle"></i>
-                <span><?php echo workflowH($username); ?></span>
-                <span class="profile-role">| Branch Admin</span>
+           <div class="dropdown">
+                <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
+                        type="button" id="branchAdminProfileMenu"
+                        data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="bi bi-person-circle"></i>
+                    <span><?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?></span>
+                    <span class="profile-role">| Branch Admin</span>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2"
+                    aria-labelledby="branchAdminProfileMenu">
+                    <li><h6 class="dropdown-header">Account options</h6></li>
+                    <li>
+                        <a class="dropdown-item rounded-2 py-2" href="Account_ChangePassword.php">
+                            <i class="bi bi-key-fill me-2"></i>Change Password
+                        </a>
+                    </li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li>
+                        <a class="dropdown-item rounded-2 py-2 text-danger" href="logout.php">
+                            <i class="bi bi-box-arrow-right me-2"></i>Logout
+                        </a>
+                    </li>
+                </ul>
             </div>
         </div>
 

@@ -2,6 +2,7 @@
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
+require_once 'sources/inventory_unit_helpers.php';
 
 $user = workflowRequireUser($conn, 3);
 $userId = (int)$user['user_id'];
@@ -25,12 +26,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($number < 0) throw new RuntimeException('Inventory values cannot be negative.');
         }
 
-        $itemCheck = $conn->prepare('SELECT item_name FROM inventory_items WHERE item_id=? AND is_consumable=1 LIMIT 1');
+        $itemCheck = $conn->prepare(
+            "SELECT i.item_name, u.unit_name,
+                    COALESCE(NULLIF(i.base_unit_label,''),u.unit_name) AS base_unit_label,
+                    COALESCE(NULLIF(i.display_unit_label,''),u.unit_name) AS display_unit_label,
+                    COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base
+             FROM inventory_items i
+             INNER JOIN units u ON u.unit_id=i.unit_id
+             WHERE i.item_id=? AND i.is_consumable=1 LIMIT 1"
+        );
         $itemCheck->bind_param('i', $itemId);
         $itemCheck->execute();
         $item = $itemCheck->get_result()->fetch_assoc();
         $itemCheck->close();
         if (!$item) throw new RuntimeException('Select a consumable inventory item.');
+
+        if (inventoryIsSiteBased($item)) {
+            foreach ([$beginning,$delivery,$pullOut,$actual] as $number) {
+                if (abs($number - round($number)) > 0.00001) {
+                    throw new RuntimeException('Site-based inventory values must be whole numbers.');
+                }
+            }
+        }
 
         $usageStmt = $conn->prepare(
             'SELECT COALESCE(SUM(quantity_used),0) AS consumed FROM inventory_usage_history
@@ -57,7 +74,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->bind_param('sisdddddddsi', $branchId,$itemId,$inventoryDate,$beginning,$delivery,$consumed,$pullOut,$computed,$actual,$variance,$remarks,$userId);
         $stmt->execute();
         $stmt->close();
-        workflowAudit($conn,$userId,$branchId,'Submitted daily inventory for '.$item['item_name'].' on '.$inventoryDate,'Daily Inventory');
+        workflowAudit(
+            $conn,
+            $userId,
+            $branchId,
+            'Submitted daily inventory for '.$item['item_name'].' on '.$inventoryDate.
+            ' | Beginning: '.inventoryUsageDescription($beginning,$item).
+            ' | Delivery: '.inventoryUsageDescription($delivery,$item).
+            ' | Consumed: '.inventoryUsageDescription($consumed,$item).
+            ' | Pull-out: '.inventoryUsageDescription($pullOut,$item).
+            ' | Actual: '.inventoryUsageDescription($actual,$item),
+            'Daily Inventory'
+        );
         $conn->commit();
         workflowFlash('success','Daily inventory submitted. Consumed quantity was calculated from completed treatment records.');
     } catch (Throwable $e) {
@@ -68,16 +96,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-$items = $conn->query(
-    "SELECT i.item_id,i.item_name,i.base_unit_label,i.display_unit_label,i.conversion_to_base,
+$itemStmt = $conn->prepare(
+    "SELECT i.item_id,i.item_name,u.unit_name,
+            COALESCE(NULLIF(i.base_unit_label,''),u.unit_name) AS base_unit_label,
+            COALESCE(NULLIF(i.display_unit_label,''),u.unit_name) AS display_unit_label,
+            COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base,
             COALESCE(SUM(s.quantity_available),0) AS current_stock
-     FROM inventory_items i LEFT JOIN inventory_stocks s ON s.item_id=i.item_id AND s.branch_id='".$conn->real_escape_string($branchId)."'
-     WHERE i.is_consumable=1 GROUP BY i.item_id ORDER BY i.item_name"
-)->fetch_all(MYSQLI_ASSOC);
+     FROM inventory_items i
+     INNER JOIN units u ON u.unit_id=i.unit_id
+     LEFT JOIN inventory_stocks s ON s.item_id=i.item_id AND s.branch_id=?
+     WHERE i.is_consumable=1
+     GROUP BY i.item_id,i.item_name,u.unit_name,i.base_unit_label,i.display_unit_label,i.conversion_to_base
+     ORDER BY i.item_name"
+);
+$itemStmt->bind_param('s',$branchId);
+$itemStmt->execute();
+$items=$itemStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$itemStmt->close();
+foreach ($items as &$itemRow) {
+    $itemRow['stock_display']=inventoryStockBreakdown((float)$itemRow['current_stock'],$itemRow);
+    $itemRow['input_step']=inventoryInputStep($itemRow);
+}
+unset($itemRow);
 $stmt = $conn->prepare(
-    "SELECT d.*,i.item_name,i.base_unit_label,u.username
+    "SELECT d.*,i.item_name,u2.unit_name,
+            COALESCE(NULLIF(i.base_unit_label,''),u2.unit_name) AS base_unit_label,
+            COALESCE(NULLIF(i.display_unit_label,''),u2.unit_name) AS display_unit_label,
+            COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base,
+            u.username
      FROM daily_inventory_closings d INNER JOIN inventory_items i ON i.item_id=d.item_id
      INNER JOIN users u ON u.user_id=d.submitted_by
+     INNER JOIN units u2 ON u2.unit_id=i.unit_id
      WHERE d.branch_id=? AND d.inventory_date>=DATE_SUB(CURDATE(),INTERVAL 30 DAY)
      ORDER BY d.inventory_date DESC,i.item_name"
 );
@@ -179,13 +228,36 @@ $flash=workflowTakeFlash();
             <li><a href="Nurse_Notification.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
         </ul>
     </nav>
-    <div class="logout"><a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a></div>
 </aside>
 
 <main class="main">
     <div class="topbar">
         <h3>Daily Inventory <small><?= workflowH((string)($user['branch_name'] ?? $branchId)) ?></small></h3>
-        <div class="profile"><i class="bi bi-person-circle"></i><span><?= workflowH((string)$user['username']) ?></span><span class="profile-role">| Nurse</span></div>
+        <div class="dropdown">
+            <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
+                    type="button" id="nurseProfileMenu"
+                    data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="bi bi-person-circle"></i>
+                <span><?php echo htmlspecialchars($user['username'] ?? '', ENT_QUOTES, 'UTF-8'); ?></span>
+                <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Nurse</span>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2"
+                aria-labelledby="nurseProfileMenu">
+                <li><h6 class="dropdown-header">Account options</h6></li>
+                <li>
+                    <a class="dropdown-item rounded-2 py-2" href="Account_ChangePassword.php">
+                        <i class="bi bi-key-fill me-2"></i>Change Password
+                    </a>
+                </li>
+                <li><hr class="dropdown-divider"></li>
+                <li>
+                    <a class="dropdown-item rounded-2 py-2 text-danger" href="logout.php"
+                       onclick="return window.confirm('Are you sure you want to log out?');">
+                        <i class="bi bi-box-arrow-right me-2"></i>Logout
+                    </a>
+                </li>
+            </ul>
+        </div>
     </div>
 
     <div class="content">
@@ -213,8 +285,14 @@ $flash=workflowTakeFlash();
                         <select class="form-select" id="item_id" name="item_id" required>
                             <option value="">Select an item</option>
                             <?php foreach ($items as $item): ?>
-                                <option value="<?= (int)$item['item_id'] ?>" data-stock="<?= workflowH((string)$item['current_stock']) ?>">
-                                    <?= workflowH($item['item_name'].' | Stock: '.$item['current_stock'].' '.($item['base_unit_label'] ?: '')) ?>
+                                <option value="<?= (int)$item['item_id'] ?>"
+                                        data-stock="<?= workflowH((string)$item['current_stock']) ?>"
+                                        data-stock-display="<?= workflowH((string)$item['stock_display']) ?>"
+                                        data-base-unit="<?= workflowH((string)$item['base_unit_label']) ?>"
+                                        data-display-unit="<?= workflowH((string)$item['display_unit_label']) ?>"
+                                        data-conversion="<?= workflowH((string)$item['conversion_to_base']) ?>"
+                                        data-step="<?= workflowH((string)$item['input_step']) ?>">
+                                    <?= workflowH($item['item_name'].' | Stock: '.$item['stock_display']) ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
@@ -224,20 +302,20 @@ $flash=workflowTakeFlash();
                         <input type="date" class="form-control" id="inventory_date" name="inventory_date" value="<?= date('Y-m-d') ?>" max="<?= date('Y-m-d') ?>" required>
                     </div>
                     <div class="col-xl-2 col-lg-3 col-md-6">
-                        <label class="form-label required" for="beginning_stock">Beginning Stock</label>
-                        <input type="number" step="0.01" min="0" class="form-control" id="beginning_stock" name="beginning_stock" required>
+                        <label class="form-label required" for="beginning_stock">Beginning Stock <span class="inventory-unit-label"></span></label>
+                        <input type="number" step="0.0001" min="0" class="form-control inventory-number" id="beginning_stock" name="beginning_stock" required>
                     </div>
                     <div class="col-xl-2 col-md-6">
-                        <label class="form-label" for="delivery">Delivery</label>
-                        <input type="number" step="0.01" min="0" value="0" class="form-control" id="delivery" name="delivery">
+                        <label class="form-label" for="delivery">Delivery <span class="inventory-unit-label"></span></label>
+                        <input type="number" step="0.0001" min="0" value="0" class="form-control inventory-number" id="delivery" name="delivery">
                     </div>
                     <div class="col-xl-2 col-md-6">
-                        <label class="form-label" for="pull_out">Pull-out</label>
-                        <input type="number" step="0.01" min="0" value="0" class="form-control" id="pull_out" name="pull_out">
+                        <label class="form-label" for="pull_out">Pull-out <span class="inventory-unit-label"></span></label>
+                        <input type="number" step="0.0001" min="0" value="0" class="form-control inventory-number" id="pull_out" name="pull_out">
                     </div>
                     <div class="col-lg-3 col-md-6">
-                        <label class="form-label required" for="actual_count">Actual Physical Count</label>
-                        <input type="number" step="0.01" min="0" class="form-control" id="actual_count" name="actual_count" required>
+                        <label class="form-label required" for="actual_count">Actual Physical Count <span class="inventory-unit-label"></span></label>
+                        <input type="number" step="0.0001" min="0" class="form-control inventory-number" id="actual_count" name="actual_count" required>
                     </div>
                     <div class="col-lg-7 col-md-6">
                         <label class="form-label" for="remarks">Remarks</label>
@@ -246,7 +324,10 @@ $flash=workflowTakeFlash();
                     <div class="col-lg-2 d-flex align-items-end">
                         <button class="btn btn-primary w-100" type="submit"><i class="bi bi-send-check-fill me-1"></i>Submit</button>
                     </div>
-                    <div class="col-12 small-help"><i class="bi bi-info-circle-fill"></i><span>Consumed quantity is automatically read from completed vaccination and supply-usage records to prevent double entry.</span></div>
+                    <div class="col-12">
+                        <div id="unitConversionHelp" class="alert alert-info py-2 px-3 mb-0" style="display:none"></div>
+                    </div>
+                    <div class="col-12 small-help"><i class="bi bi-info-circle-fill"></i><span>All numbers on this form use the selected item's base unit. Consumed quantity is automatically read from completed vaccination and supply-usage records.</span></div>
                 </form>
             </div>
         </section>
@@ -267,13 +348,13 @@ $flash=workflowTakeFlash();
                         <tr>
                             <td><?= workflowH(date('M d, Y', strtotime((string)$closing['inventory_date']))) ?></td>
                             <td class="item-name"><?= workflowH((string)$closing['item_name']) ?></td>
-                            <td><?= number_format((float)$closing['beginning_stock'], 2) ?></td>
-                            <td><?= number_format((float)$closing['delivery'], 2) ?></td>
-                            <td><?= number_format((float)$closing['consumed'], 2) ?></td>
-                            <td><?= number_format((float)$closing['pull_out'], 2) ?></td>
-                            <td><?= number_format((float)$closing['computed_ending'], 2) ?></td>
-                            <td><?= number_format((float)$closing['actual_count'], 2) ?></td>
-                            <td><span class="variance-badge <?= $hasVariance ? 'difference' : 'match' ?>"><?= number_format((float)$closing['variance'], 2) ?></span></td>
+                            <td><?= workflowH(inventoryStockBreakdown((float)$closing['beginning_stock'],$closing)) ?></td>
+                            <td><?= workflowH(inventoryStockBreakdown((float)$closing['delivery'],$closing)) ?></td>
+                            <td><?= workflowH(inventoryStockBreakdown((float)$closing['consumed'],$closing)) ?></td>
+                            <td><?= workflowH(inventoryStockBreakdown((float)$closing['pull_out'],$closing)) ?></td>
+                            <td><?= workflowH(inventoryStockBreakdown((float)$closing['computed_ending'],$closing)) ?></td>
+                            <td><?= workflowH(inventoryStockBreakdown((float)$closing['actual_count'],$closing)) ?></td>
+                            <td><span class="variance-badge <?= $hasVariance ? 'difference' : 'match' ?>"><?= workflowH(inventoryUsageDescription((float)$closing['variance'],$closing)) ?></span></td>
                             <td><?= workflowH((string)$closing['username']) ?></td>
                         </tr>
                     <?php endforeach; ?>
@@ -289,8 +370,41 @@ $flash=workflowTakeFlash();
 document.getElementById('item_id')?.addEventListener('change', function () {
     const selected = this.options[this.selectedIndex];
     const beginning = document.getElementById('beginning_stock');
-    if (selected && selected.dataset.stock !== undefined && beginning && beginning.value === '') {
-        beginning.value = Number(selected.dataset.stock).toFixed(2);
+    const help = document.getElementById('unitConversionHelp');
+
+    if (!selected || !selected.value) {
+        document.querySelectorAll('.inventory-unit-label').forEach(label => label.textContent = '');
+        if (help) help.style.display = 'none';
+        return;
+    }
+
+    const baseUnit = selected.dataset.baseUnit || 'unit';
+    const displayUnit = selected.dataset.displayUnit || baseUnit;
+    const conversion = Number(selected.dataset.conversion || 1);
+    const step = selected.dataset.step || '0.0001';
+
+    document.querySelectorAll('.inventory-unit-label').forEach(label => {
+        label.textContent = `(${baseUnit})`;
+    });
+    document.querySelectorAll('.inventory-number').forEach(input => {
+        input.step = step;
+    });
+
+    if (selected.dataset.stock !== undefined && beginning && beginning.value === '') {
+        beginning.value = String(Number(selected.dataset.stock));
+    }
+
+    if (help) {
+        const stockDisplay = selected.dataset.stockDisplay || `${selected.dataset.stock} ${baseUnit}`;
+        if (conversion > 1 && baseUnit.toLowerCase() !== displayUnit.toLowerCase()) {
+            help.innerHTML = `<strong>Current stock:</strong> ${stockDisplay}. ` +
+                `Enter all fields in <strong>${baseUnit}</strong>. ` +
+                `Rule: 1 ${displayUnit} = ${conversion} ${baseUnit}. ` +
+                `Example: 5 ${displayUnit} + 3 ${baseUnit} = ${(5 * conversion) + 3} ${baseUnit}.`;
+        } else {
+            help.innerHTML = `<strong>Current stock:</strong> ${stockDisplay}. Enter all fields in ${baseUnit}.`;
+        }
+        help.style.display = 'block';
     }
 });
 </script>
