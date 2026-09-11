@@ -411,13 +411,66 @@ while ($row = $branch_result->fetch_assoc()) {
             margin: 0;
             letter-spacing: -0.3px;
         }
-        .profile {
+         .profile {
             font-weight: 600;
             color: var(--primary);
-            cursor: default;
+            cursor: pointer;
             display: flex;
             align-items: center;
             gap: 6px;
+        }
+
+        .profile-button {
+            border: 0;
+            background: transparent;
+            padding: 10px 12px;
+            border-radius: 10px;
+            transition: background-color 0.2s ease;
+        }
+
+    
+        .profile-role {
+            color: #adb5bd;
+            font-size: 12px;
+            font-weight: 400;
+            margin-left: 4px;
+        }
+
+        .profile-menu {
+            min-width: 220px;
+            padding: 8px;
+            margin-top: 10px !important;
+            border: 1px solid #e4e8f1;
+            border-radius: 12px;
+            box-shadow: 0 10px 28px rgba(32, 45, 110, 0.14);
+        }
+
+        .profile-menu .dropdown-header {
+            padding: 8px 12px 10px;
+            color: #6c757d;
+            font-size: 12px;
+        }
+
+        .profile-menu .dropdown-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            color: #24315f;
+            font-weight: 500;
+        }
+
+        .profile-menu .dropdown-item:hover,
+        .profile-menu .dropdown-item:focus {
+            color: var(--primary);
+            background: #f1f3fb;
+        }
+
+        .profile-menu .dropdown-item.text-danger:hover,
+        .profile-menu .dropdown-item.text-danger:focus {
+            color: #b42332 !important;
+            background: #fff0f2;
         }
 
         .content {

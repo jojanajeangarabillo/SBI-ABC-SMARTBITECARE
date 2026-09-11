@@ -269,6 +269,99 @@ $flash = workflowTakeFlash();
         .registry-panel small { color: var(--muted); }
         .overdue-list { max-height: 145px; overflow-y: auto; }
 
+        /* Styled confirmation dialogs */
+        .confirm-modal .modal-dialog { max-width: 480px; }
+        .confirm-modal .modal-content {
+            overflow: hidden;
+            border: 0;
+            border-radius: 20px;
+            box-shadow: 0 24px 70px rgba(31, 45, 110, .24);
+        }
+        .confirm-modal .modal-header {
+            display: block;
+            padding: 28px 28px 10px;
+            border: 0;
+            text-align: center;
+        }
+        .confirm-modal .modal-icon {
+            width: 66px;
+            height: 66px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 15px;
+            color: #fff;
+            background: linear-gradient(135deg, var(--primary), #5265c7);
+            border-radius: 50%;
+            box-shadow: 0 10px 24px rgba(43, 58, 140, .25);
+            font-size: 29px;
+        }
+        .confirm-modal .modal-icon.logout-icon {
+            background: linear-gradient(135deg, #dc3545, #f06b77);
+            box-shadow: 0 10px 24px rgba(220, 53, 69, .22);
+        }
+        .confirm-modal .modal-title {
+            color: var(--primary-dark);
+            font-size: 22px;
+            font-weight: 750;
+        }
+        .confirm-modal .modal-body {
+            padding: 8px 28px 20px;
+            color: var(--muted);
+            text-align: center;
+        }
+        .confirm-modal .confirmation-summary {
+            margin-top: 16px;
+            padding: 13px 15px;
+            color: #354160;
+            background: #f6f7fc;
+            border: 1px solid #e5e9f3;
+            border-radius: 12px;
+            text-align: left;
+        }
+        .confirm-modal .confirmation-summary strong {
+            display: block;
+            margin-bottom: 2px;
+            color: var(--primary);
+        }
+        .confirm-modal .confirmation-warning {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            margin-top: 12px;
+            padding: 11px 13px;
+            color: #73510b;
+            background: #fff8e6;
+            border: 1px solid #ffe4a3;
+            border-radius: 10px;
+            font-size: 13px;
+            text-align: left;
+        }
+        .confirm-modal .modal-footer {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            padding: 0 28px 28px;
+            border: 0;
+        }
+        .confirm-modal .modal-footer .btn {
+            min-height: 46px;
+            margin: 0;
+            border-radius: 10px;
+            font-weight: 700;
+        }
+        .confirm-modal .btn-confirm {
+            color: #fff;
+            background: var(--success);
+            border-color: var(--success);
+        }
+        .confirm-modal .btn-confirm:hover,
+        .confirm-modal .btn-confirm:focus {
+            color: #fff;
+            background: #218838;
+            border-color: #218838;
+        }
+
         @media (max-width: 991px) {
             .main { margin-left: 90px; }
             .topbar { padding: 0 22px; }
@@ -306,13 +399,37 @@ $flash = workflowTakeFlash();
             <li><a href="Nurse_Notification.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
         </ul>
     </nav>
-    <div class="logout"><a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a></div>
+    
 </aside>
 
 <main class="main">
     <div class="topbar">
         <h3>Nurse Assessment <small><?= workflowH((string)($user['branch_name'] ?? $branchId)) ?></small></h3>
-        <div class="profile"><i class="bi bi-person-circle"></i><span><?= workflowH((string)$user['username']) ?></span><span class="profile-role">| Nurse</span></div>
+        <div class="dropdown">
+            <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
+                    type="button" id="nurseProfileMenu"
+                    data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="bi bi-person-circle"></i>
+                <span><?php echo htmlspecialchars($user['username'] ?? '', ENT_QUOTES, 'UTF-8'); ?></span>
+                <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Nurse</span>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2"
+                aria-labelledby="nurseProfileMenu">
+                <li><h6 class="dropdown-header">Account options</h6></li>
+                <li>
+                    <a class="dropdown-item rounded-2 py-2" href="Account_ChangePassword.php">
+                        <i class="bi bi-key-fill me-2"></i>Change Password
+                    </a>
+                </li>
+                <li><hr class="dropdown-divider"></li>
+                <li>
+                    <a class="dropdown-item rounded-2 py-2 text-danger" href="#"
+                       data-bs-toggle="modal" data-bs-target="#logoutConfirmModal">
+                        <i class="bi bi-box-arrow-right me-2"></i>Logout
+                    </a>
+                </li>
+            </ul>
+        </div>
     </div>
 
     <div class="content">
@@ -391,12 +508,10 @@ $flash = workflowTakeFlash();
 
                             <div class="registry-panel">
                                 <div><strong>Complete the patient chart</strong><small>Sign the assessment and send it to Administrative Staff for registry verification.</small></div>
-                                <form method="post" onsubmit="return confirm('Confirm that charting is complete and signed?')">
-                                    <input type="hidden" name="csrf_token" value="<?= workflowH($csrf) ?>">
-                                    <input type="hidden" name="action" value="send_registry">
-                                    <input type="hidden" name="visit_id" value="<?= $selectedId ?>">
-                                    <button class="btn btn-success" type="submit"><i class="bi bi-send-check-fill me-1"></i>Complete and Send for Registry</button>
-                                </form>
+                                <button class="btn btn-success" type="button"
+                                        data-bs-toggle="modal" data-bs-target="#registryConfirmModal">
+                                    <i class="bi bi-send-check-fill me-1"></i>Complete and Send for Registry
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -405,6 +520,79 @@ $flash = workflowTakeFlash();
         </div>
     </div>
 </main>
+
+<?php if ($selected): ?>
+<div class="modal fade confirm-modal" id="registryConfirmModal" tabindex="-1"
+     aria-labelledby="registryConfirmModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-icon"><i class="bi bi-clipboard2-check-fill"></i></div>
+                <h2 class="modal-title" id="registryConfirmModalLabel">Complete patient chart?</h2>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">Please confirm that the assessment is complete and ready for registry verification.</p>
+                <div class="confirmation-summary">
+                    <strong><?= workflowH((string)$selected['full_name']) ?></strong>
+                    <span>Case <?= workflowH((string)$selected['case_number']) ?></span>
+                </div>
+                <div class="confirmation-warning">
+                    <i class="bi bi-exclamation-triangle-fill"></i>
+                    <span>This will sign the chart and send it to Administrative Staff. Review all information before continuing.</span>
+                </div>
+            </div>
+            <form method="post" id="registryConfirmationForm">
+                <input type="hidden" name="csrf_token" value="<?= workflowH($csrf) ?>">
+                <input type="hidden" name="action" value="send_registry">
+                <input type="hidden" name="visit_id" value="<?= $selectedId ?>">
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light border" data-bs-dismiss="modal">
+                        <i class="bi bi-x-circle me-1"></i>Cancel
+                    </button>
+                    <button type="submit" class="btn btn-confirm" id="confirmRegistryButton">
+                        <i class="bi bi-check-circle-fill me-1"></i>Yes, Complete Chart
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<div class="modal fade confirm-modal" id="logoutConfirmModal" tabindex="-1"
+     aria-labelledby="logoutConfirmModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-icon logout-icon"><i class="bi bi-box-arrow-right"></i></div>
+                <h2 class="modal-title" id="logoutConfirmModalLabel">Log out of Smart Bite Care?</h2>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">Make sure you have saved any unfinished assessment before leaving your account.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light border" data-bs-dismiss="modal">Cancel</button>
+                <a href="logout.php" class="btn btn-danger d-flex align-items-center justify-content-center">
+                    <i class="bi bi-box-arrow-right me-1"></i>Yes, Log Out
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const form = document.getElementById('registryConfirmationForm');
+    const button = document.getElementById('confirmRegistryButton');
+
+    if (form && button) {
+        form.addEventListener('submit', function () {
+            button.disabled = true;
+            button.innerHTML = '<span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>Sending...';
+        });
+    }
+});
+</script>
 </body>
 </html>

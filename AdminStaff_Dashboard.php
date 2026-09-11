@@ -818,14 +818,42 @@ while ($row = $trendResult->fetch_assoc()) {
         <!-- Top Header -->
         <div class="topbar">
             <h3>Dashboard <span style="font-size:16px; color:#6c757d; font-weight:400; margin-left:8px;"> <?php echo htmlspecialchars($branch_name); ?> </span> </h3>
-           <div class="profile">
-                <i class="bi bi-person-circle"></i>
-                <?php echo htmlspecialchars($username); ?>
-                <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Admin Staff</span>
+            <div class="dropdown">
+                <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
+                        type="button" id="adminStaffProfileMenu"
+                        data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="bi bi-person-circle"></i>
+                    <span><?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?></span>
+                    <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Admin Staff</span>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2"
+                    aria-labelledby="adminStaffProfileMenu">
+                    <li><h6 class="dropdown-header">Account options</h6></li>
+                    <li>
+                        <a class="dropdown-item rounded-2 py-2" href="Account_ChangePassword.php">
+                            <i class="bi bi-key-fill me-2"></i>Change Password
+                        </a>
+                    </li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li>
+                        <a class="dropdown-item rounded-2 py-2 text-danger" href="logout.php">
+                            <i class="bi bi-box-arrow-right me-2"></i>Logout
+                        </a>
+                    </li>
+                </ul>
             </div>
         </div>
 
         <div class="dashboard-content">
+            <?php if (isset($_GET['password_changed']) && $_GET['password_changed'] === '1'): ?>
+                <div class="alert alert-success alert-dismissible fade show shadow-sm border-0 mb-4" role="alert">
+                    <i class="bi bi-check-circle-fill me-2"></i>
+                    <strong>Password changed successfully.</strong>
+                    Use your new password the next time you log in.
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            <?php endif; ?>
+
             <!-- Statistics -->
             <div class="stats-container">
                 <div class="stat-card follow-up">

@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Sep 10, 2026 at 08:05 AM
+-- Generation Time: Sep 11, 2026 at 04:23 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -20,6 +20,104 @@ SET time_zone = "+00:00";
 --
 -- Database: `smartbitecare`
 --
+
+DELIMITER $$
+--
+-- Procedures
+--
+CREATE DEFINER=`root`@`localhost` PROCEDURE `migrate_inventory_item_to_base` (IN `p_migration_key` VARCHAR(150), IN `p_exact_item_name` VARCHAR(255), IN `p_base_unit` VARCHAR(30), IN `p_display_unit` VARCHAR(30), IN `p_conversion` DECIMAL(12,4))   migration_block:BEGIN
+    DECLARE v_item_id INT DEFAULT NULL;
+
+    IF p_conversion <= 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='conversion_to_base must be greater than zero';
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM system_migrations WHERE migration_key=p_migration_key) THEN
+        LEAVE migration_block;
+    END IF;
+
+    SET v_item_id=(
+        SELECT item_id
+        FROM inventory_items
+        WHERE UPPER(TRIM(item_name))=UPPER(TRIM(p_exact_item_name))
+        ORDER BY item_id
+        LIMIT 1
+    );
+
+    IF v_item_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Configured inventory item was not found';
+    END IF;
+
+    START TRANSACTION;
+
+    
+    
+    UPDATE inventory_stocks
+       SET quantity_available=quantity_available*p_conversion
+     WHERE item_id=v_item_id;
+
+    UPDATE inventory_stocks_archive
+       SET quantity_available=quantity_available*p_conversion
+     WHERE item_id=v_item_id;
+
+    UPDATE stock_transactions
+       SET quantity=quantity*p_conversion
+     WHERE item_id=v_item_id;
+
+    UPDATE inventory_usage_history
+       SET quantity_used=quantity_used*p_conversion
+     WHERE item_id=v_item_id;
+
+    UPDATE vaccination_records
+       SET quantity_used=quantity_used*p_conversion,
+           quantity_unit_label=p_base_unit,
+           display_unit_label_snapshot=p_display_unit,
+           conversion_to_base_snapshot=p_conversion
+     WHERE item_id=v_item_id;
+
+    UPDATE vaccination_records_archive
+       SET quantity_used=quantity_used*p_conversion,
+           quantity_unit_label=p_base_unit,
+           display_unit_label_snapshot=p_display_unit,
+           conversion_to_base_snapshot=p_conversion
+     WHERE item_id=v_item_id;
+
+    UPDATE daily_inventory_closings
+       SET beginning_stock=beginning_stock*p_conversion,
+           delivery=delivery*p_conversion,
+           consumed=consumed*p_conversion,
+           pull_out=pull_out*p_conversion,
+           computed_ending=computed_ending*p_conversion,
+           actual_count=actual_count*p_conversion,
+           variance=variance*p_conversion
+     WHERE item_id=v_item_id;
+
+    UPDATE training_dataset
+       SET beginning_stock=beginning_stock*p_conversion,
+           quantity_used=quantity_used*p_conversion,
+           stock_received=stock_received*p_conversion,
+           ending_stock=ending_stock*p_conversion,
+           minimum_stock_level=minimum_stock_level*p_conversion
+     WHERE item_id=v_item_id;
+
+    UPDATE inventory_items
+       SET minimum_stock=minimum_stock*p_conversion,
+           base_unit_label=p_base_unit,
+           display_unit_label=p_display_unit,
+           conversion_to_base=p_conversion
+     WHERE item_id=v_item_id;
+
+    INSERT INTO system_migrations(migration_key,description)
+    VALUES(
+        p_migration_key,
+        CONCAT(p_exact_item_name,': converted existing quantities by ',p_conversion,
+               '; base=',p_base_unit,'; display=',p_display_unit)
+    );
+
+    COMMIT;
+END$$
+
+DELIMITER ;
 
 -- --------------------------------------------------------
 
@@ -67,14 +165,15 @@ INSERT INTO `animal_bite_cases` (`case_id`, `case_number`, `patient_id`, `branch
 (69, '26-0020', 75, 'SBI-002', 'Cat', 'Right Arm', NULL, 'Alive/Healthy', '2026-08-23', 'Completed', NULL, 16, 0, NULL, NULL, '2026-08-24 14:37:04'),
 (70, '26-0021', 76, 'SBI-002', 'Dog', 'Left Arm', NULL, 'Alive/Healthy', '2026-08-04', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-08-24 16:37:58'),
 (71, '26-0022', 77, 'SBI-002', 'Dog', 'Right Leg', NULL, 'Alive/Healthy', '2026-09-01', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-09-01 14:28:52'),
-(72, '26-0023', 78, 'SBI-002', 'Dog', 'Right Leg', NULL, 'Alive/Healthy', '2026-09-01', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-08-31 16:00:00'),
+(72, '26-0023', 78, 'SBI-002', 'Cat', 'Right Leg', 'I', 'Alive/Healthy', '2026-09-01', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-08-31 16:00:00'),
 (73, '26-0024', 79, 'SBI-002', 'Dog', 'Left Arm', NULL, 'Alive/Healthy', '2026-09-01', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-08-31 16:00:00'),
 (74, '26-0025', 80, 'SBI-002', 'Cat', 'Right Arm', NULL, 'Alive/Healthy', '2026-09-01', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-08-31 16:00:00'),
-(75, '26-0026', 81, 'SBI-002', 'Dog', 'Right Arm', 'I', 'Alive', '2026-09-01', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-08-31 16:00:00'),
+(75, '26-0026', 81, 'SBI-002', 'Dog', 'Right Arm', 'I', 'Alive', '2026-09-01', 'Completed', NULL, 16, 0, NULL, NULL, '2026-08-31 16:00:00'),
 (76, '26-0027', 82, 'SBI-002', 'Dog', 'Outside', 'III', 'Unknown', '2026-09-05', 'Ongoing', 'For ERIG/HRIG', 16, 0, NULL, NULL, '2026-09-04 16:00:00'),
-(77, '26-0028', 83, 'SBI-002', 'Dog', 'RIGHT LEG', NULL, 'Alive/Healthy', '2026-09-07', 'Ongoing', NULL, 8, 0, NULL, NULL, '2026-09-07 16:00:00'),
+(77, '26-0028', 83, 'SBI-002', 'Dog', 'RIGHT LEG', 'II', 'Alive/Healthy', '2026-09-07', 'Ongoing', NULL, 8, 0, NULL, NULL, '2026-09-07 16:00:00'),
 (78, '26-0030', 84, 'SBI-002', NULL, 'Nape', NULL, NULL, '2026-09-08', 'Ongoing', 'dd', 8, 0, NULL, NULL, '2026-09-07 16:00:00'),
-(79, '26-0031', 85, 'SBI-002', 'Dog', 'RIGHT SHOULDER', NULL, 'Unknown', '2026-09-07', 'Ongoing', 'FOR HRIG', 8, 0, NULL, NULL, '2026-09-07 16:00:00');
+(79, '26-0031', 85, 'SBI-002', 'Dog', 'RIGHT SHOULDER', NULL, 'Unknown', '2026-09-07', 'Ongoing', 'FOR HRIG', 8, 0, NULL, NULL, '2026-09-07 16:00:00'),
+(80, '26-0032', 86, 'SBI-002', 'Dog', 'Right Arm', 'II', 'Alive/Healthy', '2026-09-11', 'Ongoing', NULL, 16, 0, NULL, NULL, '2026-09-10 16:00:00');
 
 -- --------------------------------------------------------
 
@@ -797,7 +896,88 @@ INSERT INTO `audit_logs` (`log_id`, `user_id`, `branch_id`, `action`, `module`, 
 (691, 14, 'SBI-003', 'Login Success: User \'Joepat Lacerna\' - Role: Branch Admin, Branch: Pasig Branch', 'Login System', '2026-09-10 03:53:32'),
 (692, 14, 'SBI-003', 'Login Success: User \'Joepat Lacerna\' - Role: Branch Admin, Branch: Pasig Branch', 'Login System', '2026-09-10 04:20:09'),
 (693, 14, 'SBI-003', 'Logout: User \'Joepat Lacerna\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-09-10 05:19:26'),
-(694, 14, 'SBI-003', 'Login Success: User \'Joepat Lacerna\' - Role: Branch Admin, Branch: Pasig Branch', 'Login System', '2026-09-10 05:20:42');
+(694, 14, 'SBI-003', 'Login Success: User \'Joepat Lacerna\' - Role: Branch Admin, Branch: Pasig Branch', 'Login System', '2026-09-10 05:20:42'),
+(695, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-09-11 06:21:28'),
+(696, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-09-11 06:21:34'),
+(697, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-09-11 06:27:33'),
+(698, 1, 'SBI-001', 'Created new branch admin: Ferdi (ID: 0) for branch ID: SBI-005', 'Branch & Admin Management', '2026-09-11 06:35:34'),
+(699, 1, 'SBI-001', 'Welcome email sent to new branch admin: Ferdi (ID: 0, Email: ruberducky032518@gmail.com)', 'Branch & Admin Management', '2026-09-11 06:35:40'),
+(700, 6, 'SBI-002', 'Automatically generated 30-day forecasts for 33 items', 'Supply Forecasting', '2026-09-11 06:39:56'),
+(701, 1, 'SBI-001', 'Created new branch admin: Ferdi Nand (ID: 28) for branch ID: SBI-005', 'Branch & Admin Management', '2026-09-11 06:50:17'),
+(702, 1, 'SBI-001', 'Archived (deactivated) branch admin: Ferdi Nand (ID: 28, Email: ruberducky032518@gmail.com, Branch ID: SBI-005)', 'Branch & Admin Management', '2026-09-11 07:01:48'),
+(703, 1, 'SBI-001', 'Created new branch admin: Ferdi Nand (ID: 29) for branch ID: SBI-005', 'Branch & Admin Management', '2026-09-11 07:05:27'),
+(704, 1, 'SBI-001', 'Welcome email sent to new branch admin: Ferdi Nand (ID: 29, Email: ruberducky032518@gmail.com)', 'Branch & Admin Management', '2026-09-11 07:05:32'),
+(705, 29, 'SBI-005', 'Login Success: User \'Ferdi Nand\' - Role: Branch Admin, Branch: Marikina Branch', 'Login System', '2026-09-11 07:06:18'),
+(706, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-09-11 07:07:50'),
+(707, 1, 'SBI-001', 'SUCCESS | Created Branch Admin account and initial password-reset token: Ferdi Nand (ID: 30) for branch ID: SBI-005', 'Branch & Admin Management', '2026-09-11 07:23:48'),
+(708, 1, 'SBI-001', 'SUCCESS | Welcome email sent to new Branch Admin: Ferdi Nand (ID: 30, Email: ruberducky032518@gmail.com)', 'Branch & Admin Management', '2026-09-11 07:23:53'),
+(709, 30, 'SBI-005', 'Login Success: User \'Ferdi Nand\' - Role: Branch Admin, Branch: Marikina Branch', 'Login System', '2026-09-11 07:25:02'),
+(710, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-09-11 07:29:20'),
+(711, 30, 'SBI-005', 'Logout: User \'Ferdi Nand\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-09-11 07:34:00'),
+(712, 14, 'SBI-003', 'Login Success: User \'Joepat Lacerna\' - Role: Branch Admin, Branch: Pasig Branch', 'Login System', '2026-09-11 07:34:12'),
+(713, 14, 'SBI-003', 'Added new user: Ana Ella (ID: 31)', 'User Management', '2026-09-11 07:38:15'),
+(714, 31, 'SBI-003', 'Login Success: User \'Ana Ella\' - Role: Inventory Officer, Branch: Pasig Branch', 'Login System', '2026-09-11 07:40:37'),
+(715, 14, 'SBI-003', 'Login Success: User \'Joepat Lacerna\' - Role: Branch Admin, Branch: Pasig Branch', 'Login System', '2026-09-11 07:44:36'),
+(716, 6, 'SBI-002', 'Logout: User \'Jojana Garabillo\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-09-11 07:48:12'),
+(717, 14, 'SBI-003', 'Logout: User \'Joepat Lacerna\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-09-11 08:00:13'),
+(718, 31, 'SBI-003', 'SUCCESS | Password-reset link requested and sent', 'Password Recovery', '2026-09-11 08:00:27'),
+(719, 14, 'SBI-003', 'Login Success: User \'Joepat Lacerna\' - Role: Branch Admin, Branch: Pasig Branch', 'Login System', '2026-09-11 08:01:43'),
+(720, 31, 'SBI-003', 'Login Success: User \'Ana Ella\' - Role: Inventory Officer, Branch: Pasig Branch', 'Login System', '2026-09-11 08:02:15'),
+(721, 1, 'SBI-001', 'SUCCESS | Created Branch Admin account and initial password-reset token: Ferdi Nand (ID: 32) for branch ID: SBI-005', 'Branch & Admin Management', '2026-09-11 08:12:45'),
+(722, 1, 'SBI-001', 'SUCCESS | Welcome email sent to new Branch Admin: Ferdi Nand (ID: 32, Email: ruberducky032518@gmail.com)', 'Branch & Admin Management', '2026-09-11 08:12:49'),
+(723, 31, 'SBI-003', 'Logout: User \'Ana Ella\' (Role: Inventory Officer) (IP: ::1)', 'Login System', '2026-09-11 08:12:57');
+INSERT INTO `audit_logs` (`log_id`, `user_id`, `branch_id`, `action`, `module`, `created_at`) VALUES
+(724, 32, 'SBI-005', 'Login Success: User \'Ferdi Nand\' - Role: Branch Admin, Branch: Marikina Branch', 'Login System', '2026-09-11 08:13:26'),
+(725, 14, 'SBI-003', 'Added new user: Jodi Garcia (ID: 33)', 'User Management', '2026-09-11 08:14:41'),
+(726, 33, 'SBI-003', 'Login Success: User \'Jodi Garcia\' - Role: Administrative Staff, Branch: Pasig Branch', 'Login System', '2026-09-11 08:16:20'),
+(727, 32, 'SBI-005', 'Logout: User \'Ferdi Nand\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-09-11 08:16:41'),
+(728, 14, 'SBI-003', 'Added new user: Roni Antonio (ID: 34)', 'User Management', '2026-09-11 08:17:21'),
+(729, 14, 'SBI-003', 'Logout: User \'Joepat Lacerna\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-09-11 08:17:46'),
+(730, 14, 'SBI-003', 'Login Success: User \'Joepat Lacerna\' - Role: Branch Admin, Branch: Pasig Branch', 'Login System', '2026-09-11 08:18:09'),
+(731, 34, 'SBI-003', 'Login Success: User \'Roni Antonio\' - Role: Nurse, Branch: Pasig Branch', 'Login System', '2026-09-11 08:18:45'),
+(732, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-09-11 08:34:54'),
+(733, 1, 'SBI-001', 'Logout: User \'superadmin\' (Role: Super Admin) (IP: ::1)', 'Login System', '2026-09-11 08:38:34'),
+(734, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-09-11 08:38:52'),
+(735, 1, 'SBI-001', 'Changed own account password successfully; invalidated 0 password-reset token(s).', 'Account Security', '2026-09-11 08:39:48'),
+(736, 1, 'SBI-001', 'Changed own account password successfully; invalidated 0 password-reset token(s).', 'Account Security', '2026-09-11 08:48:37'),
+(737, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-09-11 08:55:22'),
+(738, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-09-11 08:57:24'),
+(739, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-09-11 08:58:07'),
+(740, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-09-11 08:58:10'),
+(741, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-09-11 08:59:30'),
+(742, 1, 'SBI-001', 'Logout: User \'superadmin\' (Role: Super Admin) (IP: ::1)', 'Login System', '2026-09-11 09:00:12'),
+(743, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-09-11 09:00:28'),
+(744, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-09-11 09:00:38'),
+(745, 11, 'SBI-002', 'Login Success: User \'Jean Montero\' - Role: Inventory Officer, Branch: Cainta Branch', 'Login System', '2026-09-11 09:08:01'),
+(746, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-09-11 09:10:03'),
+(747, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-09-11 09:10:59'),
+(748, 34, 'SBI-003', 'Logout: User \'Roni Antonio\' (Role: Nurse) (IP: ::1)', 'Login System', '2026-09-11 10:40:19'),
+(749, 9, 'SBI-002', 'Login Success: User \'Marc Beringuela\' - Role: Nurse, Branch: Cainta Branch', 'Login System', '2026-09-11 10:40:34'),
+(750, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #6 (D28/30) | Patient: Aira Flores (ID: 81) | Case ID: 75 | Used: 0.5 Vial | Status: Completed | Batch(es): N/A: 0.5 Vial (exp 2027-07-11) | Date: 2026-09-11', 'Vaccination', '2026-09-11 12:57:48'),
+(751, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #2 (D3) | Patient: Ean Abilo (ID: 76) | Case ID: 70 | Used: 0.4998 Vial | Status: Completed | Batch(es): N/A: 0.4998 Vial (exp 2027-07-11) | Date: 2026-09-11', 'Vaccination', '2026-09-11 13:12:11'),
+(752, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #2 (D3) | Patient: Jon Garcia (ID: 78) | Case ID: 72 | Used: 0.0002 Vial | Status: Completed | Batch(es): N/A: 0.0002 Vial (exp 2027-07-11) | Date: 2026-09-11', 'Vaccination', '2026-09-11 13:14:08'),
+(753, 9, 'SBI-002', 'Saved nurse assessment and schedule for visit 6', 'Clinical Assessment', '2026-09-11 13:16:01'),
+(754, 9, 'SBI-002', 'Signed chart and sent visit 6 for registry', 'Clinical Assessment', '2026-09-11 13:16:54'),
+(755, 33, 'SBI-003', 'Logout: User \'Jodi Garcia\' (Role: Administrative Staff) (IP: ::1)', 'Login System', '2026-09-11 13:17:02'),
+(756, 16, 'SBI-002', 'Login Success: User \'Ella Franco\' - Role: Administrative Staff, Branch: Cainta Branch', 'Login System', '2026-09-11 13:17:19'),
+(757, 9, 'SBI-002', 'Saved nurse assessment and schedule for visit 7', 'Clinical Assessment', '2026-09-11 13:20:54'),
+(758, 9, 'SBI-002', 'Signed chart and sent visit 7 for registry', 'Clinical Assessment', '2026-09-11 13:21:00'),
+(759, 9, 'SBI-002', 'Vaccination Administered - TT (Tetanus Toxoid) Dose #3 (D7) | Patient: Jon Garcia (ID: 78) | Case ID: 72 | Used: 1 Ampule | Status: Completed | Batch(es): 65685: 1 Ampule (exp 2028-08-07) | Date: 2026-09-11', 'Vaccination', '2026-09-11 13:22:04'),
+(760, 9, 'SBI-002', 'Vaccination Administered - Speeda  Dose #3 (D7) | Patient: Jean Lacerna (ID: 73) | Case ID: 67 | Used: 2 site (2 site total) | Status: Completed | Batch(es): 26-022489: 2 site (exp 2026-11-30) | Date: 2026-08-25', 'Vaccination', '2026-09-11 13:23:18'),
+(761, 16, 'SBI-002', 'Verified registry for Jon Garcia (26-0023)', 'Registry', '2026-09-11 13:27:54'),
+(762, 16, 'SBI-002', 'Verified registry for Reyes, Sharpay Evans (26-0028)', 'Registry', '2026-09-11 13:28:25'),
+(763, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: Joseph Marco (ID: 85) | Case ID: 79 | Used: 0.05 Vial | Status: Completed | Batch(es): 26-0027: 0.05 Vial (exp 2028-06-12) | Date: 2026-09-08', 'Vaccination', '2026-09-11 13:30:49'),
+(764, 9, 'SBI-002', 'Vaccination Administered - Speeda  Dose #2 (D3) | Patient: Joseph Marco (ID: 85) | Case ID: 79 | Used: 2 site (2 site total) | Status: Completed | Batch(es): 26-022489: 2 site (exp 2026-11-30) | Date: 2026-09-11', 'Vaccination', '2026-09-11 13:46:01'),
+(765, 9, 'SBI-002', 'Vaccination Administered - PPD Dose #3 (D7) | Patient: Reyes, Sharpay Evans (ID: 83) | Case ID: 77 | Used: 1 Vial | Status: Completed | Batch(es): 26-022489: 1 Vial (exp 2027-02-01) | Date: 2026-09-11', 'Vaccination', '2026-09-11 13:47:57'),
+(766, 9, 'SBI-002', 'Vaccination Administered - Speeda  Dose #4 (D14) | Patient: Reyes, Sharpay Evans (ID: 83) | Case ID: 77 | Used: 2 site (2 site total) | Status: Completed | Batch(es): 26-022489: 2 site (exp 2026-11-30) | Date: 2026-09-11', 'Vaccination', '2026-09-11 13:49:05'),
+(767, 16, 'SBI-002', 'Created patient intake record: Julia Singko (Case: 26-0032)', 'Patient Record', '2026-09-11 13:55:09'),
+(768, 16, 'SBI-002', 'Checked in Julia Singko as New Patient', 'Patient Visit', '2026-09-11 13:55:23'),
+(769, 9, 'SBI-002', 'Saved nurse assessment and schedule for visit 8', 'Clinical Assessment', '2026-09-11 13:56:06'),
+(770, 9, 'SBI-002', 'Signed chart and sent visit 8 for registry', 'Clinical Assessment', '2026-09-11 13:56:09'),
+(771, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: Julia Singko (ID: 86) | Case ID: 80 | Used: 0.5 Vial | Status: Completed | Batch(es): 26-0027: 0.5 Vial (exp 2028-06-12) | Date: 2026-09-11', 'Vaccination', '2026-09-11 13:57:07'),
+(772, 14, 'SBI-003', 'Logout: User \'Joepat Lacerna\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-09-11 14:18:19'),
+(773, 6, 'SBI-002', 'Login Failed: User \'Jojana Garabillo\' - Incorrect password', 'Login System', '2026-09-11 14:18:34'),
+(774, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-09-11 14:18:46');
 
 -- --------------------------------------------------------
 
@@ -820,13 +1000,13 @@ CREATE TABLE `branches` (
 --
 
 INSERT INTO `branches` (`branch_id`, `branch_name`, `branch_address`, `contact_number`, `email`, `status`, `created_at`) VALUES
-('SB-0013', 'Calbayog ', 'Purok 1 Brgy. San Isidro Calbayog Samar ', '09814899359', 'sbicalbayog@gmail.com', 'Active', '2026-09-08 06:04:06'),
 ('SBI-001', 'Antipolo Branch', 'Antipolo City, Rizal', '09123456789', 'antipolo@smartbitecare.com', 'Active', '2026-07-04 07:53:33'),
 ('SBI-002', 'Cainta Branch', 'Cainta, Rizal', '091234578', 'sbicainta@gmail.com', 'Active', '2026-07-04 08:30:29'),
 ('SBI-003', 'Pasig Branch', 'Pasig City', '091234578', 'sbipasig@gmail.com', 'Active', '2026-07-04 08:36:45'),
 ('SBI-004', 'Montalban Branch', 'Montalban, Rizal', '0912345679', 'sbimontalban@gmail.com', 'Active', '2026-07-05 11:39:58'),
 ('SBI-005', 'Marikina Branch', 'Marikina', '09123456', 'sbimarikina@gmail.com', 'Active', '2026-07-18 05:02:46'),
-('SBI-007', 'Quezon City', 'Nova, Quezon City', '091234567', 'sbiqc@gmail.com', 'Active', '2026-08-24 10:44:42');
+('SBI-007', 'Quezon City', 'Nova, Quezon City', '091234567', 'sbiqc@gmail.com', 'Active', '2026-08-24 10:44:42'),
+('SBI-008', 'Calbayog ', 'Purok 1 Brgy. San Isidro Calbayog Samar ', '09814899359', 'sbicalbayog@gmail.com', 'Active', '2026-09-08 06:04:06');
 
 -- --------------------------------------------------------
 
@@ -868,7 +1048,10 @@ INSERT INTO `clinical_assessments` (`assessment_id`, `visit_id`, `patient_id`, `
 (2, 2, 82, 76, 'SBI-002', 9, 'Dog bite on head', '2026-09-05', 'Outside', 'Dog', 'Unknown', 'III', 'PEP_ID', 'ID', 'PVRV TRC SPEEDA', 'Positive on SKIN TEST for ERIG', 'Redo SKIN TEST', 'For ERIG/HRIG', '2026-09-08', '2026-09-08 09:41:56', '2026-09-08 01:40:22', '2026-09-08 01:41:56'),
 (4, 3, 14, 11, 'SBI-002', 9, 'dog scratc', '2026-08-01', 'Left Leg', 'Dog', 'Alive', 'III', 'BOOSTER', 'ID', 'PVRV TRC SPEEDA', '', '', '', '2026-09-08', '2026-09-08 09:49:41', '2026-09-08 01:49:37', '2026-09-08 01:49:41'),
 (5, 4, 84, 78, 'SBI-002', 9, 'ddd', '2026-09-08', 'Nape', '', '', '', 'BOOSTER', 'ID', 'PVRV TRC SPEEDA', 'd', 'dd', 'dd', '2026-09-08', '2026-09-08 13:54:43', '2026-09-08 05:54:23', '2026-09-08 05:54:43'),
-(6, 5, 85, 79, 'SBI-002', 9, 'Cat Scratch', '2026-09-07', 'RIGHT SHOULDER', 'Dog', 'Unknown', '', 'PEP_IM', 'IM', 'PVRV TRC ABHAYRAB', 'POSITIVE IN ERIG', 'FOR HRIG', 'FOR HRIG', '2026-09-08', '2026-09-08 13:58:32', '2026-09-08 05:58:27', '2026-09-08 05:58:32');
+(6, 5, 85, 79, 'SBI-002', 9, 'Cat Scratch', '2026-09-07', 'RIGHT SHOULDER', 'Dog', 'Unknown', '', 'PEP_IM', 'IM', 'PVRV TRC ABHAYRAB', 'POSITIVE IN ERIG', 'FOR HRIG', 'FOR HRIG', '2026-09-08', '2026-09-08 13:58:32', '2026-09-08 05:58:27', '2026-09-08 05:58:32'),
+(7, 6, 83, 77, 'SBI-002', 9, 'Test', '2026-09-07', 'RIGHT LEG', 'Dog', 'Alive/Healthy', 'II', 'PREP', 'IM', '', '', '', '', '2026-09-11', '2026-09-11 21:16:54', '2026-09-11 13:16:01', '2026-09-11 13:16:54'),
+(8, 7, 78, 72, 'SBI-002', 9, 'test', '2026-09-01', 'Right Leg', 'Cat', 'Alive/Healthy', 'I', 'PEP_ID', 'IM', 'ERIG', '', '', '', '2026-09-11', '2026-09-11 21:21:00', '2026-09-11 13:20:54', '2026-09-11 13:21:00'),
+(9, 8, 86, 80, 'SBI-002', 9, 'Test', '2026-09-11', 'Right Arm', 'Dog', 'Alive/Healthy', 'II', 'PEP_ID', 'ID', '', '', '', '', '2026-09-11', '2026-09-11 21:56:09', '2026-09-11 13:56:06', '2026-09-11 13:56:09');
 
 -- --------------------------------------------------------
 
@@ -881,13 +1064,13 @@ CREATE TABLE `daily_inventory_closings` (
   `branch_id` varchar(10) NOT NULL,
   `item_id` int(11) NOT NULL,
   `inventory_date` date NOT NULL,
-  `beginning_stock` decimal(12,2) NOT NULL DEFAULT 0.00,
-  `delivery` decimal(12,2) NOT NULL DEFAULT 0.00,
-  `consumed` decimal(12,2) NOT NULL DEFAULT 0.00,
-  `pull_out` decimal(12,2) NOT NULL DEFAULT 0.00,
-  `computed_ending` decimal(12,2) NOT NULL DEFAULT 0.00,
-  `actual_count` decimal(12,2) NOT NULL DEFAULT 0.00,
-  `variance` decimal(12,2) NOT NULL DEFAULT 0.00,
+  `beginning_stock` decimal(12,4) NOT NULL,
+  `delivery` decimal(12,4) NOT NULL DEFAULT 0.0000,
+  `consumed` decimal(12,4) NOT NULL DEFAULT 0.0000,
+  `pull_out` decimal(12,4) NOT NULL DEFAULT 0.0000,
+  `computed_ending` decimal(12,4) NOT NULL,
+  `actual_count` decimal(12,4) NOT NULL,
+  `variance` decimal(12,4) NOT NULL,
   `remarks` text DEFAULT NULL,
   `status` enum('Draft','Submitted','Reviewed') NOT NULL DEFAULT 'Submitted',
   `submitted_by` int(11) NOT NULL,
@@ -901,7 +1084,7 @@ CREATE TABLE `daily_inventory_closings` (
 --
 
 INSERT INTO `daily_inventory_closings` (`closing_id`, `branch_id`, `item_id`, `inventory_date`, `beginning_stock`, `delivery`, `consumed`, `pull_out`, `computed_ending`, `actual_count`, `variance`, `remarks`, `status`, `submitted_by`, `submitted_at`, `reviewed_by`, `reviewed_at`) VALUES
-(1, 'SBI-002', 5, '2026-09-08', 145.00, 0.00, 5.00, 0.00, 140.00, 145.00, 5.00, '', 'Submitted', 9, '2026-09-08 11:24:42', NULL, NULL);
+(1, 'SBI-002', 5, '2026-09-08', 870.0000, 0.0000, 30.0000, 0.0000, 840.0000, 870.0000, 30.0000, '', 'Submitted', 9, '2026-09-08 11:24:42', NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -943,39 +1126,39 @@ CREATE TABLE `forecast_results` (
 --
 
 INSERT INTO `forecast_results` (`forecast_id`, `item_id`, `branch_id`, `forecast_date`, `shortage_probability`, `forecast_status`, `recommended_reorder`, `generated_by`, `forecasted_consumption`, `forecast_days`) VALUES
-(34, 42, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 355.00, 6, 66.77, 30),
-(35, 34, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 242.00, 6, 66.28, 30),
-(36, 30, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 237.00, 6, 69.11, 30),
-(37, 32, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 198.00, 6, 58.93, 30),
-(38, 44, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 189.00, 6, 76.47, 30),
-(39, 45, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 187.00, 6, 75.37, 30),
-(40, 31, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 170.00, 6, 53.53, 30),
-(41, 33, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 169.00, 6, 53.05, 30),
-(42, 35, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 76.00, 6, 17.85, 30),
-(43, 36, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 75.00, 6, 17.84, 30),
-(44, 20, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 73.00, 6, 15.27, 30),
-(45, 43, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 72.00, 6, 14.09, 30),
-(46, 37, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 65.00, 6, 11.25, 30),
-(47, 38, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 65.00, 6, 11.30, 30),
-(48, 10, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 64.00, 6, 9.51, 30),
-(49, 12, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 64.00, 6, 9.46, 30),
-(50, 11, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 64.00, 6, 9.54, 30),
-(51, 51, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 63.00, 6, 8.37, 30),
-(52, 17, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 60.00, 6, 7.89, 30),
-(53, 18, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 60.00, 6, 7.89, 30),
-(54, 19, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 60.00, 6, 7.89, 30),
-(55, 41, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 58.00, 6, 4.60, 30),
-(56, 21, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 58.00, 6, 5.43, 30),
-(57, 26, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 57.00, 6, 4.94, 30),
-(58, 24, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 57.00, 6, 5.43, 30),
-(59, 25, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 57.00, 6, 4.94, 30),
-(60, 14, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 57.00, 6, 4.94, 30),
-(61, 15, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 56.00, 6, 4.47, 30),
-(62, 23, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 54.00, 6, 2.40, 30),
-(63, 39, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 53.00, 6, 2.02, 30),
-(64, 40, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 53.00, 6, 2.02, 30),
-(65, 2, 'SBI-002', '2026-09-05', 1.0000, 'Shortage Risk', 15.00, 6, 8.06, 30),
-(66, 5, 'SBI-002', '2026-09-05', 0.0000, 'Sufficient', 0.00, 6, 18.59, 30);
+(67, 42, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 355.00, 6, 66.77, 30),
+(68, 34, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 242.00, 6, 66.28, 30),
+(69, 30, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 237.00, 6, 69.11, 30),
+(70, 32, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 198.00, 6, 58.93, 30),
+(71, 44, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 189.00, 6, 76.47, 30),
+(72, 45, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 187.00, 6, 75.37, 30),
+(73, 31, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 170.00, 6, 53.53, 30),
+(74, 33, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 169.00, 6, 53.05, 30),
+(75, 35, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 76.00, 6, 17.85, 30),
+(76, 36, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 75.00, 6, 17.84, 30),
+(77, 20, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 73.00, 6, 15.27, 30),
+(78, 43, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 72.00, 6, 14.09, 30),
+(79, 37, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 65.00, 6, 11.25, 30),
+(80, 38, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 65.00, 6, 11.30, 30),
+(81, 10, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 64.00, 6, 9.51, 30),
+(82, 12, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 64.00, 6, 9.46, 30),
+(83, 11, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 64.00, 6, 9.54, 30),
+(84, 51, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 63.00, 6, 8.37, 30),
+(85, 17, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 60.00, 6, 7.89, 30),
+(86, 18, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 60.00, 6, 7.89, 30),
+(87, 19, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 60.00, 6, 7.89, 30),
+(88, 41, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 58.00, 6, 4.60, 30),
+(89, 21, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 58.00, 6, 5.43, 30),
+(90, 26, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 57.00, 6, 4.94, 30),
+(91, 24, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 57.00, 6, 5.43, 30),
+(92, 25, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 57.00, 6, 4.94, 30),
+(93, 14, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 57.00, 6, 4.94, 30),
+(94, 15, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 56.00, 6, 4.47, 30),
+(95, 39, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 53.00, 6, 2.02, 30),
+(96, 40, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 53.00, 6, 2.02, 30),
+(97, 23, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 53.00, 6, 2.40, 30),
+(98, 2, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 16.00, 6, 8.06, 30),
+(99, 5, 'SBI-002', '2026-09-11', 0.0000, 'Sufficient', 0.00, 6, 18.59, 30);
 
 -- --------------------------------------------------------
 
@@ -1025,56 +1208,56 @@ CREATE TABLE `inventory_items` (
 --
 
 INSERT INTO `inventory_items` (`item_id`, `category_id`, `unit_id`, `item_name`, `minimum_stock`, `description`, `is_forecastable`, `is_consumable`, `base_unit_label`, `display_unit_label`, `conversion_to_base`) VALUES
-(2, 2, 5, 'ERIG (Equine Rabies Immunoglobulin)', 5, 'Equine Rabies Immunoglobulin for rabies post-exposure prophylaxis', 1, 1, NULL, NULL, 1.0000),
-(3, 2, 5, 'ATS (Anti-Tetanus Serum)', 20, 'Anti-Tetanus Serum for tetanus prophylaxis', 1, 1, NULL, NULL, 1.0000),
-(4, 2, 7, 'TT (Tetanus Toxoid)', 20, 'Tetanus Toxoid vaccine for tetanus prevention', 1, 1, NULL, NULL, 1.0000),
-(5, 2, 5, 'Speeda ', 30, 'Anti-Rabies Vaccine ', 1, 1, NULL, NULL, 1.0000),
-(6, 2, 9, 'WEIGHING SCALE', 1, 'Weighing Scale', 0, 1, NULL, NULL, 1.0000),
-(7, 3, 1, 'CSF Forms', 20, 'from antipolo', 0, 1, NULL, NULL, 1.0000),
-(8, 1, 9, 'Laptop', 1, '', 0, 1, NULL, NULL, 1.0000),
-(9, 1, 9, 'Aircon', 2, '', 0, 1, NULL, NULL, 1.0000),
-(10, 2, 5, 'ABHAYRAB', 50, 'Anti-rabies vaccine', 1, 1, NULL, NULL, 1.0000),
-(11, 2, 5, 'VAXIRAB', 50, 'Anti-rabies vaccine', 1, 1, NULL, NULL, 1.0000),
-(12, 2, 5, 'CHIRORAB', 50, 'Anti-rabies vaccine', 1, 1, NULL, NULL, 1.0000),
-(14, 2, 5, 'HRIG', 50, 'Human Rabies Immunoglobulin', 1, 1, NULL, NULL, 1.0000),
-(15, 2, 5, 'HTIG', 50, 'Human Tetanus Immunoglobulin', 1, 1, NULL, NULL, 1.0000),
-(17, 2, 5, 'ATS 1,500 \"IU\"', 50, 'Anti-Tetanus Serum 1,500 IU', 1, 1, NULL, NULL, 1.0000),
-(18, 2, 5, 'ATS 3000 \"IU\"', 50, 'Anti-Tetanus Serum 3,000 IU', 1, 1, NULL, NULL, 1.0000),
-(19, 2, 5, 'ATS 5,000 \"IU\"', 50, 'Anti-Tetanus Serum 5,000 IU', 1, 1, NULL, NULL, 1.0000),
-(20, 2, 7, 'TOXOID BETT', 50, 'Tetanus toxoid - BETT brand', 1, 1, NULL, NULL, 1.0000),
-(21, 2, 7, 'TOXOID ABHAYTOX', 50, 'Tetanus toxoid - ABHAYTOX brand', 1, 1, NULL, NULL, 1.0000),
-(23, 2, 5, 'PPD', 50, 'PPD supply', 1, 1, NULL, NULL, 1.0000),
-(24, 2, 5, 'HEPA B', 50, 'Hepatitis B vaccine', 1, 1, NULL, NULL, 1.0000),
-(25, 2, 5, 'HEPA BIG', 50, 'Hepatitis B immunoglobulin', 1, 1, NULL, NULL, 1.0000),
-(26, 2, 5, 'FLU', 50, 'Influenza vaccine', 1, 1, NULL, NULL, 1.0000),
-(30, 2, 9, 'AMOXICILLIN 500MG', 140, 'Medicine inventory item', 1, 1, NULL, NULL, 1.0000),
-(31, 2, 9, 'CEFALEXIN 500 MG', 100, 'Medicine inventory item', 1, 1, NULL, NULL, 1.0000),
-(32, 2, 9, 'MEFENAMIC 500 MG', 120, 'Medicine inventory item', 1, 1, NULL, NULL, 1.0000),
-(33, 2, 9, 'CETIRIZINE', 100, 'Medicine inventory item', 1, 1, NULL, NULL, 1.0000),
-(34, 2, 9, 'INSULIN', 150, 'Dataset item named INSULIN; clinic must confirm exact product', 1, 1, NULL, NULL, 1.0000),
-(35, 2, 3, '1CC/3CC', 50, 'Syringe inventory item', 1, 1, NULL, NULL, 1.0000),
-(36, 2, 3, '5CC/10CC', 50, 'Syringe inventory item', 1, 1, NULL, NULL, 1.0000),
-(37, 2, 9, 'G23', 50, 'Needle inventory item', 1, 1, NULL, NULL, 1.0000),
-(38, 2, 9, 'G27', 50, 'Needle inventory item', 1, 1, NULL, NULL, 1.0000),
-(39, 2, 4, 'ALCOHOL', 50, 'Clinical liquid supply', 1, 1, NULL, NULL, 1.0000),
-(40, 2, 4, 'BETADINE', 50, 'Clinical liquid supply', 1, 1, NULL, NULL, 1.0000),
-(41, 2, 4, 'STERILE WATER', 50, 'Sterile water supply', 1, 1, NULL, NULL, 1.0000),
-(42, 2, 2, 'COTTON BALLS', 240, 'Cotton ball supply', 1, 1, NULL, NULL, 1.0000),
-(43, 2, 2, 'GAUZE PAD', 50, 'Gauze pad supply', 1, 1, NULL, NULL, 1.0000),
-(44, 2, 3, 'FACEMASK', 100, 'Face mask supply', 1, 1, NULL, NULL, 1.0000),
-(45, 2, 3, 'GLOVES', 100, 'Glove supply', 1, 1, NULL, NULL, 1.0000),
-(46, 2, 9, 'ACRYLIC CONTAINERS', 50, 'Clinical storage container', 0, 1, NULL, NULL, 1.0000),
-(47, 2, 9, 'ALCOHOL PUMP CONTAINER', 50, 'Alcohol pump container', 0, 1, NULL, NULL, 1.0000),
-(48, 2, 9, 'BETADINE CONTAINER', 50, 'Betadine container', 0, 1, NULL, NULL, 1.0000),
-(49, 2, 9, 'FORCEPS', 50, 'Clinical instrument', 0, 1, NULL, NULL, 1.0000),
-(50, 2, 9, 'KIDNEY BASIN', 50, 'Clinical instrument', 0, 1, NULL, NULL, 1.0000),
-(51, 2, 9, 'MICROPRE', 50, 'Clinical supply; clinic must confirm exact product', 1, 1, NULL, NULL, 1.0000),
-(52, 2, 9, 'COOLER', 50, 'Storage equipment', 0, 1, NULL, NULL, 1.0000),
-(53, 2, 9, 'REF THERMOMETER', 50, 'Refrigerator thermometer', 0, 1, NULL, NULL, 1.0000),
-(54, 1, 9, 'Tablet', 2, 'For Admins', 0, 1, NULL, NULL, 1.0000),
-(55, 4, 9, 'Bed', 1, '', 0, 1, NULL, NULL, 1.0000),
-(56, 10, 9, 'Clock', 1, '', 0, 1, NULL, NULL, 1.0000),
-(57, 10, 9, 'Posters', 10, '', 0, 1, NULL, NULL, 1.0000);
+(2, 2, 5, 'ERIG (Equine Rabies Immunoglobulin)', 5, 'Equine Rabies Immunoglobulin for rabies post-exposure prophylaxis', 1, 1, 'Vial', 'Vial', 1.0000),
+(3, 2, 5, 'ATS (Anti-Tetanus Serum)', 20, 'Anti-Tetanus Serum for tetanus prophylaxis', 1, 1, 'Vial', 'Vial', 1.0000),
+(4, 2, 7, 'TT (Tetanus Toxoid)', 20, 'Tetanus Toxoid vaccine for tetanus prevention', 1, 1, 'Ampule', 'Ampule', 1.0000),
+(5, 2, 5, 'Speeda ', 180, 'Anti-Rabies Vaccine ', 1, 1, 'site', 'Vial', 6.0000),
+(6, 2, 9, 'WEIGHING SCALE', 1, 'Weighing Scale', 0, 0, 'Piece', 'Piece', 1.0000),
+(7, 3, 1, 'CSF Forms', 20, 'from antipolo', 0, 1, 'Ream', 'Ream', 1.0000),
+(8, 1, 9, 'Laptop', 1, '', 0, 0, 'Piece', 'Piece', 1.0000),
+(9, 1, 9, 'Aircon', 2, '', 0, 0, 'Piece', 'Piece', 1.0000),
+(10, 2, 5, 'ABHAYRAB', 50, 'Anti-rabies vaccine', 1, 1, 'Vial', 'Vial', 1.0000),
+(11, 2, 5, 'VAXIRAB', 50, 'Anti-rabies vaccine', 1, 1, 'Vial', 'Vial', 1.0000),
+(12, 2, 5, 'CHIRORAB', 50, 'Anti-rabies vaccine', 1, 1, 'Vial', 'Vial', 1.0000),
+(14, 2, 5, 'HRIG', 50, 'Human Rabies Immunoglobulin', 1, 1, 'Vial', 'Vial', 1.0000),
+(15, 2, 5, 'HTIG', 50, 'Human Tetanus Immunoglobulin', 1, 1, 'Vial', 'Vial', 1.0000),
+(17, 2, 5, 'ATS 1,500 \"IU\"', 50, 'Anti-Tetanus Serum 1,500 IU', 1, 1, 'Vial', 'Vial', 1.0000),
+(18, 2, 5, 'ATS 3000 \"IU\"', 50, 'Anti-Tetanus Serum 3,000 IU', 1, 1, 'Vial', 'Vial', 1.0000),
+(19, 2, 5, 'ATS 5,000 \"IU\"', 50, 'Anti-Tetanus Serum 5,000 IU', 1, 1, 'Vial', 'Vial', 1.0000),
+(20, 2, 7, 'TOXOID BETT', 50, 'Tetanus toxoid - BETT brand', 1, 1, 'Ampule', 'Ampule', 1.0000),
+(21, 2, 7, 'TOXOID ABHAYTOX', 50, 'Tetanus toxoid - ABHAYTOX brand', 1, 1, 'Ampule', 'Ampule', 1.0000),
+(23, 2, 5, 'PPD', 50, 'PPD supply', 1, 1, 'Vial', 'Vial', 1.0000),
+(24, 2, 5, 'HEPA B', 50, 'Hepatitis B vaccine', 1, 1, 'Vial', 'Vial', 1.0000),
+(25, 2, 5, 'HEPA BIG', 50, 'Hepatitis B immunoglobulin', 1, 1, 'Vial', 'Vial', 1.0000),
+(26, 2, 5, 'FLU', 50, 'Influenza vaccine', 1, 1, 'Vial', 'Vial', 1.0000),
+(30, 2, 9, 'AMOXICILLIN 500MG', 140, 'Medicine inventory item', 1, 1, 'Piece', 'Piece', 1.0000),
+(31, 2, 9, 'CEFALEXIN 500 MG', 100, 'Medicine inventory item', 1, 1, 'Piece', 'Piece', 1.0000),
+(32, 2, 9, 'MEFENAMIC 500 MG', 120, 'Medicine inventory item', 1, 1, 'Piece', 'Piece', 1.0000),
+(33, 2, 9, 'CETIRIZINE', 100, 'Medicine inventory item', 1, 1, 'Piece', 'Piece', 1.0000),
+(34, 2, 9, 'INSULIN', 150, 'Dataset item named INSULIN; clinic must confirm exact product', 1, 1, 'Piece', 'Piece', 1.0000),
+(35, 2, 3, '1CC/3CC', 50, 'Syringe inventory item', 1, 1, 'Box/s', 'Box/s', 1.0000),
+(36, 2, 3, '5CC/10CC', 50, 'Syringe inventory item', 1, 1, 'Box/s', 'Box/s', 1.0000),
+(37, 2, 9, 'G23', 50, 'Needle inventory item', 1, 1, 'Piece', 'Piece', 1.0000),
+(38, 2, 9, 'G27', 50, 'Needle inventory item', 1, 1, 'Piece', 'Piece', 1.0000),
+(39, 2, 4, 'ALCOHOL', 50, 'Clinical liquid supply', 1, 1, 'mL', 'mL', 1.0000),
+(40, 2, 4, 'BETADINE', 50, 'Clinical liquid supply', 1, 1, 'mL', 'mL', 1.0000),
+(41, 2, 4, 'STERILE WATER', 50, 'Sterile water supply', 1, 1, 'mL', 'mL', 1.0000),
+(42, 2, 2, 'COTTON BALLS', 240, 'Cotton ball supply', 1, 1, 'Packs', 'Packs', 1.0000),
+(43, 2, 2, 'GAUZE PAD', 50, 'Gauze pad supply', 1, 1, 'Packs', 'Packs', 1.0000),
+(44, 2, 3, 'FACEMASK', 100, 'Face mask supply', 1, 1, 'Box/s', 'Box/s', 1.0000),
+(45, 2, 3, 'GLOVES', 100, 'Glove supply', 1, 1, 'Box/s', 'Box/s', 1.0000),
+(46, 2, 9, 'ACRYLIC CONTAINERS', 50, 'Clinical storage container', 0, 0, 'Piece', 'Piece', 1.0000),
+(47, 2, 9, 'ALCOHOL PUMP CONTAINER', 50, 'Alcohol pump container', 0, 0, 'Piece', 'Piece', 1.0000),
+(48, 2, 9, 'BETADINE CONTAINER', 50, 'Betadine container', 0, 0, 'Piece', 'Piece', 1.0000),
+(49, 2, 9, 'FORCEPS', 50, 'Clinical instrument', 0, 0, 'Piece', 'Piece', 1.0000),
+(50, 2, 9, 'KIDNEY BASIN', 50, 'Clinical instrument', 0, 0, 'Piece', 'Piece', 1.0000),
+(51, 2, 9, 'MICROPRE', 50, 'Clinical supply; clinic must confirm exact product', 1, 1, 'Piece', 'Piece', 1.0000),
+(52, 2, 9, 'COOLER', 50, 'Storage equipment', 0, 0, 'Piece', 'Piece', 1.0000),
+(53, 2, 9, 'REF THERMOMETER', 50, 'Refrigerator thermometer', 0, 0, 'Piece', 'Piece', 1.0000),
+(54, 1, 9, 'Tablet', 2, 'For Admins', 0, 1, 'Piece', 'Piece', 1.0000),
+(55, 4, 9, 'Bed', 1, '', 0, 1, 'Piece', 'Piece', 1.0000),
+(56, 10, 9, 'Clock', 1, '', 0, 1, 'Piece', 'Piece', 1.0000),
+(57, 10, 9, 'Posters', 10, '', 0, 1, 'Piece', 'Piece', 1.0000);
 
 -- --------------------------------------------------------
 
@@ -1138,7 +1321,7 @@ CREATE TABLE `inventory_stocks` (
   `batch_lot_no` varchar(100) DEFAULT NULL,
   `manufacturing_date` date DEFAULT NULL,
   `branch_id` varchar(10) NOT NULL,
-  `quantity_available` decimal(12,2) NOT NULL DEFAULT 0.00,
+  `quantity_available` decimal(12,4) NOT NULL DEFAULT 0.0000,
   `expiration_date` date DEFAULT NULL,
   `last_updated` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -1148,31 +1331,32 @@ CREATE TABLE `inventory_stocks` (
 --
 
 INSERT INTO `inventory_stocks` (`stock_id`, `item_id`, `batch_lot_no`, `manufacturing_date`, `branch_id`, `quantity_available`, `expiration_date`, `last_updated`) VALUES
-(1, 2, NULL, NULL, 'SBI-002', 1.00, '2027-07-11', '2026-09-08 01:48:15'),
-(2, 3, NULL, NULL, 'SBI-002', 0.00, '2028-01-11', '2026-09-01 12:19:47'),
-(3, 4, NULL, NULL, 'SBI-002', 0.00, '2028-07-11', '2026-09-03 06:40:13'),
-(4, 5, NULL, NULL, 'SBI-002', 96.00, '2027-07-11', '2026-08-24 16:13:01'),
-(5, 2, NULL, NULL, 'SBI-003', 15.00, '2027-07-11', '2026-07-11 12:16:00'),
-(6, 3, NULL, NULL, 'SBI-003', 25.00, '2028-01-11', '2026-07-11 12:16:00'),
-(7, 4, NULL, NULL, 'SBI-003', 40.00, '2028-07-11', '2026-07-11 12:16:00'),
-(8, 5, NULL, NULL, 'SBI-003', 80.00, '2027-07-11', '2026-07-11 12:16:00'),
-(9, 2, NULL, NULL, 'SBI-001', 25.00, '2027-07-11', '2026-07-11 12:16:00'),
-(10, 3, NULL, NULL, 'SBI-001', 35.00, '2028-01-11', '2026-07-11 12:16:00'),
-(11, 4, NULL, NULL, 'SBI-001', 60.00, '2028-07-11', '2026-07-11 12:16:00'),
-(12, 5, NULL, NULL, 'SBI-001', 120.00, '2027-07-11', '2026-07-11 12:16:00'),
-(13, 2, NULL, NULL, 'SBI-004', 10.00, '2027-07-11', '2026-07-11 12:16:00'),
-(14, 3, NULL, NULL, 'SBI-004', 20.00, '2028-01-11', '2026-07-11 12:16:00'),
-(15, 4, NULL, NULL, 'SBI-004', 30.00, '2028-07-11', '2026-07-11 12:16:00'),
-(16, 5, NULL, NULL, 'SBI-004', 60.00, '2027-07-11', '2026-07-11 12:16:00'),
-(17, 5, '26-022489', '2026-08-01', 'SBI-002', 48.00, '2026-11-30', '2026-09-08 05:49:34'),
-(18, 4, '26-022489', '2026-07-18', 'SBI-002', 0.00, '2027-02-05', '2026-08-29 11:59:10'),
-(19, 6, NULL, NULL, 'SBI-002', 1.00, NULL, '2026-08-29 05:28:45'),
-(21, 4, '65685', '2025-02-10', 'SBI-002', 8.00, '2028-08-07', '2026-09-08 01:48:15'),
-(22, 7, NULL, NULL, 'SBI-002', 20.00, NULL, '2026-08-29 12:13:02'),
-(23, 8, NULL, NULL, 'SBI-002', 1.00, NULL, '2026-09-01 11:57:07'),
-(24, 9, NULL, NULL, 'SBI-002', 2.00, NULL, '2026-09-01 11:58:41'),
-(25, 3, '26-65685', '2026-08-01', 'SBI-002', 0.00, '2027-08-31', '2026-09-08 01:48:39'),
-(26, 23, '26-022489', '2025-03-10', 'SBI-002', 1.00, '2027-02-01', '2026-09-09 16:50:36');
+(1, 2, NULL, NULL, 'SBI-002', 0.0000, '2027-07-11', '2026-09-11 13:14:08'),
+(2, 3, NULL, NULL, 'SBI-002', 0.0000, '2028-01-11', '2026-09-01 12:19:47'),
+(3, 4, NULL, NULL, 'SBI-002', 0.0000, '2028-07-11', '2026-09-03 06:40:13'),
+(4, 5, NULL, NULL, 'SBI-002', 3456.0000, '2027-07-11', '2026-09-11 12:55:52'),
+(5, 2, NULL, NULL, 'SBI-003', 15.0000, '2027-07-11', '2026-07-11 12:16:00'),
+(6, 3, NULL, NULL, 'SBI-003', 25.0000, '2028-01-11', '2026-07-11 12:16:00'),
+(7, 4, NULL, NULL, 'SBI-003', 40.0000, '2028-07-11', '2026-07-11 12:16:00'),
+(8, 5, NULL, NULL, 'SBI-003', 2880.0000, '2027-07-11', '2026-09-11 12:55:52'),
+(9, 2, NULL, NULL, 'SBI-001', 25.0000, '2027-07-11', '2026-07-11 12:16:00'),
+(10, 3, NULL, NULL, 'SBI-001', 35.0000, '2028-01-11', '2026-07-11 12:16:00'),
+(11, 4, NULL, NULL, 'SBI-001', 60.0000, '2028-07-11', '2026-07-11 12:16:00'),
+(12, 5, NULL, NULL, 'SBI-001', 4320.0000, '2027-07-11', '2026-09-11 12:55:52'),
+(13, 2, NULL, NULL, 'SBI-004', 10.0000, '2027-07-11', '2026-07-11 12:16:00'),
+(14, 3, NULL, NULL, 'SBI-004', 20.0000, '2028-01-11', '2026-07-11 12:16:00'),
+(15, 4, NULL, NULL, 'SBI-004', 30.0000, '2028-07-11', '2026-07-11 12:16:00'),
+(16, 5, NULL, NULL, 'SBI-004', 2160.0000, '2027-07-11', '2026-09-11 12:55:52'),
+(17, 5, '26-022489', '2026-08-01', 'SBI-002', 1722.0000, '2026-11-30', '2026-09-11 13:49:05'),
+(18, 4, '26-022489', '2026-07-18', 'SBI-002', 0.0000, '2027-02-05', '2026-08-29 11:59:10'),
+(19, 6, NULL, NULL, 'SBI-002', 1.0000, NULL, '2026-08-29 05:28:45'),
+(21, 4, '65685', '2025-02-10', 'SBI-002', 7.0000, '2028-08-07', '2026-09-11 13:22:04'),
+(22, 7, NULL, NULL, 'SBI-002', 20.0000, NULL, '2026-08-29 12:13:02'),
+(23, 8, NULL, NULL, 'SBI-002', 1.0000, NULL, '2026-09-01 11:57:07'),
+(24, 9, NULL, NULL, 'SBI-002', 2.0000, NULL, '2026-09-01 11:58:41'),
+(25, 3, '26-65685', '2026-08-01', 'SBI-002', 0.0000, '2027-08-31', '2026-09-08 01:48:39'),
+(26, 23, '26-022489', '2025-03-10', 'SBI-002', 0.0000, '2027-02-01', '2026-09-11 13:47:57'),
+(27, 2, '26-0027', '2026-09-01', 'SBI-002', 9.4500, '2028-06-12', '2026-09-11 13:57:07');
 
 -- --------------------------------------------------------
 
@@ -1186,7 +1370,7 @@ CREATE TABLE `inventory_stocks_archive` (
   `batch_lot_no` varchar(100) DEFAULT NULL,
   `manufacturing_date` date DEFAULT NULL,
   `branch_id` varchar(10) NOT NULL,
-  `quantity_available` int(11) NOT NULL DEFAULT 0,
+  `quantity_available` decimal(12,4) NOT NULL DEFAULT 0.0000,
   `expiration_date` date DEFAULT NULL,
   `last_updated` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   `archived_at` datetime DEFAULT NULL,
@@ -1199,7 +1383,7 @@ CREATE TABLE `inventory_stocks_archive` (
 --
 
 INSERT INTO `inventory_stocks_archive` (`stock_id`, `item_id`, `batch_lot_no`, `manufacturing_date`, `branch_id`, `quantity_available`, `expiration_date`, `last_updated`, `archived_at`, `archived_by`, `archive_reason`) VALUES
-(20, 2, '26-02248', '2026-05-09', 'SBI-002', 10, '2026-08-31', '2026-08-29 05:40:44', '2026-09-01 21:57:32', 11, 'Expired stock disposed and archived');
+(20, 2, '26-02248', '2026-05-09', 'SBI-002', 10.0000, '2026-08-31', '2026-08-29 05:40:44', '2026-09-01 21:57:32', 11, 'Expired stock disposed and archived');
 
 -- --------------------------------------------------------
 
@@ -1212,7 +1396,7 @@ CREATE TABLE `inventory_usage_history` (
   `item_id` int(11) NOT NULL,
   `branch_id` varchar(10) NOT NULL,
   `usage_date` date NOT NULL,
-  `quantity_used` decimal(12,2) NOT NULL,
+  `quantity_used` decimal(12,4) NOT NULL,
   `patient_count` int(11) NOT NULL,
   `stock_received` decimal(12,2) DEFAULT 0.00
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -1222,66 +1406,76 @@ CREATE TABLE `inventory_usage_history` (
 --
 
 INSERT INTO `inventory_usage_history` (`usage_id`, `item_id`, `branch_id`, `usage_date`, `quantity_used`, `patient_count`, `stock_received`) VALUES
-(1, 2, 'SBI-002', '2026-07-16', 1.00, 1, 0.00),
-(3, 2, 'SBI-002', '2026-07-16', 1.00, 1, 0.00),
-(4, 2, 'SBI-002', '2026-07-16', 1.00, 1, 0.00),
-(5, 3, 'SBI-002', '2026-07-16', 1.00, 1, 0.00),
-(6, 3, 'SBI-002', '2026-08-24', 1.00, 1, 0.00),
-(7, 2, 'SBI-002', '2026-08-24', 1.00, 1, 0.00),
-(8, 3, 'SBI-002', '2026-08-27', 1.00, 1, 0.00),
-(9, 3, 'SBI-002', '2026-08-24', 1.00, 1, 0.00),
-(10, 5, 'SBI-002', '2026-08-24', 1.00, 1, 0.00),
-(11, 4, 'SBI-002', '2026-08-31', 1.00, 1, 0.00),
-(12, 4, 'SBI-002', '2026-08-27', 1.00, 1, 0.00),
-(13, 2, 'SBI-002', '2026-08-24', 1.00, 1, 0.00),
-(14, 5, 'SBI-002', '2026-08-31', 1.00, 1, 0.00),
-(15, 3, 'SBI-002', '2026-07-16', 1.00, 1, 0.00),
-(16, 2, 'SBI-002', '2026-07-16', 1.00, 1, 0.00),
-(17, 2, 'SBI-002', '2026-07-14', 1.00, 1, 0.00),
-(18, 5, 'SBI-002', '2026-07-14', 1.00, 1, 0.00),
-(19, 3, 'SBI-002', '2026-07-07', 1.00, 1, 0.00),
-(20, 2, 'SBI-002', '2026-07-07', 1.00, 1, 0.00),
-(21, 5, 'SBI-002', '2026-07-14', 1.00, 1, 0.00),
-(22, 4, 'SBI-002', '2026-07-14', 1.00, 1, 0.00),
-(23, 3, 'SBI-002', '2026-07-11', 1.00, 1, 0.00),
-(24, 2, 'SBI-002', '2026-07-11', 1.00, 1, 0.00),
-(25, 4, 'SBI-002', '2026-09-21', 1.00, 1, 0.00),
-(26, 3, 'SBI-002', '2026-09-21', 1.00, 1, 0.00),
-(27, 3, 'SBI-002', '2026-09-21', 1.00, 1, 0.00),
-(28, 2, 'SBI-002', '2026-09-21', 1.00, 1, 0.00),
-(29, 3, 'SBI-002', '2026-08-21', 1.00, 1, 0.00),
-(30, 3, 'SBI-002', '2026-09-21', 1.00, 1, 0.00),
-(31, 2, 'SBI-002', '2026-09-21', 1.00, 1, 0.00),
-(32, 3, 'SBI-002', '2026-09-01', 1.00, 1, 0.00),
-(33, 2, 'SBI-002', '2026-09-01', 1.00, 1, 0.00),
-(34, 2, 'SBI-002', '2026-09-01', 1.00, 1, 0.00),
-(35, 2, 'SBI-002', '2026-09-01', 1.00, 1, 0.00),
-(36, 5, 'SBI-002', '2026-09-01', 1.00, 1, 0.00),
-(37, 2, 'SBI-002', '2026-09-01', 1.00, 1, 0.00),
-(38, 2, 'SBI-002', '2026-09-01', 1.00, 1, 0.00),
-(39, 3, 'SBI-002', '2026-09-01', 1.00, 1, 0.00),
-(40, 3, 'SBI-002', '2026-09-01', 1.00, 1, 0.00),
-(41, 2, 'SBI-002', '2026-09-01', 1.00, 1, 0.00),
-(42, 5, 'SBI-002', '2026-09-01', 1.00, 1, 0.00),
-(43, 5, 'SBI-002', '2026-09-03', 1.00, 1, 0.00),
-(44, 2, 'SBI-002', '2026-09-03', 1.00, 1, 0.00),
-(45, 5, 'SBI-002', '2026-09-03', 1.00, 1, 0.00),
-(46, 4, 'SBI-002', '2026-09-03', 1.00, 1, 0.00),
-(47, 3, 'SBI-002', '2026-08-01', 1.00, 1, 0.00),
-(48, 2, 'SBI-002', '2026-08-01', 1.00, 1, 0.00),
-(49, 5, 'SBI-002', '2026-08-04', 1.00, 1, 0.00),
-(50, 5, 'SBI-002', '2026-08-08', 1.00, 1, 0.00),
-(51, 3, 'SBI-002', '2026-09-05', 1.00, 1, 0.00),
-(52, 5, 'SBI-002', '2026-09-08', 1.00, 1, 0.00),
-(53, 4, 'SBI-002', '2026-09-08', 1.00, 1, 0.00),
-(54, 5, 'SBI-002', '2026-09-08', 1.00, 1, 0.00),
-(55, 4, 'SBI-002', '2026-09-08', 1.00, 1, 0.00),
-(56, 2, 'SBI-002', '2026-09-08', 1.00, 1, 0.00),
-(57, 3, 'SBI-002', '2026-09-08', 1.00, 1, 0.00),
-(58, 5, 'SBI-002', '2026-09-08', 1.00, 1, 0.00),
-(59, 5, 'SBI-002', '2026-09-08', 1.00, 1, 0.00),
-(60, 5, 'SBI-002', '2026-09-08', 1.00, 1, 0.00),
-(61, 5, 'SBI-002', '2026-09-08', 1.00, 1, 0.00);
+(1, 2, 'SBI-002', '2026-07-16', 1.0000, 1, 0.00),
+(3, 2, 'SBI-002', '2026-07-16', 1.0000, 1, 0.00),
+(4, 2, 'SBI-002', '2026-07-16', 1.0000, 1, 0.00),
+(5, 3, 'SBI-002', '2026-07-16', 1.0000, 1, 0.00),
+(6, 3, 'SBI-002', '2026-08-24', 1.0000, 1, 0.00),
+(7, 2, 'SBI-002', '2026-08-24', 1.0000, 1, 0.00),
+(8, 3, 'SBI-002', '2026-08-27', 1.0000, 1, 0.00),
+(9, 3, 'SBI-002', '2026-08-24', 1.0000, 1, 0.00),
+(10, 5, 'SBI-002', '2026-08-24', 36.0000, 1, 0.00),
+(11, 4, 'SBI-002', '2026-08-31', 1.0000, 1, 0.00),
+(12, 4, 'SBI-002', '2026-08-27', 1.0000, 1, 0.00),
+(13, 2, 'SBI-002', '2026-08-24', 1.0000, 1, 0.00),
+(14, 5, 'SBI-002', '2026-08-31', 36.0000, 1, 0.00),
+(15, 3, 'SBI-002', '2026-07-16', 1.0000, 1, 0.00),
+(16, 2, 'SBI-002', '2026-07-16', 1.0000, 1, 0.00),
+(17, 2, 'SBI-002', '2026-07-14', 1.0000, 1, 0.00),
+(18, 5, 'SBI-002', '2026-07-14', 36.0000, 1, 0.00),
+(19, 3, 'SBI-002', '2026-07-07', 1.0000, 1, 0.00),
+(20, 2, 'SBI-002', '2026-07-07', 1.0000, 1, 0.00),
+(21, 5, 'SBI-002', '2026-07-14', 36.0000, 1, 0.00),
+(22, 4, 'SBI-002', '2026-07-14', 1.0000, 1, 0.00),
+(23, 3, 'SBI-002', '2026-07-11', 1.0000, 1, 0.00),
+(24, 2, 'SBI-002', '2026-07-11', 1.0000, 1, 0.00),
+(25, 4, 'SBI-002', '2026-09-21', 1.0000, 1, 0.00),
+(26, 3, 'SBI-002', '2026-09-21', 1.0000, 1, 0.00),
+(27, 3, 'SBI-002', '2026-09-21', 1.0000, 1, 0.00),
+(28, 2, 'SBI-002', '2026-09-21', 1.0000, 1, 0.00),
+(29, 3, 'SBI-002', '2026-08-21', 1.0000, 1, 0.00),
+(30, 3, 'SBI-002', '2026-09-21', 1.0000, 1, 0.00),
+(31, 2, 'SBI-002', '2026-09-21', 1.0000, 1, 0.00),
+(32, 3, 'SBI-002', '2026-09-01', 1.0000, 1, 0.00),
+(33, 2, 'SBI-002', '2026-09-01', 1.0000, 1, 0.00),
+(34, 2, 'SBI-002', '2026-09-01', 1.0000, 1, 0.00),
+(35, 2, 'SBI-002', '2026-09-01', 1.0000, 1, 0.00),
+(36, 5, 'SBI-002', '2026-09-01', 36.0000, 1, 0.00),
+(37, 2, 'SBI-002', '2026-09-01', 1.0000, 1, 0.00),
+(38, 2, 'SBI-002', '2026-09-01', 1.0000, 1, 0.00),
+(39, 3, 'SBI-002', '2026-09-01', 1.0000, 1, 0.00),
+(40, 3, 'SBI-002', '2026-09-01', 1.0000, 1, 0.00),
+(41, 2, 'SBI-002', '2026-09-01', 1.0000, 1, 0.00),
+(42, 5, 'SBI-002', '2026-09-01', 36.0000, 1, 0.00),
+(43, 5, 'SBI-002', '2026-09-03', 36.0000, 1, 0.00),
+(44, 2, 'SBI-002', '2026-09-03', 1.0000, 1, 0.00),
+(45, 5, 'SBI-002', '2026-09-03', 36.0000, 1, 0.00),
+(46, 4, 'SBI-002', '2026-09-03', 1.0000, 1, 0.00),
+(47, 3, 'SBI-002', '2026-08-01', 1.0000, 1, 0.00),
+(48, 2, 'SBI-002', '2026-08-01', 1.0000, 1, 0.00),
+(49, 5, 'SBI-002', '2026-08-04', 36.0000, 1, 0.00),
+(50, 5, 'SBI-002', '2026-08-08', 36.0000, 1, 0.00),
+(51, 3, 'SBI-002', '2026-09-05', 1.0000, 1, 0.00),
+(52, 5, 'SBI-002', '2026-09-08', 36.0000, 1, 0.00),
+(53, 4, 'SBI-002', '2026-09-08', 1.0000, 1, 0.00),
+(54, 5, 'SBI-002', '2026-09-08', 36.0000, 1, 0.00),
+(55, 4, 'SBI-002', '2026-09-08', 1.0000, 1, 0.00),
+(56, 2, 'SBI-002', '2026-09-08', 1.0000, 1, 0.00),
+(57, 3, 'SBI-002', '2026-09-08', 1.0000, 1, 0.00),
+(58, 5, 'SBI-002', '2026-09-08', 36.0000, 1, 0.00),
+(59, 5, 'SBI-002', '2026-09-08', 36.0000, 1, 0.00),
+(60, 5, 'SBI-002', '2026-09-08', 36.0000, 1, 0.00),
+(61, 5, 'SBI-002', '2026-09-08', 36.0000, 1, 0.00),
+(62, 2, 'SBI-002', '2026-09-11', 0.5000, 1, 0.00),
+(63, 2, 'SBI-002', '2026-09-11', 0.4998, 1, 0.00),
+(64, 2, 'SBI-002', '2026-09-11', 0.0002, 1, 0.00),
+(65, 4, 'SBI-002', '2026-09-11', 1.0000, 1, 0.00),
+(66, 5, 'SBI-002', '2026-08-25', 2.0000, 1, 0.00),
+(67, 2, 'SBI-002', '2026-09-08', 0.0500, 1, 0.00),
+(68, 5, 'SBI-002', '2026-09-11', 2.0000, 1, 0.00),
+(69, 23, 'SBI-002', '2026-09-11', 1.0000, 1, 0.00),
+(70, 5, 'SBI-002', '2026-09-11', 2.0000, 1, 0.00),
+(71, 2, 'SBI-002', '2026-09-11', 0.5000, 1, 0.00);
 
 -- --------------------------------------------------------
 
@@ -1689,7 +1883,411 @@ INSERT INTO `notifications` (`notification_id`, `user_id`, `title`, `message`, `
 (2493, 11, 'Shortage Prediction Alert', 'Shortage risk detected for INSULIN. Status: Shortage Risk. Forecast: 30 days. Recommended reorder: 242.', 'forecast', 'forecast:35', 1, '2026-09-09 22:45:20'),
 (2494, 11, 'Shortage Prediction Alert', 'Shortage risk detected for COTTON BALLS. Status: Shortage Risk. Forecast: 30 days. Recommended reorder: 355.', 'forecast', 'forecast:34', 1, '2026-09-09 22:45:20'),
 (2495, 11, 'Stock In Confirmed', '1 Vial of PPD were added to inventory by Jean Montero.', 'stock_in', 'transaction:77', 1, '2026-09-09 22:45:20'),
-(2734, 11, 'Critical Stock Alert', 'Posters has 0 Piece remaining. Minimum stock is 10 Piece.', 'critical_stock', 'condition:stock:57', 1, '2026-09-10 02:45:45');
+(2734, 11, 'Critical Stock Alert', 'Posters has 0 Piece remaining. Minimum stock is 10 Piece.', 'critical_stock', 'condition:stock:57', 1, '2026-09-10 02:45:45'),
+(3678, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for 1CC/3CC. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 17.85. Recommended reorder: 76.', 'forecast', 'forecast:35:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3679, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for 5CC/10CC. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 17.84. Recommended reorder: 75.', 'forecast', 'forecast:36:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3680, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for ABHAYRAB. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 9.51. Recommended reorder: 64.', 'forecast', 'forecast:10:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3681, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for ALCOHOL. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 2.02. Recommended reorder: 53.', 'forecast', 'forecast:39:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3682, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for AMOXICILLIN 500MG. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 69.11. Recommended reorder: 237.', 'forecast', 'forecast:30:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3683, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for ATS 1,500 \"IU\". Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 7.89. Recommended reorder: 60.', 'forecast', 'forecast:17:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3684, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for ATS 3000 \"IU\". Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 7.89. Recommended reorder: 60.', 'forecast', 'forecast:18:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3685, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for ATS 5,000 \"IU\". Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 7.89. Recommended reorder: 60.', 'forecast', 'forecast:19:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3686, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for BETADINE. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 2.02. Recommended reorder: 53.', 'forecast', 'forecast:40:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3687, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for CEFALEXIN 500 MG. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 53.53. Recommended reorder: 170.', 'forecast', 'forecast:31:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3688, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for CETIRIZINE. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 53.05. Recommended reorder: 169.', 'forecast', 'forecast:33:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3689, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for CHIRORAB. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 9.46. Recommended reorder: 64.', 'forecast', 'forecast:12:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3690, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for COTTON BALLS. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 66.77. Recommended reorder: 355.', 'forecast', 'forecast:42:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3691, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for ERIG (Equine Rabies Immunoglobulin). Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 8.06. Recommended reorder: 16.', 'forecast', 'forecast:2:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3692, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for FACEMASK. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 76.47. Recommended reorder: 189.', 'forecast', 'forecast:44:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3693, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for FLU. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 4.94. Recommended reorder: 57.', 'forecast', 'forecast:26:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3694, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for G23. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 11.25. Recommended reorder: 65.', 'forecast', 'forecast:37:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3695, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for G27. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 11.30. Recommended reorder: 65.', 'forecast', 'forecast:38:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3696, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for GAUZE PAD. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 14.09. Recommended reorder: 72.', 'forecast', 'forecast:43:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3697, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for GLOVES. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 75.37. Recommended reorder: 187.', 'forecast', 'forecast:45:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3698, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for HEPA B. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 5.43. Recommended reorder: 57.', 'forecast', 'forecast:24:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3699, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for HEPA BIG. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 4.94. Recommended reorder: 57.', 'forecast', 'forecast:25:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3700, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for HRIG. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 4.94. Recommended reorder: 57.', 'forecast', 'forecast:14:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3701, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for HTIG. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 4.47. Recommended reorder: 56.', 'forecast', 'forecast:15:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3702, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for INSULIN. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 66.28. Recommended reorder: 242.', 'forecast', 'forecast:34:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3703, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for MEFENAMIC 500 MG. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 58.93. Recommended reorder: 198.', 'forecast', 'forecast:32:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3704, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for MICROPRE. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 8.37. Recommended reorder: 63.', 'forecast', 'forecast:51:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3705, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for PPD. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 2.40. Recommended reorder: 53.', 'forecast', 'forecast:23:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3706, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for STERILE WATER. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 4.60. Recommended reorder: 58.', 'forecast', 'forecast:41:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3707, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for TOXOID ABHAYTOX. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 5.43. Recommended reorder: 58.', 'forecast', 'forecast:21:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3708, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for TOXOID BETT. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 15.27. Recommended reorder: 73.', 'forecast', 'forecast:20:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3709, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for VAXIRAB. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 9.54. Recommended reorder: 64.', 'forecast', 'forecast:11:2026-09-11', 0, '2026-09-11 09:25:29'),
+(3908, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 11, 2026 20:57:48\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D28/30 - 0.5 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 12:57:48'),
+(3909, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 11, 2026 20:57:48\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D28/30 - 0.5 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 12:57:48'),
+(3910, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 11, 2026 20:57:48\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D28/30 - 0.5 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 12:57:48'),
+(3911, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Aira Flores was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 20:57:48', 'vaccination', NULL, 0, '2026-09-11 12:57:48'),
+(3912, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ean Abilo (ID: P0076)\nCase ID: C0070\nDate: September 11, 2026 21:12:11\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D3 - 0.4998 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:12:11'),
+(3913, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ean Abilo (ID: P0076)\nCase ID: C0070\nDate: September 11, 2026 21:12:11\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D3 - 0.4998 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:12:11'),
+(3914, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ean Abilo (ID: P0076)\nCase ID: C0070\nDate: September 11, 2026 21:12:11\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D3 - 0.4998 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:12:11'),
+(3915, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Ean Abilo was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:12:11', 'vaccination', NULL, 0, '2026-09-11 13:12:11'),
+(3916, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jon Garcia (ID: P0078)\nCase ID: C0072\nDate: September 11, 2026 21:14:08\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D3 - 0.0002 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:14:08'),
+(3917, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jon Garcia (ID: P0078)\nCase ID: C0072\nDate: September 11, 2026 21:14:08\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D3 - 0.0002 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:14:08'),
+(3918, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jon Garcia (ID: P0078)\nCase ID: C0072\nDate: September 11, 2026 21:14:08\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D3 - 0.0002 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:14:08'),
+(3919, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Jon Garcia was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:14:08', 'vaccination', NULL, 0, '2026-09-11 13:14:08'),
+(3920, 8, 'Chart Ready for Registry', 'Reyes, Sharpay Evans (Case 26-0028) is ready for registry verification.', 'registry', NULL, 0, '2026-09-11 13:16:54'),
+(3921, 16, 'Chart Ready for Registry', 'Reyes, Sharpay Evans (Case 26-0028) is ready for registry verification.', 'registry', NULL, 0, '2026-09-11 13:16:54'),
+(3922, 25, 'Chart Ready for Registry', 'Reyes, Sharpay Evans (Case 26-0028) is ready for registry verification.', 'registry', NULL, 0, '2026-09-11 13:16:54'),
+(3923, 8, 'Chart Ready for Registry', 'Jon Garcia (Case 26-0023) is ready for registry verification.', 'registry', NULL, 0, '2026-09-11 13:21:00'),
+(3924, 16, 'Chart Ready for Registry', 'Jon Garcia (Case 26-0023) is ready for registry verification.', 'registry', NULL, 0, '2026-09-11 13:21:00'),
+(3925, 25, 'Chart Ready for Registry', 'Jon Garcia (Case 26-0023) is ready for registry verification.', 'registry', NULL, 0, '2026-09-11 13:21:00'),
+(3926, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jon Garcia (ID: P0078)\nCase ID: C0072\nDate: September 11, 2026 21:22:04\n\nVaccination Entries:\n• TT (Tetanus Toxoid) - D7 - 1 Ampule (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:22:04'),
+(3927, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jon Garcia (ID: P0078)\nCase ID: C0072\nDate: September 11, 2026 21:22:04\n\nVaccination Entries:\n• TT (Tetanus Toxoid) - D7 - 1 Ampule (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:22:04'),
+(3928, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jon Garcia (ID: P0078)\nCase ID: C0072\nDate: September 11, 2026 21:22:04\n\nVaccination Entries:\n• TT (Tetanus Toxoid) - D7 - 1 Ampule (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:22:04'),
+(3929, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Jon Garcia was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:22:04', 'vaccination', NULL, 0, '2026-09-11 13:22:04'),
+(3930, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jean Lacerna (ID: P0073)\nCase ID: C0067\nDate: September 11, 2026 21:23:18\n\nVaccination Entries:\n• Speeda  - D7 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:23:18'),
+(3931, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jean Lacerna (ID: P0073)\nCase ID: C0067\nDate: September 11, 2026 21:23:18\n\nVaccination Entries:\n• Speeda  - D7 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:23:18'),
+(3932, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jean Lacerna (ID: P0073)\nCase ID: C0067\nDate: September 11, 2026 21:23:18\n\nVaccination Entries:\n• Speeda  - D7 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:23:18'),
+(3933, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Jean Lacerna was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:23:18', 'vaccination', NULL, 0, '2026-09-11 13:23:18'),
+(3934, 9, 'Registry Completed', 'Jon Garcia was registered by Administrative Staff.', 'registry', NULL, 0, '2026-09-11 13:27:54'),
+(3935, 9, 'Registry Completed', 'Reyes, Sharpay Evans was registered by Administrative Staff.', 'registry', NULL, 0, '2026-09-11 13:28:25'),
+(3936, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Joseph Marco (ID: P0085)\nCase ID: C0079\nDate: September 11, 2026 21:30:49\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 - 0.05 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:30:49'),
+(3937, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Joseph Marco (ID: P0085)\nCase ID: C0079\nDate: September 11, 2026 21:30:49\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 - 0.05 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:30:49'),
+(3938, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Joseph Marco (ID: P0085)\nCase ID: C0079\nDate: September 11, 2026 21:30:49\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 - 0.05 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:30:49'),
+(3939, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Joseph Marco was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:30:49', 'vaccination', NULL, 0, '2026-09-11 13:30:49'),
+(3940, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: Joseph Marco (ID: 85) | Case ID: 79 | Used: 0.05 Vial | Status: Completed | Batch(es): 26-0027: 0.05 Vial (exp 2028-06-12) | Date: 2026-09-08', 'user_management', 'superadmin_audit_763', 0, '2026-09-11 13:30:49'),
+(3941, 1, 'Registry Activity', 'Cainta Branch: Verified registry for Reyes, Sharpay Evans (26-0028)', 'registry', 'superadmin_audit_762', 0, '2026-09-11 13:28:25'),
+(3942, 1, 'Registry Activity', 'Cainta Branch: Verified registry for Jon Garcia (26-0023)', 'registry', 'superadmin_audit_761', 0, '2026-09-11 13:27:54'),
+(3943, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Speeda  Dose #3 (D7) | Patient: Jean Lacerna (ID: 73) | Case ID: 67 | Used: 2 site (2 site total) | Status: Completed | Batch(es): 26-022489: 2 site (exp 2026-11-30) | Date: 2026-08-25', 'user_management', 'superadmin_audit_760', 0, '2026-09-11 13:23:18'),
+(3944, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - TT (Tetanus Toxoid) Dose #3 (D7) | Patient: Jon Garcia (ID: 78) | Case ID: 72 | Used: 1 Ampule | Status: Completed | Batch(es): 65685: 1 Ampule (exp 2028-08-07) | Date: 2026-09-11', 'user_management', 'superadmin_audit_759', 0, '2026-09-11 13:22:04'),
+(3945, 1, 'Clinical Assessment Update', 'Cainta Branch: Signed chart and sent visit 7 for registry', 'system', 'superadmin_audit_758', 0, '2026-09-11 13:21:00'),
+(3946, 1, 'Clinical Assessment Update', 'Cainta Branch: Saved nurse assessment and schedule for visit 7', 'system', 'superadmin_audit_757', 0, '2026-09-11 13:20:54'),
+(3947, 1, 'Clinical Assessment Update', 'Cainta Branch: Signed chart and sent visit 6 for registry', 'system', 'superadmin_audit_754', 0, '2026-09-11 13:16:54'),
+(3948, 1, 'Clinical Assessment Update', 'Cainta Branch: Saved nurse assessment and schedule for visit 6', 'system', 'superadmin_audit_753', 0, '2026-09-11 13:16:01'),
+(3949, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #2 (D3) | Patient: Jon Garcia (ID: 78) | Case ID: 72 | Used: 0.0002 Vial | Status: Completed | Batch(es): N/A: 0.0002 Vial (exp 2027-07-11) | Date: 2026-09-11', 'user_management', 'superadmin_audit_752', 0, '2026-09-11 13:14:08'),
+(3950, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #2 (D3) | Patient: Ean Abilo (ID: 76) | Case ID: 70 | Used: 0.4998 Vial | Status: Completed | Batch(es): N/A: 0.4998 Vial (exp 2027-07-11) | Date: 2026-09-11', 'user_management', 'superadmin_audit_751', 0, '2026-09-11 13:12:11'),
+(3951, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #6 (D28/30) | Patient: Aira Flores (ID: 81) | Case ID: 75 | Used: 0.5 Vial | Status: Completed | Batch(es): N/A: 0.5 Vial (exp 2027-07-11) | Date: 2026-09-11', 'user_management', 'superadmin_audit_750', 0, '2026-09-11 12:57:48'),
+(3952, 1, 'Account Security Update', 'Antipolo Branch: Changed own account password successfully; invalidated 0 password-reset token(s).', 'system', 'superadmin_audit_736', 0, '2026-09-11 08:48:37'),
+(3953, 1, 'Account Security Update', 'Antipolo Branch: Changed own account password successfully; invalidated 0 password-reset token(s).', 'system', 'superadmin_audit_735', 0, '2026-09-11 08:39:48'),
+(3954, 1, 'New User Account Created', 'Pasig Branch: Added new user: Roni Antonio (ID: 34)', 'user_management', 'superadmin_audit_728', 0, '2026-09-11 08:17:21'),
+(3955, 1, 'New User Account Created', 'Pasig Branch: Added new user: Jodi Garcia (ID: 33)', 'user_management', 'superadmin_audit_725', 0, '2026-09-11 08:14:41'),
+(3956, 1, 'Branch & Admin Management Update', 'Antipolo Branch: SUCCESS | Welcome email sent to new Branch Admin: Ferdi Nand (ID: 32, Email: ruberducky032518@gmail.com)', 'branch_management', 'superadmin_audit_722', 0, '2026-09-11 08:12:49'),
+(3957, 1, 'New Branch Added', 'Antipolo Branch: SUCCESS | Created Branch Admin account and initial password-reset token: Ferdi Nand (ID: 32) for branch ID: SBI-005', 'branch_management', 'superadmin_audit_721', 0, '2026-09-11 08:12:45'),
+(3958, 1, 'Password Recovery Update', 'Pasig Branch: SUCCESS | Password-reset link requested and sent', 'system', 'superadmin_audit_718', 0, '2026-09-11 08:00:27'),
+(3959, 1, 'New User Account Created', 'Pasig Branch: Added new user: Ana Ella (ID: 31)', 'user_management', 'superadmin_audit_713', 0, '2026-09-11 07:38:15'),
+(3960, 1, 'Branch & Admin Management Update', 'Antipolo Branch: SUCCESS | Welcome email sent to new Branch Admin: Ferdi Nand (ID: 30, Email: ruberducky032518@gmail.com)', 'branch_management', 'superadmin_audit_708', 0, '2026-09-11 07:23:53'),
+(3961, 1, 'New Branch Added', 'Antipolo Branch: SUCCESS | Created Branch Admin account and initial password-reset token: Ferdi Nand (ID: 30) for branch ID: SBI-005', 'branch_management', 'superadmin_audit_707', 0, '2026-09-11 07:23:48'),
+(3962, 1, 'Branch & Admin Management Update', 'Antipolo Branch: Welcome email sent to new branch admin: Ferdi Nand (ID: 29, Email: ruberducky032518@gmail.com)', 'branch_management', 'superadmin_audit_704', 0, '2026-09-11 07:05:32'),
+(3963, 1, 'New Branch Admin Created', 'Antipolo Branch: Created new branch admin: Ferdi Nand (ID: 29) for branch ID: SBI-005', 'branch_management', 'superadmin_audit_703', 0, '2026-09-11 07:05:27');
+INSERT INTO `notifications` (`notification_id`, `user_id`, `title`, `message`, `notification_type`, `source_key`, `is_read`, `created_at`) VALUES
+(3964, 1, 'Branch or Account Deactivated', 'Antipolo Branch: Archived (deactivated) branch admin: Ferdi Nand (ID: 28, Email: ruberducky032518@gmail.com, Branch ID: SBI-005)', 'branch_management', 'superadmin_audit_702', 0, '2026-09-11 07:01:48'),
+(3965, 1, 'New Branch Admin Created', 'Antipolo Branch: Created new branch admin: Ferdi Nand (ID: 28) for branch ID: SBI-005', 'branch_management', 'superadmin_audit_701', 0, '2026-09-11 06:50:17'),
+(3966, 1, 'Forecasting Activity', 'Cainta Branch: Automatically generated 30-day forecasts for 33 items', 'forecasting', 'superadmin_audit_700', 0, '2026-09-11 06:39:56'),
+(3967, 1, 'Branch & Admin Management Update', 'Antipolo Branch: Welcome email sent to new branch admin: Ferdi (ID: 0, Email: ruberducky032518@gmail.com)', 'branch_management', 'superadmin_audit_699', 0, '2026-09-11 06:35:40'),
+(3968, 1, 'New Branch Admin Created', 'Antipolo Branch: Created new branch admin: Ferdi (ID: 0) for branch ID: SBI-005', 'branch_management', 'superadmin_audit_698', 0, '2026-09-11 06:35:34'),
+(3969, 1, 'Inventory Activity', 'Cainta Branch: Updated inventory item: CETIRIZINE (ID: 33) - No field changes', 'inventory', 'superadmin_audit_670', 0, '2026-09-10 03:19:32'),
+(3970, 1, 'Inventory Activity', 'Cainta Branch: Updated inventory item: 1CC/3CC (ID: 35) - No field changes', 'inventory', 'superadmin_audit_669', 0, '2026-09-10 03:15:03'),
+(3971, 1, 'Return Management Update', 'Cainta Branch: Recorded and automatically transferred return RET-2026-000014 for FOAM (1) to branch SBI-003', 'branch_management', 'superadmin_audit_668', 0, '2026-09-10 03:04:14'),
+(3972, 1, 'Return Management Update', 'Cainta Branch: Recorded and automatically transferred return RET-2026-000013 for Signage (2) to branch SBI-005', 'branch_management', 'superadmin_audit_667', 0, '2026-09-10 02:57:07'),
+(3973, 1, 'Return Management Update', 'Cainta Branch: Recorded and automatically transferred return RET-2026-000012 for Trash Bin (2) to branch SBI-001', 'branch_management', 'superadmin_audit_666', 0, '2026-09-10 02:55:40'),
+(3974, 1, 'Return Management Update', 'Cainta Branch: Recorded and automatically transferred return RET-2026-000011 for Fire Extinguisher (2) to branch SBI-001', 'branch_management', 'superadmin_audit_665', 0, '2026-09-10 02:51:35'),
+(3975, 1, 'Return Management Update', 'Cainta Branch: Recorded and automatically transferred return RET-2026-000010 for Cold Dogs (10) to branch SBI-001', 'branch_management', 'superadmin_audit_664', 0, '2026-09-10 02:45:18'),
+(3976, 1, 'Inventory Activity', 'Cainta Branch: Added inventory item: Posters (ID: 57)', 'inventory', 'superadmin_audit_663', 0, '2026-09-10 02:42:13'),
+(3977, 1, 'Inventory Activity', 'Cainta Branch: Deleted inventory category: Other (ID: 13)', 'inventory', 'superadmin_audit_662', 0, '2026-09-10 02:41:20'),
+(3978, 1, 'Inventory Activity', 'Cainta Branch: Deleted inventory category: s (ID: 15)', 'inventory', 'superadmin_audit_661', 0, '2026-09-10 02:41:14'),
+(3979, 1, 'Inventory Activity', 'Cainta Branch: Deleted inventory category: d (ID: 14)', 'inventory', 'superadmin_audit_660', 0, '2026-09-10 02:41:04'),
+(3980, 1, 'Inventory Activity', 'Cainta Branch: Added new inventory category: s (ID: 15) with frequency: Monthly', 'inventory', 'superadmin_audit_656', 0, '2026-09-09 16:51:08'),
+(3981, 1, 'Return Management Update', 'Cainta Branch: Recorded and automatically transferred return RET-2026-000009 for Samplee (1) to branch SBI-001', 'branch_management', 'superadmin_audit_655', 0, '2026-09-09 16:49:23'),
+(3982, 1, 'Inventory Activity', 'Cainta Branch: Added new inventory category: d (ID: 14) with frequency: Daily', 'inventory', 'superadmin_audit_654', 0, '2026-09-09 16:48:39'),
+(3983, 1, 'Inventory Activity', 'Cainta Branch: Added new inventory category: Other (ID: 13) with frequency: Monthly', 'inventory', 'superadmin_audit_653', 0, '2026-09-09 16:48:14'),
+(3984, 1, 'Inventory Activity', 'Cainta Branch: Added inventory item: Clock (ID: 56)', 'inventory', 'superadmin_audit_652', 0, '2026-09-09 16:36:27'),
+(3985, 1, 'Inventory Activity', 'Cainta Branch: Deleted inventory category: Other (ID: 12)', 'inventory', 'superadmin_audit_651', 0, '2026-09-09 16:35:54'),
+(3986, 1, 'Inventory Activity', 'Cainta Branch: Added new inventory category: Other (ID: 12) with frequency: Monthly', 'inventory', 'superadmin_audit_650', 0, '2026-09-09 16:34:39'),
+(3987, 1, 'Inventory Activity', 'Cainta Branch: Updated inventory category: Other Supplies (ID: 10) - Changes: Name: \'Other\' → \'Other Supplies\'', 'inventory', 'superadmin_audit_649', 0, '2026-09-09 16:14:23'),
+(3988, 1, 'Inventory Activity', 'Cainta Branch: Updated inventory category: Other (ID: 10) - Changes: Name: \'Other Supplies\' → \'Other\'', 'inventory', 'superadmin_audit_648', 0, '2026-09-09 16:14:16'),
+(3989, 1, 'Inventory Activity', 'Cainta Branch: Deleted inventory category: Other (ID: 11)', 'inventory', 'superadmin_audit_647', 0, '2026-09-09 16:14:09'),
+(3990, 1, 'Inventory Activity', 'Cainta Branch: Added new inventory category: Other (ID: 11) with frequency: Monthly', 'inventory', 'superadmin_audit_646', 0, '2026-09-09 16:14:02'),
+(3991, 1, 'Inventory Activity', 'Cainta Branch: Updated inventory item: 5CC/10CC (ID: 36) - unit changed', 'inventory', 'superadmin_audit_645', 0, '2026-09-09 16:11:32'),
+(3992, 1, 'Inventory Activity', 'Cainta Branch: Updated inventory item: 1CC/3CC (ID: 35) - unit changed', 'inventory', 'superadmin_audit_644', 0, '2026-09-09 16:11:14'),
+(3993, 1, 'Inventory Activity', 'Cainta Branch: Added new unit: Set (ID: 11)', 'inventory', 'superadmin_audit_643', 0, '2026-09-09 16:10:02'),
+(3994, 1, 'Inventory Activity', 'Cainta Branch: Added new inventory category: Other Supplies (ID: 10) with frequency: Monthly', 'inventory', 'superadmin_audit_642', 0, '2026-09-09 16:09:32'),
+(3995, 1, 'Inventory Activity', 'Cainta Branch: Added inventory item: Bed (ID: 55)', 'inventory', 'superadmin_audit_641', 0, '2026-09-09 16:08:53'),
+(3996, 1, 'Return Management Update', 'Antipolo Branch: Confirmed receipt of return RET-2026-000001', 'system', 'superadmin_audit_640', 0, '2026-09-09 15:57:43'),
+(3997, 1, 'Return Management Update', 'Antipolo Branch: Confirmed receipt of return RET-2026-000008', 'system', 'superadmin_audit_639', 0, '2026-09-09 15:50:22'),
+(3998, 1, 'Return Management Update', 'Cainta Branch: Recorded and automatically transferred return RET-2026-000008 for Bed (1) to branch SBI-001', 'branch_management', 'superadmin_audit_638', 0, '2026-09-09 15:43:08'),
+(3999, 1, 'Return Management Update', 'Antipolo Branch: Confirmed receipt of return RET-2026-000003', 'system', 'superadmin_audit_637', 0, '2026-09-09 15:21:35'),
+(4000, 1, 'Return Management Update', 'Cainta Branch: Confirmed receipt of return RET-2026-000007', 'system', 'superadmin_audit_636', 0, '2026-09-09 14:58:35'),
+(4001, 1, 'Return Management Update', 'Antipolo Branch: Recorded and automatically transferred return RET-2026-000007 for Table (1) to branch SBI-002', 'branch_management', 'superadmin_audit_634', 0, '2026-09-09 14:57:34'),
+(4002, 1, 'Inventory Activity', 'Cainta Branch: Added new unit: ss (ID: 10)', 'inventory', 'superadmin_audit_627', 0, '2026-09-08 08:26:09'),
+(4003, 1, 'Inventory Activity', 'Cainta Branch: Added inventory item: Tablet (ID: 54)', 'inventory', 'superadmin_audit_626', 0, '2026-09-08 08:25:35'),
+(4004, 1, 'Return Management Update', 'Antipolo Branch: Confirmed receipt of return RET-2026-000005', 'system', 'superadmin_audit_625', 0, '2026-09-08 08:15:01'),
+(4005, 1, 'Return Management Update', 'Cainta Branch: Confirmed receipt of return RET-2026-000006', 'system', 'superadmin_audit_624', 0, '2026-09-08 08:14:36'),
+(4006, 1, 'Return Management Update', 'Antipolo Branch: Recorded and automatically transferred return RET-2026-000006 for Printer (1) to branch SBI-002', 'branch_management', 'superadmin_audit_623', 0, '2026-09-08 08:14:09'),
+(4007, 1, 'Return Management Update', 'Antipolo Branch: Confirmed receipt of return RET-2026-000004', 'system', 'superadmin_audit_622', 0, '2026-09-08 07:48:32'),
+(4008, 1, 'New User Account Created', 'Antipolo Branch: Added new user: Katsupot (ID: 27)', 'user_management', 'superadmin_audit_619', 0, '2026-09-08 07:46:55'),
+(4009, 1, 'Branch & Admin Management Update', 'Antipolo Branch: Welcome email sent to new branch admin: Micha Almo (ID: 26, Email: ewyouseff123@gmail.com)', 'branch_management', 'superadmin_audit_617', 0, '2026-09-08 07:32:14'),
+(4010, 1, 'New Branch Admin Created', 'Antipolo Branch: Created new branch admin: Micha Almo (ID: 26) for branch ID: SBI-001', 'branch_management', 'superadmin_audit_616', 0, '2026-09-08 07:32:10'),
+(4011, 1, 'Return Management Update', 'Cainta Branch: Recorded and automatically transferred return RET-2026-000005 for Face Mask (5) to branch SBI-001', 'branch_management', 'superadmin_audit_613', 0, '2026-09-08 07:29:07'),
+(4012, 1, 'Return Management Update', 'Cainta Branch: Outgoing return RET-2026-000004 status changed from Ready to Send to Sent to Main Branch', 'branch_management', 'superadmin_audit_612', 0, '2026-09-08 07:21:29'),
+(4013, 1, 'Return Management Update', 'Cainta Branch: Outgoing return RET-2026-000004 status changed from Pending to Ready to Send', 'system', 'superadmin_audit_611', 0, '2026-09-08 07:21:16'),
+(4014, 1, 'Return Management Update', 'Cainta Branch: Recorded return RET-2026-000004 for ERIG (Equine Rabies Immunoglobulin) (5) to branch SBI-001', 'branch_management', 'superadmin_audit_610', 0, '2026-09-08 07:17:08'),
+(4015, 1, 'Return Management Update', 'Cainta Branch: Updated return record: RET-3', 'system', 'superadmin_audit_609', 0, '2026-09-08 07:08:52'),
+(4016, 1, 'Return Management Update', 'Cainta Branch: Updated return record: RET-3', 'system', 'superadmin_audit_608', 0, '2026-09-08 07:01:11'),
+(4017, 1, 'Return Management Update', 'Cainta Branch: Recorded return RET-2026-000003 for Scale (1) to branch SBI-001', 'branch_management', 'superadmin_audit_606', 0, '2026-09-08 06:45:41'),
+(4018, 1, 'Return Management Update', 'Cainta Branch: Recorded return RET-2026-000002 for Laptop (1) to branch SB-0013', 'branch_management', 'superadmin_audit_605', 0, '2026-09-08 06:22:43'),
+(4019, 1, 'New User Account Created', 'Cainta Branch: Added new user: Sarah Princess (ID: 25)', 'user_management', 'superadmin_audit_604', 0, '2026-09-08 06:07:41'),
+(4020, 1, 'Branch & Admin Management Update', 'Antipolo Branch: Welcome email sent to new branch admin: Sharpay Evans (ID: 24, Email: SharpayEvans@gmail.com)', 'branch_management', 'superadmin_audit_599', 0, '2026-09-08 06:05:03'),
+(4021, 1, 'New Branch Admin Created', 'Antipolo Branch: Created new branch admin: Sharpay Evans (ID: 24) for branch ID: SB-0013', 'branch_management', 'superadmin_audit_598', 0, '2026-09-08 06:04:57'),
+(4022, 1, 'Branch & Admin Management Update', 'Antipolo Branch: Added new branch: Calbayog  (ID: SB-0013)', 'branch_management', 'superadmin_audit_595', 0, '2026-09-08 06:04:07'),
+(4023, 1, 'Registry Activity', 'Cainta Branch: Verified registry for Joseph Marco (26-0031)', 'registry', 'superadmin_audit_592', 0, '2026-09-08 05:58:53'),
+(4024, 1, 'Clinical Assessment Update', 'Cainta Branch: Signed chart and sent visit 5 for registry', 'system', 'superadmin_audit_591', 0, '2026-09-08 05:58:32'),
+(4025, 1, 'Clinical Assessment Update', 'Cainta Branch: Saved nurse assessment and schedule for visit 5', 'system', 'superadmin_audit_590', 0, '2026-09-08 05:58:28'),
+(4026, 1, 'Registry Activity', 'Cainta Branch: Verified registry for Santiago, Leah (26-0030)', 'registry', 'superadmin_audit_589', 0, '2026-09-08 05:55:32'),
+(4027, 1, 'Clinical Assessment Update', 'Cainta Branch: Signed chart and sent visit 4 for registry', 'system', 'superadmin_audit_587', 0, '2026-09-08 05:54:43'),
+(4028, 1, 'Clinical Assessment Update', 'Cainta Branch: Saved nurse assessment and schedule for visit 4', 'system', 'superadmin_audit_586', 0, '2026-09-08 05:54:23'),
+(4029, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Speeda  Dose #1 (D0) | Patient: Santiago, Leah (ID: 84) | Case ID: 78 | Quantity: 1 | Status: Completed | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', 'user_management', 'superadmin_audit_585', 0, '2026-09-08 05:49:34'),
+(4030, 1, 'Return Management Update', 'Cainta Branch: Recorded return RET-2026-000001 for Speeda  (49) to branch SBI-001', 'branch_management', 'superadmin_audit_584', 0, '2026-09-08 04:04:11'),
+(4031, 1, 'Inventory Activity', 'Cainta Branch: Submitted daily inventory for Speeda  on 2026-09-08', 'inventory', 'superadmin_audit_583', 0, '2026-09-08 03:24:42'),
+(4032, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Speeda  Dose #1 (D0) | Patient: Ean Abilo (ID: 76) | Case ID: 70 | Quantity: 1 | Status: Completed | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', 'user_management', 'superadmin_audit_582', 0, '2026-09-08 03:24:24'),
+(4033, 1, 'Inventory Activity', 'Cainta Branch: Submitted daily inventory for Speeda  on 2026-09-08', 'inventory', 'superadmin_audit_581', 0, '2026-09-08 03:23:28'),
+(4034, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Speeda  Dose #4 (D14) | Patient: Aira Flores (ID: 81) | Case ID: 75 | Quantity: 1 | Status: Completed | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', 'user_management', 'superadmin_audit_580', 0, '2026-09-08 03:22:46'),
+(4035, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Speeda  Dose #3 (D7) | Patient: Aira Flores (ID: 81) | Case ID: 75 | Quantity: 1 | Status: Completed | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', 'user_management', 'superadmin_audit_575', 0, '2026-09-08 02:59:16'),
+(4036, 1, 'Patient Visit Update', 'Cainta Branch: Checked in Jon Garcia as New Patient', 'system', 'superadmin_audit_574', 0, '2026-09-08 02:35:41'),
+(4037, 1, 'Patient Visit Update', 'Cainta Branch: Checked in Reyes, Sharpay Evans as Follow-up', 'system', 'superadmin_audit_573', 0, '2026-09-08 02:34:00'),
+(4038, 1, 'Patient Visit Update', 'Cainta Branch: Checked in Joseph Marco as Repeating Patient', 'system', 'superadmin_audit_572', 0, '2026-09-08 02:25:05'),
+(4039, 1, 'Patient Record Update', 'Cainta Branch: Created patient intake record: Joseph Marco (Case: 26-0031)', 'system', 'superadmin_audit_571', 0, '2026-09-08 02:24:15'),
+(4040, 1, 'Patient Visit Update', 'Cainta Branch: Checked in Santiago, Leah as New Patient', 'system', 'superadmin_audit_570', 0, '2026-09-08 02:14:34'),
+(4041, 1, 'Patient Record Update', 'Cainta Branch: Created patient intake record: Santiago, Leah (Case: 26-0030)', 'system', 'superadmin_audit_569', 0, '2026-09-08 02:13:42'),
+(4042, 1, 'Patient Record Update', 'Cainta Branch: Updated patient intake record: Reyes, Sharpay Evans (Case: 26-0028)', 'system', 'superadmin_audit_568', 0, '2026-09-08 02:11:51'),
+(4043, 1, 'PhilHealth Activity', 'Cainta Branch: Changed PhilHealth status for Reyes, Sharpay Evans to For Writing', 'philhealth', 'superadmin_audit_567', 0, '2026-09-08 02:11:17'),
+(4044, 1, 'Inventory Activity', 'Cainta Branch: Submitted daily inventory for Speeda  on 2026-09-08', 'inventory', 'superadmin_audit_566', 0, '2026-09-08 01:55:22'),
+(4045, 1, 'Inventory Activity', 'Cainta Branch: Submitted daily inventory for Speeda  on 2026-09-08', 'inventory', 'superadmin_audit_565', 0, '2026-09-08 01:53:37'),
+(4046, 1, 'Patient Record Update', 'Cainta Branch: Updated patient intake record: Reyes, Sharpay Evans (Case: 26-0028)', 'system', 'superadmin_audit_564', 0, '2026-09-08 01:50:53'),
+(4047, 1, 'Registry Activity', 'Cainta Branch: Verified registry for SHANE CACHO (26-0001)', 'registry', 'superadmin_audit_563', 0, '2026-09-08 01:50:00'),
+(4048, 1, 'Clinical Assessment Update', 'Cainta Branch: Signed chart and sent visit 3 for registry', 'system', 'superadmin_audit_562', 0, '2026-09-08 01:49:41'),
+(4049, 1, 'Clinical Assessment Update', 'Cainta Branch: Saved nurse assessment and schedule for visit 3', 'system', 'superadmin_audit_561', 0, '2026-09-08 01:49:38'),
+(4050, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #2 (D3) | Patient: Aira Flores (ID: 81) | Case ID: 75 | Quantity: 1 | Status: Completed | Batch(es): 26-65685: 1 (exp 2027-08-31) | Date: 2026-09-08', 'user_management', 'superadmin_audit_560', 0, '2026-09-08 01:48:39'),
+(4051, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: Reyes, Sharpay Evans (ID: 83) | Case ID: 77 | Quantity: 1 | Status: Completed | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-08', 'user_management', 'superadmin_audit_559', 0, '2026-09-08 01:48:15'),
+(4052, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - TT (Tetanus Toxoid) Dose #1 (D0) | Patient: Reyes, Sharpay Evans (ID: 83) | Case ID: 77 | Quantity: 1 | Status: Completed | Batch(es): 65685: 1 (exp 2028-08-07) | Date: 2026-09-08', 'user_management', 'superadmin_audit_558', 0, '2026-09-08 01:48:15'),
+(4053, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Speeda  Dose #1 (D0) | Patient: Reyes, Sharpay Evans (ID: 83) | Case ID: 77 | Quantity: 1 | Status: Completed | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', 'user_management', 'superadmin_audit_557', 0, '2026-09-08 01:48:15'),
+(4054, 1, 'Registry Activity', 'Cainta Branch: Verified registry for Joe Montero (26-0027)', 'registry', 'superadmin_audit_556', 0, '2026-09-08 01:42:22'),
+(4055, 1, 'Clinical Assessment Update', 'Cainta Branch: Signed chart and sent visit 2 for registry', 'system', 'superadmin_audit_555', 0, '2026-09-08 01:41:56'),
+(4056, 1, 'Clinical Assessment Update', 'Cainta Branch: Saved nurse assessment and schedule for visit 2', 'system', 'superadmin_audit_554', 0, '2026-09-08 01:41:53'),
+(4057, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - TT (Tetanus Toxoid) Dose #1 (D0) | Patient: Joe Montero (ID: 82) | Case ID: 76 | Quantity: 1 | Status: Completed | Batch(es): 65685: 1 (exp 2028-08-07) | Date: 2026-09-08', 'user_management', 'superadmin_audit_553', 0, '2026-09-08 01:41:44'),
+(4058, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Speeda  Dose #1 (D0) | Patient: Joe Montero (ID: 82) | Case ID: 76 | Quantity: 1 | Status: Completed | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', 'user_management', 'superadmin_audit_552', 0, '2026-09-08 01:41:44'),
+(4059, 1, 'Clinical Assessment Update', 'Cainta Branch: Saved nurse assessment and schedule for visit 2', 'system', 'superadmin_audit_551', 0, '2026-09-08 01:40:22'),
+(4060, 1, 'Patient Visit Update', 'Cainta Branch: Checked in SHANE CACHO as Follow-up', 'system', 'superadmin_audit_548', 0, '2026-09-08 01:22:25'),
+(4061, 1, 'Patient Record Update', 'Cainta Branch: Updated patient intake record: Reyes, Sharpay Evans (Case: 26-0028)', 'system', 'superadmin_audit_545', 0, '2026-09-08 01:16:51'),
+(4062, 1, 'Patient Record Update', 'Cainta Branch: Created patient intake record: Reyes, Sharpay Evans (Case: 26-0028)', 'system', 'superadmin_audit_544', 0, '2026-09-08 01:16:33'),
+(4063, 1, 'Return Management Update', 'Cainta Branch: Updated return record: RET-1', 'system', 'superadmin_audit_538', 0, '2026-09-07 08:23:39'),
+(4064, 1, 'Return Management Update', 'Cainta Branch: Recorded return RET-2026-000001 for ERIG (Equine Rabies Immunoglobulin) (2) to branch SBI-001', 'branch_management', 'superadmin_audit_537', 0, '2026-09-07 08:17:57'),
+(4065, 1, 'Patient Visit Update', 'Cainta Branch: Checked in Joe Montero as New Patient', 'system', 'superadmin_audit_527', 0, '2026-09-05 09:44:07'),
+(4066, 1, 'Patient Record Update', 'Cainta Branch: Created patient intake record: Joe Montero (Case: 26-0027)', 'system', 'superadmin_audit_526', 0, '2026-09-05 09:43:49'),
+(4067, 1, 'Registry Activity', 'Cainta Branch: Verified registry for Aira Flores (26-0026)', 'registry', 'superadmin_audit_525', 0, '2026-09-05 09:31:44'),
+(4068, 1, 'Clinical Assessment Update', 'Cainta Branch: Signed chart and sent visit 1 for registry', 'system', 'superadmin_audit_524', 0, '2026-09-05 09:31:19'),
+(4069, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 (D0) | Patient: Aira Flores (ID: 81) | Case ID: 75 | Quantity: 1 | Status: Completed | Batch(es): 26-65685: 1 (exp 2027-08-31) | Date: 2026-09-05', 'user_management', 'superadmin_audit_523', 0, '2026-09-05 09:30:36'),
+(4070, 1, 'Clinical Assessment Update', 'Cainta Branch: Saved nurse assessment and schedule for visit 1', 'system', 'superadmin_audit_522', 0, '2026-09-05 09:29:28'),
+(4071, 1, 'Patient Visit Update', 'Cainta Branch: Checked in Aira Flores as Repeating Patient', 'system', 'superadmin_audit_518', 0, '2026-09-05 08:11:39'),
+(4072, 1, 'PhilHealth Activity', 'Cainta Branch: Changed PhilHealth status for ddd to Ready for Main Branch', 'branch_management', 'superadmin_audit_516', 0, '2026-09-05 07:24:57'),
+(4073, 1, 'PhilHealth Activity', 'Cainta Branch: Changed PhilHealth status for ddd to For Screening', 'philhealth', 'superadmin_audit_515', 0, '2026-09-05 07:24:34'),
+(4074, 1, 'PhilHealth Activity', 'Cainta Branch: Changed PhilHealth status for ddd to For Writing', 'philhealth', 'superadmin_audit_514', 0, '2026-09-05 07:24:03'),
+(4075, 1, 'Forecasting Activity', 'Cainta Branch: Automatically generated 30-day forecasts for 33 items', 'forecasting', 'superadmin_audit_513', 0, '2026-09-05 07:23:18'),
+(4076, 1, 'Patient Record Update', 'Cainta Branch: Updated patient intake record: ddd (Case: 26-0003)', 'system', 'superadmin_audit_512', 0, '2026-09-05 07:00:59'),
+(4077, 1, 'Forecasting Activity', 'Cainta Branch: Automatically generated 30-day forecasts for 33 items', 'forecasting', 'superadmin_audit_506', 0, '2026-09-04 11:28:00'),
+(4078, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Speeda  Dose #3 (D7) | Patient: SHANE CACHO (ID: 14) | Case ID: 11 | Quantity: 1 | Status: Completed | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-08-08', 'user_management', 'superadmin_audit_491', 0, '2026-09-03 06:51:28'),
+(4079, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Speeda  Dose #2 (D3) | Patient: SHANE CACHO (ID: 14) | Case ID: 11 | Quantity: 1 | Status: Completed | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-08-04', 'user_management', 'superadmin_audit_490', 0, '2026-09-03 06:50:50'),
+(4080, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: SHANE CACHO (ID: 14) | Case ID: 11 | Quantity: 1 | Status: Completed | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-08-01', 'user_management', 'superadmin_audit_489', 0, '2026-09-03 06:49:28'),
+(4081, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 (D0) | Patient: SHANE CACHO (ID: 14) | Case ID: 11 | Quantity: 1 | Status: Completed | Batch(es): 26-65685: 1 (exp 2027-08-31) | Date: 2026-08-01', 'user_management', 'superadmin_audit_488', 0, '2026-09-03 06:49:28'),
+(4082, 1, 'Patient Record Update', 'Cainta Branch: Updated patient information/schedule: SHANE CACHO (Case: 26-0001)', 'system', 'superadmin_audit_487', 0, '2026-09-03 06:48:19'),
+(4083, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - TT (Tetanus Toxoid) Dose #1 (D0) | Patient: ddd (ID: 16) | Case ID: 13 | Quantity: 1 | Status: Completed | Batch(es): N/A: 1 (exp 2028-07-11) | Date: 2026-09-03', 'user_management', 'superadmin_audit_486', 0, '2026-09-03 06:40:13'),
+(4084, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Speeda  Dose #1 (D0) | Patient: ddd (ID: 16) | Case ID: 13 | Quantity: 1 | Status: Completed | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-03', 'user_management', 'superadmin_audit_485', 0, '2026-09-03 06:40:13'),
+(4085, 1, 'Patient Record Update', 'Cainta Branch: Updated patient information/schedule: ddd (Case: 26-0003)', 'system', 'superadmin_audit_484', 0, '2026-09-03 06:39:52'),
+(4086, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: ELLA MAE (ID: 15) | Case ID: 12 | Quantity: 1 | Status: Completed | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-03', 'user_management', 'superadmin_audit_483', 0, '2026-09-03 06:31:35'),
+(4087, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Speeda  Dose #1 (D0) | Patient: ELLA MAE (ID: 15) | Case ID: 12 | Quantity: 1 | Status: Completed | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-03', 'user_management', 'superadmin_audit_482', 0, '2026-09-03 06:31:35'),
+(4088, 1, 'Patient Record Update', 'Cainta Branch: Updated patient information/schedule: ELLA MAE (Case: 26-0002)', 'system', 'superadmin_audit_481', 0, '2026-09-03 06:31:10'),
+(4089, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Speeda  Dose #1 (D0) | Patient: Aira Flores (ID: 81) | Case ID: 75 | Quantity: 1 | Status: Completed | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-01', 'user_management', 'superadmin_audit_477', 0, '2026-09-01 15:30:08'),
+(4090, 1, 'Patient Record Update', 'Cainta Branch: Created patient record and vaccination schedule: Aira Flores (Case: 26-0026)', 'system', 'superadmin_audit_476', 0, '2026-09-01 15:29:52'),
+(4091, 1, 'Notification Update', 'Cainta Branch: Sent new patient notification to nurses for: Aira Flores', 'system', 'superadmin_audit_475', 0, '2026-09-01 15:29:52'),
+(4092, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: Analyn Briones (ID: 80) | Case ID: 74 | Quantity: 1 | Status: Completed | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', 'user_management', 'superadmin_audit_474', 0, '2026-09-01 15:24:48'),
+(4093, 1, 'Patient Record Update', 'Cainta Branch: Created patient record and vaccination schedule: Analyn Briones (Case: 26-0025)', 'system', 'superadmin_audit_473', 0, '2026-09-01 15:24:27'),
+(4094, 1, 'Notification Update', 'Cainta Branch: Sent new patient notification to nurses for: Analyn Briones', 'system', 'superadmin_audit_472', 0, '2026-09-01 15:24:27'),
+(4095, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 (D0) | Patient: testing (ID: 79) | Case ID: 73 | Quantity: 1 | Status: Completed | Batch(es): 26-65685: 1 (exp 2027-08-31) | Date: 2026-09-01', 'user_management', 'superadmin_audit_471', 0, '2026-09-01 15:14:04'),
+(4096, 1, 'Patient Record Update', 'Cainta Branch: Created patient record and vaccination schedule: testing (Case: 26-0024)', 'system', 'superadmin_audit_470', 0, '2026-09-01 15:13:44'),
+(4097, 1, 'Notification Update', 'Cainta Branch: Sent new patient notification to nurses for: testing', 'system', 'superadmin_audit_469', 0, '2026-09-01 15:13:44'),
+(4098, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 (D0) | Patient: Jon Garcia (ID: 78) | Case ID: 72 | Quantity: 1 | Status: Completed | Batch(es): 26-65685: 1 (exp 2027-08-31) | Date: 2026-09-01', 'user_management', 'superadmin_audit_468', 0, '2026-09-01 15:10:42'),
+(4099, 1, 'Patient Record Update', 'Cainta Branch: Created patient record and vaccination schedule: Jon Garcia (Case: 26-0023)', 'system', 'superadmin_audit_467', 0, '2026-09-01 15:10:16'),
+(4100, 1, 'Notification Update', 'Cainta Branch: Sent new patient notification to nurses for: Jon Garcia', 'system', 'superadmin_audit_466', 0, '2026-09-01 15:10:16'),
+(4101, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: Jen Baglan (ID: 77) | Case ID: 71 | Quantity: 1 | Status: Completed | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', 'user_management', 'superadmin_audit_465', 0, '2026-09-01 14:29:45'),
+(4102, 1, 'Patient Record Update', 'Cainta Branch: Created new patient record: Jen Baglan (Case: 26-0022)', 'system', 'superadmin_audit_464', 0, '2026-09-01 14:28:52'),
+(4103, 1, 'Notification Update', 'Cainta Branch: Sent new patient notification to nurses for: Jen Baglan', 'system', 'superadmin_audit_463', 0, '2026-09-01 14:28:52'),
+(4104, 1, 'Inventory Activity', 'Cainta Branch: Disposed and archived expired stock: ERIG (Equine Rabies Immunoglobulin) | Batch/Lot: 26-02248 | Quantity: 10 Vial | Expiration: 2026-08-31', 'inventory', 'superadmin_audit_462', 0, '2026-09-01 13:57:32'),
+(4105, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #5 (D21) | Patient: Ela Ketcho (ID: 75) | Case ID: 69 | Quantity: 1 | Status: Completed | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', 'user_management', 'superadmin_audit_461', 0, '2026-09-01 13:12:14'),
+(4106, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Speeda  Dose #5 (D21) | Patient: Ela Ketcho (ID: 75) | Case ID: 69 | Quantity: 1 | Status: Completed | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-01', 'user_management', 'superadmin_audit_460', 0, '2026-09-01 13:12:14'),
+(4107, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #4 (D14) | Patient: Ela Ketcho (ID: 75) | Case ID: 69 | Quantity: 1 | Status: Completed | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', 'user_management', 'superadmin_audit_459', 0, '2026-09-01 13:11:53'),
+(4108, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #5 (D21) | Patient: Coco (ID: 72) | Case ID: 66 | Quantity: 1 | Status: Completed | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', 'user_management', 'superadmin_audit_457', 0, '2026-09-01 12:20:47'),
+(4109, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #4 (D14) | Patient: Coco (ID: 72) | Case ID: 66 | Quantity: 1 | Status: Completed | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', 'user_management', 'superadmin_audit_456', 0, '2026-09-01 12:20:08'),
+(4110, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #3 (D7) | Patient: Coco (ID: 72) | Case ID: 66 | Quantity: 1 | Status: Completed | Batch(es): N/A: 1 (exp 2028-01-11) | Date: 2026-09-01', 'user_management', 'superadmin_audit_455', 0, '2026-09-01 12:19:47'),
+(4111, 1, 'Inventory Activity', 'Cainta Branch: Added inventory item: Aircon (ID: 9)', 'inventory', 'superadmin_audit_454', 0, '2026-09-01 11:58:12'),
+(4112, 1, 'Inventory Activity', 'Cainta Branch: Added inventory item: Laptop (ID: 8)', 'inventory', 'superadmin_audit_452', 0, '2026-09-01 11:06:38'),
+(4113, 1, 'Inventory Activity', 'Cainta Branch: Updated inventory item: ATS (Anti-Tetanus Serum) (ID: 3) - minimum stock changed', 'inventory', 'superadmin_audit_450', 0, '2026-08-29 12:17:09'),
+(4114, 1, 'Inventory Activity', 'Cainta Branch: Updated inventory item: ATS (Anti-Tetanus Serum) (ID: 3) - No field changes', 'inventory', 'superadmin_audit_449', 0, '2026-08-29 12:17:03'),
+(4115, 1, 'Inventory Activity', 'Cainta Branch: Added inventory item: CSF Forms (ID: 7)', 'inventory', 'superadmin_audit_448', 0, '2026-08-29 12:12:18'),
+(4116, 1, 'Inventory Activity', 'Cainta Branch: Added inventory item: Scale (ID: 6)', 'inventory', 'superadmin_audit_445', 0, '2026-08-29 05:27:31'),
+(4117, 1, 'Inventory Activity', 'Cainta Branch: Added new unit: Piece (ID: 9)', 'inventory', 'superadmin_audit_444', 0, '2026-08-29 05:27:13'),
+(4118, 1, 'Inventory Activity', 'Cainta Branch: Deleted inventory category: Piece (ID: 7)', 'inventory', 'superadmin_audit_443', 0, '2026-08-29 05:27:06'),
+(4119, 1, 'Inventory Activity', 'Cainta Branch: Added new inventory category: Piece (ID: 7) with frequency: Monthly', 'inventory', 'superadmin_audit_442', 0, '2026-08-29 05:26:47'),
+(4120, 1, 'Inventory Activity', 'Cainta Branch: Deleted unit: Capsule (ID: 8)', 'inventory', 'superadmin_audit_441', 0, '2026-08-29 04:31:08'),
+(4121, 1, 'Inventory Activity', 'Cainta Branch: Added new unit: Capsule (ID: 8)', 'inventory', 'superadmin_audit_440', 0, '2026-08-29 04:30:41'),
+(4122, 1, 'Inventory Activity', 'Cainta Branch: Added new inventory category: Vaccine (ID: 6) with frequency: Weekly', 'inventory', 'superadmin_audit_439', 0, '2026-08-29 04:29:33'),
+(4123, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Jean Lacerna (Case: 26-0018)', 'system', 'superadmin_audit_432', 0, '2026-08-24 17:10:55'),
+(4124, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Ean Abilo (Case: 26-0021)', 'system', 'superadmin_audit_431', 0, '2026-08-24 16:39:06'),
+(4125, 1, 'Patient Record Update', 'Cainta Branch: Created new patient record: Ean Abilo (Case: 26-0021)', 'system', 'superadmin_audit_430', 0, '2026-08-24 16:37:58'),
+(4126, 1, 'Notification Update', 'Cainta Branch: Sent new patient notification to nurses for: Ean Abilo', 'system', 'superadmin_audit_429', 0, '2026-08-24 16:37:58'),
+(4127, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #6 (D28/30) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-09-21', 'user_management', 'superadmin_audit_428', 0, '2026-08-24 16:31:56'),
+(4128, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #6 (D28/30) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-09-21', 'user_management', 'superadmin_audit_427', 0, '2026-08-24 16:31:56'),
+(4129, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #6 (D28/30) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-08-21', 'user_management', 'superadmin_audit_426', 0, '2026-08-24 16:25:31'),
+(4130, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-09-21', 'user_management', 'superadmin_audit_425', 0, '2026-08-24 16:24:13'),
+(4131, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #5 (D21) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-09-21', 'user_management', 'superadmin_audit_424', 0, '2026-08-24 16:24:13'),
+(4132, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 (D0) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-09-21', 'user_management', 'superadmin_audit_423', 0, '2026-08-24 16:22:45'),
+(4133, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - TT (Tetanus Toxoid) Dose #4 (D14) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-09-21', 'user_management', 'superadmin_audit_422', 0, '2026-08-24 16:22:45'),
+(4134, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: kemi (ID: 70) | Case ID: 64 | Quantity: 1 | Status: Completed | Date: 2026-07-11', 'user_management', 'superadmin_audit_421', 0, '2026-08-24 16:18:05'),
+(4135, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 (D0) | Patient: kemi (ID: 70) | Case ID: 64 | Quantity: 1 | Status: Completed | Date: 2026-07-11', 'user_management', 'superadmin_audit_420', 0, '2026-08-24 16:18:05'),
+(4136, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - TT (Tetanus Toxoid) Dose #1 (D0) | Patient: Juan (ID: 71) | Case ID: 65 | Quantity: 1 | Status: Completed | Date: 2026-07-14', 'user_management', 'superadmin_audit_419', 0, '2026-08-24 16:13:01'),
+(4137, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Rabies Vaccine Dose #2 (D3) | Patient: Juan (ID: 71) | Case ID: 65 | Quantity: 1 | Status: Completed | Date: 2026-07-14', 'user_management', 'superadmin_audit_418', 0, '2026-08-24 16:13:01'),
+(4138, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: Juan (ID: 71) | Case ID: 65 | Quantity: 1 | Status: Completed | Date: 2026-07-07', 'user_management', 'superadmin_audit_417', 0, '2026-08-24 16:12:05'),
+(4139, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 (D0) | Patient: Juan (ID: 71) | Case ID: 65 | Quantity: 1 | Status: Completed | Date: 2026-07-07', 'user_management', 'superadmin_audit_416', 0, '2026-08-24 16:12:05'),
+(4140, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Rabies Vaccine Dose #1 (D0) | Patient: Coco (ID: 72) | Case ID: 66 | Quantity: 1 | Status: Completed | Date: 2026-07-14', 'user_management', 'superadmin_audit_415', 0, '2026-08-24 16:03:05'),
+(4141, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #2 (D3) | Patient: Coco (ID: 72) | Case ID: 66 | Quantity: 1 | Status: Completed | Date: 2026-07-14', 'user_management', 'superadmin_audit_414', 0, '2026-08-24 16:03:05'),
+(4142, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #2 (D3) | Patient: Jean Lacerna (ID: 73) | Case ID: 67 | Quantity: 1 | Status: Completed | Date: 2026-07-16', 'user_management', 'superadmin_audit_413', 0, '2026-08-24 15:54:18'),
+(4143, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #2 (D3) | Patient: Jean Lacerna (ID: 73) | Case ID: 67 | Quantity: 1 | Status: Completed | Date: 2026-07-16', 'user_management', 'superadmin_audit_412', 0, '2026-08-24 15:54:18'),
+(4144, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Rabies Vaccine Dose #2 (D3) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-08-31', 'user_management', 'superadmin_audit_411', 0, '2026-08-24 15:46:54'),
+(4145, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #3 (D7) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-08-24', 'user_management', 'superadmin_audit_410', 0, '2026-08-24 15:46:54'),
+(4146, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - TT (Tetanus Toxoid) Dose #2 (D3) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-08-27', 'user_management', 'superadmin_audit_409', 0, '2026-08-24 15:44:42'),
+(4147, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - TT (Tetanus Toxoid) Dose #2 (D3) | Patient: Ela Ketcho (ID: 75) | Case ID: 69 | Quantity: 1 | Status: Completed | Date: 2026-08-31', 'user_management', 'superadmin_audit_408', 0, '2026-08-24 15:05:42'),
+(4148, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Rabies Vaccine Dose #3 (D7) | Patient: Ela Ketcho (ID: 75) | Case ID: 69 | Quantity: 1 | Status: Completed | Date: 2026-08-24', 'user_management', 'superadmin_audit_407', 0, '2026-08-24 15:05:42'),
+(4149, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 (D0) | Patient: Ferdinand Margallo (ID: 74) | Case ID: 68 | Quantity: 1 | Status: Completed | Date: 2026-08-24', 'user_management', 'superadmin_audit_406', 0, '2026-08-24 15:00:43'),
+(4150, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #2 (D3) | Patient: Ela Ketcho (ID: 75) | Case ID: 69 | Quantity: 1 | Status: Completed | Date: 2026-08-27', 'user_management', 'superadmin_audit_402', 0, '2026-08-24 14:40:33'),
+(4151, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: Ela Ketcho (ID: 75) | Case ID: 69 | Quantity: 1 | Status: Completed | Date: 2026-08-24', 'user_management', 'superadmin_audit_401', 0, '2026-08-24 14:39:37'),
+(4152, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Ela Ketcho (Case: 26-0020)', 'system', 'superadmin_audit_400', 0, '2026-08-24 14:37:04'),
+(4153, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Ferdinand Margallo (Case: 26-0019)', 'system', 'superadmin_audit_399', 0, '2026-08-24 14:22:14'),
+(4154, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Ferdinand Margallo (Case: 26-0019)', 'system', 'superadmin_audit_398', 0, '2026-08-24 14:21:29'),
+(4155, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Ferdinand Margallo (Case: 26-0019)', 'system', 'superadmin_audit_397', 0, '2026-08-24 13:28:01'),
+(4156, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 | Patient ID: 74 | Case ID: 68 | Quantity: 1 | Vaccination ID: 91', 'user_management', 'superadmin_audit_396', 0, '2026-08-24 13:15:46'),
+(4157, 1, 'Branch & Admin Management Update', 'Antipolo Branch: Welcome email sent to new branch admin: Jana Baglan (ID: 23, Email: janajean925@gmail.com)', 'branch_management', 'superadmin_audit_388', 0, '2026-08-24 13:04:24'),
+(4158, 1, 'New Branch Admin Created', 'Antipolo Branch: Created new branch admin: Jana Baglan (ID: 23) for branch ID: SBI-007', 'branch_management', 'superadmin_audit_387', 0, '2026-08-24 13:04:19'),
+(4159, 1, 'Branch & Admin Management Update', 'Antipolo Branch: Welcome email sent to new branch admin: Jana Baglan (ID: 22, Email: janajean925@gmail.com)', 'branch_management', 'superadmin_audit_386', 0, '2026-08-24 12:58:29'),
+(4160, 1, 'New Branch Admin Created', 'Antipolo Branch: Created new branch admin: Jana Baglan (ID: 22) for branch ID: SBI-007', 'branch_management', 'superadmin_audit_385', 0, '2026-08-24 12:58:26'),
+(4161, 1, 'Branch & Admin Management Update', 'Antipolo Branch: Welcome email sent to new branch admin: Jana Baglan (ID: 21, Email: janajean925@gmail.com)', 'branch_management', 'superadmin_audit_384', 0, '2026-08-24 12:18:27'),
+(4162, 1, 'New Branch Admin Created', 'Antipolo Branch: Created new branch admin: Jana Baglan (ID: 21) for branch ID: SBI-007', 'branch_management', 'superadmin_audit_383', 0, '2026-08-24 12:18:22'),
+(4163, 1, 'Branch & Admin Management Update', 'Antipolo Branch: Welcome email sent to new branch admin: Jana Baglan (ID: 20, Email: janajean925@gmail.com)', 'branch_management', 'superadmin_audit_382', 0, '2026-08-24 11:17:51'),
+(4164, 1, 'New Branch Admin Created', 'Antipolo Branch: Created new branch admin: Jana Baglan (ID: 20) for branch ID: SBI-007', 'branch_management', 'superadmin_audit_381', 0, '2026-08-24 11:17:47'),
+(4165, 1, 'New User Account Created', 'Pasig Branch: Added new user: Jana Baglan (ID: 19)', 'user_management', 'superadmin_audit_378', 0, '2026-08-24 11:03:04'),
+(4166, 1, 'Branch & Admin Management Update', 'Antipolo Branch: Welcome email sent to new branch admin: Jana Baglan (ID: 18, Email: janajean925@gmail.com)', 'branch_management', 'superadmin_audit_374', 0, '2026-08-24 10:59:53'),
+(4167, 1, 'New Branch Admin Created', 'Antipolo Branch: Created new branch admin: Jana Baglan (ID: 18) for branch ID: SBI-007', 'branch_management', 'superadmin_audit_373', 0, '2026-08-24 10:59:50'),
+(4168, 1, 'Branch & Admin Management Update', 'Antipolo Branch: Welcome email sent to new branch admin: Jana Baglan (ID: 17, Email: janajean925@gmail.com)', 'branch_management', 'superadmin_audit_372', 0, '2026-08-24 10:46:12'),
+(4169, 1, 'New Branch Admin Created', 'Antipolo Branch: Created new branch admin: Jana Baglan (ID: 17) for branch ID: SBI-007', 'branch_management', 'superadmin_audit_371', 0, '2026-08-24 10:46:08'),
+(4170, 1, 'Branch & Admin Management Update', 'Antipolo Branch: Added new branch: Quezon City (ID: SBI-007)', 'branch_management', 'superadmin_audit_370', 0, '2026-08-24 10:44:42'),
+(4171, 1, 'Inventory Activity', 'Cainta Branch: Deleted inventory category: Medical Supplies (ID: 5)', 'inventory', 'superadmin_audit_332', 0, '2026-07-18 06:41:14'),
+(4172, 1, 'Branch Management Update', 'Antipolo Branch: Updated branch: SBI-005 (Marikina Branch) - Changes: Name: \'SBI Marikina\' → \'Marikina Branch\'', 'branch_management', 'superadmin_audit_328', 0, '2026-07-18 05:07:14'),
+(4173, 1, 'System Action Requires Attention', 'Antipolo Branch: Failed to create branch admin - Username or email already exists: Pamela One, joepatlacerna54@gmail.com', 'system_alert', 'superadmin_audit_326', 0, '2026-07-18 05:04:47'),
+(4174, 1, 'Branch Management Update', 'Antipolo Branch: Added new branch: SBI Marikina (ID: SBI-005)', 'branch_management', 'superadmin_audit_325', 0, '2026-07-18 05:02:46'),
+(4175, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Ferdinand Margallo (Case: 26-0019)', 'system', 'superadmin_audit_312', 0, '2026-07-17 12:52:05'),
+(4176, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Ferdinand Margallo (Case: 26-0019)', 'system', 'superadmin_audit_311', 0, '2026-07-17 12:51:02'),
+(4177, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ATS (Anti-Tetanus Serum) Dose #1 | Patient ID: 72 | Case ID: 66 | Quantity: 1 | Vaccination ID: 82', 'user_management', 'superadmin_audit_288', 0, '2026-07-16 07:31:57'),
+(4178, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 | Patient ID: 73 | Case ID: 67 | Quantity: 1 | Vaccination ID: 81', 'user_management', 'superadmin_audit_280', 0, '2026-07-16 03:33:31'),
+(4179, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Jean Lacerna (Case: 26-0018)', 'system', 'superadmin_audit_279', 0, '2026-07-16 03:33:00'),
+(4180, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 | Patient ID: 73 | Case ID: 67 | Quantity: 1 | Vaccination ID: 76', 'user_management', 'superadmin_audit_277', 0, '2026-07-16 03:13:50'),
+(4181, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Coco (Case: 26-0017)', 'system', 'superadmin_audit_249', 0, '2026-07-11 13:56:51'),
+(4182, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Coco (Case: 26-0017)', 'system', 'superadmin_audit_248', 0, '2026-07-11 13:56:00'),
+(4183, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Jean Lacerna (Case: 26-0018)', 'system', 'superadmin_audit_247', 0, '2026-07-11 13:55:33'),
+(4184, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Coco (Case: 26-0017)', 'system', 'superadmin_audit_246', 0, '2026-07-11 13:46:48'),
+(4185, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Juan (Case: 26-0016)', 'system', 'superadmin_audit_245', 0, '2026-07-11 13:31:15'),
+(4186, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: kemi (Case: 26-0015)', 'system', 'superadmin_audit_244', 0, '2026-07-11 13:18:54'),
+(4187, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Jojane Baglan (Case: 26-0013)', 'system', 'superadmin_audit_242', 0, '2026-07-11 11:07:38'),
+(4188, 1, 'Inventory Activity', 'Cainta Branch: Added new inventory category: Office Supplies (ID: 4) with frequency: Weekly', 'inventory', 'superadmin_audit_240', 0, '2026-07-11 11:04:22'),
+(4189, 1, 'Patient Record Update', 'Cainta Branch: Deleted patient record: Antonio, Luiz (Case: 26-0005)', 'system', 'superadmin_audit_194', 0, '2026-07-09 06:18:55'),
+(4190, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Antonio, Luiz (Case: 26-0005)', 'system', 'superadmin_audit_193', 0, '2026-07-09 06:18:46'),
+(4191, 1, 'Patient Record Update', 'Cainta Branch: Archived patient record: Antonio, Luiz (Case: 26-0012)', 'system', 'superadmin_audit_192', 0, '2026-07-09 05:48:53'),
+(4192, 1, 'Patient Record Update', 'Cainta Branch: Deleted patient record: SHELLA MAE RUIZ (Case: 26-0010)', 'system', 'superadmin_audit_191', 0, '2026-07-09 05:28:38'),
+(4193, 1, 'Patient Record Update', 'Cainta Branch: Deleted patient record: Cruz, Ariane (Case: 26-0013)', 'system', 'superadmin_audit_190', 0, '2026-07-09 05:25:45'),
+(4194, 1, 'Patient Record Update', 'Cainta Branch: Deleted patient record: Lala, MoveAnne (Case: 23-0015)', 'system', 'superadmin_audit_189', 0, '2026-07-09 04:03:35'),
+(4195, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Cruz, Ariane (Case: 26-0013)', 'system', 'superadmin_audit_188', 0, '2026-07-09 02:44:51'),
+(4196, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Lala, MoveAnne (Case: 23-0015)', 'system', 'superadmin_audit_187', 0, '2026-07-09 02:40:47'),
+(4197, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Lala, MoveAnne (Case: 23-0015)', 'system', 'superadmin_audit_186', 0, '2026-07-09 02:33:32'),
+(4198, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Cruz, Ariane (Case: 26-0013)', 'system', 'superadmin_audit_185', 0, '2026-07-09 02:29:36'),
+(4199, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: Antonio, Luiz (Case: 26-0012)', 'system', 'superadmin_audit_184', 0, '2026-07-09 02:23:52'),
+(4200, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: SHELLA MAE RUIZ (Case: 26-0010)', 'system', 'superadmin_audit_182', 0, '2026-07-08 22:36:42'),
+(4201, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: SHANE CACHO (Case: 26-0007)', 'system', 'superadmin_audit_181', 0, '2026-07-08 22:23:31'),
+(4202, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: SHANE CACHO (Case: 26-0007)', 'system', 'superadmin_audit_180', 0, '2026-07-08 22:22:55'),
+(4203, 1, 'Patient Record Update', 'Cainta Branch: Deleted patient record: sHANE CACHO (Case: 26-0005)', 'system', 'superadmin_audit_179', 0, '2026-07-08 07:40:27'),
+(4204, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: SHANE CACHO (Case: 26-0006)', 'system', 'superadmin_audit_178', 0, '2026-07-08 07:40:22');
+INSERT INTO `notifications` (`notification_id`, `user_id`, `title`, `message`, `notification_type`, `source_key`, `is_read`, `created_at`) VALUES
+(4205, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: sHANE CACHO (Case: 26-0005)', 'system', 'superadmin_audit_177', 0, '2026-07-08 03:45:34'),
+(4206, 1, 'Patient Record Update', 'Cainta Branch: Deleted patient record: sHANE CACHO (Case: 26-0005)', 'system', 'superadmin_audit_160', 0, '2026-07-07 09:24:29'),
+(4207, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: sHANE CACHO (Case: 26-0005)', 'system', 'superadmin_audit_159', 0, '2026-07-07 09:24:08'),
+(4208, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: ken (Case: 26-0004)', 'system', 'superadmin_audit_158', 0, '2026-07-07 09:17:21'),
+(4209, 1, 'Patient Record Update', 'Cainta Branch: Deleted patient record: ddd (Case: 26-0004)', 'system', 'superadmin_audit_157', 0, '2026-07-07 08:59:56'),
+(4210, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: ddd (Case: 26-0004)', 'system', 'superadmin_audit_156', 0, '2026-07-07 08:56:55'),
+(4211, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: ddd (Case: 26-0003)', 'system', 'superadmin_audit_155', 0, '2026-07-07 08:56:21'),
+(4212, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: ELLA MAE (Case: 26-0002)', 'system', 'superadmin_audit_154', 0, '2026-07-07 08:50:17'),
+(4213, 1, 'Patient Record Update', 'Cainta Branch: Updated patient record: SHANE CACHO (Case: 26-0001)', 'system', 'superadmin_audit_153', 0, '2026-07-07 08:50:01'),
+(4214, 1, 'Patient Record Update', 'Cainta Branch: Deleted patient record: sHANE CACHO (Case: 26-0001)', 'system', 'superadmin_audit_152', 0, '2026-07-07 08:49:45'),
+(4215, 1, 'Patient Record Update', 'Cainta Branch: Deleted patient record: sHANE CACHO (Case: 26-0001)', 'system', 'superadmin_audit_151', 0, '2026-07-07 08:49:43'),
+(4216, 1, 'Patient Record Update', 'Cainta Branch: Deleted patient record: Ken Allen Rosales (Case: 26-0002)', 'system', 'superadmin_audit_150', 0, '2026-07-07 08:45:41'),
+(4217, 1, 'Patient Record Update', 'Cainta Branch: Deleted patient record: Ken Allen Rosales (Case: 26-0003)', 'system', 'superadmin_audit_149', 0, '2026-07-07 08:45:39'),
+(4218, 1, 'Patient Record Update', 'Cainta Branch: Deleted patient record: sHANE CACHO (Case: 26-0001)', 'system', 'superadmin_audit_148', 0, '2026-07-07 08:45:21'),
+(4219, 1, 'Patient Record Update', 'Cainta Branch: Deleted patient record: ddd (Case: 26-0004)', 'system', 'superadmin_audit_147', 0, '2026-07-07 08:43:30'),
+(4220, 1, 'Patient Record Update', 'Cainta Branch: Updated case 26-0004', 'system', 'superadmin_audit_146', 0, '2026-07-07 08:42:41'),
+(4221, 1, 'Patient Record Update', 'Cainta Branch: Updated case 26-0001', 'system', 'superadmin_audit_145', 0, '2026-07-07 08:42:26'),
+(4222, 1, 'Patient Record Update', 'Cainta Branch: Updated case 26-0001', 'system', 'superadmin_audit_144', 0, '2026-07-07 08:42:25'),
+(4223, 1, 'Patient Record Update', 'Cainta Branch: Updated case 26-0001', 'system', 'superadmin_audit_143', 0, '2026-07-07 08:30:41'),
+(4224, 1, 'User Management Update', 'Cainta Branch: Updated user: cachosheyn (ID: 16)', 'user_management', 'superadmin_audit_140', 0, '2026-07-07 06:28:09'),
+(4225, 1, 'New User Account Created', 'Cainta Branch: Added new user: cachosheyn (ID: 16)', 'user_management', 'superadmin_audit_136', 0, '2026-07-07 06:24:22'),
+(4226, 1, 'Admin Staff Patient Records Update', 'Cainta Branch: Deleted Admin Staff patient record: 26-0001', 'user_management', 'superadmin_audit_132', 0, '2026-07-06 12:20:33'),
+(4227, 1, 'Admin Staff Patient Records Update', 'Cainta Branch: Added Admin Staff patient record: 26-0003', 'user_management', 'superadmin_audit_131', 0, '2026-07-06 12:15:51'),
+(4228, 1, 'Admin Staff Patient Records Update', 'Cainta Branch: Added Admin Staff patient record: 26-0002', 'user_management', 'superadmin_audit_126', 0, '2026-07-06 12:09:16'),
+(4229, 1, 'Admin Staff Patient Records Update', 'Cainta Branch: Added Admin Staff patient record: 26-0001', 'user_management', 'superadmin_audit_125', 0, '2026-07-06 11:52:40'),
+(4230, 1, 'Patient Records Update', 'Cainta Branch: Deleted patient: ken allen rosales (ID: 2)', 'system', 'superadmin_audit_123', 0, '2026-07-05 23:15:51'),
+(4231, 1, 'Patient Records Update', 'Cainta Branch: Deleted patient: Michelle Batacan (ID: 4)', 'system', 'superadmin_audit_122', 0, '2026-07-05 22:52:13'),
+(4232, 1, 'Patient Records Update', 'Cainta Branch: Added patient: Michelle Batacan', 'system', 'superadmin_audit_121', 0, '2026-07-05 22:45:50'),
+(4233, 1, 'Patient Records Update', 'Cainta Branch: Added patient: Michelle Batacan', 'system', 'superadmin_audit_120', 0, '2026-07-05 22:45:50'),
+(4234, 1, 'Patient Records Update', 'Cainta Branch: Added patient: ken allen rosales', 'system', 'superadmin_audit_119', 0, '2026-07-05 22:30:21'),
+(4235, 1, 'Patient Records Update', 'Cainta Branch: Added patient: Shane Ella Mae Franco Cacho', 'system', 'superadmin_audit_118', 0, '2026-07-05 22:28:52'),
+(4236, 1, 'Branch Admin Management Update', 'Antipolo Branch: Welcome email sent to new branch admin: branchadmin (ID: 15, Email: sheyn.cacho@gmail.com)', 'branch_management', 'superadmin_audit_110', 0, '2026-07-05 16:19:53'),
+(4237, 1, 'New Branch Admin Created', 'Antipolo Branch: Created new branch admin: branchadmin (ID: 15) for branch ID: SBI-003', 'branch_management', 'superadmin_audit_109', 0, '2026-07-05 16:19:47'),
+(4238, 1, 'Inventory Activity', 'Cainta Branch: Added new unit: Box/s (ID: 3)', 'inventory', 'superadmin_audit_102', 0, '2026-07-05 14:32:40'),
+(4239, 1, 'Inventory Activity', 'Cainta Branch: Added new unit: Packs (ID: 2)', 'inventory', 'superadmin_audit_101', 0, '2026-07-05 14:32:14'),
+(4240, 1, 'Inventory Activity', 'Cainta Branch: Added new unit: Ream (ID: 1)', 'inventory', 'superadmin_audit_95', 0, '2026-07-05 14:30:05'),
+(4241, 1, 'Inventory Activity', 'Cainta Branch: Added new inventory category: Logbook/Forms (ID: 3) with frequency: Weekly', 'inventory', 'superadmin_audit_92', 0, '2026-07-05 14:03:21'),
+(4242, 1, 'Inventory Activity', 'Cainta Branch: Added new inventory category: Medical Supplies (ID: 2) with frequency: Daily', 'inventory', 'superadmin_audit_91', 0, '2026-07-05 14:02:56'),
+(4243, 1, 'Inventory Activity', 'Cainta Branch: Added new inventory category: Appliances/Electronics (ID: 1) with frequency: Monthly', 'inventory', 'superadmin_audit_88', 0, '2026-07-05 14:01:09'),
+(4244, 1, 'Branch Admin Management Update', 'Antipolo Branch: Welcome email sent to new branch admin: Joepat Lacerna (ID: 14, Email: opat09252005@gmail.com)', 'branch_management', 'superadmin_audit_32', 0, '2026-07-05 11:56:26'),
+(4245, 1, 'New Branch Admin Created', 'Antipolo Branch: Created new branch admin: Joepat Lacerna (ID: 14) for branch ID: SBI-003', 'branch_management', 'superadmin_audit_31', 0, '2026-07-05 11:56:22'),
+(4246, 1, 'Branch Admin Management Update', 'Antipolo Branch: Welcome email sent to new branch admin: Joepat Lacerna (ID: 13, Email: opat09252005@gmail.com)', 'branch_management', 'superadmin_audit_30', 0, '2026-07-05 11:48:54'),
+(4247, 1, 'New Branch Admin Created', 'Antipolo Branch: Created new branch admin: Joepat Lacerna (ID: 13) for branch ID: SBI-003', 'branch_management', 'superadmin_audit_29', 0, '2026-07-05 11:48:50'),
+(4248, 1, 'Branch Admin Management Update', 'Antipolo Branch: Sent email to branch admin: Jojana Garabillo (ID: 6, Email: jojanajeangarabillo@gmail.com) - Subject: test email', 'branch_management', 'superadmin_audit_28', 0, '2026-07-05 11:44:50'),
+(4249, 1, 'Branch Admin Management Update', 'Antipolo Branch: Sent welcome email to new branch admin: Joepat Lacerna (ID: 12)', 'branch_management', 'superadmin_audit_27', 0, '2026-07-05 11:44:17'),
+(4250, 1, 'New Branch Admin Created', 'Antipolo Branch: Created new branch admin: Joepat Lacerna (ID: 12) for branch: Pasig Branch (ID: SBI-003)', 'branch_management', 'superadmin_audit_26', 0, '2026-07-05 11:44:12'),
+(4251, 1, 'Branch Management Update', 'Antipolo Branch: Updated branch: SBI-004 (Montalban Branch) - Changes: Contact: \'091234567\' → \'0912345679\'', 'branch_management', 'superadmin_audit_25', 0, '2026-07-05 11:40:25'),
+(4252, 1, 'Branch Management Update', 'Antipolo Branch: Added new branch: Montalban Branch (ID: SBI-004)', 'branch_management', 'superadmin_audit_24', 0, '2026-07-05 11:39:58'),
+(4253, 1, 'New User Account Created', 'Cainta Branch: Added new user: Jean Montero (ID: 11)', 'user_management', 'superadmin_audit_23', 0, '2026-07-04 15:09:39'),
+(4254, 1, 'New User Account Created', 'Cainta Branch: Added new user: Marc Beringuela (ID: 9)', 'user_management', 'superadmin_audit_22', 0, '2026-07-04 14:55:07'),
+(4255, 1, 'User Management Update', 'Cainta Branch: Updated user: Shane Cacho (ID: 8)', 'user_management', 'superadmin_audit_21', 0, '2026-07-04 14:54:14'),
+(4256, 1, 'New User Account Created', 'Cainta Branch: Added new user: Pamela One (ID: 8)', 'user_management', 'superadmin_audit_20', 0, '2026-07-04 14:41:02'),
+(4257, 1, 'New User Account Created', 'Cainta Branch: Added new user: Pamela One (ID: 7)', 'user_management', 'superadmin_audit_19', 0, '2026-07-04 14:36:23'),
+(4452, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Joseph Marco (ID: P0085)\nCase ID: C0079\nDate: September 11, 2026 21:46:01\n\nVaccination Entries:\n• Speeda  - D3 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:46:01'),
+(4453, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Joseph Marco (ID: P0085)\nCase ID: C0079\nDate: September 11, 2026 21:46:01\n\nVaccination Entries:\n• Speeda  - D3 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:46:01'),
+(4454, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Joseph Marco (ID: P0085)\nCase ID: C0079\nDate: September 11, 2026 21:46:01\n\nVaccination Entries:\n• Speeda  - D3 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:46:01'),
+(4455, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Joseph Marco was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:46:01', 'vaccination', NULL, 0, '2026-09-11 13:46:01'),
+(4456, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Reyes, Sharpay Evans (ID: P0083)\nCase ID: C0077\nDate: September 11, 2026 21:47:57\n\nVaccination Entries:\n• PPD - D7 - 1 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:47:57'),
+(4457, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Reyes, Sharpay Evans (ID: P0083)\nCase ID: C0077\nDate: September 11, 2026 21:47:57\n\nVaccination Entries:\n• PPD - D7 - 1 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:47:57'),
+(4458, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Reyes, Sharpay Evans (ID: P0083)\nCase ID: C0077\nDate: September 11, 2026 21:47:57\n\nVaccination Entries:\n• PPD - D7 - 1 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:47:57'),
+(4459, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Reyes, Sharpay Evans was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:47:57', 'vaccination', NULL, 0, '2026-09-11 13:47:57'),
+(4460, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Reyes, Sharpay Evans (ID: P0083)\nCase ID: C0077\nDate: September 11, 2026 21:49:05\n\nVaccination Entries:\n• Speeda  - D14 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:49:05'),
+(4461, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Reyes, Sharpay Evans (ID: P0083)\nCase ID: C0077\nDate: September 11, 2026 21:49:05\n\nVaccination Entries:\n• Speeda  - D14 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:49:05'),
+(4462, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Reyes, Sharpay Evans (ID: P0083)\nCase ID: C0077\nDate: September 11, 2026 21:49:05\n\nVaccination Entries:\n• Speeda  - D14 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:49:05'),
+(4463, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Reyes, Sharpay Evans was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:49:05', 'vaccination', NULL, 0, '2026-09-11 13:49:05'),
+(4464, 9, 'Patient Waiting for Nurse', 'Julia Singko (Case 26-0032) is waiting for assessment.', 'patient_queue', NULL, 0, '2026-09-11 13:55:23'),
+(4465, 8, 'Chart Ready for Registry', 'Julia Singko (Case 26-0032) is ready for registry verification.', 'registry', NULL, 0, '2026-09-11 13:56:09'),
+(4466, 16, 'Chart Ready for Registry', 'Julia Singko (Case 26-0032) is ready for registry verification.', 'registry', NULL, 0, '2026-09-11 13:56:09'),
+(4467, 25, 'Chart Ready for Registry', 'Julia Singko (Case 26-0032) is ready for registry verification.', 'registry', NULL, 0, '2026-09-11 13:56:09'),
+(4468, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Julia Singko (ID: P0086)\nCase ID: C0080\nDate: September 11, 2026 21:57:07\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 - 0.5 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:57:07'),
+(4469, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Julia Singko (ID: P0086)\nCase ID: C0080\nDate: September 11, 2026 21:57:07\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 - 0.5 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:57:07'),
+(4470, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Julia Singko (ID: P0086)\nCase ID: C0080\nDate: September 11, 2026 21:57:07\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 - 0.5 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:57:07'),
+(4471, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Julia Singko was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:57:07', 'vaccination', NULL, 0, '2026-09-11 13:57:07');
 
 -- --------------------------------------------------------
 
@@ -1740,7 +2338,8 @@ INSERT INTO `patients` (`patient_id`, `full_name`, `email`, `contact_number`, `b
 (82, 'Joe Montero', NULL, '091456789', '2005-09-01', 'Male', 'Taguig', '2026-09-05 09:43:49', 'SBI-002', 0, NULL, NULL),
 (83, 'Reyes, Sharpay Evans', NULL, '09985447638', '1985-03-05', 'Female', 'USA', '2026-09-08 01:16:33', 'SBI-002', 0, NULL, NULL),
 (84, 'Santiago, Leah', NULL, '09718735987', '2000-10-03', 'Female', 'Eastwood City', '2026-09-08 02:13:41', 'SBI-002', 0, NULL, NULL),
-(85, 'Joseph Marco', NULL, '0999 380 5499', '1988-05-05', 'Male', 'Mandaluyong City', '2026-09-08 02:24:15', 'SBI-002', 0, NULL, NULL);
+(85, 'Joseph Marco', NULL, '0999 380 5499', '1988-05-05', 'Male', 'Mandaluyong City', '2026-09-08 02:24:15', 'SBI-002', 0, NULL, NULL),
+(86, 'Julia Singko', NULL, '0912345678', '2000-09-02', 'Female', 'Lifehomes', '2026-09-11 13:55:09', 'SBI-002', 0, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -1802,8 +2401,9 @@ INSERT INTO `patient_visits` (`visit_id`, `patient_id`, `case_id`, `branch_id`, 
 (3, 14, 11, 'SBI-002', 'Follow-up', '2026-09-08', '2026-09-08 09:22:24', 'Registered', 8, 9, '2026-09-08 09:49:37', '2026-09-08 09:49:41', '2026-09-08 09:49:41', '2026-09-08 09:50:00', NULL, '', '2026-09-08 01:22:24', '2026-09-08 01:50:00'),
 (4, 84, 78, 'SBI-002', 'New Patient', '2026-09-08', '2026-09-08 10:14:34', 'Registered', 8, 9, '2026-09-08 13:54:23', '2026-09-08 13:54:43', '2026-09-08 13:54:43', '2026-09-08 13:55:32', NULL, 'With previous ARV Record', '2026-09-08 02:14:34', '2026-09-08 05:55:32'),
 (5, 85, 79, 'SBI-002', 'Repeating Patient', '2026-09-08', '2026-09-08 10:25:05', 'Registered', 8, 9, '2026-09-08 13:58:27', '2026-09-08 13:58:32', '2026-09-08 13:58:32', '2026-09-08 13:58:53', NULL, '', '2026-09-08 02:25:05', '2026-09-08 05:58:53'),
-(6, 83, 77, 'SBI-002', 'Follow-up', '2026-09-08', '2026-09-08 10:34:00', 'Waiting for Nurse', 8, NULL, NULL, NULL, NULL, NULL, NULL, '', '2026-09-08 02:34:00', '2026-09-08 02:34:00'),
-(7, 78, 72, 'SBI-002', 'New Patient', '2026-09-08', '2026-09-08 10:35:40', 'Waiting for Nurse', 8, NULL, NULL, NULL, NULL, NULL, NULL, '', '2026-09-08 02:35:40', '2026-09-08 02:35:40');
+(6, 83, 77, 'SBI-002', 'Follow-up', '2026-09-08', '2026-09-08 10:34:00', 'Registered', 8, 9, '2026-09-11 21:16:01', '2026-09-11 21:16:54', '2026-09-11 21:16:54', '2026-09-11 21:28:25', NULL, '', '2026-09-08 02:34:00', '2026-09-11 13:28:25'),
+(7, 78, 72, 'SBI-002', 'New Patient', '2026-09-08', '2026-09-08 10:35:40', 'Registered', 8, 9, '2026-09-11 21:20:54', '2026-09-11 21:21:00', '2026-09-11 21:21:00', '2026-09-11 21:27:54', NULL, '', '2026-09-08 02:35:40', '2026-09-11 13:27:54'),
+(8, 86, 80, 'SBI-002', 'New Patient', '2026-09-11', '2026-09-11 21:55:23', 'For Registry', 16, 9, '2026-09-11 21:56:06', '2026-09-11 21:56:09', '2026-09-11 21:56:09', NULL, NULL, '', '2026-09-11 13:55:23', '2026-09-11 13:56:09');
 
 -- --------------------------------------------------------
 
@@ -1860,7 +2460,8 @@ INSERT INTO `philhealth_records` (`philhealth_record_id`, `case_id`, `has_philhe
 (44, 76, 'No', NULL, NULL, NULL, 16, '2026-09-05 17:43:49', 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
 (45, 77, 'Yes', 'Sponsored', 'For Writing', '', 8, '2026-09-08 10:11:51', 0, NULL, NULL, '2026-09-08', NULL, NULL, NULL, NULL, '2026-09-08', '2027-03-08'),
 (46, 78, 'Yes', 'Employed Private', NULL, NULL, 8, '2026-09-08 10:13:42', 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-(47, 79, 'No', NULL, NULL, NULL, 8, '2026-09-08 10:24:15', 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+(47, 79, 'No', NULL, NULL, NULL, 8, '2026-09-08 10:24:15', 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+(48, 80, 'No', NULL, NULL, NULL, 16, '2026-09-11 21:55:09', 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -2004,19 +2605,20 @@ INSERT INTO `registry_records` (`registry_id`, `case_id`, `visit_id`, `branch_id
 (32, 64, NULL, NULL, NULL, '2026-07-11 13:18:54', '26-0015', 'Alive/Healthy', 0.00, 0.00, 1, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '0942358332', NULL, 9, '2026-08-25 00:18:05', 0, NULL, NULL, 'Draft', NULL, NULL),
 (33, 65, NULL, NULL, NULL, '2026-07-11 13:31:15', '26-0016', 'Alive/Healthy', 5.00, 1.00, 1, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 0, 0, 0, 0, 0, '0942312345', NULL, 9, '2026-08-25 00:13:01', 0, NULL, NULL, 'Draft', NULL, NULL),
 (34, 66, NULL, NULL, NULL, '2026-07-11 13:46:48', '26-0017', 'Alive/Healthy', 1.00, 1.00, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 1, 1, 1, 1, 1, '094235123456', NULL, 9, '2026-09-01 20:20:47', 0, NULL, NULL, 'Draft', NULL, NULL),
-(35, 67, NULL, NULL, NULL, '2026-07-11 13:55:33', '26-0018', 'Alive/Healthy', 0.00, 0.00, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 0, 0, 0, 0, 0, '0942358234', NULL, 16, '2026-08-25 01:10:55', 0, NULL, NULL, 'Draft', NULL, NULL),
+(35, 67, NULL, NULL, NULL, '2026-07-11 13:55:33', '26-0018', 'Alive/Healthy', 0.00, 0.00, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 1, 0, 0, 0, 0, '0942358234', NULL, 9, '2026-09-11 21:23:18', 0, NULL, NULL, 'Draft', NULL, NULL),
 (36, 68, NULL, NULL, NULL, '2026-07-17 12:51:02', '26-0019', 'Alive/Healthy', 0.00, 0.00, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 1, 1, 1, 1, 0, '0992134568', NULL, 9, '2026-08-25 00:31:56', 0, NULL, NULL, 'Draft', NULL, NULL),
 (37, 69, NULL, NULL, NULL, '2026-08-24 14:37:04', '26-0020', 'Alive/Healthy', 0.00, 0.00, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 1, 1, 1, 0, 0, '099213412345', NULL, 9, '2026-09-01 21:12:14', 0, NULL, NULL, 'Draft', NULL, NULL),
-(38, 70, NULL, NULL, NULL, '2026-08-24 16:37:58', '26-0021', 'Alive/Healthy', 0.00, 0.00, 1, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '091234765', NULL, 9, '2026-09-08 11:24:24', 0, NULL, NULL, 'Draft', NULL, NULL),
+(38, 70, NULL, NULL, NULL, '2026-08-24 16:37:58', '26-0021', 'Alive/Healthy', 0.00, 0.00, 1, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 0, 0, 0, 0, 0, '091234765', NULL, 9, '2026-09-11 21:12:11', 0, NULL, NULL, 'Draft', NULL, NULL),
 (39, 71, NULL, NULL, NULL, '2026-09-01 14:28:52', '26-0022', 'Alive/Healthy', 0.00, 0.00, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '09123456', NULL, 9, '2026-09-01 22:29:45', 0, NULL, NULL, 'Draft', NULL, NULL),
-(40, 72, NULL, 'SBI-002', 16, '2026-09-01 15:10:16', '26-0023', 'Alive/Healthy', 0.00, 0.00, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '09921398754', NULL, 9, '2026-09-01 23:10:42', 0, NULL, NULL, 'Draft', NULL, NULL),
+(40, 72, 7, 'SBI-002', 16, '2026-09-01 15:10:16', '26-0023', 'Alive/Healthy', 0.00, 0.00, 0, 'ERIG', NULL, NULL, 1, 1, 1, 0, 0, 0, 0, '09921398754', '', 16, '2026-09-11 21:27:54', 0, NULL, NULL, 'Registered', 16, '2026-09-11 21:27:54'),
 (41, 73, NULL, 'SBI-002', 16, '2026-09-01 15:13:44', '26-0024', 'Alive/Healthy', 0.00, 0.00, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '234567890', NULL, 9, '2026-09-01 23:14:04', 0, NULL, NULL, 'Draft', NULL, NULL),
 (42, 74, NULL, 'SBI-002', 16, '2026-09-01 15:24:27', '26-0025', 'Alive/Healthy', 0.00, 0.00, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '234567876', NULL, 9, '2026-09-01 23:24:48', 0, NULL, NULL, 'Draft', NULL, NULL),
-(43, 75, 1, 'SBI-002', 16, '2026-09-01 15:29:52', '26-0026', 'Alive', 0.00, 0.00, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 1, 1, 0, 0, 0, '123456789', '', 9, '2026-09-08 11:22:46', 0, NULL, NULL, 'Registered', 16, '2026-09-05 17:31:44'),
+(43, 75, 1, 'SBI-002', 16, '2026-09-01 15:29:52', '26-0026', 'Alive', 0.00, 0.00, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 1, 1, 1, 0, 1, 0, '123456789', '', 9, '2026-09-11 20:57:48', 0, NULL, NULL, 'Registered', 16, '2026-09-05 17:31:44'),
 (44, 76, 2, 'SBI-002', 16, '2026-09-05 09:43:49', '26-0027', 'Unknown', 0.00, 0.00, 1, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '091456789', '', 8, '2026-09-08 09:42:22', 0, NULL, NULL, 'Registered', 8, '2026-09-08 09:42:22'),
-(45, 77, NULL, 'SBI-002', 8, '2026-09-08 01:16:33', '26-0028', 'Alive/Healthy', 0.00, 0.00, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '09985447638', NULL, 8, '2026-09-08 10:11:51', 0, NULL, NULL, 'Draft', NULL, NULL),
+(45, 77, 6, 'SBI-002', 8, '2026-09-08 01:16:33', '26-0028', 'Alive/Healthy', 0.00, 0.00, 0, '', NULL, NULL, 1, 0, 1, 1, 0, 0, 0, '09985447638', '', 9, '2026-09-11 21:49:05', 0, NULL, NULL, 'Registered', 16, '2026-09-11 21:28:25'),
 (46, 78, 4, 'SBI-002', 8, '2026-09-08 02:13:41', '26-0030', '', 0.00, 0.00, 1, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '09718735987', '', 8, '2026-09-08 13:55:32', 0, NULL, NULL, 'Registered', 8, '2026-09-08 13:55:32'),
-(47, 79, 5, 'SBI-002', 8, '2026-09-08 02:24:15', '26-0031', 'Unknown', 0.00, 0.00, 1, 'PVRV TRC ABHAYRAB', NULL, NULL, 0, 0, 0, 0, 0, 0, 0, '0999 380 5499', '', 8, '2026-09-08 13:58:53', 0, NULL, NULL, 'Registered', 8, '2026-09-08 13:58:53');
+(47, 79, 5, 'SBI-002', 8, '2026-09-08 02:24:15', '26-0031', 'Unknown', 0.00, 0.00, 1, 'PVRV TRC ABHAYRAB', NULL, NULL, 1, 1, 0, 0, 0, 0, 0, '0999 380 5499', '', 9, '2026-09-11 21:46:01', 0, NULL, NULL, 'Registered', 8, '2026-09-08 13:58:53'),
+(48, 80, NULL, 'SBI-002', 16, '2026-09-11 13:55:09', '26-0032', 'Alive/Healthy', 0.00, 0.00, 0, 'PVRV TRC SPEEDA', NULL, NULL, 1, 0, 0, 0, 0, 0, 0, '0912345678', NULL, 9, '2026-09-11 21:57:07', 0, NULL, NULL, 'Draft', NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -2147,7 +2749,7 @@ CREATE TABLE `stock_transactions` (
   `vaccination_id` int(11) DEFAULT NULL,
   `branch_id` varchar(10) NOT NULL,
   `transaction_type` enum('IN','OUT','ADJUSTMENT','TRANSFER_IN','TRANSFER_OUT','RETURN','EXPIRED') DEFAULT NULL,
-  `quantity` decimal(12,2) NOT NULL,
+  `quantity` decimal(12,4) NOT NULL,
   `remarks` text DEFAULT NULL,
   `transaction_date` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -2157,76 +2759,106 @@ CREATE TABLE `stock_transactions` (
 --
 
 INSERT INTO `stock_transactions` (`transaction_id`, `item_id`, `user_id`, `vaccination_id`, `branch_id`, `transaction_type`, `quantity`, `remarks`, `transaction_date`) VALUES
-(5, 3, 9, 82, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-16', '2026-07-16 07:31:57'),
-(7, 2, 9, 111, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-08-24', '2026-08-24 14:39:37'),
-(8, 3, 9, 112, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 2 | Qty Used: 1 | Date: 2026-08-27', '2026-08-24 14:40:33'),
-(9, 3, 9, 107, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-08-24', '2026-08-24 15:00:43'),
-(10, 5, 9, 113, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: Rabies Vaccine | Dose #: 3 | Qty Used: 1 | Date: 2026-08-24', '2026-08-24 15:05:42'),
-(11, 4, 9, 112, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: TT (Tetanus Toxoid) | Dose #: 2 | Qty Used: 1 | Date: 2026-08-31', '2026-08-24 15:05:42'),
-(12, 4, 9, 108, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: TT (Tetanus Toxoid) | Dose #: 2 | Qty Used: 1 | Date: 2026-08-27', '2026-08-24 15:44:42'),
-(13, 2, 9, 109, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 3 | Qty Used: 1 | Date: 2026-08-24', '2026-08-24 15:46:54'),
-(14, 5, 9, 108, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: Rabies Vaccine | Dose #: 2 | Qty Used: 1 | Date: 2026-08-31', '2026-08-24 15:46:54'),
-(17, 2, 9, 71, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 2 | Qty Used: 1 | Date: 2026-07-14', '2026-08-24 16:03:05'),
-(18, 5, 9, 82, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: Rabies Vaccine | Dose #: 1 | Qty Used: 1 | Date: 2026-07-14', '2026-08-24 16:03:05'),
-(19, 3, 9, 115, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 71 | Case ID: 65 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-07', '2026-08-24 16:12:05'),
-(20, 2, 9, 116, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 71 | Case ID: 65 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-07', '2026-08-24 16:12:05'),
-(21, 5, 9, 117, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 71 | Case ID: 65 | Vaccine: Rabies Vaccine | Dose #: 2 | Qty Used: 1 | Date: 2026-07-14', '2026-08-24 16:13:01'),
-(22, 4, 9, 118, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 71 | Case ID: 65 | Vaccine: TT (Tetanus Toxoid) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-14', '2026-08-24 16:13:01'),
-(23, 3, 9, 119, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 70 | Case ID: 64 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-11', '2026-08-24 16:18:05'),
-(24, 2, 9, 120, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 70 | Case ID: 64 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-11', '2026-08-24 16:18:05'),
-(25, 4, 9, 124, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: TT (Tetanus Toxoid) | Dose #: 4 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:22:45'),
-(26, 3, 9, 125, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:22:45'),
-(27, 3, 9, 126, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 5 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:24:13'),
-(28, 2, 9, 127, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:24:13'),
-(29, 3, 9, 128, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 6 | Qty Used: 1 | Date: 2026-08-21', '2026-08-24 16:25:31'),
-(30, 3, 9, 129, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 6 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:31:56'),
-(31, 2, 9, 130, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 6 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:31:56'),
-(32, 3, 11, NULL, 'SBI-002', 'ADJUSTMENT', -17.00, 'Reason: Miscount / Physical Count Correction | Previous Stock: 19 | New Stock: 2', '2026-08-27 16:00:00'),
-(33, 5, 11, NULL, 'SBI-002', 'IN', 60.00, 'Batch/Lot No.: 26-022489', '2026-08-28 16:00:00'),
-(34, 4, 11, NULL, 'SBI-002', 'IN', 50.00, 'Batch/Lot No.: 26-022489', '2026-08-28 16:00:00'),
-(35, 4, 11, NULL, 'SBI-002', 'ADJUSTMENT', 45.00, 'Reason: Damaged | Previous Stock: 50 | New Stock: 95', '2026-08-28 16:00:00'),
-(36, 2, 11, NULL, 'SBI-002', 'ADJUSTMENT', 1.00, 'Reason: Other | Previous Stock: 9 | New Stock: 10', '2026-08-28 16:00:00'),
-(37, 6, 11, NULL, 'SBI-002', 'IN', 1.00, '', '2026-08-28 16:00:00'),
-(38, 2, 11, NULL, 'SBI-002', 'IN', 10.00, 'Batch/Lot No.: 26-02248', '2026-08-28 16:00:00'),
-(39, 3, 11, NULL, 'SBI-002', 'ADJUSTMENT', -1.00, 'Reason: Miscount / Physical Count Correction | Previous Stock: 2 | New Stock: 1', '2026-08-28 16:00:00'),
-(40, 4, 11, NULL, 'SBI-002', 'IN', 10.00, 'Batch/Lot No.: 65685', '2026-08-28 16:00:00'),
-(41, 4, 11, NULL, 'SBI-002', 'OUT', 140.00, 'Reason: Other | Batch/Lot: 26-022489 (-95) | pull out for pasig branch', '2026-08-28 16:00:00'),
-(42, 7, 11, NULL, 'SBI-002', 'IN', 20.00, '', '2026-08-28 16:00:00'),
-(43, 8, 11, NULL, 'SBI-002', 'IN', 1.00, '', '2026-08-31 16:00:00'),
-(44, 9, 11, NULL, 'SBI-002', 'IN', 2.00, '', '2026-08-31 16:00:00'),
-(45, 3, 9, 143, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 3 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2028-01-11) | Date: 2026-09-01', '2026-09-01 06:19:47'),
-(46, 2, 9, 144, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 4 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', '2026-09-01 06:20:08'),
-(47, 2, 9, 145, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 5 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', '2026-09-01 06:20:47'),
-(48, 2, 9, 146, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 4 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', '2026-09-01 07:11:53'),
-(49, 5, 9, 147, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: Speeda  | Dose #: 5 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-01', '2026-09-01 07:12:14'),
-(50, 2, 9, 148, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 5 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', '2026-09-01 07:12:14'),
-(51, 2, 11, NULL, 'SBI-002', 'OUT', 10.00, 'Expired stock disposal and archive | Batch/Lot: 26-02248 | Expiration Date: 2026-08-31 | Original Stock ID: 20', '2026-09-01 07:57:32'),
-(52, 3, 11, NULL, 'SBI-002', 'IN', 5.00, 'Batch/Lot No.: 26-65685 | ATS Stock In', '2026-08-31 16:00:00'),
-(53, 2, 9, 153, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 77 | Case ID: 71 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', '2026-09-01 08:29:45'),
-(54, 3, 9, 160, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 78 | Case ID: 72 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Batch(es): 26-65685: 1 (exp 2027-08-31) | Date: 2026-09-01', '2026-09-01 09:10:42'),
-(55, 3, 9, 167, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 79 | Case ID: 73 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Batch(es): 26-65685: 1 (exp 2027-08-31) | Date: 2026-09-01', '2026-09-01 09:14:04'),
-(56, 2, 9, 174, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 80 | Case ID: 74 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', '2026-09-01 09:24:48'),
-(57, 5, 9, 181, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 81 | Case ID: 75 | Vaccine: Speeda  | Dose #: 1 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-01', '2026-09-01 09:30:08'),
-(58, 5, 9, 182, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 15 | Case ID: 12 | Vaccine: Speeda  | Dose #: 1 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-03', '2026-09-03 00:31:35'),
-(59, 2, 9, 188, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 15 | Case ID: 12 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-03', '2026-09-03 00:31:35'),
-(60, 5, 9, 189, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 16 | Case ID: 13 | Vaccine: Speeda  | Dose #: 1 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-03', '2026-09-03 00:40:13'),
-(61, 4, 9, 195, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 16 | Case ID: 13 | Vaccine: TT (Tetanus Toxoid) | Dose #: 1 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2028-07-11) | Date: 2026-09-03', '2026-09-03 00:40:13'),
-(62, 3, 9, 196, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 14 | Case ID: 11 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Batch(es): 26-65685: 1 (exp 2027-08-31) | Date: 2026-08-01', '2026-08-01 00:49:28'),
-(63, 2, 9, 202, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 14 | Case ID: 11 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-08-01', '2026-08-01 00:49:28'),
-(64, 5, 9, 197, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 14 | Case ID: 11 | Vaccine: Speeda  | Dose #: 2 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-08-04', '2026-08-04 00:50:50'),
-(65, 5, 9, 198, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 14 | Case ID: 11 | Vaccine: Speeda  | Dose #: 3 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-08-08', '2026-08-08 00:51:28'),
-(66, 3, 9, 203, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 81 | Case ID: 75 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Batch(es): 26-65685: 1 (exp 2027-08-31) | Date: 2026-09-05', '2026-09-05 03:30:36'),
-(67, 5, 9, 207, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 82 | Case ID: 76 | Vaccine: Speeda  | Dose #: 1 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', '2026-09-07 19:41:44'),
-(68, 4, 9, 211, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 82 | Case ID: 76 | Vaccine: TT (Tetanus Toxoid) | Dose #: 1 | Qty Used: 1 | Batch(es): 65685: 1 (exp 2028-08-07) | Date: 2026-09-08', '2026-09-07 19:41:44'),
-(69, 5, 9, 216, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 83 | Case ID: 77 | Vaccine: Speeda  | Dose #: 1 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', '2026-09-07 19:48:15'),
-(70, 4, 9, 217, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 83 | Case ID: 77 | Vaccine: TT (Tetanus Toxoid) | Dose #: 1 | Qty Used: 1 | Batch(es): 65685: 1 (exp 2028-08-07) | Date: 2026-09-08', '2026-09-07 19:48:15'),
-(71, 2, 9, 218, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 83 | Case ID: 77 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-08', '2026-09-07 19:48:15'),
-(72, 3, 9, 204, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 81 | Case ID: 75 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 2 | Qty Used: 1 | Batch(es): 26-65685: 1 (exp 2027-08-31) | Date: 2026-09-08', '2026-09-07 19:48:39'),
-(73, 5, 9, 205, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 81 | Case ID: 75 | Vaccine: Speeda  | Dose #: 3 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', '2026-09-07 20:59:16'),
-(74, 5, 9, 221, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 81 | Case ID: 75 | Vaccine: Speeda  | Dose #: 4 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', '2026-09-07 21:22:46'),
-(75, 5, 9, 222, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 76 | Case ID: 70 | Vaccine: Speeda  | Dose #: 1 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', '2026-09-07 21:24:24'),
-(76, 5, 9, 223, 'SBI-002', 'OUT', 1.00, 'Vaccination | Patient ID: 84 | Case ID: 78 | Vaccine: Speeda  | Dose #: 1 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', '2026-09-07 23:49:34'),
-(77, 23, 11, NULL, 'SBI-002', 'IN', 1.00, 'Batch/Lot No.: 26-022489', '2026-09-09 16:00:00');
+(5, 3, 9, 82, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-16', '2026-07-16 07:31:57'),
+(7, 2, 9, 111, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-08-24', '2026-08-24 14:39:37'),
+(8, 3, 9, 112, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 2 | Qty Used: 1 | Date: 2026-08-27', '2026-08-24 14:40:33'),
+(9, 3, 9, 107, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-08-24', '2026-08-24 15:00:43'),
+(10, 5, 9, 113, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: Rabies Vaccine | Dose #: 3 | Qty Used: 1 | Date: 2026-08-24', '2026-08-24 15:05:42'),
+(11, 4, 9, 112, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: TT (Tetanus Toxoid) | Dose #: 2 | Qty Used: 1 | Date: 2026-08-31', '2026-08-24 15:05:42'),
+(12, 4, 9, 108, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: TT (Tetanus Toxoid) | Dose #: 2 | Qty Used: 1 | Date: 2026-08-27', '2026-08-24 15:44:42'),
+(13, 2, 9, 109, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 3 | Qty Used: 1 | Date: 2026-08-24', '2026-08-24 15:46:54'),
+(14, 5, 9, 108, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: Rabies Vaccine | Dose #: 2 | Qty Used: 1 | Date: 2026-08-31', '2026-08-24 15:46:54'),
+(17, 2, 9, 71, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 2 | Qty Used: 1 | Date: 2026-07-14', '2026-08-24 16:03:05'),
+(18, 5, 9, 82, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: Rabies Vaccine | Dose #: 1 | Qty Used: 1 | Date: 2026-07-14', '2026-08-24 16:03:05'),
+(19, 3, 9, 115, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 71 | Case ID: 65 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-07', '2026-08-24 16:12:05'),
+(20, 2, 9, 116, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 71 | Case ID: 65 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-07', '2026-08-24 16:12:05'),
+(21, 5, 9, 117, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 71 | Case ID: 65 | Vaccine: Rabies Vaccine | Dose #: 2 | Qty Used: 1 | Date: 2026-07-14', '2026-08-24 16:13:01'),
+(22, 4, 9, 118, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 71 | Case ID: 65 | Vaccine: TT (Tetanus Toxoid) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-14', '2026-08-24 16:13:01'),
+(23, 3, 9, 119, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 70 | Case ID: 64 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-11', '2026-08-24 16:18:05'),
+(24, 2, 9, 120, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 70 | Case ID: 64 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-07-11', '2026-08-24 16:18:05'),
+(25, 4, 9, 124, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: TT (Tetanus Toxoid) | Dose #: 4 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:22:45'),
+(26, 3, 9, 125, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:22:45'),
+(27, 3, 9, 126, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 5 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:24:13'),
+(28, 2, 9, 127, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:24:13'),
+(29, 3, 9, 128, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 6 | Qty Used: 1 | Date: 2026-08-21', '2026-08-24 16:25:31'),
+(30, 3, 9, 129, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 6 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:31:56'),
+(31, 2, 9, 130, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 74 | Case ID: 68 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 6 | Qty Used: 1 | Date: 2026-09-21', '2026-08-24 16:31:56'),
+(32, 3, 11, NULL, 'SBI-002', 'ADJUSTMENT', -17.0000, 'Reason: Miscount / Physical Count Correction | Previous Stock: 19 | New Stock: 2', '2026-08-27 16:00:00'),
+(33, 5, 11, NULL, 'SBI-002', 'IN', 2160.0000, 'Batch/Lot No.: 26-022489', '2026-08-28 16:00:00'),
+(34, 4, 11, NULL, 'SBI-002', 'IN', 50.0000, 'Batch/Lot No.: 26-022489', '2026-08-28 16:00:00'),
+(35, 4, 11, NULL, 'SBI-002', 'ADJUSTMENT', 45.0000, 'Reason: Damaged | Previous Stock: 50 | New Stock: 95', '2026-08-28 16:00:00'),
+(36, 2, 11, NULL, 'SBI-002', 'ADJUSTMENT', 1.0000, 'Reason: Other | Previous Stock: 9 | New Stock: 10', '2026-08-28 16:00:00'),
+(37, 6, 11, NULL, 'SBI-002', 'IN', 1.0000, '', '2026-08-28 16:00:00'),
+(38, 2, 11, NULL, 'SBI-002', 'IN', 10.0000, 'Batch/Lot No.: 26-02248', '2026-08-28 16:00:00'),
+(39, 3, 11, NULL, 'SBI-002', 'ADJUSTMENT', -1.0000, 'Reason: Miscount / Physical Count Correction | Previous Stock: 2 | New Stock: 1', '2026-08-28 16:00:00'),
+(40, 4, 11, NULL, 'SBI-002', 'IN', 10.0000, 'Batch/Lot No.: 65685', '2026-08-28 16:00:00'),
+(41, 4, 11, NULL, 'SBI-002', 'OUT', 140.0000, 'Reason: Other | Batch/Lot: 26-022489 (-95) | pull out for pasig branch', '2026-08-28 16:00:00'),
+(42, 7, 11, NULL, 'SBI-002', 'IN', 20.0000, '', '2026-08-28 16:00:00'),
+(43, 8, 11, NULL, 'SBI-002', 'IN', 1.0000, '', '2026-08-31 16:00:00'),
+(44, 9, 11, NULL, 'SBI-002', 'IN', 2.0000, '', '2026-08-31 16:00:00'),
+(45, 3, 9, 143, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 3 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2028-01-11) | Date: 2026-09-01', '2026-09-01 06:19:47'),
+(46, 2, 9, 144, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 4 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', '2026-09-01 06:20:08'),
+(47, 2, 9, 145, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 72 | Case ID: 66 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 5 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', '2026-09-01 06:20:47'),
+(48, 2, 9, 146, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 4 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', '2026-09-01 07:11:53'),
+(49, 5, 9, 147, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: Speeda  | Dose #: 5 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-01', '2026-09-01 07:12:14'),
+(50, 2, 9, 148, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 75 | Case ID: 69 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 5 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', '2026-09-01 07:12:14'),
+(51, 2, 11, NULL, 'SBI-002', 'OUT', 10.0000, 'Expired stock disposal and archive | Batch/Lot: 26-02248 | Expiration Date: 2026-08-31 | Original Stock ID: 20', '2026-09-01 07:57:32'),
+(52, 3, 11, NULL, 'SBI-002', 'IN', 5.0000, 'Batch/Lot No.: 26-65685 | ATS Stock In', '2026-08-31 16:00:00'),
+(53, 2, 9, 153, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 77 | Case ID: 71 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', '2026-09-01 08:29:45'),
+(54, 3, 9, 160, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 78 | Case ID: 72 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Batch(es): 26-65685: 1 (exp 2027-08-31) | Date: 2026-09-01', '2026-09-01 09:10:42'),
+(55, 3, 9, 167, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 79 | Case ID: 73 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Batch(es): 26-65685: 1 (exp 2027-08-31) | Date: 2026-09-01', '2026-09-01 09:14:04'),
+(56, 2, 9, 174, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 80 | Case ID: 74 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-01', '2026-09-01 09:24:48'),
+(57, 5, 9, 181, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 81 | Case ID: 75 | Vaccine: Speeda  | Dose #: 1 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-01', '2026-09-01 09:30:08'),
+(58, 5, 9, 182, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 15 | Case ID: 12 | Vaccine: Speeda  | Dose #: 1 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-03', '2026-09-03 00:31:35'),
+(59, 2, 9, 188, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 15 | Case ID: 12 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-03', '2026-09-03 00:31:35'),
+(60, 5, 9, 189, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 16 | Case ID: 13 | Vaccine: Speeda  | Dose #: 1 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-03', '2026-09-03 00:40:13'),
+(61, 4, 9, 195, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 16 | Case ID: 13 | Vaccine: TT (Tetanus Toxoid) | Dose #: 1 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2028-07-11) | Date: 2026-09-03', '2026-09-03 00:40:13'),
+(62, 3, 9, 196, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 14 | Case ID: 11 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Batch(es): 26-65685: 1 (exp 2027-08-31) | Date: 2026-08-01', '2026-08-01 00:49:28'),
+(63, 2, 9, 202, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 14 | Case ID: 11 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-08-01', '2026-08-01 00:49:28'),
+(64, 5, 9, 197, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 14 | Case ID: 11 | Vaccine: Speeda  | Dose #: 2 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-08-04', '2026-08-04 00:50:50'),
+(65, 5, 9, 198, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 14 | Case ID: 11 | Vaccine: Speeda  | Dose #: 3 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-08-08', '2026-08-08 00:51:28'),
+(66, 3, 9, 203, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 81 | Case ID: 75 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 1 | Qty Used: 1 | Batch(es): 26-65685: 1 (exp 2027-08-31) | Date: 2026-09-05', '2026-09-05 03:30:36'),
+(67, 5, 9, 207, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 82 | Case ID: 76 | Vaccine: Speeda  | Dose #: 1 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', '2026-09-07 19:41:44'),
+(68, 4, 9, 211, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 82 | Case ID: 76 | Vaccine: TT (Tetanus Toxoid) | Dose #: 1 | Qty Used: 1 | Batch(es): 65685: 1 (exp 2028-08-07) | Date: 2026-09-08', '2026-09-07 19:41:44'),
+(69, 5, 9, 216, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 83 | Case ID: 77 | Vaccine: Speeda  | Dose #: 1 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', '2026-09-07 19:48:15'),
+(70, 4, 9, 217, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 83 | Case ID: 77 | Vaccine: TT (Tetanus Toxoid) | Dose #: 1 | Qty Used: 1 | Batch(es): 65685: 1 (exp 2028-08-07) | Date: 2026-09-08', '2026-09-07 19:48:15'),
+(71, 2, 9, 218, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 83 | Case ID: 77 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Qty Used: 1 | Batch(es): N/A: 1 (exp 2027-07-11) | Date: 2026-09-08', '2026-09-07 19:48:15'),
+(72, 3, 9, 204, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 81 | Case ID: 75 | Vaccine: ATS (Anti-Tetanus Serum) | Dose #: 2 | Qty Used: 1 | Batch(es): 26-65685: 1 (exp 2027-08-31) | Date: 2026-09-08', '2026-09-07 19:48:39'),
+(73, 5, 9, 205, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 81 | Case ID: 75 | Vaccine: Speeda  | Dose #: 3 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', '2026-09-07 20:59:16'),
+(74, 5, 9, 221, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 81 | Case ID: 75 | Vaccine: Speeda  | Dose #: 4 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', '2026-09-07 21:22:46'),
+(75, 5, 9, 222, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 76 | Case ID: 70 | Vaccine: Speeda  | Dose #: 1 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', '2026-09-07 21:24:24'),
+(76, 5, 9, 223, 'SBI-002', 'OUT', 36.0000, 'Vaccination | Patient ID: 84 | Case ID: 78 | Vaccine: Speeda  | Dose #: 1 | Qty Used: 1 | Batch(es): 26-022489: 1 (exp 2026-11-30) | Date: 2026-09-08', '2026-09-07 23:49:34'),
+(77, 23, 11, NULL, 'SBI-002', 'IN', 1.0000, 'Batch/Lot No.: 26-022489', '2026-09-09 16:00:00'),
+(78, 2, 9, 206, 'SBI-002', 'OUT', 0.5000, 'Vaccination | Patient ID: 81 | Case ID: 75 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 6 | Used: 0.5 Vial | Batch(es): N/A: 0.5 Vial (exp 2027-07-11) | Date: 2026-09-11', '2026-09-11 12:57:48'),
+(79, 2, 9, 231, 'SBI-002', 'OUT', 0.4998, 'Vaccination | Patient ID: 76 | Case ID: 70 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 2 | Used: 0.4998 Vial | Batch(es): N/A: 0.4998 Vial (exp 2027-07-11) | Date: 2026-09-11', '2026-09-11 13:12:11'),
+(80, 2, 9, 233, 'SBI-002', 'OUT', 0.0002, 'Vaccination | Patient ID: 78 | Case ID: 72 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 2 | Used: 0.0002 Vial | Batch(es): N/A: 0.0002 Vial (exp 2027-07-11) | Date: 2026-09-11', '2026-09-11 13:14:08'),
+(81, 4, 9, 239, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 78 | Case ID: 72 | Vaccine: TT (Tetanus Toxoid) | Dose #: 3 | Used: 1 Ampule | Batch(es): 65685: 1 Ampule (exp 2028-08-07) | Date: 2026-09-11', '2026-09-11 13:22:04'),
+(82, 5, 9, 241, 'SBI-002', 'OUT', 2.0000, 'Vaccination | Patient ID: 73 | Case ID: 67 | Vaccine: Speeda  | Dose #: 3 | Used: 2 site (2 site total) | Batch(es): 26-022489: 2 site (exp 2026-11-30) | Date: 2026-08-25', '2026-08-25 13:23:18'),
+(83, 2, 11, NULL, 'SBI-002', 'IN', 10.0000, 'Batch/Lot No.: 26-0027 | Stock in', '2026-09-10 16:00:00'),
+(84, 2, 9, 226, 'SBI-002', 'OUT', 0.0500, 'Vaccination | Patient ID: 85 | Case ID: 79 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Used: 0.05 Vial | Batch(es): 26-0027: 0.05 Vial (exp 2028-06-12) | Date: 2026-09-08', '2026-09-08 13:30:49'),
+(85, 5, 9, 227, 'SBI-002', 'OUT', 2.0000, 'Vaccination | Patient ID: 85 | Case ID: 79 | Vaccine: Speeda  | Dose #: 2 | Used: 2 site (2 site total) | Batch(es): 26-022489: 2 site (exp 2026-11-30) | Date: 2026-09-11', '2026-09-11 13:46:01'),
+(86, 23, 9, 235, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 83 | Case ID: 77 | Vaccine: PPD | Dose #: 3 | Used: 1 Vial | Batch(es): 26-022489: 1 Vial (exp 2027-02-01) | Date: 2026-09-11', '2026-09-11 13:47:57'),
+(87, 5, 9, 242, 'SBI-002', 'OUT', 2.0000, 'Vaccination | Patient ID: 83 | Case ID: 77 | Vaccine: Speeda  | Dose #: 4 | Used: 2 site (2 site total) | Batch(es): 26-022489: 2 site (exp 2026-11-30) | Date: 2026-09-11', '2026-09-11 13:49:05'),
+(88, 2, 9, 243, 'SBI-002', 'OUT', 0.5000, 'Vaccination | Patient ID: 86 | Case ID: 80 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Used: 0.5 Vial | Batch(es): 26-0027: 0.5 Vial (exp 2028-06-12) | Date: 2026-09-11', '2026-09-11 13:57:07');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `system_migrations`
+--
+
+CREATE TABLE `system_migrations` (
+  `migration_key` varchar(150) NOT NULL,
+  `description` varchar(500) NOT NULL,
+  `applied_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `system_migrations`
+--
+
+INSERT INTO `system_migrations` (`migration_key`, `description`, `applied_at`) VALUES
+('2026-09-speeda-sites-v2', 'Converted legacy Speeda vial quantities to sites using 1 vial = 6 sites', '2026-09-11 12:55:52');
 
 -- --------------------------------------------------------
 
@@ -2256,7 +2888,7 @@ CREATE TABLE `training_dataset` (
 --
 
 INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
-(53, 'SBI-002', 5, '2025-11-14', 86, 50.0, 13.4, 161.2, 197.8, 48, 50, 70.0, 0, '2026-09-04 09:36:32'),
+(53, 'SBI-002', 5, '2025-11-14', 86, 300.0, 80.4, 967.2, 1186.8, 48, 50, 420.0, 0, '2026-09-04 09:36:32'),
 (54, 'SBI-002', 10, '2025-11-14', 86, 20.0, 4.3, 0.0, 15.7, 37, 31, 50.0, 1, '2026-09-04 09:36:32'),
 (55, 'SBI-002', 11, '2025-11-14', 86, 15.0, 4.4, 0.0, 10.6, 51, 59, 50.0, 1, '2026-09-04 09:36:32'),
 (56, 'SBI-002', 12, '2025-11-14', 86, 12.0, 4.5, 0.0, 7.5, 45, 55, 50.0, 1, '2026-09-04 09:36:32'),
@@ -2297,7 +2929,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (91, 'SBI-002', 49, '2025-11-14', 86, 15.0, 1.7, 0.0, 13.3, 29, 31, 50.0, 1, '2026-09-04 09:36:32'),
 (92, 'SBI-002', 48, '2025-11-14', 86, 4.0, 0.9, 0.0, 3.1, 45, 59, 50.0, 1, '2026-09-04 09:36:32'),
 (93, 'SBI-002', 47, '2025-11-14', 86, 4.0, 0.9, 0.0, 3.1, 37, 51, 50.0, 1, '2026-09-04 09:36:32'),
-(94, 'SBI-002', 5, '2025-11-15', 17, 197.8, 2.6, 0.0, 195.2, 10, 12, 70.0, 0, '2026-09-04 09:36:32'),
+(94, 'SBI-002', 5, '2025-11-15', 17, 1186.8, 15.6, 0.0, 1171.2, 10, 12, 420.0, 0, '2026-09-04 09:36:32'),
 (95, 'SBI-002', 10, '2025-11-15', 17, 15.7, 0.8, 0.0, 14.9, 9, 8, 50.0, 1, '2026-09-04 09:36:32'),
 (96, 'SBI-002', 11, '2025-11-15', 17, 10.6, 0.8, 0.0, 9.8, 6, 5, 50.0, 1, '2026-09-04 09:36:32'),
 (97, 'SBI-002', 12, '2025-11-15', 17, 7.5, 0.8, 0.0, 6.7, 10, 12, 50.0, 1, '2026-09-04 09:36:32'),
@@ -2338,7 +2970,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (132, 'SBI-002', 49, '2025-11-15', 17, 13.3, 0.3, 0.0, 13.0, 10, 9, 50.0, 1, '2026-09-04 09:36:32'),
 (133, 'SBI-002', 48, '2025-11-15', 17, 3.1, 0.2, 0.0, 2.9, 9, 9, 50.0, 1, '2026-09-04 09:36:32'),
 (134, 'SBI-002', 47, '2025-11-15', 17, 3.1, 0.2, 0.0, 2.9, 7, 7, 50.0, 1, '2026-09-04 09:36:32'),
-(135, 'SBI-002', 5, '2025-11-16', 24, 195.2, 4.1, 0.0, 191.1, 14, 12, 70.0, 0, '2026-09-04 09:36:32'),
+(135, 'SBI-002', 5, '2025-11-16', 24, 1171.2, 24.6, 0.0, 1146.6, 14, 12, 420.0, 0, '2026-09-04 09:36:32'),
 (136, 'SBI-002', 10, '2025-11-16', 24, 14.9, 1.2, 0.0, 13.7, 8, 10, 50.0, 1, '2026-09-04 09:36:32'),
 (137, 'SBI-002', 11, '2025-11-16', 24, 9.8, 1.2, 0.0, 8.6, 6, 6, 50.0, 1, '2026-09-04 09:36:32'),
 (138, 'SBI-002', 12, '2025-11-16', 24, 6.7, 1.2, 25.3, 30.8, 7, 7, 50.0, 1, '2026-09-04 09:36:32'),
@@ -2379,7 +3011,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (173, 'SBI-002', 49, '2025-11-16', 24, 13.0, 0.5, 0.0, 12.5, 12, 16, 50.0, 1, '2026-09-04 09:36:32'),
 (174, 'SBI-002', 48, '2025-11-16', 24, 2.9, 0.2, 0.0, 2.7, 12, 11, 50.0, 1, '2026-09-04 09:36:32'),
 (175, 'SBI-002', 47, '2025-11-16', 24, 2.9, 0.2, 0.0, 2.7, 7, 8, 50.0, 1, '2026-09-04 09:36:32'),
-(176, 'SBI-002', 5, '2025-11-17', 73, 191.1, 9.8, 0.0, 181.3, 30, 35, 70.0, 0, '2026-09-04 09:36:32'),
+(176, 'SBI-002', 5, '2025-11-17', 73, 1146.6, 58.8, 0.0, 1087.8, 30, 35, 420.0, 0, '2026-09-04 09:36:32'),
 (177, 'SBI-002', 10, '2025-11-17', 73, 13.7, 3.7, 0.0, 10.0, 19, 16, 50.0, 1, '2026-09-04 09:36:32'),
 (178, 'SBI-002', 11, '2025-11-17', 73, 8.6, 3.9, 0.0, 4.7, 33, 28, 50.0, 1, '2026-09-04 09:36:32'),
 (179, 'SBI-002', 12, '2025-11-17', 73, 30.8, 3.5, 0.0, 27.3, 28, 39, 50.0, 1, '2026-09-04 09:36:32'),
@@ -2420,7 +3052,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (214, 'SBI-002', 49, '2025-11-17', 73, 12.5, 1.5, 0.0, 11.0, 45, 48, 50.0, 1, '2026-09-04 09:36:32'),
 (215, 'SBI-002', 48, '2025-11-17', 73, 2.7, 0.7, 0.0, 2.0, 25, 27, 50.0, 1, '2026-09-04 09:36:32'),
 (216, 'SBI-002', 47, '2025-11-17', 73, 2.7, 0.7, 0.0, 2.0, 19, 17, 50.0, 1, '2026-09-04 09:36:32'),
-(217, 'SBI-002', 5, '2025-11-18', 87, 181.3, 14.1, 110.4, 277.6, 41, 57, 70.0, 0, '2026-09-04 09:36:32'),
+(217, 'SBI-002', 5, '2025-11-18', 87, 1087.8, 84.6, 662.4, 1665.6, 41, 57, 420.0, 0, '2026-09-04 09:36:32'),
 (218, 'SBI-002', 10, '2025-11-18', 87, 10.0, 4.4, 0.0, 5.6, 35, 28, 50.0, 1, '2026-09-04 09:36:32'),
 (219, 'SBI-002', 11, '2025-11-18', 87, 4.7, 4.5, 0.0, 0.2, 51, 41, 50.0, 1, '2026-09-04 09:36:32'),
 (220, 'SBI-002', 12, '2025-11-18', 87, 27.3, 4.6, 0.0, 22.7, 50, 51, 50.0, 1, '2026-09-04 09:36:32'),
@@ -2461,7 +3093,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (255, 'SBI-002', 49, '2025-11-18', 87, 11.0, 1.8, 0.0, 9.2, 39, 48, 50.0, 1, '2026-09-04 09:36:32'),
 (256, 'SBI-002', 48, '2025-11-18', 87, 2.0, 0.9, 0.0, 1.1, 27, 25, 50.0, 1, '2026-09-04 09:36:32'),
 (257, 'SBI-002', 47, '2025-11-18', 87, 2.0, 0.9, 0.0, 1.1, 22, 18, 50.0, 1, '2026-09-04 09:36:32'),
-(258, 'SBI-002', 5, '2025-11-19', 56, 277.6, 7.8, 183.5, 453.3, 19, 19, 70.0, 0, '2026-09-04 09:36:32'),
+(258, 'SBI-002', 5, '2025-11-19', 56, 1665.6, 46.8, 1101.0, 2719.8, 19, 19, 420.0, 0, '2026-09-04 09:36:32'),
 (259, 'SBI-002', 10, '2025-11-19', 56, 5.6, 2.8, 0.0, 2.8, 17, 15, 50.0, 1, '2026-09-04 09:36:32'),
 (260, 'SBI-002', 11, '2025-11-19', 56, 0.2, 2.8, 9.6, 7.0, 29, 30, 50.0, 1, '2026-09-04 09:36:32'),
 (261, 'SBI-002', 12, '2025-11-19', 56, 22.7, 2.8, 0.0, 19.9, 17, 24, 50.0, 1, '2026-09-04 09:36:32'),
@@ -2502,7 +3134,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (296, 'SBI-002', 49, '2025-11-19', 56, 9.2, 1.1, 0.0, 8.1, 26, 31, 50.0, 1, '2026-09-04 09:36:32'),
 (297, 'SBI-002', 48, '2025-11-19', 56, 1.1, 0.6, 0.0, 0.5, 28, 33, 50.0, 1, '2026-09-04 09:36:32'),
 (298, 'SBI-002', 47, '2025-11-19', 56, 1.1, 0.6, 0.0, 0.5, 33, 33, 50.0, 1, '2026-09-04 09:36:32'),
-(299, 'SBI-002', 5, '2025-11-20', 31, 453.3, 4.5, 0.0, 448.8, 15, 16, 70.0, 0, '2026-09-04 09:36:32'),
+(299, 'SBI-002', 5, '2025-11-20', 31, 2719.8, 27.0, 0.0, 2692.8, 15, 16, 420.0, 0, '2026-09-04 09:36:32'),
 (300, 'SBI-002', 10, '2025-11-20', 31, 2.8, 1.5, 0.0, 1.3, 13, 15, 50.0, 1, '2026-09-04 09:36:32'),
 (301, 'SBI-002', 11, '2025-11-20', 31, 7.0, 1.6, 0.0, 5.4, 12, 13, 50.0, 1, '2026-09-04 09:36:32'),
 (302, 'SBI-002', 12, '2025-11-20', 31, 19.9, 1.6, 0.0, 18.3, 13, 18, 50.0, 1, '2026-09-04 09:36:32'),
@@ -2543,7 +3175,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (337, 'SBI-002', 49, '2025-11-20', 31, 8.1, 0.6, 0.0, 7.5, 15, 21, 50.0, 1, '2026-09-04 09:36:32'),
 (338, 'SBI-002', 48, '2025-11-20', 31, 0.5, 0.3, 0.0, 0.2, 13, 16, 50.0, 1, '2026-09-04 09:36:32'),
 (339, 'SBI-002', 47, '2025-11-20', 31, 0.5, 0.3, 0.0, 0.2, 8, 10, 50.0, 1, '2026-09-04 09:36:32'),
-(340, 'SBI-002', 5, '2025-11-21', 57, 448.8, 9.0, 0.0, 439.8, 23, 28, 70.0, 0, '2026-09-04 09:36:32'),
+(340, 'SBI-002', 5, '2025-11-21', 57, 2692.8, 54.0, 0.0, 2638.8, 23, 28, 420.0, 0, '2026-09-04 09:36:32'),
 (341, 'SBI-002', 10, '2025-11-21', 57, 1.3, 2.9, 13.6, 12.0, 26, 34, 50.0, 1, '2026-09-04 09:36:32'),
 (342, 'SBI-002', 11, '2025-11-21', 57, 5.4, 2.8, 0.0, 2.6, 17, 15, 50.0, 1, '2026-09-04 09:36:32'),
 (343, 'SBI-002', 12, '2025-11-21', 57, 18.3, 2.8, 0.0, 15.5, 33, 36, 50.0, 1, '2026-09-04 09:36:32'),
@@ -2584,7 +3216,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (378, 'SBI-002', 49, '2025-11-21', 57, 7.5, 1.1, 0.0, 6.4, 29, 26, 50.0, 1, '2026-09-04 09:36:32'),
 (379, 'SBI-002', 48, '2025-11-21', 57, 0.2, 0.6, 15.4, 15.0, 33, 32, 50.0, 1, '2026-09-04 09:36:32'),
 (380, 'SBI-002', 47, '2025-11-21', 57, 0.2, 0.6, 8.4, 8.0, 26, 21, 50.0, 1, '2026-09-04 09:36:32'),
-(381, 'SBI-002', 5, '2025-11-22', 97, 439.8, 15.3, 0.0, 424.5, 49, 67, 70.0, 0, '2026-09-04 09:36:32'),
+(381, 'SBI-002', 5, '2025-11-22', 97, 2638.8, 91.8, 0.0, 2547.0, 49, 67, 420.0, 0, '2026-09-04 09:36:32'),
 (382, 'SBI-002', 10, '2025-11-22', 97, 12.0, 4.9, 0.0, 7.1, 35, 31, 50.0, 1, '2026-09-04 09:36:32'),
 (383, 'SBI-002', 11, '2025-11-22', 97, 2.6, 4.8, 17.2, 15.0, 53, 55, 50.0, 1, '2026-09-04 09:36:32'),
 (384, 'SBI-002', 12, '2025-11-22', 97, 15.5, 4.7, 0.0, 10.8, 32, 42, 50.0, 1, '2026-09-04 09:36:32'),
@@ -2625,7 +3257,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (419, 'SBI-002', 49, '2025-11-22', 97, 6.4, 1.9, 0.0, 4.5, 54, 74, 50.0, 1, '2026-09-04 09:36:32'),
 (420, 'SBI-002', 48, '2025-11-22', 97, 15.0, 1.0, 0.0, 14.0, 50, 67, 50.0, 1, '2026-09-04 09:36:32'),
 (421, 'SBI-002', 47, '2025-11-22', 97, 8.0, 1.0, 4.3, 11.3, 37, 48, 50.0, 1, '2026-09-04 09:36:32'),
-(422, 'SBI-002', 5, '2025-11-23', 18, 424.5, 2.5, 0.0, 422.0, 11, 15, 70.0, 0, '2026-09-04 09:36:32'),
+(422, 'SBI-002', 5, '2025-11-23', 18, 2547.0, 15.0, 0.0, 2532.0, 11, 15, 420.0, 0, '2026-09-04 09:36:32'),
 (423, 'SBI-002', 10, '2025-11-23', 18, 7.1, 0.9, 0.0, 6.2, 10, 9, 50.0, 1, '2026-09-04 09:36:33'),
 (424, 'SBI-002', 11, '2025-11-23', 18, 15.0, 0.9, 0.0, 14.1, 6, 7, 50.0, 1, '2026-09-04 09:36:33'),
 (425, 'SBI-002', 12, '2025-11-23', 18, 10.8, 0.9, 0.0, 9.9, 7, 7, 50.0, 1, '2026-09-04 09:36:33'),
@@ -2666,7 +3298,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (460, 'SBI-002', 49, '2025-11-23', 18, 4.5, 0.4, 0.0, 4.1, 11, 12, 50.0, 1, '2026-09-04 09:36:33'),
 (461, 'SBI-002', 48, '2025-11-23', 18, 14.0, 0.2, 0.0, 13.8, 5, 5, 50.0, 1, '2026-09-04 09:36:33'),
 (462, 'SBI-002', 47, '2025-11-23', 18, 11.3, 0.2, 0.0, 11.1, 12, 11, 50.0, 1, '2026-09-04 09:36:33'),
-(463, 'SBI-002', 5, '2025-11-24', 64, 422.0, 10.2, 0.0, 411.8, 33, 33, 70.0, 0, '2026-09-04 09:36:33'),
+(463, 'SBI-002', 5, '2025-11-24', 64, 2532.0, 61.2, 0.0, 2470.8, 33, 33, 420.0, 0, '2026-09-04 09:36:33'),
 (464, 'SBI-002', 10, '2025-11-24', 64, 6.2, 3.1, 0.0, 3.1, 33, 27, 50.0, 1, '2026-09-04 09:36:33'),
 (465, 'SBI-002', 11, '2025-11-24', 64, 14.1, 3.1, 0.0, 11.0, 18, 19, 50.0, 1, '2026-09-04 09:36:33'),
 (466, 'SBI-002', 12, '2025-11-24', 64, 9.9, 3.3, 0.0, 6.6, 39, 31, 50.0, 1, '2026-09-04 09:36:33'),
@@ -2707,7 +3339,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (501, 'SBI-002', 49, '2025-11-24', 64, 4.1, 1.3, 10.4, 13.2, 17, 18, 50.0, 1, '2026-09-04 09:36:33'),
 (502, 'SBI-002', 48, '2025-11-24', 64, 13.8, 0.6, 0.0, 13.2, 32, 26, 50.0, 1, '2026-09-04 09:36:33'),
 (503, 'SBI-002', 47, '2025-11-24', 64, 11.1, 0.6, 0.0, 10.5, 17, 23, 50.0, 1, '2026-09-04 09:36:33'),
-(504, 'SBI-002', 5, '2025-11-25', 88, 411.8, 14.2, 193.6, 591.2, 53, 68, 70.0, 0, '2026-09-04 09:36:33'),
+(504, 'SBI-002', 5, '2025-11-25', 88, 2470.8, 85.2, 1161.6, 3547.2, 53, 68, 420.0, 0, '2026-09-04 09:36:33'),
 (505, 'SBI-002', 10, '2025-11-25', 88, 3.1, 4.3, 11.2, 10.0, 47, 65, 50.0, 1, '2026-09-04 09:36:33'),
 (506, 'SBI-002', 11, '2025-11-25', 88, 11.0, 4.5, 0.0, 6.5, 28, 38, 50.0, 1, '2026-09-04 09:36:33'),
 (507, 'SBI-002', 12, '2025-11-25', 88, 6.6, 4.3, 0.0, 2.3, 25, 25, 50.0, 1, '2026-09-04 09:36:33'),
@@ -2748,7 +3380,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (542, 'SBI-002', 49, '2025-11-25', 88, 13.2, 1.8, 9.2, 20.6, 42, 46, 50.0, 1, '2026-09-04 09:36:33'),
 (543, 'SBI-002', 48, '2025-11-25', 88, 13.2, 0.9, 0.0, 12.3, 47, 41, 50.0, 1, '2026-09-04 09:36:33'),
 (544, 'SBI-002', 47, '2025-11-25', 88, 10.5, 0.9, 0.0, 9.6, 45, 44, 50.0, 1, '2026-09-04 09:36:33'),
-(545, 'SBI-002', 5, '2025-11-26', 51, 591.2, 7.7, 0.0, 583.5, 26, 33, 70.0, 0, '2026-09-04 09:36:33'),
+(545, 'SBI-002', 5, '2025-11-26', 51, 3547.2, 46.2, 0.0, 3501.0, 26, 33, 420.0, 0, '2026-09-04 09:36:33'),
 (546, 'SBI-002', 10, '2025-11-26', 51, 10.0, 2.5, 0.0, 7.5, 19, 25, 50.0, 1, '2026-09-04 09:36:33'),
 (547, 'SBI-002', 11, '2025-11-26', 51, 6.5, 2.7, 0.0, 3.8, 29, 29, 50.0, 1, '2026-09-04 09:36:33');
 INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
@@ -2790,7 +3422,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (583, 'SBI-002', 49, '2025-11-26', 51, 20.6, 1.0, 0.0, 19.6, 27, 36, 50.0, 1, '2026-09-04 09:36:33'),
 (584, 'SBI-002', 48, '2025-11-26', 51, 12.3, 0.5, 0.0, 11.8, 27, 28, 50.0, 1, '2026-09-04 09:36:33'),
 (585, 'SBI-002', 47, '2025-11-26', 51, 9.6, 0.5, 0.0, 9.1, 21, 27, 50.0, 1, '2026-09-04 09:36:33'),
-(586, 'SBI-002', 5, '2025-11-27', 52, 583.5, 7.1, 0.0, 576.4, 26, 29, 70.0, 0, '2026-09-04 09:36:33'),
+(586, 'SBI-002', 5, '2025-11-27', 52, 3501.0, 42.6, 0.0, 3458.4, 26, 29, 420.0, 0, '2026-09-04 09:36:33'),
 (587, 'SBI-002', 10, '2025-11-27', 52, 7.5, 2.5, 0.0, 5.0, 13, 10, 50.0, 1, '2026-09-04 09:36:33'),
 (588, 'SBI-002', 11, '2025-11-27', 52, 3.8, 2.6, 0.0, 1.2, 17, 16, 50.0, 1, '2026-09-04 09:36:33'),
 (589, 'SBI-002', 12, '2025-11-27', 52, 13.0, 2.5, 0.0, 10.5, 24, 33, 50.0, 1, '2026-09-04 09:36:33'),
@@ -2831,7 +3463,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (624, 'SBI-002', 49, '2025-11-27', 52, 19.6, 1.1, 0.0, 18.5, 31, 29, 50.0, 1, '2026-09-04 09:36:33'),
 (625, 'SBI-002', 48, '2025-11-27', 52, 11.8, 0.5, 0.0, 11.3, 23, 19, 50.0, 1, '2026-09-04 09:36:33'),
 (626, 'SBI-002', 47, '2025-11-27', 52, 9.1, 0.5, 0.0, 8.6, 29, 25, 50.0, 1, '2026-09-04 09:36:33'),
-(627, 'SBI-002', 5, '2025-11-28', 85, 576.4, 13.6, 0.0, 562.8, 50, 47, 70.0, 0, '2026-09-04 09:36:33'),
+(627, 'SBI-002', 5, '2025-11-28', 85, 3458.4, 81.6, 0.0, 3376.8, 50, 47, 420.0, 0, '2026-09-04 09:36:33'),
 (628, 'SBI-002', 10, '2025-11-28', 85, 5.0, 4.0, 0.0, 1.0, 38, 47, 50.0, 1, '2026-09-04 09:36:33'),
 (629, 'SBI-002', 11, '2025-11-28', 85, 1.2, 4.3, 17.1, 14.0, 52, 66, 50.0, 1, '2026-09-04 09:36:33'),
 (630, 'SBI-002', 12, '2025-11-28', 85, 10.5, 4.3, 19.9, 26.1, 41, 47, 50.0, 1, '2026-09-04 09:36:33'),
@@ -2872,7 +3504,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (665, 'SBI-002', 49, '2025-11-28', 85, 18.5, 1.7, 0.0, 16.8, 54, 44, 50.0, 1, '2026-09-04 09:36:33'),
 (666, 'SBI-002', 48, '2025-11-28', 85, 11.3, 0.8, 0.0, 10.5, 55, 48, 50.0, 1, '2026-09-04 09:36:33'),
 (667, 'SBI-002', 47, '2025-11-28', 85, 8.6, 0.9, 0.0, 7.7, 31, 34, 50.0, 1, '2026-09-04 09:36:33'),
-(668, 'SBI-002', 5, '2025-11-29', 44, 562.8, 6.7, 0.0, 556.1, 24, 24, 70.0, 0, '2026-09-04 09:36:33'),
+(668, 'SBI-002', 5, '2025-11-29', 44, 3376.8, 40.2, 0.0, 3336.6, 24, 24, 420.0, 0, '2026-09-04 09:36:33'),
 (669, 'SBI-002', 10, '2025-11-29', 44, 1.0, 2.2, 15.2, 14.0, 24, 33, 50.0, 1, '2026-09-04 09:36:33'),
 (670, 'SBI-002', 11, '2025-11-29', 44, 14.0, 2.2, 0.0, 11.8, 17, 18, 50.0, 1, '2026-09-04 09:36:33'),
 (671, 'SBI-002', 12, '2025-11-29', 44, 26.1, 2.2, 0.0, 23.9, 13, 11, 50.0, 1, '2026-09-04 09:36:33'),
@@ -2913,7 +3545,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (706, 'SBI-002', 49, '2025-11-29', 44, 16.8, 0.9, 0.0, 15.9, 15, 19, 50.0, 1, '2026-09-04 09:36:33'),
 (707, 'SBI-002', 48, '2025-11-29', 44, 10.5, 0.5, 0.0, 10.0, 26, 24, 50.0, 1, '2026-09-04 09:36:33'),
 (708, 'SBI-002', 47, '2025-11-29', 44, 7.7, 0.4, 0.0, 7.3, 17, 17, 50.0, 1, '2026-09-04 09:36:33'),
-(709, 'SBI-002', 5, '2025-11-30', 37, 556.1, 5.6, 0.0, 550.5, 22, 28, 70.0, 0, '2026-09-04 09:36:33'),
+(709, 'SBI-002', 5, '2025-11-30', 37, 3336.6, 33.6, 0.0, 3303.0, 22, 28, 420.0, 0, '2026-09-04 09:36:33'),
 (710, 'SBI-002', 10, '2025-11-30', 37, 14.0, 1.8, 0.0, 12.2, 14, 16, 50.0, 1, '2026-09-04 09:36:33'),
 (711, 'SBI-002', 11, '2025-11-30', 37, 11.8, 1.9, 0.0, 9.9, 18, 16, 50.0, 1, '2026-09-04 09:36:33'),
 (712, 'SBI-002', 12, '2025-11-30', 37, 23.9, 1.8, 0.0, 22.1, 15, 16, 50.0, 1, '2026-09-04 09:36:33'),
@@ -2954,7 +3586,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (747, 'SBI-002', 49, '2025-11-30', 37, 15.9, 0.7, 0.0, 15.2, 23, 24, 50.0, 1, '2026-09-04 09:36:33'),
 (748, 'SBI-002', 48, '2025-11-30', 37, 10.0, 0.4, 0.0, 9.6, 17, 23, 50.0, 1, '2026-09-04 09:36:33'),
 (749, 'SBI-002', 47, '2025-11-30', 37, 7.3, 0.4, 0.0, 6.9, 20, 26, 50.0, 1, '2026-09-04 09:36:33'),
-(750, 'SBI-002', 5, '2025-12-01', 13, 550.5, 1.8, 0.0, 548.7, 6, 6, 70.0, 0, '2026-09-04 09:36:33'),
+(750, 'SBI-002', 5, '2025-12-01', 13, 3303.0, 10.8, 0.0, 3292.2, 6, 6, 420.0, 0, '2026-09-04 09:36:33'),
 (751, 'SBI-002', 10, '2025-12-01', 13, 12.2, 0.7, 0.0, 11.5, 7, 9, 50.0, 1, '2026-09-04 09:36:33'),
 (752, 'SBI-002', 11, '2025-12-01', 13, 9.9, 0.6, 0.0, 9.3, 5, 6, 50.0, 1, '2026-09-04 09:36:33'),
 (753, 'SBI-002', 12, '2025-12-01', 13, 22.1, 0.6, 0.0, 21.5, 5, 6, 50.0, 1, '2026-09-04 09:36:33'),
@@ -2995,7 +3627,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (788, 'SBI-002', 49, '2025-12-01', 13, 15.2, 0.3, 0.0, 14.9, 7, 6, 50.0, 1, '2026-09-04 09:36:33'),
 (789, 'SBI-002', 48, '2025-12-01', 13, 9.6, 0.1, 0.0, 9.5, 4, 4, 50.0, 1, '2026-09-04 09:36:33'),
 (790, 'SBI-002', 47, '2025-12-01', 13, 6.9, 0.1, 0.0, 6.8, 5, 6, 50.0, 1, '2026-09-04 09:36:33'),
-(791, 'SBI-002', 5, '2025-12-02', 24, 548.7, 4.1, 167.2, 711.8, 10, 13, 70.0, 0, '2026-09-04 09:36:33'),
+(791, 'SBI-002', 5, '2025-12-02', 24, 3292.2, 24.6, 1003.2, 4270.8, 10, 13, 420.0, 0, '2026-09-04 09:36:33'),
 (792, 'SBI-002', 10, '2025-12-02', 24, 11.5, 1.2, 0.0, 10.3, 10, 11, 50.0, 1, '2026-09-04 09:36:33'),
 (793, 'SBI-002', 11, '2025-12-02', 24, 9.3, 1.1, 0.0, 8.2, 6, 8, 50.0, 1, '2026-09-04 09:36:33'),
 (794, 'SBI-002', 12, '2025-12-02', 24, 21.5, 1.2, 0.0, 20.3, 7, 9, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3036,7 +3668,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (829, 'SBI-002', 49, '2025-12-02', 24, 14.9, 0.5, 0.0, 14.4, 12, 14, 50.0, 1, '2026-09-04 09:36:33'),
 (830, 'SBI-002', 48, '2025-12-02', 24, 9.5, 0.2, 0.0, 9.3, 8, 10, 50.0, 1, '2026-09-04 09:36:33'),
 (831, 'SBI-002', 47, '2025-12-02', 24, 6.8, 0.2, 0.0, 6.6, 13, 14, 50.0, 1, '2026-09-04 09:36:33'),
-(832, 'SBI-002', 5, '2025-12-03', 41, 711.8, 6.5, 0.0, 705.3, 24, 23, 70.0, 0, '2026-09-04 09:36:33'),
+(832, 'SBI-002', 5, '2025-12-03', 41, 4270.8, 39.0, 0.0, 4231.8, 24, 23, 420.0, 0, '2026-09-04 09:36:33'),
 (833, 'SBI-002', 10, '2025-12-03', 41, 10.3, 2.1, 0.0, 8.2, 14, 12, 50.0, 1, '2026-09-04 09:36:33'),
 (834, 'SBI-002', 11, '2025-12-03', 41, 8.2, 2.0, 0.0, 6.2, 25, 32, 50.0, 1, '2026-09-04 09:36:33'),
 (835, 'SBI-002', 12, '2025-12-03', 41, 20.3, 2.1, 0.0, 18.2, 18, 19, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3077,7 +3709,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (870, 'SBI-002', 49, '2025-12-03', 41, 14.4, 0.8, 0.0, 13.6, 19, 19, 50.0, 1, '2026-09-04 09:36:33'),
 (871, 'SBI-002', 48, '2025-12-03', 41, 9.3, 0.4, 0.0, 8.9, 20, 24, 50.0, 1, '2026-09-04 09:36:33'),
 (872, 'SBI-002', 47, '2025-12-03', 41, 6.6, 0.4, 0.0, 6.2, 15, 21, 50.0, 1, '2026-09-04 09:36:33'),
-(873, 'SBI-002', 5, '2025-12-04', 98, 705.3, 14.1, 186.4, 877.6, 26, 33, 70.0, 0, '2026-09-04 09:36:33'),
+(873, 'SBI-002', 5, '2025-12-04', 98, 4231.8, 84.6, 1118.4, 5265.6, 26, 33, 420.0, 0, '2026-09-04 09:36:33'),
 (874, 'SBI-002', 10, '2025-12-04', 98, 8.2, 5.1, 0.0, 3.1, 48, 52, 50.0, 1, '2026-09-04 09:36:33'),
 (875, 'SBI-002', 11, '2025-12-04', 98, 6.2, 5.2, 0.0, 1.0, 36, 38, 50.0, 1, '2026-09-04 09:36:33'),
 (876, 'SBI-002', 12, '2025-12-04', 98, 18.2, 4.8, 0.0, 13.4, 51, 69, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3118,7 +3750,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (911, 'SBI-002', 49, '2025-12-04', 98, 13.6, 1.9, 0.0, 11.7, 39, 49, 50.0, 1, '2026-09-04 09:36:33'),
 (912, 'SBI-002', 48, '2025-12-04', 98, 8.9, 1.0, 0.0, 7.9, 45, 48, 50.0, 1, '2026-09-04 09:36:33'),
 (913, 'SBI-002', 47, '2025-12-04', 98, 6.2, 1.0, 0.0, 5.2, 54, 59, 50.0, 1, '2026-09-04 09:36:33'),
-(914, 'SBI-002', 5, '2025-12-05', 94, 877.6, 12.5, 0.0, 865.1, 51, 45, 70.0, 0, '2026-09-04 09:36:33'),
+(914, 'SBI-002', 5, '2025-12-05', 94, 5265.6, 75.0, 0.0, 5190.6, 51, 45, 420.0, 0, '2026-09-04 09:36:33'),
 (915, 'SBI-002', 10, '2025-12-05', 94, 3.1, 4.9, 10.8, 9.0, 53, 65, 50.0, 1, '2026-09-04 09:36:33'),
 (916, 'SBI-002', 11, '2025-12-05', 94, 1.0, 5.0, 11.5, 7.5, 45, 63, 50.0, 1, '2026-09-04 09:36:33'),
 (917, 'SBI-002', 12, '2025-12-05', 94, 13.4, 4.6, 0.0, 8.8, 27, 34, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3159,7 +3791,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (952, 'SBI-002', 49, '2025-12-05', 94, 11.7, 1.9, 0.0, 9.8, 43, 57, 50.0, 1, '2026-09-04 09:36:33'),
 (953, 'SBI-002', 48, '2025-12-05', 94, 7.9, 0.9, 0.0, 7.0, 41, 54, 50.0, 1, '2026-09-04 09:36:33'),
 (954, 'SBI-002', 47, '2025-12-05', 94, 5.2, 0.9, 0.0, 4.3, 33, 42, 50.0, 1, '2026-09-04 09:36:33'),
-(955, 'SBI-002', 5, '2025-12-06', 31, 865.1, 4.7, 164.8, 1025.2, 8, 8, 70.0, 0, '2026-09-04 09:36:33'),
+(955, 'SBI-002', 5, '2025-12-06', 31, 5190.6, 28.2, 988.8, 6151.2, 8, 8, 420.0, 0, '2026-09-04 09:36:33'),
 (956, 'SBI-002', 10, '2025-12-06', 31, 9.0, 1.6, 0.0, 7.4, 14, 12, 50.0, 1, '2026-09-04 09:36:33'),
 (957, 'SBI-002', 11, '2025-12-06', 31, 7.5, 1.6, 0.0, 5.9, 20, 24, 50.0, 1, '2026-09-04 09:36:33'),
 (958, 'SBI-002', 12, '2025-12-06', 31, 8.8, 1.6, 0.0, 7.2, 16, 15, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3200,7 +3832,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (993, 'SBI-002', 49, '2025-12-06', 31, 9.8, 0.6, 0.0, 9.2, 11, 11, 50.0, 1, '2026-09-04 09:36:33'),
 (994, 'SBI-002', 48, '2025-12-06', 31, 7.0, 0.3, 0.0, 6.7, 18, 25, 50.0, 1, '2026-09-04 09:36:33'),
 (995, 'SBI-002', 47, '2025-12-06', 31, 4.3, 0.3, 0.0, 4.0, 10, 13, 50.0, 1, '2026-09-04 09:36:33'),
-(996, 'SBI-002', 5, '2025-12-07', 23, 1025.2, 3.4, 91.3, 1113.1, 10, 8, 70.0, 0, '2026-09-04 09:36:33'),
+(996, 'SBI-002', 5, '2025-12-07', 23, 6151.2, 20.4, 547.8, 6678.6, 10, 8, 420.0, 0, '2026-09-04 09:36:33'),
 (997, 'SBI-002', 10, '2025-12-07', 23, 7.4, 1.2, 0.0, 6.2, 10, 13, 50.0, 1, '2026-09-04 09:36:33'),
 (998, 'SBI-002', 11, '2025-12-07', 23, 5.9, 1.1, 0.0, 4.8, 8, 10, 50.0, 1, '2026-09-04 09:36:33'),
 (999, 'SBI-002', 12, '2025-12-07', 23, 7.2, 1.1, 0.0, 6.1, 12, 13, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3241,13 +3873,13 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1034, 'SBI-002', 49, '2025-12-07', 23, 9.2, 0.5, 0.0, 8.7, 13, 14, 50.0, 1, '2026-09-04 09:36:33'),
 (1035, 'SBI-002', 48, '2025-12-07', 23, 6.7, 0.2, 0.0, 6.5, 13, 15, 50.0, 1, '2026-09-04 09:36:33'),
 (1036, 'SBI-002', 47, '2025-12-07', 23, 4.0, 0.2, 0.0, 3.8, 10, 10, 50.0, 1, '2026-09-04 09:36:33'),
-(1037, 'SBI-002', 5, '2025-12-08', 50, 1113.1, 7.5, 126.1, 1231.7, 16, 15, 70.0, 0, '2026-09-04 09:36:33'),
+(1037, 'SBI-002', 5, '2025-12-08', 50, 6678.6, 45.0, 756.6, 7390.2, 16, 15, 420.0, 0, '2026-09-04 09:36:33'),
 (1038, 'SBI-002', 10, '2025-12-08', 50, 6.2, 2.4, 0.0, 3.8, 31, 43, 50.0, 1, '2026-09-04 09:36:33'),
 (1039, 'SBI-002', 11, '2025-12-08', 50, 4.8, 2.6, 0.0, 2.2, 19, 25, 50.0, 1, '2026-09-04 09:36:33'),
 (1040, 'SBI-002', 12, '2025-12-08', 50, 6.1, 2.6, 0.0, 3.5, 14, 17, 50.0, 1, '2026-09-04 09:36:33'),
-(1041, 'SBI-002', 2, '2025-12-08', 50, 10.0, 2.0, 0.0, 8.0, 19, 17, 50.0, 1, '2026-09-04 09:36:33'),
-(1042, 'SBI-002', 14, '2025-12-08', 50, 7.9, 1.0, 0.0, 6.9, 28, 23, 50.0, 1, '2026-09-04 09:36:33');
+(1041, 'SBI-002', 2, '2025-12-08', 50, 10.0, 2.0, 0.0, 8.0, 19, 17, 50.0, 1, '2026-09-04 09:36:33');
 INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(1042, 'SBI-002', 14, '2025-12-08', 50, 7.9, 1.0, 0.0, 6.9, 28, 23, 50.0, 1, '2026-09-04 09:36:33'),
 (1043, 'SBI-002', 17, '2025-12-08', 50, 1.7, 1.0, 0.0, 0.7, 25, 23, 50.0, 1, '2026-09-04 09:36:33'),
 (1044, 'SBI-002', 18, '2025-12-08', 50, 36.3, 1.0, 0.0, 35.3, 28, 38, 50.0, 1, '2026-09-04 09:36:33'),
 (1045, 'SBI-002', 19, '2025-12-08', 50, 23.4, 1.0, 0.0, 22.4, 28, 36, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3283,7 +3915,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1075, 'SBI-002', 49, '2025-12-08', 50, 8.7, 1.0, 0.0, 7.7, 32, 28, 50.0, 1, '2026-09-04 09:36:33'),
 (1076, 'SBI-002', 48, '2025-12-08', 50, 6.5, 0.5, 0.0, 6.0, 23, 21, 50.0, 1, '2026-09-04 09:36:33'),
 (1077, 'SBI-002', 47, '2025-12-08', 50, 3.8, 0.5, 0.0, 3.3, 26, 28, 50.0, 1, '2026-09-04 09:36:33'),
-(1078, 'SBI-002', 5, '2025-12-09', 89, 1231.7, 13.8, 0.0, 1217.9, 33, 32, 70.0, 0, '2026-09-04 09:36:33'),
+(1078, 'SBI-002', 5, '2025-12-09', 89, 7390.2, 82.8, 0.0, 7307.4, 33, 32, 420.0, 0, '2026-09-04 09:36:33'),
 (1079, 'SBI-002', 10, '2025-12-09', 89, 3.8, 4.5, 18.7, 18.0, 56, 67, 50.0, 1, '2026-09-04 09:36:33'),
 (1080, 'SBI-002', 11, '2025-12-09', 89, 2.2, 4.5, 10.3, 8.0, 35, 43, 50.0, 1, '2026-09-04 09:36:33'),
 (1081, 'SBI-002', 12, '2025-12-09', 89, 3.5, 4.5, 9.0, 8.0, 49, 55, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3324,7 +3956,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1116, 'SBI-002', 49, '2025-12-09', 89, 7.7, 1.7, 0.0, 6.0, 45, 44, 50.0, 1, '2026-09-04 09:36:33'),
 (1117, 'SBI-002', 48, '2025-12-09', 89, 6.0, 0.9, 0.0, 5.1, 34, 31, 50.0, 1, '2026-09-04 09:36:33'),
 (1118, 'SBI-002', 47, '2025-12-09', 89, 3.3, 0.9, 0.0, 2.4, 57, 64, 50.0, 1, '2026-09-04 09:36:33'),
-(1119, 'SBI-002', 5, '2025-12-10', 100, 1217.9, 13.5, 0.0, 1204.4, 41, 39, 70.0, 0, '2026-09-04 09:36:33'),
+(1119, 'SBI-002', 5, '2025-12-10', 100, 7307.4, 81.0, 0.0, 7226.4, 41, 39, 420.0, 0, '2026-09-04 09:36:33'),
 (1120, 'SBI-002', 10, '2025-12-10', 100, 18.0, 5.2, 0.0, 12.8, 52, 43, 50.0, 1, '2026-09-04 09:36:33'),
 (1121, 'SBI-002', 11, '2025-12-10', 100, 8.0, 4.9, 0.0, 3.1, 26, 22, 50.0, 1, '2026-09-04 09:36:33'),
 (1122, 'SBI-002', 12, '2025-12-10', 100, 8.0, 5.1, 0.0, 2.9, 41, 50, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3365,7 +3997,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1157, 'SBI-002', 49, '2025-12-10', 100, 6.0, 2.0, 0.0, 4.0, 31, 34, 50.0, 1, '2026-09-04 09:36:33'),
 (1158, 'SBI-002', 48, '2025-12-10', 100, 5.1, 1.0, 0.0, 4.1, 56, 53, 50.0, 1, '2026-09-04 09:36:33'),
 (1159, 'SBI-002', 47, '2025-12-10', 100, 2.4, 1.0, 0.0, 1.4, 30, 25, 50.0, 1, '2026-09-04 09:36:33'),
-(1160, 'SBI-002', 5, '2025-12-11', 16, 1204.4, 2.2, 0.0, 1202.2, 6, 7, 70.0, 0, '2026-09-04 09:36:33'),
+(1160, 'SBI-002', 5, '2025-12-11', 16, 7226.4, 13.2, 0.0, 7213.2, 6, 7, 420.0, 0, '2026-09-04 09:36:33'),
 (1161, 'SBI-002', 10, '2025-12-11', 16, 12.8, 0.8, 0.0, 12.0, 10, 8, 50.0, 1, '2026-09-04 09:36:33'),
 (1162, 'SBI-002', 11, '2025-12-11', 16, 3.1, 0.8, 0.0, 2.3, 5, 6, 50.0, 1, '2026-09-04 09:36:33'),
 (1163, 'SBI-002', 12, '2025-12-11', 16, 2.9, 0.8, 0.0, 2.1, 5, 7, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3406,7 +4038,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1198, 'SBI-002', 49, '2025-12-11', 16, 4.0, 0.3, 0.0, 3.7, 6, 8, 50.0, 1, '2026-09-04 09:36:33'),
 (1199, 'SBI-002', 48, '2025-12-11', 16, 4.1, 0.2, 0.0, 3.9, 9, 12, 50.0, 1, '2026-09-04 09:36:33'),
 (1200, 'SBI-002', 47, '2025-12-11', 16, 1.4, 0.2, 0.0, 1.2, 9, 12, 50.0, 1, '2026-09-04 09:36:33'),
-(1201, 'SBI-002', 5, '2025-12-12', 94, 1202.2, 16.0, 0.0, 1186.2, 42, 54, 70.0, 0, '2026-09-04 09:36:33'),
+(1201, 'SBI-002', 5, '2025-12-12', 94, 7213.2, 96.0, 0.0, 7117.2, 42, 54, 420.0, 0, '2026-09-04 09:36:33'),
 (1202, 'SBI-002', 10, '2025-12-12', 94, 12.0, 4.6, 0.0, 7.4, 57, 61, 50.0, 1, '2026-09-04 09:36:33'),
 (1203, 'SBI-002', 11, '2025-12-12', 94, 2.3, 4.6, 9.3, 7.0, 29, 27, 50.0, 1, '2026-09-04 09:36:33'),
 (1204, 'SBI-002', 12, '2025-12-12', 94, 2.1, 4.4, 19.3, 17.0, 57, 59, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3447,7 +4079,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1239, 'SBI-002', 49, '2025-12-12', 94, 3.7, 1.9, 0.0, 1.8, 38, 35, 50.0, 1, '2026-09-04 09:36:33'),
 (1240, 'SBI-002', 48, '2025-12-12', 94, 3.9, 0.9, 0.0, 3.0, 61, 53, 50.0, 1, '2026-09-04 09:36:33'),
 (1241, 'SBI-002', 47, '2025-12-12', 94, 1.2, 0.9, 0.0, 0.3, 29, 41, 50.0, 1, '2026-09-04 09:36:33'),
-(1242, 'SBI-002', 5, '2025-12-13', 62, 1186.2, 8.6, 0.0, 1177.6, 32, 31, 70.0, 0, '2026-09-04 09:36:33'),
+(1242, 'SBI-002', 5, '2025-12-13', 62, 7117.2, 51.6, 0.0, 7065.6, 32, 31, 420.0, 0, '2026-09-04 09:36:33'),
 (1243, 'SBI-002', 10, '2025-12-13', 62, 7.4, 3.1, 0.0, 4.3, 27, 36, 50.0, 1, '2026-09-04 09:36:33'),
 (1244, 'SBI-002', 11, '2025-12-13', 62, 7.0, 3.0, 0.0, 4.0, 25, 29, 50.0, 1, '2026-09-04 09:36:33'),
 (1245, 'SBI-002', 12, '2025-12-13', 62, 17.0, 3.0, 0.0, 14.0, 37, 45, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3488,7 +4120,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1280, 'SBI-002', 49, '2025-12-13', 62, 1.8, 1.2, 0.0, 0.6, 27, 22, 50.0, 1, '2026-09-04 09:36:33'),
 (1281, 'SBI-002', 48, '2025-12-13', 62, 3.0, 0.6, 0.0, 2.4, 39, 51, 50.0, 1, '2026-09-04 09:36:33'),
 (1282, 'SBI-002', 47, '2025-12-13', 62, 0.3, 0.6, 14.3, 14.0, 17, 19, 50.0, 1, '2026-09-04 09:36:33'),
-(1283, 'SBI-002', 5, '2025-12-14', 65, 1177.6, 9.3, 0.0, 1168.3, 22, 30, 70.0, 0, '2026-09-04 09:36:33'),
+(1283, 'SBI-002', 5, '2025-12-14', 65, 7065.6, 55.8, 0.0, 7009.8, 22, 30, 420.0, 0, '2026-09-04 09:36:33'),
 (1284, 'SBI-002', 10, '2025-12-14', 65, 4.3, 3.1, 0.0, 1.2, 31, 32, 50.0, 1, '2026-09-04 09:36:33'),
 (1285, 'SBI-002', 11, '2025-12-14', 65, 4.0, 3.2, 0.0, 0.8, 21, 20, 50.0, 1, '2026-09-04 09:36:33'),
 (1286, 'SBI-002', 12, '2025-12-14', 65, 14.0, 3.5, 0.0, 10.5, 34, 47, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3529,7 +4161,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1321, 'SBI-002', 49, '2025-12-14', 65, 0.6, 1.3, 15.7, 15.0, 29, 31, 50.0, 1, '2026-09-04 09:36:33'),
 (1322, 'SBI-002', 48, '2025-12-14', 65, 2.4, 0.7, 0.0, 1.7, 29, 30, 50.0, 1, '2026-09-04 09:36:33'),
 (1323, 'SBI-002', 47, '2025-12-14', 65, 14.0, 0.7, 0.0, 13.3, 41, 42, 50.0, 1, '2026-09-04 09:36:33'),
-(1324, 'SBI-002', 5, '2025-12-15', 48, 1168.3, 7.6, 0.0, 1160.7, 19, 26, 70.0, 0, '2026-09-04 09:36:33'),
+(1324, 'SBI-002', 5, '2025-12-15', 48, 7009.8, 45.6, 0.0, 6964.2, 19, 26, 420.0, 0, '2026-09-04 09:36:33'),
 (1325, 'SBI-002', 10, '2025-12-15', 48, 1.2, 2.3, 20.1, 19.0, 20, 17, 50.0, 1, '2026-09-04 09:36:33'),
 (1326, 'SBI-002', 11, '2025-12-15', 48, 0.8, 2.4, 21.6, 20.0, 23, 30, 50.0, 1, '2026-09-04 09:36:33'),
 (1327, 'SBI-002', 12, '2025-12-15', 48, 10.5, 2.5, 0.0, 8.0, 14, 14, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3570,7 +4202,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1362, 'SBI-002', 49, '2025-12-15', 48, 15.0, 1.0, 0.0, 14.0, 30, 32, 50.0, 1, '2026-09-04 09:36:33'),
 (1363, 'SBI-002', 48, '2025-12-15', 48, 1.7, 0.5, 0.0, 1.2, 20, 20, 50.0, 1, '2026-09-04 09:36:33'),
 (1364, 'SBI-002', 47, '2025-12-15', 48, 13.3, 0.5, 0.0, 12.8, 30, 31, 50.0, 1, '2026-09-04 09:36:33'),
-(1365, 'SBI-002', 5, '2025-12-16', 82, 1160.7, 13.7, 0.0, 1147.0, 39, 43, 70.0, 0, '2026-09-04 09:36:33'),
+(1365, 'SBI-002', 5, '2025-12-16', 82, 6964.2, 82.2, 0.0, 6882.0, 39, 43, 420.0, 0, '2026-09-04 09:36:33'),
 (1366, 'SBI-002', 10, '2025-12-16', 82, 19.0, 4.2, 0.0, 14.8, 21, 18, 50.0, 1, '2026-09-04 09:36:33'),
 (1367, 'SBI-002', 11, '2025-12-16', 82, 20.0, 4.1, 0.0, 15.9, 22, 23, 50.0, 1, '2026-09-04 09:36:33'),
 (1368, 'SBI-002', 12, '2025-12-16', 82, 8.0, 3.9, 0.0, 4.1, 43, 51, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3611,7 +4243,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1403, 'SBI-002', 49, '2025-12-16', 82, 14.0, 1.6, 0.0, 12.4, 47, 57, 50.0, 1, '2026-09-04 09:36:33'),
 (1404, 'SBI-002', 48, '2025-12-16', 82, 1.2, 0.8, 0.0, 0.4, 48, 42, 50.0, 1, '2026-09-04 09:36:33'),
 (1405, 'SBI-002', 47, '2025-12-16', 82, 12.8, 0.8, 0.0, 12.0, 30, 27, 50.0, 1, '2026-09-04 09:36:33'),
-(1406, 'SBI-002', 5, '2025-12-17', 41, 1147.0, 6.5, 0.0, 1140.5, 15, 14, 70.0, 0, '2026-09-04 09:36:33'),
+(1406, 'SBI-002', 5, '2025-12-17', 41, 6882.0, 39.0, 0.0, 6843.0, 15, 14, 420.0, 0, '2026-09-04 09:36:33'),
 (1407, 'SBI-002', 10, '2025-12-17', 41, 14.8, 2.0, 0.0, 12.8, 25, 31, 50.0, 1, '2026-09-04 09:36:33'),
 (1408, 'SBI-002', 11, '2025-12-17', 41, 15.9, 1.9, 0.0, 14.0, 11, 10, 50.0, 1, '2026-09-04 09:36:33'),
 (1409, 'SBI-002', 12, '2025-12-17', 41, 4.1, 2.0, 0.0, 2.1, 19, 16, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3652,7 +4284,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1444, 'SBI-002', 49, '2025-12-17', 41, 12.4, 0.8, 0.0, 11.6, 24, 25, 50.0, 1, '2026-09-04 09:36:33'),
 (1445, 'SBI-002', 48, '2025-12-17', 41, 0.4, 0.4, 0.0, 0.0, 12, 10, 50.0, 1, '2026-09-04 09:36:33'),
 (1446, 'SBI-002', 47, '2025-12-17', 41, 12.0, 0.4, 0.0, 11.6, 11, 13, 50.0, 1, '2026-09-04 09:36:33'),
-(1447, 'SBI-002', 5, '2025-12-18', 60, 1140.5, 8.7, 0.0, 1131.8, 35, 40, 70.0, 0, '2026-09-04 09:36:33'),
+(1447, 'SBI-002', 5, '2025-12-18', 60, 6843.0, 52.2, 0.0, 6790.8, 35, 40, 420.0, 0, '2026-09-04 09:36:33'),
 (1448, 'SBI-002', 10, '2025-12-18', 60, 12.8, 3.0, 0.0, 9.8, 19, 23, 50.0, 1, '2026-09-04 09:36:33'),
 (1449, 'SBI-002', 11, '2025-12-18', 60, 14.0, 2.9, 0.0, 11.1, 28, 33, 50.0, 1, '2026-09-04 09:36:33'),
 (1450, 'SBI-002', 12, '2025-12-18', 60, 2.1, 2.9, 14.8, 14.0, 37, 30, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3693,7 +4325,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1485, 'SBI-002', 49, '2025-12-18', 60, 11.6, 1.2, 0.0, 10.4, 16, 22, 50.0, 1, '2026-09-04 09:36:33'),
 (1486, 'SBI-002', 48, '2025-12-18', 60, 0.0, 0.6, 17.6, 17.0, 19, 16, 50.0, 1, '2026-09-04 09:36:33'),
 (1487, 'SBI-002', 47, '2025-12-18', 60, 11.6, 0.6, 0.0, 11.0, 20, 26, 50.0, 1, '2026-09-04 09:36:33'),
-(1488, 'SBI-002', 5, '2025-12-19', 14, 1131.8, 2.1, 0.0, 1129.7, 9, 11, 70.0, 0, '2026-09-04 09:36:33'),
+(1488, 'SBI-002', 5, '2025-12-19', 14, 6790.8, 12.6, 0.0, 6778.2, 9, 11, 420.0, 0, '2026-09-04 09:36:33'),
 (1489, 'SBI-002', 10, '2025-12-19', 14, 9.8, 0.7, 0.0, 9.1, 5, 6, 50.0, 1, '2026-09-04 09:36:33'),
 (1490, 'SBI-002', 11, '2025-12-19', 14, 11.1, 0.7, 0.0, 10.4, 6, 6, 50.0, 1, '2026-09-04 09:36:33'),
 (1491, 'SBI-002', 12, '2025-12-19', 14, 14.0, 0.7, 0.0, 13.3, 9, 11, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3734,10 +4366,10 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1526, 'SBI-002', 49, '2025-12-19', 14, 10.4, 0.3, 0.0, 10.1, 6, 8, 50.0, 1, '2026-09-04 09:36:33'),
 (1527, 'SBI-002', 48, '2025-12-19', 14, 17.0, 0.1, 0.0, 16.9, 6, 6, 50.0, 1, '2026-09-04 09:36:33'),
 (1528, 'SBI-002', 47, '2025-12-19', 14, 11.0, 0.1, 0.0, 10.9, 6, 5, 50.0, 1, '2026-09-04 09:36:33'),
-(1529, 'SBI-002', 5, '2025-12-20', 6, 1129.7, 0.9, 0.0, 1128.8, 3, 3, 70.0, 0, '2026-09-04 09:36:33'),
-(1530, 'SBI-002', 10, '2025-12-20', 6, 9.1, 0.3, 0.0, 8.8, 4, 4, 50.0, 1, '2026-09-04 09:36:33'),
-(1531, 'SBI-002', 11, '2025-12-20', 6, 10.4, 0.3, 0.0, 10.1, 3, 3, 50.0, 1, '2026-09-04 09:36:33');
+(1529, 'SBI-002', 5, '2025-12-20', 6, 6778.2, 5.4, 0.0, 6772.8, 3, 3, 420.0, 0, '2026-09-04 09:36:33');
 INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(1530, 'SBI-002', 10, '2025-12-20', 6, 9.1, 0.3, 0.0, 8.8, 4, 4, 50.0, 1, '2026-09-04 09:36:33'),
+(1531, 'SBI-002', 11, '2025-12-20', 6, 10.4, 0.3, 0.0, 10.1, 3, 3, 50.0, 1, '2026-09-04 09:36:33'),
 (1532, 'SBI-002', 12, '2025-12-20', 6, 13.3, 0.3, 0.0, 13.0, 3, 3, 50.0, 1, '2026-09-04 09:36:33'),
 (1533, 'SBI-002', 2, '2025-12-20', 6, 23.6, 0.2, 0.0, 23.4, 3, 3, 50.0, 1, '2026-09-04 09:36:33'),
 (1534, 'SBI-002', 14, '2025-12-20', 6, 12.8, 0.1, 0.0, 12.7, 2, 2, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3776,7 +4408,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1567, 'SBI-002', 49, '2025-12-20', 6, 10.1, 0.1, 0.0, 10.0, 4, 4, 50.0, 1, '2026-09-04 09:36:33'),
 (1568, 'SBI-002', 48, '2025-12-20', 6, 16.9, 0.1, 0.0, 16.8, 2, 2, 50.0, 1, '2026-09-04 09:36:33'),
 (1569, 'SBI-002', 47, '2025-12-20', 6, 10.9, 0.1, 0.0, 10.8, 2, 2, 50.0, 1, '2026-09-04 09:36:33'),
-(1570, 'SBI-002', 5, '2025-12-21', 43, 1128.8, 6.8, 0.0, 1122.0, 27, 27, 70.0, 0, '2026-09-04 09:36:33'),
+(1570, 'SBI-002', 5, '2025-12-21', 43, 6772.8, 40.8, 0.0, 6732.0, 27, 27, 420.0, 0, '2026-09-04 09:36:33'),
 (1571, 'SBI-002', 10, '2025-12-21', 43, 8.8, 2.1, 23.2, 29.9, 13, 11, 50.0, 1, '2026-09-04 09:36:33'),
 (1572, 'SBI-002', 11, '2025-12-21', 43, 10.1, 2.3, 0.0, 7.8, 14, 17, 50.0, 1, '2026-09-04 09:36:33'),
 (1573, 'SBI-002', 12, '2025-12-21', 43, 13.0, 2.2, 0.0, 10.8, 16, 15, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3817,7 +4449,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1608, 'SBI-002', 49, '2025-12-21', 43, 10.0, 0.9, 0.0, 9.1, 24, 26, 50.0, 1, '2026-09-04 09:36:33'),
 (1609, 'SBI-002', 48, '2025-12-21', 43, 16.8, 0.4, 0.0, 16.4, 27, 24, 50.0, 1, '2026-09-04 09:36:33'),
 (1610, 'SBI-002', 47, '2025-12-21', 43, 10.8, 0.4, 0.0, 10.4, 19, 21, 50.0, 1, '2026-09-04 09:36:33'),
-(1611, 'SBI-002', 5, '2025-12-22', 63, 1122.0, 10.6, 0.0, 1111.4, 32, 43, 70.0, 0, '2026-09-04 09:36:33'),
+(1611, 'SBI-002', 5, '2025-12-22', 63, 6732.0, 63.6, 0.0, 6668.4, 32, 43, 420.0, 0, '2026-09-04 09:36:33'),
 (1612, 'SBI-002', 10, '2025-12-22', 63, 29.9, 3.1, 0.0, 26.8, 38, 35, 50.0, 1, '2026-09-04 09:36:33'),
 (1613, 'SBI-002', 11, '2025-12-22', 63, 7.8, 3.1, 0.0, 4.7, 41, 35, 50.0, 1, '2026-09-04 09:36:33'),
 (1614, 'SBI-002', 12, '2025-12-22', 63, 10.8, 3.1, 0.0, 7.7, 31, 40, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3858,7 +4490,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1649, 'SBI-002', 49, '2025-12-22', 63, 9.1, 1.3, 0.0, 7.8, 21, 25, 50.0, 1, '2026-09-04 09:36:33'),
 (1650, 'SBI-002', 48, '2025-12-22', 63, 16.4, 0.6, 0.0, 15.8, 20, 26, 50.0, 1, '2026-09-04 09:36:33'),
 (1651, 'SBI-002', 47, '2025-12-22', 63, 10.4, 0.6, 0.0, 9.8, 36, 44, 50.0, 1, '2026-09-04 09:36:33'),
-(1652, 'SBI-002', 5, '2025-12-23', 35, 1111.4, 5.0, 0.0, 1106.4, 12, 11, 70.0, 0, '2026-09-04 09:36:33'),
+(1652, 'SBI-002', 5, '2025-12-23', 35, 6668.4, 30.0, 0.0, 6638.4, 12, 11, 420.0, 0, '2026-09-04 09:36:33'),
 (1653, 'SBI-002', 10, '2025-12-23', 35, 26.8, 1.7, 0.0, 25.1, 22, 31, 50.0, 1, '2026-09-04 09:36:33'),
 (1654, 'SBI-002', 11, '2025-12-23', 35, 4.7, 1.8, 0.0, 2.9, 11, 14, 50.0, 1, '2026-09-04 09:36:33'),
 (1655, 'SBI-002', 12, '2025-12-23', 35, 7.7, 1.7, 0.0, 6.0, 18, 21, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3899,7 +4531,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1690, 'SBI-002', 49, '2025-12-23', 35, 7.8, 0.7, 0.0, 7.1, 22, 22, 50.0, 1, '2026-09-04 09:36:33'),
 (1691, 'SBI-002', 48, '2025-12-23', 35, 15.8, 0.4, 0.0, 15.4, 12, 11, 50.0, 1, '2026-09-04 09:36:33'),
 (1692, 'SBI-002', 47, '2025-12-23', 35, 9.8, 0.3, 0.0, 9.5, 19, 24, 50.0, 1, '2026-09-04 09:36:33'),
-(1693, 'SBI-002', 5, '2025-12-24', 69, 1106.4, 10.4, 0.0, 1096.0, 38, 50, 70.0, 0, '2026-09-04 09:36:33'),
+(1693, 'SBI-002', 5, '2025-12-24', 69, 6638.4, 62.4, 0.0, 6576.0, 38, 50, 420.0, 0, '2026-09-04 09:36:33'),
 (1694, 'SBI-002', 10, '2025-12-24', 69, 25.1, 3.6, 0.0, 21.5, 20, 20, 50.0, 1, '2026-09-04 09:36:33'),
 (1695, 'SBI-002', 11, '2025-12-24', 69, 2.9, 3.4, 10.5, 10.0, 30, 29, 50.0, 1, '2026-09-04 09:36:33'),
 (1696, 'SBI-002', 12, '2025-12-24', 69, 6.0, 3.5, 0.0, 2.5, 23, 22, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3940,7 +4572,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1731, 'SBI-002', 49, '2025-12-24', 69, 7.1, 1.4, 0.0, 5.7, 41, 54, 50.0, 1, '2026-09-04 09:36:33'),
 (1732, 'SBI-002', 48, '2025-12-24', 69, 15.4, 0.7, 0.0, 14.7, 32, 41, 50.0, 1, '2026-09-04 09:36:33'),
 (1733, 'SBI-002', 47, '2025-12-24', 69, 9.5, 0.7, 0.0, 8.8, 38, 50, 50.0, 1, '2026-09-04 09:36:33'),
-(1734, 'SBI-002', 5, '2025-12-25', 66, 1096.0, 9.9, 0.0, 1086.1, 38, 45, 70.0, 0, '2026-09-04 09:36:33'),
+(1734, 'SBI-002', 5, '2025-12-25', 66, 6576.0, 59.4, 0.0, 6516.6, 38, 45, 420.0, 0, '2026-09-04 09:36:33'),
 (1735, 'SBI-002', 10, '2025-12-25', 66, 21.5, 3.2, 0.0, 18.3, 36, 42, 50.0, 1, '2026-09-04 09:36:33'),
 (1736, 'SBI-002', 11, '2025-12-25', 66, 10.0, 3.3, 0.0, 6.7, 24, 21, 50.0, 1, '2026-09-04 09:36:33'),
 (1737, 'SBI-002', 12, '2025-12-25', 66, 2.5, 3.2, 20.7, 20.0, 20, 24, 50.0, 1, '2026-09-04 09:36:33'),
@@ -3981,7 +4613,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1772, 'SBI-002', 49, '2025-12-25', 66, 5.7, 1.3, 0.0, 4.4, 38, 36, 50.0, 1, '2026-09-04 09:36:33'),
 (1773, 'SBI-002', 48, '2025-12-25', 66, 14.7, 0.7, 0.0, 14.0, 17, 19, 50.0, 1, '2026-09-04 09:36:33'),
 (1774, 'SBI-002', 47, '2025-12-25', 66, 8.8, 0.7, 0.0, 8.1, 22, 23, 50.0, 1, '2026-09-04 09:36:33'),
-(1775, 'SBI-002', 5, '2025-12-26', 13, 1086.1, 2.1, 0.0, 1084.0, 7, 6, 70.0, 0, '2026-09-04 09:36:33'),
+(1775, 'SBI-002', 5, '2025-12-26', 13, 6516.6, 12.6, 0.0, 6504.0, 7, 6, 420.0, 0, '2026-09-04 09:36:33'),
 (1776, 'SBI-002', 10, '2025-12-26', 13, 18.3, 0.7, 0.0, 17.6, 6, 8, 50.0, 1, '2026-09-04 09:36:33'),
 (1777, 'SBI-002', 11, '2025-12-26', 13, 6.7, 0.6, 0.0, 6.1, 6, 5, 50.0, 1, '2026-09-04 09:36:33'),
 (1778, 'SBI-002', 12, '2025-12-26', 13, 20.0, 0.7, 0.0, 19.3, 4, 5, 50.0, 1, '2026-09-04 09:36:33'),
@@ -4022,7 +4654,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1813, 'SBI-002', 49, '2025-12-26', 13, 4.4, 0.3, 0.0, 4.1, 5, 6, 50.0, 1, '2026-09-04 09:36:33'),
 (1814, 'SBI-002', 48, '2025-12-26', 13, 14.0, 0.1, 0.0, 13.9, 4, 5, 50.0, 1, '2026-09-04 09:36:33'),
 (1815, 'SBI-002', 47, '2025-12-26', 13, 8.1, 0.1, 0.0, 8.0, 4, 5, 50.0, 1, '2026-09-04 09:36:33'),
-(1816, 'SBI-002', 5, '2025-12-27', 62, 1084.0, 8.2, 0.0, 1075.8, 18, 19, 70.0, 0, '2026-09-04 09:36:33'),
+(1816, 'SBI-002', 5, '2025-12-27', 62, 6504.0, 49.2, 0.0, 6454.8, 18, 19, 420.0, 0, '2026-09-04 09:36:33'),
 (1817, 'SBI-002', 10, '2025-12-27', 62, 17.6, 3.1, 0.0, 14.5, 18, 16, 50.0, 1, '2026-09-04 09:36:33'),
 (1818, 'SBI-002', 11, '2025-12-27', 62, 6.1, 3.0, 39.6, 42.7, 17, 15, 50.0, 1, '2026-09-04 09:36:33'),
 (1819, 'SBI-002', 12, '2025-12-27', 62, 19.3, 3.3, 0.0, 16.0, 40, 42, 50.0, 1, '2026-09-04 09:36:33'),
@@ -4063,7 +4695,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1854, 'SBI-002', 49, '2025-12-27', 62, 4.1, 1.2, 0.0, 2.9, 31, 41, 50.0, 1, '2026-09-04 09:36:33'),
 (1855, 'SBI-002', 48, '2025-12-27', 62, 13.9, 0.6, 0.0, 13.3, 19, 17, 50.0, 1, '2026-09-04 09:36:33'),
 (1856, 'SBI-002', 47, '2025-12-27', 62, 8.0, 0.6, 0.0, 7.4, 33, 32, 50.0, 1, '2026-09-04 09:36:33'),
-(1857, 'SBI-002', 5, '2025-12-28', 76, 1075.8, 9.9, 0.0, 1065.9, 40, 56, 70.0, 0, '2026-09-04 09:36:33'),
+(1857, 'SBI-002', 5, '2025-12-28', 76, 6454.8, 59.4, 0.0, 6395.4, 40, 56, 420.0, 0, '2026-09-04 09:36:33'),
 (1858, 'SBI-002', 10, '2025-12-28', 76, 14.5, 3.6, 0.0, 10.9, 40, 37, 50.0, 1, '2026-09-04 09:36:33'),
 (1859, 'SBI-002', 11, '2025-12-28', 76, 42.7, 3.8, 0.0, 38.9, 21, 18, 50.0, 1, '2026-09-04 09:36:33'),
 (1860, 'SBI-002', 12, '2025-12-28', 76, 16.0, 3.9, 0.0, 12.1, 33, 39, 50.0, 1, '2026-09-04 09:36:33'),
@@ -4104,7 +4736,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1895, 'SBI-002', 49, '2025-12-28', 76, 2.9, 1.5, 0.0, 1.4, 24, 20, 50.0, 1, '2026-09-04 09:36:33'),
 (1896, 'SBI-002', 48, '2025-12-28', 76, 13.3, 0.8, 0.0, 12.5, 48, 50, 50.0, 1, '2026-09-04 09:36:33'),
 (1897, 'SBI-002', 47, '2025-12-28', 76, 7.4, 0.8, 0.0, 6.6, 24, 28, 50.0, 1, '2026-09-04 09:36:33'),
-(1898, 'SBI-002', 5, '2025-12-29', 97, 1065.9, 13.4, 0.0, 1052.5, 49, 57, 70.0, 0, '2026-09-04 09:36:33'),
+(1898, 'SBI-002', 5, '2025-12-29', 97, 6395.4, 80.4, 0.0, 6315.0, 49, 57, 420.0, 0, '2026-09-04 09:36:33'),
 (1899, 'SBI-002', 10, '2025-12-29', 97, 10.9, 5.0, 0.0, 5.9, 37, 34, 50.0, 1, '2026-09-04 09:36:33'),
 (1900, 'SBI-002', 11, '2025-12-29', 97, 38.9, 4.7, 0.0, 34.2, 49, 56, 50.0, 1, '2026-09-04 09:36:33'),
 (1901, 'SBI-002', 12, '2025-12-29', 97, 12.1, 5.0, 0.0, 7.1, 40, 40, 50.0, 1, '2026-09-04 09:36:33'),
@@ -4145,7 +4777,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1936, 'SBI-002', 49, '2025-12-29', 97, 1.4, 1.9, 20.5, 20.0, 53, 70, 50.0, 1, '2026-09-04 09:36:33'),
 (1937, 'SBI-002', 48, '2025-12-29', 97, 12.5, 1.0, 0.0, 11.5, 37, 51, 50.0, 1, '2026-09-04 09:36:33'),
 (1938, 'SBI-002', 47, '2025-12-29', 97, 6.6, 1.0, 3.6, 9.2, 37, 48, 50.0, 1, '2026-09-04 09:36:33'),
-(1939, 'SBI-002', 5, '2025-12-30', 57, 1052.5, 8.0, 129.4, 1173.9, 17, 22, 70.0, 0, '2026-09-04 09:36:33'),
+(1939, 'SBI-002', 5, '2025-12-30', 57, 6315.0, 48.0, 776.4, 7043.4, 17, 22, 420.0, 0, '2026-09-04 09:36:33'),
 (1940, 'SBI-002', 10, '2025-12-30', 57, 5.9, 2.9, 0.0, 3.0, 19, 17, 50.0, 1, '2026-09-04 09:36:33'),
 (1941, 'SBI-002', 11, '2025-12-30', 57, 34.2, 2.8, 0.0, 31.4, 34, 33, 50.0, 1, '2026-09-04 09:36:33'),
 (1942, 'SBI-002', 12, '2025-12-30', 57, 7.1, 2.8, 42.5, 46.8, 24, 28, 50.0, 1, '2026-09-04 09:36:33'),
@@ -4186,7 +4818,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (1977, 'SBI-002', 49, '2025-12-30', 57, 20.0, 1.2, 0.0, 18.8, 19, 19, 50.0, 1, '2026-09-04 09:36:34'),
 (1978, 'SBI-002', 48, '2025-12-30', 57, 11.5, 0.6, 0.0, 10.9, 15, 12, 50.0, 1, '2026-09-04 09:36:34'),
 (1979, 'SBI-002', 47, '2025-12-30', 57, 9.2, 0.6, 0.0, 8.6, 22, 18, 50.0, 1, '2026-09-04 09:36:34'),
-(1980, 'SBI-002', 5, '2025-12-31', 92, 1173.9, 13.5, 0.0, 1160.4, 49, 53, 70.0, 0, '2026-09-04 09:36:34'),
+(1980, 'SBI-002', 5, '2025-12-31', 92, 7043.4, 81.0, 0.0, 6962.4, 49, 53, 420.0, 0, '2026-09-04 09:36:34'),
 (1981, 'SBI-002', 10, '2025-12-31', 92, 3.0, 4.8, 7.8, 6.0, 24, 29, 50.0, 1, '2026-09-04 09:36:34'),
 (1982, 'SBI-002', 11, '2025-12-31', 92, 31.4, 4.9, 0.0, 26.5, 39, 48, 50.0, 1, '2026-09-04 09:36:34'),
 (1983, 'SBI-002', 12, '2025-12-31', 92, 46.8, 4.4, 0.0, 42.4, 47, 43, 50.0, 1, '2026-09-04 09:36:34'),
@@ -4224,11 +4856,11 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2015, 'SBI-002', 52, '2025-12-31', 92, 14.1, 0.5, 0.0, 13.6, 44, 48, 50.0, 1, '2026-09-04 09:36:34'),
 (2016, 'SBI-002', 50, '2025-12-31', 92, 17.9, 1.9, 0.0, 16.0, 29, 24, 50.0, 1, '2026-09-04 09:36:34'),
 (2017, 'SBI-002', 6, '2025-12-31', 92, 1.8, 0.5, 0.0, 1.3, 50, 44, 50.0, 1, '2026-09-04 09:36:34'),
-(2018, 'SBI-002', 49, '2025-12-31', 92, 18.8, 1.8, 0.0, 17.0, 26, 35, 50.0, 1, '2026-09-04 09:36:34'),
-(2019, 'SBI-002', 48, '2025-12-31', 92, 10.9, 0.9, 0.0, 10.0, 50, 42, 50.0, 1, '2026-09-04 09:36:34'),
-(2020, 'SBI-002', 47, '2025-12-31', 92, 8.6, 0.9, 0.0, 7.7, 54, 62, 50.0, 1, '2026-09-04 09:36:34');
+(2018, 'SBI-002', 49, '2025-12-31', 92, 18.8, 1.8, 0.0, 17.0, 26, 35, 50.0, 1, '2026-09-04 09:36:34');
 INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
-(2021, 'SBI-002', 5, '2026-01-01', 24, 1160.4, 3.5, 0.0, 1156.9, 11, 14, 70.0, 0, '2026-09-04 09:36:34'),
+(2019, 'SBI-002', 48, '2025-12-31', 92, 10.9, 0.9, 0.0, 10.0, 50, 42, 50.0, 1, '2026-09-04 09:36:34'),
+(2020, 'SBI-002', 47, '2025-12-31', 92, 8.6, 0.9, 0.0, 7.7, 54, 62, 50.0, 1, '2026-09-04 09:36:34'),
+(2021, 'SBI-002', 5, '2026-01-01', 24, 6962.4, 21.0, 0.0, 6941.4, 11, 14, 420.0, 0, '2026-09-04 09:36:34'),
 (2022, 'SBI-002', 10, '2026-01-01', 24, 6.0, 1.2, 0.0, 4.8, 11, 9, 50.0, 1, '2026-09-04 09:36:34'),
 (2023, 'SBI-002', 11, '2026-01-01', 24, 26.5, 1.2, 0.0, 25.3, 9, 8, 50.0, 1, '2026-09-04 09:36:34'),
 (2024, 'SBI-002', 12, '2026-01-01', 24, 42.4, 1.1, 22.3, 63.6, 15, 15, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4269,7 +4901,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2059, 'SBI-002', 49, '2026-01-01', 24, 17.0, 0.5, 0.0, 16.5, 11, 13, 50.0, 1, '2026-09-04 09:36:34'),
 (2060, 'SBI-002', 48, '2026-01-01', 24, 10.0, 0.2, 0.0, 9.8, 7, 8, 50.0, 1, '2026-09-04 09:36:34'),
 (2061, 'SBI-002', 47, '2026-01-01', 24, 7.7, 0.2, 0.0, 7.5, 7, 8, 50.0, 1, '2026-09-04 09:36:34'),
-(2062, 'SBI-002', 5, '2026-01-02', 60, 1156.9, 9.7, 0.0, 1147.2, 32, 29, 70.0, 0, '2026-09-04 09:36:34'),
+(2062, 'SBI-002', 5, '2026-01-02', 60, 6941.4, 58.2, 0.0, 6883.2, 32, 29, 420.0, 0, '2026-09-04 09:36:34'),
 (2063, 'SBI-002', 10, '2026-01-02', 60, 4.8, 2.9, 0.0, 1.9, 16, 21, 50.0, 1, '2026-09-04 09:36:34'),
 (2064, 'SBI-002', 11, '2026-01-02', 60, 25.3, 2.9, 0.0, 22.4, 22, 30, 50.0, 1, '2026-09-04 09:36:34'),
 (2065, 'SBI-002', 12, '2026-01-02', 60, 63.6, 2.9, 0.0, 60.7, 18, 19, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4310,7 +4942,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2100, 'SBI-002', 49, '2026-01-02', 60, 16.5, 1.2, 0.0, 15.3, 28, 35, 50.0, 1, '2026-09-04 09:36:34'),
 (2101, 'SBI-002', 48, '2026-01-02', 60, 9.8, 0.6, 0.0, 9.2, 19, 21, 50.0, 1, '2026-09-04 09:36:34'),
 (2102, 'SBI-002', 47, '2026-01-02', 60, 7.5, 0.6, 0.0, 6.9, 23, 21, 50.0, 1, '2026-09-04 09:36:34'),
-(2103, 'SBI-002', 5, '2026-01-03', 56, 1147.2, 9.0, 0.0, 1138.2, 36, 30, 70.0, 0, '2026-09-04 09:36:34'),
+(2103, 'SBI-002', 5, '2026-01-03', 56, 6883.2, 54.0, 0.0, 6829.2, 36, 30, 420.0, 0, '2026-09-04 09:36:34'),
 (2104, 'SBI-002', 10, '2026-01-03', 56, 1.9, 2.7, 18.8, 18.0, 14, 12, 50.0, 1, '2026-09-04 09:36:34'),
 (2105, 'SBI-002', 11, '2026-01-03', 56, 22.4, 2.7, 0.0, 19.7, 24, 23, 50.0, 1, '2026-09-04 09:36:34'),
 (2106, 'SBI-002', 12, '2026-01-03', 56, 60.7, 2.8, 0.0, 57.9, 33, 34, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4351,7 +4983,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2141, 'SBI-002', 49, '2026-01-03', 56, 15.3, 1.1, 0.0, 14.2, 30, 26, 50.0, 1, '2026-09-04 09:36:34'),
 (2142, 'SBI-002', 48, '2026-01-03', 56, 9.2, 0.6, 0.0, 8.6, 24, 31, 50.0, 1, '2026-09-04 09:36:34'),
 (2143, 'SBI-002', 47, '2026-01-03', 56, 6.9, 0.6, 0.0, 6.3, 22, 18, 50.0, 1, '2026-09-04 09:36:34'),
-(2144, 'SBI-002', 5, '2026-01-04', 61, 1138.2, 9.4, 0.0, 1128.8, 36, 39, 70.0, 0, '2026-09-04 09:36:34'),
+(2144, 'SBI-002', 5, '2026-01-04', 61, 6829.2, 56.4, 0.0, 6772.8, 36, 39, 420.0, 0, '2026-09-04 09:36:34'),
 (2145, 'SBI-002', 10, '2026-01-04', 61, 18.0, 3.1, 0.0, 14.9, 29, 26, 50.0, 1, '2026-09-04 09:36:34'),
 (2146, 'SBI-002', 11, '2026-01-04', 61, 19.7, 2.9, 11.8, 28.6, 20, 23, 50.0, 1, '2026-09-04 09:36:34'),
 (2147, 'SBI-002', 12, '2026-01-04', 61, 57.9, 3.1, 0.0, 54.8, 37, 47, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4392,7 +5024,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2182, 'SBI-002', 49, '2026-01-04', 61, 14.2, 1.2, 0.0, 13.0, 16, 20, 50.0, 1, '2026-09-04 09:36:34'),
 (2183, 'SBI-002', 48, '2026-01-04', 61, 8.6, 0.6, 0.0, 8.0, 20, 26, 50.0, 1, '2026-09-04 09:36:34'),
 (2184, 'SBI-002', 47, '2026-01-04', 61, 6.3, 0.6, 0.0, 5.7, 34, 43, 50.0, 1, '2026-09-04 09:36:34'),
-(2185, 'SBI-002', 5, '2026-01-05', 91, 1128.8, 14.4, 0.0, 1114.4, 59, 68, 70.0, 0, '2026-09-04 09:36:34'),
+(2185, 'SBI-002', 5, '2026-01-05', 91, 6772.8, 86.4, 0.0, 6686.4, 59, 68, 420.0, 0, '2026-09-04 09:36:34'),
 (2186, 'SBI-002', 10, '2026-01-05', 91, 14.9, 4.6, 0.0, 10.3, 57, 50, 50.0, 1, '2026-09-04 09:36:34'),
 (2187, 'SBI-002', 11, '2026-01-05', 91, 28.6, 4.5, 0.0, 24.1, 41, 48, 50.0, 1, '2026-09-04 09:36:34'),
 (2188, 'SBI-002', 12, '2026-01-05', 91, 54.8, 4.5, 15.4, 65.7, 42, 56, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4433,7 +5065,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2223, 'SBI-002', 49, '2026-01-05', 91, 13.0, 1.8, 0.0, 11.2, 38, 38, 50.0, 1, '2026-09-04 09:36:34'),
 (2224, 'SBI-002', 48, '2026-01-05', 91, 8.0, 0.9, 0.0, 7.1, 32, 40, 50.0, 1, '2026-09-04 09:36:34'),
 (2225, 'SBI-002', 47, '2026-01-05', 91, 5.7, 0.9, 0.0, 4.8, 41, 38, 50.0, 1, '2026-09-04 09:36:34'),
-(2226, 'SBI-002', 5, '2026-01-06', 74, 1114.4, 11.2, 0.0, 1103.2, 23, 31, 70.0, 0, '2026-09-04 09:36:34'),
+(2226, 'SBI-002', 5, '2026-01-06', 74, 6686.4, 67.2, 0.0, 6619.2, 23, 31, 420.0, 0, '2026-09-04 09:36:34'),
 (2227, 'SBI-002', 10, '2026-01-06', 74, 10.3, 3.6, 0.0, 6.7, 29, 29, 50.0, 1, '2026-09-04 09:36:34'),
 (2228, 'SBI-002', 11, '2026-01-06', 74, 24.1, 3.9, 0.0, 20.2, 35, 30, 50.0, 1, '2026-09-04 09:36:34'),
 (2229, 'SBI-002', 12, '2026-01-06', 74, 65.7, 3.5, 38.8, 101.0, 31, 29, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4474,7 +5106,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2264, 'SBI-002', 49, '2026-01-06', 74, 11.2, 1.5, 0.0, 9.7, 32, 44, 50.0, 1, '2026-09-04 09:36:34'),
 (2265, 'SBI-002', 48, '2026-01-06', 74, 7.1, 0.7, 0.0, 6.4, 44, 37, 50.0, 1, '2026-09-04 09:36:34'),
 (2266, 'SBI-002', 47, '2026-01-06', 74, 4.8, 0.7, 0.0, 4.1, 33, 44, 50.0, 1, '2026-09-04 09:36:34'),
-(2267, 'SBI-002', 5, '2026-01-07', 40, 1103.2, 5.8, 0.0, 1097.4, 25, 21, 70.0, 0, '2026-09-04 09:36:34'),
+(2267, 'SBI-002', 5, '2026-01-07', 40, 6619.2, 34.8, 0.0, 6584.4, 25, 21, 420.0, 0, '2026-09-04 09:36:34'),
 (2268, 'SBI-002', 10, '2026-01-07', 40, 6.7, 2.0, 0.0, 4.7, 11, 11, 50.0, 1, '2026-09-04 09:36:34'),
 (2269, 'SBI-002', 11, '2026-01-07', 40, 20.2, 2.0, 0.0, 18.2, 12, 10, 50.0, 1, '2026-09-04 09:36:34'),
 (2270, 'SBI-002', 12, '2026-01-07', 40, 101.0, 2.0, 0.0, 99.0, 25, 35, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4515,7 +5147,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2305, 'SBI-002', 49, '2026-01-07', 40, 9.7, 0.8, 0.0, 8.9, 16, 14, 50.0, 1, '2026-09-04 09:36:34'),
 (2306, 'SBI-002', 48, '2026-01-07', 40, 6.4, 0.4, 0.0, 6.0, 19, 16, 50.0, 1, '2026-09-04 09:36:34'),
 (2307, 'SBI-002', 47, '2026-01-07', 40, 4.1, 0.4, 0.0, 3.7, 25, 27, 50.0, 1, '2026-09-04 09:36:34'),
-(2308, 'SBI-002', 5, '2026-01-08', 11, 1097.4, 1.7, 143.9, 1239.6, 5, 7, 70.0, 0, '2026-09-04 09:36:34'),
+(2308, 'SBI-002', 5, '2026-01-08', 11, 6584.4, 10.2, 863.4, 7437.6, 5, 7, 420.0, 0, '2026-09-04 09:36:34'),
 (2309, 'SBI-002', 10, '2026-01-08', 11, 4.7, 0.6, 0.0, 4.1, 7, 8, 50.0, 1, '2026-09-04 09:36:34'),
 (2310, 'SBI-002', 11, '2026-01-08', 11, 18.2, 0.5, 47.2, 64.9, 6, 6, 50.0, 0, '2026-09-04 09:36:34'),
 (2311, 'SBI-002', 12, '2026-01-08', 11, 99.0, 0.5, 0.0, 98.5, 3, 4, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4556,7 +5188,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2346, 'SBI-002', 49, '2026-01-08', 11, 8.9, 0.2, 0.0, 8.7, 4, 4, 50.0, 1, '2026-09-04 09:36:34'),
 (2347, 'SBI-002', 48, '2026-01-08', 11, 6.0, 0.1, 0.0, 5.9, 4, 4, 50.0, 1, '2026-09-04 09:36:34'),
 (2348, 'SBI-002', 47, '2026-01-08', 11, 3.7, 0.1, 0.0, 3.6, 3, 3, 50.0, 1, '2026-09-04 09:36:34'),
-(2349, 'SBI-002', 5, '2026-01-09', 87, 1239.6, 13.5, 0.0, 1226.1, 47, 49, 70.0, 0, '2026-09-04 09:36:34'),
+(2349, 'SBI-002', 5, '2026-01-09', 87, 7437.6, 81.0, 0.0, 7356.6, 47, 49, 420.0, 0, '2026-09-04 09:36:34'),
 (2350, 'SBI-002', 10, '2026-01-09', 87, 4.1, 4.5, 5.4, 5.0, 23, 24, 50.0, 1, '2026-09-04 09:36:34'),
 (2351, 'SBI-002', 11, '2026-01-09', 87, 64.9, 4.4, 0.0, 60.5, 22, 19, 50.0, 0, '2026-09-04 09:36:34'),
 (2352, 'SBI-002', 12, '2026-01-09', 87, 98.5, 4.2, 0.0, 94.3, 47, 62, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4597,7 +5229,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2387, 'SBI-002', 49, '2026-01-09', 87, 8.7, 1.8, 0.0, 6.9, 37, 47, 50.0, 1, '2026-09-04 09:36:34'),
 (2388, 'SBI-002', 48, '2026-01-09', 87, 5.9, 0.9, 0.0, 5.0, 46, 61, 50.0, 1, '2026-09-04 09:36:34'),
 (2389, 'SBI-002', 47, '2026-01-09', 87, 3.6, 0.9, 0.0, 2.7, 52, 58, 50.0, 1, '2026-09-04 09:36:34'),
-(2390, 'SBI-002', 5, '2026-01-10', 21, 1226.1, 3.2, 0.0, 1222.9, 8, 9, 70.0, 0, '2026-09-04 09:36:34'),
+(2390, 'SBI-002', 5, '2026-01-10', 21, 7356.6, 19.2, 0.0, 7337.4, 8, 9, 420.0, 0, '2026-09-04 09:36:34'),
 (2391, 'SBI-002', 10, '2026-01-10', 21, 5.0, 1.1, 0.0, 3.9, 10, 13, 50.0, 1, '2026-09-04 09:36:34'),
 (2392, 'SBI-002', 11, '2026-01-10', 21, 60.5, 1.0, 0.0, 59.5, 6, 8, 50.0, 0, '2026-09-04 09:36:34'),
 (2393, 'SBI-002', 12, '2026-01-10', 21, 94.3, 1.1, 0.0, 93.2, 7, 9, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4638,7 +5270,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2428, 'SBI-002', 49, '2026-01-10', 21, 6.9, 0.4, 0.0, 6.5, 7, 10, 50.0, 1, '2026-09-04 09:36:34'),
 (2429, 'SBI-002', 48, '2026-01-10', 21, 5.0, 0.2, 0.0, 4.8, 13, 13, 50.0, 1, '2026-09-04 09:36:34'),
 (2430, 'SBI-002', 47, '2026-01-10', 21, 2.7, 0.2, 0.0, 2.5, 10, 11, 50.0, 1, '2026-09-04 09:36:34'),
-(2431, 'SBI-002', 5, '2026-01-11', 27, 1222.9, 3.9, 156.2, 1375.2, 8, 11, 70.0, 0, '2026-09-04 09:36:34'),
+(2431, 'SBI-002', 5, '2026-01-11', 27, 7337.4, 23.4, 937.2, 8251.2, 8, 11, 420.0, 0, '2026-09-04 09:36:34'),
 (2432, 'SBI-002', 10, '2026-01-11', 27, 3.9, 1.4, 0.0, 2.5, 14, 14, 50.0, 1, '2026-09-04 09:36:34'),
 (2433, 'SBI-002', 11, '2026-01-11', 27, 59.5, 1.3, 0.0, 58.2, 16, 16, 50.0, 0, '2026-09-04 09:36:34'),
 (2434, 'SBI-002', 12, '2026-01-11', 27, 93.2, 1.3, 0.0, 91.9, 9, 9, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4679,7 +5311,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2469, 'SBI-002', 49, '2026-01-11', 27, 6.5, 0.5, 0.0, 6.0, 9, 8, 50.0, 1, '2026-09-04 09:36:34'),
 (2470, 'SBI-002', 48, '2026-01-11', 27, 4.8, 0.3, 0.0, 4.5, 12, 13, 50.0, 1, '2026-09-04 09:36:34'),
 (2471, 'SBI-002', 47, '2026-01-11', 27, 2.5, 0.3, 0.0, 2.2, 7, 7, 50.0, 1, '2026-09-04 09:36:34'),
-(2472, 'SBI-002', 5, '2026-01-12', 58, 1375.2, 7.8, 0.0, 1367.4, 36, 50, 70.0, 0, '2026-09-04 09:36:34'),
+(2472, 'SBI-002', 5, '2026-01-12', 58, 8251.2, 46.8, 0.0, 8204.4, 36, 50, 420.0, 0, '2026-09-04 09:36:34'),
 (2473, 'SBI-002', 10, '2026-01-12', 58, 2.5, 3.0, 7.5, 7.0, 17, 21, 50.0, 1, '2026-09-04 09:36:34'),
 (2474, 'SBI-002', 11, '2026-01-12', 58, 58.2, 3.0, 0.0, 55.2, 19, 23, 50.0, 0, '2026-09-04 09:36:34'),
 (2475, 'SBI-002', 12, '2026-01-12', 58, 91.9, 2.9, 0.0, 89.0, 32, 36, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4713,15 +5345,15 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2503, 'SBI-002', 51, '2026-01-12', 58, 186.1, 2.8, 0.0, 183.3, 30, 32, 50.0, 0, '2026-09-04 09:36:34'),
 (2504, 'SBI-002', 41, '2026-01-12', 58, 9.5, 1.7, 16.7, 24.5, 31, 26, 50.0, 1, '2026-09-04 09:36:34'),
 (2505, 'SBI-002', 53, '2026-01-12', 58, 8.1, 0.6, 0.0, 7.5, 29, 25, 50.0, 1, '2026-09-04 09:36:34'),
-(2506, 'SBI-002', 46, '2026-01-12', 58, 5.1, 1.2, 0.0, 3.9, 33, 41, 50.0, 1, '2026-09-04 09:36:34'),
+(2506, 'SBI-002', 46, '2026-01-12', 58, 5.1, 1.2, 0.0, 3.9, 33, 41, 50.0, 1, '2026-09-04 09:36:34');
+INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
 (2507, 'SBI-002', 52, '2026-01-12', 58, 10.8, 0.3, 0.0, 10.5, 29, 24, 50.0, 1, '2026-09-04 09:36:34'),
 (2508, 'SBI-002', 50, '2026-01-12', 58, 14.1, 1.2, 0.0, 12.9, 27, 22, 50.0, 1, '2026-09-04 09:36:34'),
-(2509, 'SBI-002', 6, '2026-01-12', 58, 18.7, 0.3, 0.0, 18.4, 29, 39, 50.0, 1, '2026-09-04 09:36:34');
-INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(2509, 'SBI-002', 6, '2026-01-12', 58, 18.7, 0.3, 0.0, 18.4, 29, 39, 50.0, 1, '2026-09-04 09:36:34'),
 (2510, 'SBI-002', 49, '2026-01-12', 58, 6.0, 1.2, 0.0, 4.8, 17, 21, 50.0, 1, '2026-09-04 09:36:34'),
 (2511, 'SBI-002', 48, '2026-01-12', 58, 4.5, 0.6, 0.0, 3.9, 21, 17, 50.0, 1, '2026-09-04 09:36:34'),
 (2512, 'SBI-002', 47, '2026-01-12', 58, 2.2, 0.6, 0.0, 1.6, 27, 27, 50.0, 1, '2026-09-04 09:36:34'),
-(2513, 'SBI-002', 5, '2026-01-13', 23, 1367.4, 3.5, 0.0, 1363.9, 14, 18, 70.0, 0, '2026-09-04 09:36:34'),
+(2513, 'SBI-002', 5, '2026-01-13', 23, 8204.4, 21.0, 0.0, 8183.4, 14, 18, 420.0, 0, '2026-09-04 09:36:34'),
 (2514, 'SBI-002', 10, '2026-01-13', 23, 7.0, 1.2, 46.9, 52.7, 12, 13, 50.0, 0, '2026-09-04 09:36:34'),
 (2515, 'SBI-002', 11, '2026-01-13', 23, 55.2, 1.2, 0.0, 54.0, 7, 8, 50.0, 0, '2026-09-04 09:36:34'),
 (2516, 'SBI-002', 12, '2026-01-13', 23, 89.0, 1.1, 0.0, 87.9, 11, 12, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4762,7 +5394,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2551, 'SBI-002', 49, '2026-01-13', 23, 4.8, 0.5, 13.4, 17.7, 13, 11, 50.0, 1, '2026-09-04 09:36:34'),
 (2552, 'SBI-002', 48, '2026-01-13', 23, 3.9, 0.2, 0.0, 3.7, 10, 9, 50.0, 1, '2026-09-04 09:36:34'),
 (2553, 'SBI-002', 47, '2026-01-13', 23, 1.6, 0.2, 0.0, 1.4, 6, 5, 50.0, 1, '2026-09-04 09:36:34'),
-(2554, 'SBI-002', 5, '2026-01-14', 36, 1363.9, 5.8, 0.0, 1358.1, 19, 17, 70.0, 0, '2026-09-04 09:36:34'),
+(2554, 'SBI-002', 5, '2026-01-14', 36, 8183.4, 34.8, 0.0, 8148.6, 19, 17, 420.0, 0, '2026-09-04 09:36:34'),
 (2555, 'SBI-002', 10, '2026-01-14', 36, 52.7, 1.8, 0.0, 50.9, 23, 25, 50.0, 0, '2026-09-04 09:36:34'),
 (2556, 'SBI-002', 11, '2026-01-14', 36, 54.0, 1.8, 22.0, 74.2, 21, 28, 50.0, 0, '2026-09-04 09:36:34'),
 (2557, 'SBI-002', 12, '2026-01-14', 36, 87.9, 1.7, 0.0, 86.2, 13, 14, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4803,7 +5435,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2592, 'SBI-002', 49, '2026-01-14', 36, 17.7, 0.7, 0.0, 17.0, 16, 20, 50.0, 1, '2026-09-04 09:36:34'),
 (2593, 'SBI-002', 48, '2026-01-14', 36, 3.7, 0.4, 0.0, 3.3, 16, 19, 50.0, 1, '2026-09-04 09:36:34'),
 (2594, 'SBI-002', 47, '2026-01-14', 36, 1.4, 0.4, 0.0, 1.0, 15, 16, 50.0, 1, '2026-09-04 09:36:34'),
-(2595, 'SBI-002', 5, '2026-01-15', 83, 1358.1, 12.2, 0.0, 1345.9, 32, 44, 70.0, 0, '2026-09-04 09:36:34'),
+(2595, 'SBI-002', 5, '2026-01-15', 83, 8148.6, 73.2, 0.0, 8075.4, 32, 44, 420.0, 0, '2026-09-04 09:36:34'),
 (2596, 'SBI-002', 10, '2026-01-15', 83, 50.9, 4.1, 0.0, 46.8, 29, 25, 50.0, 1, '2026-09-04 09:36:34'),
 (2597, 'SBI-002', 11, '2026-01-15', 83, 74.2, 4.5, 0.0, 69.7, 38, 50, 50.0, 0, '2026-09-04 09:36:34'),
 (2598, 'SBI-002', 12, '2026-01-15', 83, 86.2, 4.2, 0.0, 82.0, 33, 42, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4844,7 +5476,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2633, 'SBI-002', 49, '2026-01-15', 83, 17.0, 1.7, 0.0, 15.3, 22, 21, 50.0, 1, '2026-09-04 09:36:34'),
 (2634, 'SBI-002', 48, '2026-01-15', 83, 3.3, 0.8, 0.0, 2.5, 49, 62, 50.0, 1, '2026-09-04 09:36:34'),
 (2635, 'SBI-002', 47, '2026-01-15', 83, 1.0, 0.8, 0.0, 0.2, 23, 24, 50.0, 1, '2026-09-04 09:36:34'),
-(2636, 'SBI-002', 5, '2026-01-16', 27, 1345.9, 4.5, 0.0, 1341.4, 9, 11, 70.0, 0, '2026-09-04 09:36:34'),
+(2636, 'SBI-002', 5, '2026-01-16', 27, 8075.4, 27.0, 0.0, 8048.4, 9, 11, 420.0, 0, '2026-09-04 09:36:34'),
 (2637, 'SBI-002', 10, '2026-01-16', 27, 46.8, 1.4, 0.0, 45.4, 7, 7, 50.0, 1, '2026-09-04 09:36:34'),
 (2638, 'SBI-002', 11, '2026-01-16', 27, 69.7, 1.3, 0.0, 68.4, 12, 14, 50.0, 0, '2026-09-04 09:36:34'),
 (2639, 'SBI-002', 12, '2026-01-16', 27, 82.0, 1.3, 0.0, 80.7, 10, 10, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4885,7 +5517,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2674, 'SBI-002', 49, '2026-01-16', 27, 15.3, 0.5, 0.0, 14.8, 17, 17, 50.0, 1, '2026-09-04 09:36:34'),
 (2675, 'SBI-002', 48, '2026-01-16', 27, 2.5, 0.3, 0.0, 2.2, 9, 9, 50.0, 1, '2026-09-04 09:36:34'),
 (2676, 'SBI-002', 47, '2026-01-16', 27, 0.2, 0.3, 10.1, 10.0, 17, 19, 50.0, 1, '2026-09-04 09:36:34'),
-(2677, 'SBI-002', 5, '2026-01-17', 95, 1341.4, 14.7, 0.0, 1326.7, 45, 36, 70.0, 0, '2026-09-04 09:36:34'),
+(2677, 'SBI-002', 5, '2026-01-17', 95, 8048.4, 88.2, 0.0, 7960.2, 45, 36, 420.0, 0, '2026-09-04 09:36:34'),
 (2678, 'SBI-002', 10, '2026-01-17', 95, 45.4, 4.6, 0.0, 40.8, 40, 38, 50.0, 1, '2026-09-04 09:36:34'),
 (2679, 'SBI-002', 11, '2026-01-17', 95, 68.4, 5.0, 0.0, 63.4, 45, 37, 50.0, 0, '2026-09-04 09:36:34'),
 (2680, 'SBI-002', 12, '2026-01-17', 95, 80.7, 4.9, 0.0, 75.8, 37, 44, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4926,7 +5558,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2715, 'SBI-002', 49, '2026-01-17', 95, 14.8, 1.9, 0.0, 12.9, 39, 39, 50.0, 1, '2026-09-04 09:36:34'),
 (2716, 'SBI-002', 48, '2026-01-17', 95, 2.2, 0.9, 0.0, 1.3, 33, 29, 50.0, 1, '2026-09-04 09:36:34'),
 (2717, 'SBI-002', 47, '2026-01-17', 95, 10.0, 1.0, 0.0, 9.0, 42, 36, 50.0, 1, '2026-09-04 09:36:34'),
-(2718, 'SBI-002', 5, '2026-01-18', 17, 1326.7, 2.3, 0.0, 1324.4, 10, 13, 70.0, 0, '2026-09-04 09:36:34'),
+(2718, 'SBI-002', 5, '2026-01-18', 17, 7960.2, 13.8, 0.0, 7946.4, 10, 13, 420.0, 0, '2026-09-04 09:36:34'),
 (2719, 'SBI-002', 10, '2026-01-18', 17, 40.8, 0.9, 0.0, 39.9, 10, 13, 50.0, 1, '2026-09-04 09:36:34'),
 (2720, 'SBI-002', 11, '2026-01-18', 17, 63.4, 0.8, 0.0, 62.6, 5, 5, 50.0, 0, '2026-09-04 09:36:34'),
 (2721, 'SBI-002', 12, '2026-01-18', 17, 75.8, 0.9, 0.0, 74.9, 8, 7, 50.0, 0, '2026-09-04 09:36:34'),
@@ -4967,7 +5599,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2756, 'SBI-002', 49, '2026-01-18', 17, 12.9, 0.3, 0.0, 12.6, 10, 9, 50.0, 1, '2026-09-04 09:36:34'),
 (2757, 'SBI-002', 48, '2026-01-18', 17, 1.3, 0.2, 0.0, 1.1, 9, 12, 50.0, 1, '2026-09-04 09:36:34'),
 (2758, 'SBI-002', 47, '2026-01-18', 17, 9.0, 0.2, 0.0, 8.8, 7, 8, 50.0, 1, '2026-09-04 09:36:34'),
-(2759, 'SBI-002', 5, '2026-01-19', 31, 1324.4, 4.7, 0.0, 1319.7, 19, 16, 70.0, 0, '2026-09-04 09:36:34'),
+(2759, 'SBI-002', 5, '2026-01-19', 31, 7946.4, 28.2, 0.0, 7918.2, 19, 16, 420.0, 0, '2026-09-04 09:36:34'),
 (2760, 'SBI-002', 10, '2026-01-19', 31, 39.9, 1.6, 0.0, 38.3, 11, 13, 50.0, 1, '2026-09-04 09:36:34'),
 (2761, 'SBI-002', 11, '2026-01-19', 31, 62.6, 1.5, 43.8, 104.9, 10, 11, 50.0, 0, '2026-09-04 09:36:34'),
 (2762, 'SBI-002', 12, '2026-01-19', 31, 74.9, 1.6, 0.0, 73.3, 16, 21, 50.0, 0, '2026-09-04 09:36:34'),
@@ -5008,7 +5640,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2797, 'SBI-002', 49, '2026-01-19', 31, 12.6, 0.6, 0.0, 12.0, 12, 14, 50.0, 1, '2026-09-04 09:36:34'),
 (2798, 'SBI-002', 48, '2026-01-19', 31, 1.1, 0.3, 0.0, 0.8, 17, 18, 50.0, 1, '2026-09-04 09:36:34'),
 (2799, 'SBI-002', 47, '2026-01-19', 31, 8.8, 0.3, 0.0, 8.5, 10, 13, 50.0, 1, '2026-09-04 09:36:34'),
-(2800, 'SBI-002', 5, '2026-01-20', 27, 1319.7, 3.7, 0.0, 1316.0, 9, 12, 70.0, 0, '2026-09-04 09:36:34'),
+(2800, 'SBI-002', 5, '2026-01-20', 27, 7918.2, 22.2, 0.0, 7896.0, 9, 12, 420.0, 0, '2026-09-04 09:36:34'),
 (2801, 'SBI-002', 10, '2026-01-20', 27, 38.3, 1.4, 0.0, 36.9, 12, 11, 50.0, 1, '2026-09-04 09:36:34'),
 (2802, 'SBI-002', 11, '2026-01-20', 27, 104.9, 1.3, 0.0, 103.6, 7, 6, 50.0, 0, '2026-09-04 09:36:34'),
 (2803, 'SBI-002', 12, '2026-01-20', 27, 73.3, 1.4, 0.0, 71.9, 9, 9, 50.0, 0, '2026-09-04 09:36:34'),
@@ -5049,7 +5681,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2838, 'SBI-002', 49, '2026-01-20', 27, 12.0, 0.5, 0.0, 11.5, 14, 17, 50.0, 1, '2026-09-04 09:36:34'),
 (2839, 'SBI-002', 48, '2026-01-20', 27, 0.8, 0.3, 0.0, 0.5, 14, 14, 50.0, 1, '2026-09-04 09:36:34'),
 (2840, 'SBI-002', 47, '2026-01-20', 27, 8.5, 0.3, 0.0, 8.2, 13, 11, 50.0, 1, '2026-09-04 09:36:34'),
-(2841, 'SBI-002', 5, '2026-01-21', 55, 1316.0, 8.0, 0.0, 1308.0, 34, 37, 70.0, 0, '2026-09-04 09:36:34'),
+(2841, 'SBI-002', 5, '2026-01-21', 55, 7896.0, 48.0, 0.0, 7848.0, 34, 37, 420.0, 0, '2026-09-04 09:36:34'),
 (2842, 'SBI-002', 10, '2026-01-21', 55, 36.9, 2.8, 0.0, 34.1, 22, 24, 50.0, 1, '2026-09-04 09:36:34'),
 (2843, 'SBI-002', 11, '2026-01-21', 55, 103.6, 2.8, 0.0, 100.8, 32, 40, 50.0, 0, '2026-09-04 09:36:34'),
 (2844, 'SBI-002', 12, '2026-01-21', 55, 71.9, 2.7, 0.0, 69.2, 15, 18, 50.0, 0, '2026-09-04 09:36:34'),
@@ -5090,7 +5722,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2879, 'SBI-002', 49, '2026-01-21', 55, 11.5, 1.1, 0.0, 10.4, 24, 28, 50.0, 1, '2026-09-04 09:36:34'),
 (2880, 'SBI-002', 48, '2026-01-21', 55, 0.5, 0.5, 0.0, 0.0, 19, 21, 50.0, 1, '2026-09-04 09:36:34'),
 (2881, 'SBI-002', 47, '2026-01-21', 55, 8.2, 0.6, 0.0, 7.6, 32, 31, 50.0, 1, '2026-09-04 09:36:34'),
-(2882, 'SBI-002', 5, '2026-01-22', 69, 1308.0, 10.1, 0.0, 1297.9, 38, 37, 70.0, 0, '2026-09-04 09:36:34'),
+(2882, 'SBI-002', 5, '2026-01-22', 69, 7848.0, 60.6, 0.0, 7787.4, 38, 37, 420.0, 0, '2026-09-04 09:36:34'),
 (2883, 'SBI-002', 10, '2026-01-22', 69, 34.1, 3.3, 0.0, 30.8, 23, 29, 50.0, 1, '2026-09-04 09:36:34'),
 (2884, 'SBI-002', 11, '2026-01-22', 69, 100.8, 3.4, 0.0, 97.4, 30, 30, 50.0, 0, '2026-09-04 09:36:34'),
 (2885, 'SBI-002', 12, '2026-01-22', 69, 69.2, 3.6, 0.0, 65.6, 30, 37, 50.0, 0, '2026-09-04 09:36:34'),
@@ -5131,7 +5763,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2920, 'SBI-002', 49, '2026-01-22', 69, 10.4, 1.4, 0.0, 9.0, 33, 28, 50.0, 1, '2026-09-04 09:36:34'),
 (2921, 'SBI-002', 48, '2026-01-22', 69, 0.0, 0.7, 14.7, 14.0, 43, 52, 50.0, 1, '2026-09-04 09:36:34'),
 (2922, 'SBI-002', 47, '2026-01-22', 69, 7.6, 0.7, 0.0, 6.9, 18, 19, 50.0, 1, '2026-09-04 09:36:34'),
-(2923, 'SBI-002', 5, '2026-01-23', 84, 1297.9, 12.0, 0.0, 1285.9, 42, 56, 70.0, 0, '2026-09-04 09:36:34'),
+(2923, 'SBI-002', 5, '2026-01-23', 84, 7787.4, 72.0, 0.0, 7715.4, 42, 56, 420.0, 0, '2026-09-04 09:36:34'),
 (2924, 'SBI-002', 10, '2026-01-23', 84, 30.8, 4.3, 0.0, 26.5, 36, 35, 50.0, 1, '2026-09-04 09:36:34'),
 (2925, 'SBI-002', 11, '2026-01-23', 84, 97.4, 3.9, 0.0, 93.5, 22, 30, 50.0, 0, '2026-09-04 09:36:34'),
 (2926, 'SBI-002', 12, '2026-01-23', 84, 65.6, 4.1, 0.0, 61.5, 29, 26, 50.0, 0, '2026-09-04 09:36:34'),
@@ -5172,7 +5804,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2961, 'SBI-002', 49, '2026-01-23', 84, 9.0, 1.7, 0.0, 7.3, 52, 46, 50.0, 1, '2026-09-04 09:36:34'),
 (2962, 'SBI-002', 48, '2026-01-23', 84, 14.0, 0.9, 0.0, 13.1, 40, 40, 50.0, 1, '2026-09-04 09:36:34'),
 (2963, 'SBI-002', 47, '2026-01-23', 84, 6.9, 0.8, 0.0, 6.1, 45, 43, 50.0, 1, '2026-09-04 09:36:34'),
-(2964, 'SBI-002', 5, '2026-01-24', 89, 1285.9, 13.7, 0.0, 1272.2, 28, 34, 70.0, 0, '2026-09-04 09:36:34'),
+(2964, 'SBI-002', 5, '2026-01-24', 89, 7715.4, 82.2, 0.0, 7633.2, 28, 34, 420.0, 0, '2026-09-04 09:36:34'),
 (2965, 'SBI-002', 10, '2026-01-24', 89, 26.5, 4.4, 0.0, 22.1, 41, 38, 50.0, 1, '2026-09-04 09:36:34'),
 (2966, 'SBI-002', 11, '2026-01-24', 89, 93.5, 4.6, 15.1, 104.0, 46, 55, 50.0, 0, '2026-09-04 09:36:34'),
 (2967, 'SBI-002', 12, '2026-01-24', 89, 61.5, 4.5, 0.0, 57.0, 38, 42, 50.0, 0, '2026-09-04 09:36:34'),
@@ -5201,11 +5833,11 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (2990, 'SBI-002', 42, '2026-01-24', 89, 2631.9, 42.5, 0.0, 2589.4, 25, 25, 240.0, 0, '2026-09-04 09:36:34'),
 (2991, 'SBI-002', 40, '2026-01-24', 89, 3.0, 0.4, 0.0, 2.6, 31, 42, 50.0, 1, '2026-09-04 09:36:34'),
 (2992, 'SBI-002', 39, '2026-01-24', 89, 9.1, 0.4, 0.0, 8.7, 23, 23, 50.0, 1, '2026-09-04 09:36:34'),
-(2993, 'SBI-002', 44, '2026-01-24', 89, 384.6, 19.7, 80.0, 444.9, 57, 70, 100.0, 0, '2026-09-04 09:36:34'),
+(2993, 'SBI-002', 44, '2026-01-24', 89, 384.6, 19.7, 80.0, 444.9, 57, 70, 100.0, 0, '2026-09-04 09:36:34');
+INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
 (2994, 'SBI-002', 45, '2026-01-24', 89, 1060.9, 17.0, 0.0, 1043.9, 30, 40, 100.0, 0, '2026-09-04 09:36:34'),
 (2995, 'SBI-002', 51, '2026-01-24', 89, 156.1, 4.5, 0.0, 151.6, 51, 46, 50.0, 0, '2026-09-04 09:36:34'),
-(2996, 'SBI-002', 41, '2026-01-24', 89, 83.0, 2.7, 0.0, 80.3, 28, 26, 50.0, 0, '2026-09-04 09:36:34');
-INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(2996, 'SBI-002', 41, '2026-01-24', 89, 83.0, 2.7, 0.0, 80.3, 28, 26, 50.0, 0, '2026-09-04 09:36:34'),
 (2997, 'SBI-002', 53, '2026-01-24', 89, 1.9, 0.9, 0.0, 1.0, 32, 37, 50.0, 1, '2026-09-04 09:36:34'),
 (2998, 'SBI-002', 46, '2026-01-24', 89, 10.7, 1.8, 0.0, 8.9, 37, 48, 50.0, 1, '2026-09-04 09:36:34'),
 (2999, 'SBI-002', 52, '2026-01-24', 89, 7.8, 0.4, 0.0, 7.4, 34, 29, 50.0, 1, '2026-09-04 09:36:34'),
@@ -5214,7 +5846,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3002, 'SBI-002', 49, '2026-01-24', 89, 7.3, 1.8, 0.0, 5.5, 53, 55, 50.0, 1, '2026-09-04 09:36:34'),
 (3003, 'SBI-002', 48, '2026-01-24', 89, 13.1, 0.9, 0.0, 12.2, 28, 28, 50.0, 1, '2026-09-04 09:36:34'),
 (3004, 'SBI-002', 47, '2026-01-24', 89, 6.1, 0.9, 0.0, 5.2, 50, 67, 50.0, 1, '2026-09-04 09:36:34'),
-(3005, 'SBI-002', 5, '2026-01-25', 5, 1272.2, 0.8, 0.0, 1271.4, 2, 2, 70.0, 0, '2026-09-04 09:36:34'),
+(3005, 'SBI-002', 5, '2026-01-25', 5, 7633.2, 4.8, 0.0, 7628.4, 2, 2, 420.0, 0, '2026-09-04 09:36:34'),
 (3006, 'SBI-002', 10, '2026-01-25', 5, 22.1, 0.3, 0.0, 21.8, 3, 3, 50.0, 1, '2026-09-04 09:36:34'),
 (3007, 'SBI-002', 11, '2026-01-25', 5, 104.0, 0.2, 0.0, 103.8, 2, 2, 50.0, 0, '2026-09-04 09:36:34'),
 (3008, 'SBI-002', 12, '2026-01-25', 5, 57.0, 0.3, 0.0, 56.7, 2, 3, 50.0, 0, '2026-09-04 09:36:34'),
@@ -5255,7 +5887,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3043, 'SBI-002', 49, '2026-01-25', 5, 5.5, 0.1, 0.0, 5.4, 3, 3, 50.0, 1, '2026-09-04 09:36:34'),
 (3044, 'SBI-002', 48, '2026-01-25', 5, 12.2, 0.1, 0.0, 12.1, 3, 4, 50.0, 1, '2026-09-04 09:36:34'),
 (3045, 'SBI-002', 47, '2026-01-25', 5, 5.2, 0.1, 2.7, 7.8, 2, 2, 50.0, 1, '2026-09-04 09:36:34'),
-(3046, 'SBI-002', 5, '2026-01-26', 21, 1271.4, 3.1, 0.0, 1268.3, 10, 11, 70.0, 0, '2026-09-04 09:36:34'),
+(3046, 'SBI-002', 5, '2026-01-26', 21, 7628.4, 18.6, 0.0, 7609.8, 10, 11, 420.0, 0, '2026-09-04 09:36:34'),
 (3047, 'SBI-002', 10, '2026-01-26', 21, 21.8, 1.0, 30.2, 51.0, 10, 8, 50.0, 0, '2026-09-04 09:36:34'),
 (3048, 'SBI-002', 11, '2026-01-26', 21, 103.8, 1.1, 0.0, 102.7, 9, 8, 50.0, 0, '2026-09-04 09:36:34'),
 (3049, 'SBI-002', 12, '2026-01-26', 21, 56.7, 1.1, 0.0, 55.6, 11, 13, 50.0, 0, '2026-09-04 09:36:34'),
@@ -5296,7 +5928,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3084, 'SBI-002', 49, '2026-01-26', 21, 5.4, 0.4, 0.0, 5.0, 6, 6, 50.0, 1, '2026-09-04 09:36:34'),
 (3085, 'SBI-002', 48, '2026-01-26', 21, 12.1, 0.2, 0.0, 11.9, 7, 8, 50.0, 1, '2026-09-04 09:36:34'),
 (3086, 'SBI-002', 47, '2026-01-26', 21, 7.8, 0.2, 0.0, 7.6, 7, 6, 50.0, 1, '2026-09-04 09:36:34'),
-(3087, 'SBI-002', 5, '2026-01-27', 66, 1268.3, 9.9, 0.0, 1258.4, 43, 38, 70.0, 0, '2026-09-04 09:36:34'),
+(3087, 'SBI-002', 5, '2026-01-27', 66, 7609.8, 59.4, 0.0, 7550.4, 43, 38, 420.0, 0, '2026-09-04 09:36:34'),
 (3088, 'SBI-002', 10, '2026-01-27', 66, 51.0, 3.3, 36.9, 84.6, 35, 34, 50.0, 0, '2026-09-04 09:36:34'),
 (3089, 'SBI-002', 11, '2026-01-27', 66, 102.7, 3.3, 0.0, 99.4, 33, 29, 50.0, 0, '2026-09-04 09:36:34'),
 (3090, 'SBI-002', 12, '2026-01-27', 66, 55.6, 3.3, 0.0, 52.3, 17, 23, 50.0, 0, '2026-09-04 09:36:34'),
@@ -5337,7 +5969,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3125, 'SBI-002', 49, '2026-01-27', 66, 5.0, 1.3, 0.0, 3.7, 38, 33, 50.0, 1, '2026-09-04 09:36:34'),
 (3126, 'SBI-002', 48, '2026-01-27', 66, 11.9, 0.7, 0.0, 11.2, 36, 29, 50.0, 1, '2026-09-04 09:36:34'),
 (3127, 'SBI-002', 47, '2026-01-27', 66, 7.6, 0.7, 0.0, 6.9, 39, 49, 50.0, 1, '2026-09-04 09:36:34'),
-(3128, 'SBI-002', 5, '2026-01-28', 21, 1258.4, 3.6, 0.0, 1254.8, 13, 13, 70.0, 0, '2026-09-04 09:36:34'),
+(3128, 'SBI-002', 5, '2026-01-28', 21, 7550.4, 21.6, 0.0, 7528.8, 13, 13, 420.0, 0, '2026-09-04 09:36:34'),
 (3129, 'SBI-002', 10, '2026-01-28', 21, 84.6, 1.1, 47.7, 131.2, 8, 8, 50.0, 0, '2026-09-04 09:36:34'),
 (3130, 'SBI-002', 11, '2026-01-28', 21, 99.4, 1.1, 0.0, 98.3, 10, 13, 50.0, 0, '2026-09-04 09:36:34'),
 (3131, 'SBI-002', 12, '2026-01-28', 21, 52.3, 1.1, 0.0, 51.2, 10, 9, 50.0, 0, '2026-09-04 09:36:34'),
@@ -5378,7 +6010,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3166, 'SBI-002', 49, '2026-01-28', 21, 3.7, 0.4, 0.0, 3.3, 11, 11, 50.0, 1, '2026-09-04 09:36:34'),
 (3167, 'SBI-002', 48, '2026-01-28', 21, 11.2, 0.2, 0.0, 11.0, 9, 12, 50.0, 1, '2026-09-04 09:36:34'),
 (3168, 'SBI-002', 47, '2026-01-28', 21, 6.9, 0.2, 0.0, 6.7, 11, 10, 50.0, 1, '2026-09-04 09:36:34'),
-(3169, 'SBI-002', 5, '2026-01-29', 47, 1254.8, 6.9, 0.0, 1247.9, 15, 20, 70.0, 0, '2026-09-04 09:36:34'),
+(3169, 'SBI-002', 5, '2026-01-29', 47, 7528.8, 41.4, 0.0, 7487.4, 15, 20, 420.0, 0, '2026-09-04 09:36:34'),
 (3170, 'SBI-002', 10, '2026-01-29', 47, 131.2, 2.3, 18.9, 147.8, 24, 26, 50.0, 0, '2026-09-04 09:36:34'),
 (3171, 'SBI-002', 11, '2026-01-29', 47, 98.3, 2.4, 0.0, 95.9, 17, 22, 50.0, 0, '2026-09-04 09:36:34'),
 (3172, 'SBI-002', 12, '2026-01-29', 47, 51.2, 2.5, 0.0, 48.7, 17, 16, 50.0, 1, '2026-09-04 09:36:34'),
@@ -5419,7 +6051,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3207, 'SBI-002', 49, '2026-01-29', 47, 3.3, 0.9, 0.0, 2.4, 15, 17, 50.0, 1, '2026-09-04 09:36:34'),
 (3208, 'SBI-002', 48, '2026-01-29', 47, 11.0, 0.5, 0.0, 10.5, 18, 24, 50.0, 1, '2026-09-04 09:36:34'),
 (3209, 'SBI-002', 47, '2026-01-29', 47, 6.7, 0.5, 0.0, 6.2, 13, 13, 50.0, 1, '2026-09-04 09:36:34'),
-(3210, 'SBI-002', 5, '2026-01-30', 26, 1247.9, 3.9, 0.0, 1244.0, 7, 7, 70.0, 0, '2026-09-04 09:36:34'),
+(3210, 'SBI-002', 5, '2026-01-30', 26, 7487.4, 23.4, 0.0, 7464.0, 7, 7, 420.0, 0, '2026-09-04 09:36:34'),
 (3211, 'SBI-002', 10, '2026-01-30', 26, 147.8, 1.4, 0.0, 146.4, 16, 17, 50.0, 0, '2026-09-04 09:36:34'),
 (3212, 'SBI-002', 11, '2026-01-30', 26, 95.9, 1.3, 0.0, 94.6, 10, 14, 50.0, 0, '2026-09-04 09:36:34'),
 (3213, 'SBI-002', 12, '2026-01-30', 26, 48.7, 1.3, 0.0, 47.4, 17, 22, 50.0, 1, '2026-09-04 09:36:34'),
@@ -5460,7 +6092,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3248, 'SBI-002', 49, '2026-01-30', 26, 2.4, 0.5, 0.0, 1.9, 11, 14, 50.0, 1, '2026-09-04 09:36:34'),
 (3249, 'SBI-002', 48, '2026-01-30', 26, 10.5, 0.3, 0.0, 10.2, 12, 12, 50.0, 1, '2026-09-04 09:36:34'),
 (3250, 'SBI-002', 47, '2026-01-30', 26, 6.2, 0.3, 0.0, 5.9, 7, 9, 50.0, 1, '2026-09-04 09:36:34'),
-(3251, 'SBI-002', 5, '2026-01-31', 48, 1244.0, 7.0, 0.0, 1237.0, 15, 15, 70.0, 0, '2026-09-04 09:36:34'),
+(3251, 'SBI-002', 5, '2026-01-31', 48, 7464.0, 42.0, 0.0, 7422.0, 15, 15, 420.0, 0, '2026-09-04 09:36:34'),
 (3252, 'SBI-002', 10, '2026-01-31', 48, 146.4, 2.4, 0.0, 144.0, 30, 39, 50.0, 0, '2026-09-04 09:36:34'),
 (3253, 'SBI-002', 11, '2026-01-31', 48, 94.6, 2.4, 0.0, 92.2, 27, 30, 50.0, 0, '2026-09-04 09:36:34'),
 (3254, 'SBI-002', 12, '2026-01-31', 48, 47.4, 2.4, 0.0, 45.0, 30, 31, 50.0, 1, '2026-09-04 09:36:34'),
@@ -5501,7 +6133,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3289, 'SBI-002', 49, '2026-01-31', 48, 1.9, 1.0, 0.0, 0.9, 30, 37, 50.0, 1, '2026-09-04 09:36:34'),
 (3290, 'SBI-002', 48, '2026-01-31', 48, 10.2, 0.5, 0.0, 9.7, 17, 23, 50.0, 1, '2026-09-04 09:36:34'),
 (3291, 'SBI-002', 47, '2026-01-31', 48, 5.9, 0.5, 0.0, 5.4, 19, 22, 50.0, 1, '2026-09-04 09:36:34'),
-(3292, 'SBI-002', 5, '2026-02-01', 41, 1237.0, 6.6, 0.0, 1230.4, 16, 14, 70.0, 0, '2026-09-04 09:36:34'),
+(3292, 'SBI-002', 5, '2026-02-01', 41, 7422.0, 39.6, 0.0, 7382.4, 16, 14, 420.0, 0, '2026-09-04 09:36:34'),
 (3293, 'SBI-002', 10, '2026-02-01', 41, 144.0, 2.1, 0.0, 141.9, 25, 35, 50.0, 0, '2026-09-04 09:36:34'),
 (3294, 'SBI-002', 11, '2026-02-01', 41, 92.2, 2.2, 41.4, 131.4, 19, 26, 50.0, 0, '2026-09-04 09:36:34'),
 (3295, 'SBI-002', 12, '2026-02-01', 41, 45.0, 1.9, 0.0, 43.1, 25, 27, 50.0, 1, '2026-09-04 09:36:34'),
@@ -5542,7 +6174,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3330, 'SBI-002', 49, '2026-02-01', 41, 0.9, 0.8, 0.0, 0.1, 19, 21, 50.0, 1, '2026-09-04 09:36:34'),
 (3331, 'SBI-002', 48, '2026-02-01', 41, 9.7, 0.4, 0.0, 9.3, 16, 20, 50.0, 1, '2026-09-04 09:36:34'),
 (3332, 'SBI-002', 47, '2026-02-01', 41, 5.4, 0.4, 0.0, 5.0, 12, 15, 50.0, 1, '2026-09-04 09:36:34'),
-(3333, 'SBI-002', 5, '2026-02-02', 20, 1230.4, 2.8, 0.0, 1227.6, 10, 14, 70.0, 0, '2026-09-04 09:36:34'),
+(3333, 'SBI-002', 5, '2026-02-02', 20, 7382.4, 16.8, 0.0, 7365.6, 10, 14, 420.0, 0, '2026-09-04 09:36:34'),
 (3334, 'SBI-002', 10, '2026-02-02', 20, 141.9, 1.0, 0.0, 140.9, 5, 5, 50.0, 0, '2026-09-04 09:36:34'),
 (3335, 'SBI-002', 11, '2026-02-02', 20, 131.4, 0.9, 0.0, 130.5, 7, 7, 50.0, 0, '2026-09-04 09:36:34'),
 (3336, 'SBI-002', 12, '2026-02-02', 20, 43.1, 1.0, 0.0, 42.1, 6, 6, 50.0, 1, '2026-09-04 09:36:34'),
@@ -5583,7 +6215,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3371, 'SBI-002', 49, '2026-02-02', 20, 0.1, 0.4, 6.3, 6.0, 6, 8, 50.0, 1, '2026-09-04 09:36:34'),
 (3372, 'SBI-002', 48, '2026-02-02', 20, 9.3, 0.2, 0.0, 9.1, 7, 8, 50.0, 1, '2026-09-04 09:36:34'),
 (3373, 'SBI-002', 47, '2026-02-02', 20, 5.0, 0.2, 0.0, 4.8, 5, 6, 50.0, 1, '2026-09-04 09:36:34'),
-(3374, 'SBI-002', 5, '2026-02-03', 19, 1227.6, 2.7, 0.0, 1224.9, 8, 7, 70.0, 0, '2026-09-04 09:36:34'),
+(3374, 'SBI-002', 5, '2026-02-03', 19, 7365.6, 16.2, 0.0, 7349.4, 8, 7, 420.0, 0, '2026-09-04 09:36:34'),
 (3375, 'SBI-002', 10, '2026-02-03', 19, 140.9, 0.9, 0.0, 140.0, 10, 11, 50.0, 0, '2026-09-04 09:36:34'),
 (3376, 'SBI-002', 11, '2026-02-03', 19, 130.5, 1.0, 0.0, 129.5, 11, 11, 50.0, 0, '2026-09-04 09:36:34'),
 (3377, 'SBI-002', 12, '2026-02-03', 19, 42.1, 1.0, 0.0, 41.1, 9, 12, 50.0, 1, '2026-09-04 09:36:34'),
@@ -5624,7 +6256,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3412, 'SBI-002', 49, '2026-02-03', 19, 6.0, 0.4, 0.0, 5.6, 10, 13, 50.0, 1, '2026-09-04 09:36:34'),
 (3413, 'SBI-002', 48, '2026-02-03', 19, 9.1, 0.2, 4.0, 12.9, 7, 6, 50.0, 1, '2026-09-04 09:36:34'),
 (3414, 'SBI-002', 47, '2026-02-03', 19, 4.8, 0.2, 0.0, 4.6, 7, 6, 50.0, 1, '2026-09-04 09:36:34'),
-(3415, 'SBI-002', 5, '2026-02-04', 87, 1224.9, 11.3, 0.0, 1213.6, 42, 39, 70.0, 0, '2026-09-04 09:36:34'),
+(3415, 'SBI-002', 5, '2026-02-04', 87, 7349.4, 67.8, 0.0, 7281.6, 42, 39, 420.0, 0, '2026-09-04 09:36:34'),
 (3416, 'SBI-002', 10, '2026-02-04', 87, 140.0, 4.2, 39.8, 175.6, 43, 56, 50.0, 0, '2026-09-04 09:36:34'),
 (3417, 'SBI-002', 11, '2026-02-04', 87, 129.5, 4.3, 43.9, 169.1, 33, 29, 50.0, 0, '2026-09-04 09:36:34'),
 (3418, 'SBI-002', 12, '2026-02-04', 87, 41.1, 4.6, 0.0, 36.5, 33, 32, 50.0, 1, '2026-09-04 09:36:34'),
@@ -5665,7 +6297,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3453, 'SBI-002', 49, '2026-02-04', 87, 5.6, 1.7, 0.0, 3.9, 24, 25, 50.0, 1, '2026-09-04 09:36:34'),
 (3454, 'SBI-002', 48, '2026-02-04', 87, 12.9, 0.9, 0.0, 12.0, 51, 66, 50.0, 1, '2026-09-04 09:36:34'),
 (3455, 'SBI-002', 47, '2026-02-04', 87, 4.6, 0.9, 0.0, 3.7, 40, 32, 50.0, 1, '2026-09-04 09:36:34'),
-(3456, 'SBI-002', 5, '2026-02-05', 75, 1213.6, 11.2, 0.0, 1202.4, 46, 52, 70.0, 0, '2026-09-04 09:36:34'),
+(3456, 'SBI-002', 5, '2026-02-05', 75, 7281.6, 67.2, 0.0, 7214.4, 46, 52, 420.0, 0, '2026-09-04 09:36:34'),
 (3457, 'SBI-002', 10, '2026-02-05', 75, 175.6, 3.8, 0.0, 171.8, 45, 43, 50.0, 0, '2026-09-04 09:36:34'),
 (3458, 'SBI-002', 11, '2026-02-05', 75, 169.1, 3.5, 0.0, 165.6, 43, 45, 50.0, 0, '2026-09-04 09:36:34'),
 (3459, 'SBI-002', 12, '2026-02-05', 75, 36.5, 3.8, 13.9, 46.6, 34, 36, 50.0, 1, '2026-09-04 09:36:34'),
@@ -5691,11 +6323,11 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3479, 'SBI-002', 37, '2026-02-05', 75, 734.9, 3.8, 0.0, 731.1, 21, 21, 50.0, 0, '2026-09-04 09:36:34'),
 (3480, 'SBI-002', 38, '2026-02-05', 75, 1040.9, 3.9, 0.0, 1037.0, 45, 53, 50.0, 0, '2026-09-04 09:36:34'),
 (3481, 'SBI-002', 43, '2026-02-05', 75, 205.7, 7.7, 0.0, 198.0, 46, 52, 50.0, 0, '2026-09-04 09:36:34'),
-(3482, 'SBI-002', 42, '2026-02-05', 75, 2478.8, 46.7, 393.2, 2825.3, 43, 39, 240.0, 0, '2026-09-04 09:36:34'),
+(3482, 'SBI-002', 42, '2026-02-05', 75, 2478.8, 46.7, 393.2, 2825.3, 43, 39, 240.0, 0, '2026-09-04 09:36:34');
+INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
 (3483, 'SBI-002', 40, '2026-02-05', 75, 0.8, 0.4, 0.0, 0.4, 36, 45, 50.0, 1, '2026-09-04 09:36:34'),
 (3484, 'SBI-002', 39, '2026-02-05', 75, 6.9, 0.4, 0.0, 6.5, 35, 38, 50.0, 1, '2026-09-04 09:36:34'),
-(3485, 'SBI-002', 44, '2026-02-05', 75, 596.7, 15.8, 0.0, 580.9, 48, 54, 100.0, 0, '2026-09-04 09:36:34');
-INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(3485, 'SBI-002', 44, '2026-02-05', 75, 596.7, 15.8, 0.0, 580.9, 48, 54, 100.0, 0, '2026-09-04 09:36:34'),
 (3486, 'SBI-002', 45, '2026-02-05', 75, 1022.3, 14.9, 0.0, 1007.4, 26, 31, 100.0, 0, '2026-09-04 09:36:34'),
 (3487, 'SBI-002', 51, '2026-02-05', 75, 131.7, 4.0, 0.0, 127.7, 21, 25, 50.0, 0, '2026-09-04 09:36:34'),
 (3488, 'SBI-002', 41, '2026-02-05', 75, 68.2, 2.3, 0.0, 65.9, 36, 45, 50.0, 0, '2026-09-04 09:36:34'),
@@ -5707,7 +6339,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3494, 'SBI-002', 49, '2026-02-05', 75, 3.9, 1.5, 0.0, 2.4, 24, 21, 50.0, 1, '2026-09-04 09:36:34'),
 (3495, 'SBI-002', 48, '2026-02-05', 75, 12.0, 0.8, 0.0, 11.2, 20, 20, 50.0, 1, '2026-09-04 09:36:34'),
 (3496, 'SBI-002', 47, '2026-02-05', 75, 3.7, 0.8, 0.0, 2.9, 30, 42, 50.0, 1, '2026-09-04 09:36:34'),
-(3497, 'SBI-002', 5, '2026-02-06', 14, 1202.4, 2.2, 0.0, 1200.2, 8, 7, 70.0, 0, '2026-09-04 09:36:34'),
+(3497, 'SBI-002', 5, '2026-02-06', 14, 7214.4, 13.2, 0.0, 7201.2, 8, 7, 420.0, 0, '2026-09-04 09:36:34'),
 (3498, 'SBI-002', 10, '2026-02-06', 14, 171.8, 0.7, 0.0, 171.1, 5, 5, 50.0, 0, '2026-09-04 09:36:34'),
 (3499, 'SBI-002', 11, '2026-02-06', 14, 165.6, 0.7, 0.0, 164.9, 7, 9, 50.0, 0, '2026-09-04 09:36:34'),
 (3500, 'SBI-002', 12, '2026-02-06', 14, 46.6, 0.7, 0.0, 45.9, 8, 11, 50.0, 1, '2026-09-04 09:36:34'),
@@ -5748,7 +6380,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3535, 'SBI-002', 49, '2026-02-06', 14, 2.4, 0.3, 0.0, 2.1, 8, 6, 50.0, 1, '2026-09-04 09:36:34'),
 (3536, 'SBI-002', 48, '2026-02-06', 14, 11.2, 0.1, 0.0, 11.1, 7, 10, 50.0, 1, '2026-09-04 09:36:34'),
 (3537, 'SBI-002', 47, '2026-02-06', 14, 2.9, 0.1, 0.0, 2.8, 7, 7, 50.0, 1, '2026-09-04 09:36:34'),
-(3538, 'SBI-002', 5, '2026-02-07', 10, 1200.2, 1.4, 0.0, 1198.8, 5, 7, 70.0, 0, '2026-09-04 09:36:34'),
+(3538, 'SBI-002', 5, '2026-02-07', 10, 7201.2, 8.4, 0.0, 7192.8, 5, 7, 420.0, 0, '2026-09-04 09:36:34'),
 (3539, 'SBI-002', 10, '2026-02-07', 10, 171.1, 0.5, 0.0, 170.6, 5, 6, 50.0, 0, '2026-09-04 09:36:34'),
 (3540, 'SBI-002', 11, '2026-02-07', 10, 164.9, 0.5, 0.0, 164.4, 5, 7, 50.0, 0, '2026-09-04 09:36:34'),
 (3541, 'SBI-002', 12, '2026-02-07', 10, 45.9, 0.5, 0.0, 45.4, 3, 4, 50.0, 1, '2026-09-04 09:36:34'),
@@ -5789,7 +6421,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3576, 'SBI-002', 49, '2026-02-07', 10, 2.1, 0.2, 5.4, 7.3, 4, 5, 50.0, 1, '2026-09-04 09:36:34'),
 (3577, 'SBI-002', 48, '2026-02-07', 10, 11.1, 0.1, 0.0, 11.0, 5, 7, 50.0, 1, '2026-09-04 09:36:34'),
 (3578, 'SBI-002', 47, '2026-02-07', 10, 2.8, 0.1, 0.0, 2.7, 4, 5, 50.0, 1, '2026-09-04 09:36:34'),
-(3579, 'SBI-002', 5, '2026-02-08', 85, 1198.8, 12.5, 0.0, 1186.3, 25, 29, 70.0, 0, '2026-09-04 09:36:34'),
+(3579, 'SBI-002', 5, '2026-02-08', 85, 7192.8, 75.0, 0.0, 7117.8, 25, 29, 420.0, 0, '2026-09-04 09:36:34'),
 (3580, 'SBI-002', 10, '2026-02-08', 85, 170.6, 4.5, 0.0, 166.1, 26, 35, 50.0, 0, '2026-09-04 09:36:34'),
 (3581, 'SBI-002', 11, '2026-02-08', 85, 164.4, 4.0, 0.0, 160.4, 50, 48, 50.0, 0, '2026-09-04 09:36:34'),
 (3582, 'SBI-002', 12, '2026-02-08', 85, 45.4, 4.1, 0.0, 41.3, 38, 32, 50.0, 1, '2026-09-04 09:36:34'),
@@ -5830,7 +6462,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3617, 'SBI-002', 49, '2026-02-08', 85, 7.3, 1.7, 0.0, 5.6, 54, 75, 50.0, 1, '2026-09-04 09:36:34'),
 (3618, 'SBI-002', 48, '2026-02-08', 85, 11.0, 0.9, 0.0, 10.1, 49, 50, 50.0, 1, '2026-09-04 09:36:34'),
 (3619, 'SBI-002', 47, '2026-02-08', 85, 2.7, 0.9, 0.0, 1.8, 51, 48, 50.0, 1, '2026-09-04 09:36:34'),
-(3620, 'SBI-002', 5, '2026-02-09', 82, 1186.3, 13.4, 0.0, 1172.9, 36, 38, 70.0, 0, '2026-09-04 09:36:34'),
+(3620, 'SBI-002', 5, '2026-02-09', 82, 7117.8, 80.4, 0.0, 7037.4, 36, 38, 420.0, 0, '2026-09-04 09:36:34'),
 (3621, 'SBI-002', 10, '2026-02-09', 82, 166.1, 4.1, 47.5, 209.5, 48, 47, 50.0, 0, '2026-09-04 09:36:34'),
 (3622, 'SBI-002', 11, '2026-02-09', 82, 160.4, 4.2, 0.0, 156.2, 31, 37, 50.0, 0, '2026-09-04 09:36:34'),
 (3623, 'SBI-002', 12, '2026-02-09', 82, 41.3, 4.1, 0.0, 37.2, 45, 53, 50.0, 1, '2026-09-04 09:36:34'),
@@ -5871,7 +6503,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3658, 'SBI-002', 49, '2026-02-09', 82, 5.6, 1.6, 0.0, 4.0, 21, 18, 50.0, 1, '2026-09-04 09:36:34'),
 (3659, 'SBI-002', 48, '2026-02-09', 82, 10.1, 0.8, 0.0, 9.3, 25, 27, 50.0, 1, '2026-09-04 09:36:34'),
 (3660, 'SBI-002', 47, '2026-02-09', 82, 1.8, 0.8, 0.0, 1.0, 29, 26, 50.0, 1, '2026-09-04 09:36:34'),
-(3661, 'SBI-002', 5, '2026-02-10', 76, 1172.9, 10.2, 0.0, 1162.7, 25, 29, 70.0, 0, '2026-09-04 09:36:34'),
+(3661, 'SBI-002', 5, '2026-02-10', 76, 7037.4, 61.2, 0.0, 6976.2, 25, 29, 420.0, 0, '2026-09-04 09:36:34'),
 (3662, 'SBI-002', 10, '2026-02-10', 76, 209.5, 3.8, 0.0, 205.7, 26, 23, 50.0, 0, '2026-09-04 09:36:34'),
 (3663, 'SBI-002', 11, '2026-02-10', 76, 156.2, 3.8, 0.0, 152.4, 39, 36, 50.0, 0, '2026-09-04 09:36:34'),
 (3664, 'SBI-002', 12, '2026-02-10', 76, 37.2, 3.8, 0.0, 33.4, 29, 37, 50.0, 1, '2026-09-04 09:36:34'),
@@ -5912,7 +6544,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3699, 'SBI-002', 49, '2026-02-10', 76, 4.0, 1.5, 0.0, 2.5, 30, 29, 50.0, 1, '2026-09-04 09:36:35'),
 (3700, 'SBI-002', 48, '2026-02-10', 76, 9.3, 0.8, 0.0, 8.5, 31, 42, 50.0, 1, '2026-09-04 09:36:35'),
 (3701, 'SBI-002', 47, '2026-02-10', 76, 1.0, 0.8, 0.0, 0.2, 27, 24, 50.0, 1, '2026-09-04 09:36:35'),
-(3702, 'SBI-002', 5, '2026-02-11', 83, 1162.7, 12.0, 0.0, 1150.7, 49, 65, 70.0, 0, '2026-09-04 09:36:35'),
+(3702, 'SBI-002', 5, '2026-02-11', 83, 6976.2, 72.0, 0.0, 6904.2, 49, 65, 420.0, 0, '2026-09-04 09:36:35'),
 (3703, 'SBI-002', 10, '2026-02-11', 83, 205.7, 4.2, 19.6, 221.1, 31, 26, 50.0, 0, '2026-09-04 09:36:35'),
 (3704, 'SBI-002', 11, '2026-02-11', 83, 152.4, 4.2, 16.3, 164.5, 28, 29, 50.0, 0, '2026-09-04 09:36:35'),
 (3705, 'SBI-002', 12, '2026-02-11', 83, 33.4, 4.2, 0.0, 29.2, 31, 37, 50.0, 1, '2026-09-04 09:36:35'),
@@ -5953,7 +6585,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3740, 'SBI-002', 49, '2026-02-11', 83, 2.5, 1.7, 0.0, 0.8, 52, 52, 50.0, 1, '2026-09-04 09:36:35'),
 (3741, 'SBI-002', 48, '2026-02-11', 83, 8.5, 0.8, 0.0, 7.7, 41, 36, 50.0, 1, '2026-09-04 09:36:35'),
 (3742, 'SBI-002', 47, '2026-02-11', 83, 0.2, 0.8, 8.6, 8.0, 33, 37, 50.0, 1, '2026-09-04 09:36:35'),
-(3743, 'SBI-002', 5, '2026-02-12', 38, 1150.7, 5.9, 145.0, 1289.8, 10, 14, 70.0, 0, '2026-09-04 09:36:35'),
+(3743, 'SBI-002', 5, '2026-02-12', 38, 6904.2, 35.4, 870.0, 7738.8, 10, 14, 420.0, 0, '2026-09-04 09:36:35'),
 (3744, 'SBI-002', 10, '2026-02-12', 38, 221.1, 1.9, 0.0, 219.2, 19, 17, 50.0, 0, '2026-09-04 09:36:35'),
 (3745, 'SBI-002', 11, '2026-02-12', 38, 164.5, 2.0, 0.0, 162.5, 11, 14, 50.0, 0, '2026-09-04 09:36:35'),
 (3746, 'SBI-002', 12, '2026-02-12', 38, 29.2, 2.0, 0.0, 27.2, 18, 23, 50.0, 1, '2026-09-04 09:36:35'),
@@ -5994,7 +6626,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3781, 'SBI-002', 49, '2026-02-12', 38, 0.8, 0.8, 0.0, 0.0, 20, 17, 50.0, 1, '2026-09-04 09:36:35'),
 (3782, 'SBI-002', 48, '2026-02-12', 38, 7.7, 0.4, 0.0, 7.3, 21, 24, 50.0, 1, '2026-09-04 09:36:35'),
 (3783, 'SBI-002', 47, '2026-02-12', 38, 8.0, 0.4, 0.0, 7.6, 24, 28, 50.0, 1, '2026-09-04 09:36:35'),
-(3784, 'SBI-002', 5, '2026-02-13', 40, 1289.8, 5.6, 0.0, 1284.2, 25, 32, 70.0, 0, '2026-09-04 09:36:35'),
+(3784, 'SBI-002', 5, '2026-02-13', 40, 7738.8, 33.6, 0.0, 7705.2, 25, 32, 420.0, 0, '2026-09-04 09:36:35'),
 (3785, 'SBI-002', 10, '2026-02-13', 40, 219.2, 1.9, 0.0, 217.3, 19, 16, 50.0, 0, '2026-09-04 09:36:35'),
 (3786, 'SBI-002', 11, '2026-02-13', 40, 162.5, 2.0, 0.0, 160.5, 19, 18, 50.0, 0, '2026-09-04 09:36:35'),
 (3787, 'SBI-002', 12, '2026-02-13', 40, 27.2, 2.0, 0.0, 25.2, 13, 17, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6035,7 +6667,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3822, 'SBI-002', 49, '2026-02-13', 40, 0.0, 0.8, 13.8, 13.0, 20, 21, 50.0, 1, '2026-09-04 09:36:35'),
 (3823, 'SBI-002', 48, '2026-02-13', 40, 7.3, 0.4, 0.0, 6.9, 25, 33, 50.0, 1, '2026-09-04 09:36:35'),
 (3824, 'SBI-002', 47, '2026-02-13', 40, 7.6, 0.4, 0.0, 7.2, 25, 25, 50.0, 1, '2026-09-04 09:36:35'),
-(3825, 'SBI-002', 5, '2026-02-14', 53, 1284.2, 7.5, 0.0, 1276.7, 28, 23, 70.0, 0, '2026-09-04 09:36:35'),
+(3825, 'SBI-002', 5, '2026-02-14', 53, 7705.2, 45.0, 0.0, 7660.2, 28, 23, 420.0, 0, '2026-09-04 09:36:35'),
 (3826, 'SBI-002', 10, '2026-02-14', 53, 217.3, 2.6, 0.0, 214.7, 31, 43, 50.0, 0, '2026-09-04 09:36:35'),
 (3827, 'SBI-002', 11, '2026-02-14', 53, 160.5, 2.5, 0.0, 158.0, 30, 36, 50.0, 0, '2026-09-04 09:36:35'),
 (3828, 'SBI-002', 12, '2026-02-14', 53, 25.2, 2.7, 0.0, 22.5, 24, 27, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6076,7 +6708,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3863, 'SBI-002', 49, '2026-02-14', 53, 13.0, 1.0, 0.0, 12.0, 25, 24, 50.0, 1, '2026-09-04 09:36:35'),
 (3864, 'SBI-002', 48, '2026-02-14', 53, 6.9, 0.5, 0.0, 6.4, 16, 22, 50.0, 1, '2026-09-04 09:36:35'),
 (3865, 'SBI-002', 47, '2026-02-14', 53, 7.2, 0.5, 0.0, 6.7, 25, 27, 50.0, 1, '2026-09-04 09:36:35'),
-(3866, 'SBI-002', 5, '2026-02-15', 26, 1276.7, 3.9, 0.0, 1272.8, 7, 8, 70.0, 0, '2026-09-04 09:36:35'),
+(3866, 'SBI-002', 5, '2026-02-15', 26, 7660.2, 23.4, 0.0, 7636.8, 7, 8, 420.0, 0, '2026-09-04 09:36:35'),
 (3867, 'SBI-002', 10, '2026-02-15', 26, 214.7, 1.3, 0.0, 213.4, 11, 13, 50.0, 0, '2026-09-04 09:36:35'),
 (3868, 'SBI-002', 11, '2026-02-15', 26, 158.0, 1.2, 0.0, 156.8, 11, 15, 50.0, 0, '2026-09-04 09:36:35'),
 (3869, 'SBI-002', 12, '2026-02-15', 26, 22.5, 1.3, 0.0, 21.2, 11, 10, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6117,7 +6749,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3904, 'SBI-002', 49, '2026-02-15', 26, 12.0, 0.5, 0.0, 11.5, 9, 12, 50.0, 1, '2026-09-04 09:36:35'),
 (3905, 'SBI-002', 48, '2026-02-15', 26, 6.4, 0.3, 0.0, 6.1, 10, 10, 50.0, 1, '2026-09-04 09:36:35'),
 (3906, 'SBI-002', 47, '2026-02-15', 26, 6.7, 0.3, 0.0, 6.4, 11, 10, 50.0, 1, '2026-09-04 09:36:35'),
-(3907, 'SBI-002', 5, '2026-02-16', 21, 1272.8, 3.1, 175.8, 1445.5, 10, 10, 70.0, 0, '2026-09-04 09:36:35'),
+(3907, 'SBI-002', 5, '2026-02-16', 21, 7636.8, 18.6, 1054.8, 8673.0, 10, 10, 420.0, 0, '2026-09-04 09:36:35'),
 (3908, 'SBI-002', 10, '2026-02-16', 21, 213.4, 1.0, 36.5, 248.9, 7, 7, 50.0, 0, '2026-09-04 09:36:35'),
 (3909, 'SBI-002', 11, '2026-02-16', 21, 156.8, 1.0, 0.0, 155.8, 12, 11, 50.0, 0, '2026-09-04 09:36:35'),
 (3910, 'SBI-002', 12, '2026-02-16', 21, 21.2, 1.1, 0.0, 20.1, 9, 12, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6158,7 +6790,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3945, 'SBI-002', 49, '2026-02-16', 21, 11.5, 0.4, 0.0, 11.1, 10, 12, 50.0, 1, '2026-09-04 09:36:35'),
 (3946, 'SBI-002', 48, '2026-02-16', 21, 6.1, 0.2, 0.0, 5.9, 10, 9, 50.0, 1, '2026-09-04 09:36:35'),
 (3947, 'SBI-002', 47, '2026-02-16', 21, 6.4, 0.2, 0.0, 6.2, 13, 12, 50.0, 1, '2026-09-04 09:36:35'),
-(3948, 'SBI-002', 5, '2026-02-17', 99, 1445.5, 16.1, 0.0, 1429.4, 49, 45, 70.0, 0, '2026-09-04 09:36:35'),
+(3948, 'SBI-002', 5, '2026-02-17', 99, 8673.0, 96.6, 0.0, 8576.4, 49, 45, 420.0, 0, '2026-09-04 09:36:35'),
 (3949, 'SBI-002', 10, '2026-02-17', 99, 248.9, 5.2, 0.0, 243.7, 37, 37, 50.0, 0, '2026-09-04 09:36:35'),
 (3950, 'SBI-002', 11, '2026-02-17', 99, 155.8, 5.1, 0.0, 150.7, 41, 37, 50.0, 0, '2026-09-04 09:36:35'),
 (3951, 'SBI-002', 12, '2026-02-17', 99, 20.1, 5.0, 35.0, 50.1, 30, 30, 50.0, 0, '2026-09-04 09:36:35'),
@@ -6179,11 +6811,11 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3966, 'SBI-002', 32, '2026-02-17', 99, 3097.0, 22.4, 0.0, 3074.6, 40, 56, 120.0, 0, '2026-09-04 09:36:35'),
 (3967, 'SBI-002', 34, '2026-02-17', 99, 1182.4, 23.7, 0.0, 1158.7, 40, 41, 150.0, 0, '2026-09-04 09:36:35'),
 (3968, 'SBI-002', 35, '2026-02-17', 99, 1181.0, 9.9, 57.4, 1228.5, 37, 44, 50.0, 0, '2026-09-04 09:36:35'),
-(3969, 'SBI-002', 36, '2026-02-17', 99, 1767.7, 9.9, 0.0, 1757.8, 45, 40, 50.0, 0, '2026-09-04 09:36:35'),
+(3969, 'SBI-002', 36, '2026-02-17', 99, 1767.7, 9.9, 0.0, 1757.8, 45, 40, 50.0, 0, '2026-09-04 09:36:35');
+INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
 (3970, 'SBI-002', 33, '2026-02-17', 99, 2997.6, 20.9, 0.0, 2976.7, 46, 55, 100.0, 0, '2026-09-04 09:36:35'),
 (3971, 'SBI-002', 37, '2026-02-17', 99, 879.5, 5.1, 0.0, 874.4, 51, 49, 50.0, 0, '2026-09-04 09:36:35'),
-(3972, 'SBI-002', 38, '2026-02-17', 99, 1143.7, 4.9, 0.0, 1138.8, 42, 49, 50.0, 0, '2026-09-04 09:36:35');
-INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(3972, 'SBI-002', 38, '2026-02-17', 99, 1143.7, 4.9, 0.0, 1138.8, 42, 49, 50.0, 0, '2026-09-04 09:36:35'),
 (3973, 'SBI-002', 43, '2026-02-17', 99, 180.1, 10.9, 0.0, 169.2, 33, 28, 50.0, 0, '2026-09-04 09:36:35'),
 (3974, 'SBI-002', 42, '2026-02-17', 99, 2969.4, 51.8, 0.0, 2917.6, 59, 66, 240.0, 0, '2026-09-04 09:36:35'),
 (3975, 'SBI-002', 40, '2026-02-17', 99, 8.9, 0.5, 0.0, 8.4, 38, 36, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6200,7 +6832,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (3986, 'SBI-002', 49, '2026-02-17', 99, 11.1, 2.0, 0.0, 9.1, 26, 28, 50.0, 1, '2026-09-04 09:36:35'),
 (3987, 'SBI-002', 48, '2026-02-17', 99, 5.9, 1.0, 0.0, 4.9, 44, 55, 50.0, 1, '2026-09-04 09:36:35'),
 (3988, 'SBI-002', 47, '2026-02-17', 99, 6.2, 1.0, 0.0, 5.2, 35, 46, 50.0, 1, '2026-09-04 09:36:35'),
-(3989, 'SBI-002', 5, '2026-02-18', 14, 1429.4, 2.3, 0.0, 1427.1, 5, 6, 70.0, 0, '2026-09-04 09:36:35'),
+(3989, 'SBI-002', 5, '2026-02-18', 14, 8576.4, 13.8, 0.0, 8562.6, 5, 6, 420.0, 0, '2026-09-04 09:36:35'),
 (3990, 'SBI-002', 10, '2026-02-18', 14, 243.7, 0.7, 0.0, 243.0, 7, 8, 50.0, 0, '2026-09-04 09:36:35'),
 (3991, 'SBI-002', 11, '2026-02-18', 14, 150.7, 0.7, 0.0, 150.0, 6, 6, 50.0, 0, '2026-09-04 09:36:35'),
 (3992, 'SBI-002', 12, '2026-02-18', 14, 50.1, 0.7, 0.0, 49.4, 4, 5, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6241,7 +6873,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4027, 'SBI-002', 49, '2026-02-18', 14, 9.1, 0.3, 0.0, 8.8, 4, 4, 50.0, 1, '2026-09-04 09:36:35'),
 (4028, 'SBI-002', 48, '2026-02-18', 14, 4.9, 0.1, 0.0, 4.8, 5, 7, 50.0, 1, '2026-09-04 09:36:35'),
 (4029, 'SBI-002', 47, '2026-02-18', 14, 5.2, 0.1, 0.0, 5.1, 4, 4, 50.0, 1, '2026-09-04 09:36:35'),
-(4030, 'SBI-002', 5, '2026-02-19', 16, 1427.1, 2.7, 0.0, 1424.4, 5, 5, 70.0, 0, '2026-09-04 09:36:35'),
+(4030, 'SBI-002', 5, '2026-02-19', 16, 8562.6, 16.2, 0.0, 8546.4, 5, 5, 420.0, 0, '2026-09-04 09:36:35'),
 (4031, 'SBI-002', 10, '2026-02-19', 16, 243.0, 0.8, 0.0, 242.2, 7, 9, 50.0, 0, '2026-09-04 09:36:35'),
 (4032, 'SBI-002', 11, '2026-02-19', 16, 150.0, 0.8, 0.0, 149.2, 8, 7, 50.0, 0, '2026-09-04 09:36:35'),
 (4033, 'SBI-002', 12, '2026-02-19', 16, 49.4, 0.8, 0.0, 48.6, 5, 6, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6282,7 +6914,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4068, 'SBI-002', 49, '2026-02-19', 16, 8.8, 0.3, 0.0, 8.5, 8, 9, 50.0, 1, '2026-09-04 09:36:35'),
 (4069, 'SBI-002', 48, '2026-02-19', 16, 4.8, 0.2, 0.0, 4.6, 6, 8, 50.0, 1, '2026-09-04 09:36:35'),
 (4070, 'SBI-002', 47, '2026-02-19', 16, 5.1, 0.2, 0.0, 4.9, 7, 8, 50.0, 1, '2026-09-04 09:36:35'),
-(4071, 'SBI-002', 5, '2026-02-20', 84, 1424.4, 12.1, 0.0, 1412.3, 24, 31, 70.0, 0, '2026-09-04 09:36:35'),
+(4071, 'SBI-002', 5, '2026-02-20', 84, 8546.4, 72.6, 0.0, 8473.8, 24, 31, 420.0, 0, '2026-09-04 09:36:35'),
 (4072, 'SBI-002', 10, '2026-02-20', 84, 242.2, 4.2, 0.0, 238.0, 45, 43, 50.0, 0, '2026-09-04 09:36:35'),
 (4073, 'SBI-002', 11, '2026-02-20', 84, 149.2, 4.5, 0.0, 144.7, 28, 36, 50.0, 0, '2026-09-04 09:36:35'),
 (4074, 'SBI-002', 12, '2026-02-20', 84, 48.6, 4.0, 0.0, 44.6, 27, 38, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6323,7 +6955,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4109, 'SBI-002', 49, '2026-02-20', 84, 8.5, 1.7, 0.0, 6.8, 31, 35, 50.0, 1, '2026-09-04 09:36:35'),
 (4110, 'SBI-002', 48, '2026-02-20', 84, 4.6, 0.8, 0.0, 3.8, 53, 71, 50.0, 1, '2026-09-04 09:36:35'),
 (4111, 'SBI-002', 47, '2026-02-20', 84, 4.9, 0.8, 0.0, 4.1, 34, 34, 50.0, 1, '2026-09-04 09:36:35'),
-(4112, 'SBI-002', 5, '2026-02-21', 83, 1412.3, 12.2, 0.0, 1400.1, 47, 52, 70.0, 0, '2026-09-04 09:36:35'),
+(4112, 'SBI-002', 5, '2026-02-21', 83, 8473.8, 73.2, 0.0, 8400.6, 47, 52, 420.0, 0, '2026-09-04 09:36:35'),
 (4113, 'SBI-002', 10, '2026-02-21', 83, 238.0, 4.2, 12.8, 246.6, 53, 70, 50.0, 0, '2026-09-04 09:36:35'),
 (4114, 'SBI-002', 11, '2026-02-21', 83, 144.7, 4.2, 0.0, 140.5, 44, 47, 50.0, 0, '2026-09-04 09:36:35'),
 (4115, 'SBI-002', 12, '2026-02-21', 83, 44.6, 4.0, 0.0, 40.6, 26, 34, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6364,7 +6996,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4150, 'SBI-002', 49, '2026-02-21', 83, 6.8, 1.7, 0.0, 5.1, 41, 42, 50.0, 1, '2026-09-04 09:36:35'),
 (4151, 'SBI-002', 48, '2026-02-21', 83, 3.8, 0.8, 0.0, 3.0, 44, 44, 50.0, 1, '2026-09-04 09:36:35'),
 (4152, 'SBI-002', 47, '2026-02-21', 83, 4.1, 0.8, 0.0, 3.3, 51, 53, 50.0, 1, '2026-09-04 09:36:35'),
-(4153, 'SBI-002', 5, '2026-02-22', 62, 1400.1, 8.2, 0.0, 1391.9, 23, 26, 70.0, 0, '2026-09-04 09:36:35'),
+(4153, 'SBI-002', 5, '2026-02-22', 62, 8400.6, 49.2, 0.0, 8351.4, 23, 26, 420.0, 0, '2026-09-04 09:36:35'),
 (4154, 'SBI-002', 10, '2026-02-22', 62, 246.6, 3.0, 0.0, 243.6, 32, 32, 50.0, 0, '2026-09-04 09:36:35'),
 (4155, 'SBI-002', 11, '2026-02-22', 62, 140.5, 3.2, 0.0, 137.3, 29, 35, 50.0, 0, '2026-09-04 09:36:35'),
 (4156, 'SBI-002', 12, '2026-02-22', 62, 40.6, 3.2, 0.0, 37.4, 23, 27, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6405,7 +7037,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4191, 'SBI-002', 49, '2026-02-22', 62, 5.1, 1.3, 0.0, 3.8, 33, 33, 50.0, 1, '2026-09-04 09:36:35'),
 (4192, 'SBI-002', 48, '2026-02-22', 62, 3.0, 0.6, 0.0, 2.4, 35, 43, 50.0, 1, '2026-09-04 09:36:35'),
 (4193, 'SBI-002', 47, '2026-02-22', 62, 3.3, 0.6, 0.0, 2.7, 25, 33, 50.0, 1, '2026-09-04 09:36:35'),
-(4194, 'SBI-002', 5, '2026-02-23', 60, 1391.9, 10.3, 0.0, 1381.6, 28, 35, 70.0, 0, '2026-09-04 09:36:35'),
+(4194, 'SBI-002', 5, '2026-02-23', 60, 8351.4, 61.8, 0.0, 8289.6, 28, 35, 420.0, 0, '2026-09-04 09:36:35'),
 (4195, 'SBI-002', 10, '2026-02-23', 60, 243.6, 3.0, 0.0, 240.6, 16, 16, 50.0, 0, '2026-09-04 09:36:35'),
 (4196, 'SBI-002', 11, '2026-02-23', 60, 137.3, 3.0, 0.0, 134.3, 24, 29, 50.0, 0, '2026-09-04 09:36:35'),
 (4197, 'SBI-002', 12, '2026-02-23', 60, 37.4, 2.9, 0.0, 34.5, 26, 24, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6446,7 +7078,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4232, 'SBI-002', 49, '2026-02-23', 60, 3.8, 1.2, 0.0, 2.6, 37, 51, 50.0, 1, '2026-09-04 09:36:35'),
 (4233, 'SBI-002', 48, '2026-02-23', 60, 2.4, 0.6, 0.0, 1.8, 32, 43, 50.0, 1, '2026-09-04 09:36:35'),
 (4234, 'SBI-002', 47, '2026-02-23', 60, 2.7, 0.6, 0.0, 2.1, 18, 21, 50.0, 1, '2026-09-04 09:36:35'),
-(4235, 'SBI-002', 5, '2026-02-24', 49, 1381.6, 6.9, 0.0, 1374.7, 26, 25, 70.0, 0, '2026-09-04 09:36:35'),
+(4235, 'SBI-002', 5, '2026-02-24', 49, 8289.6, 41.4, 0.0, 8248.2, 26, 25, 420.0, 0, '2026-09-04 09:36:35'),
 (4236, 'SBI-002', 10, '2026-02-24', 49, 240.6, 2.4, 0.0, 238.2, 22, 28, 50.0, 0, '2026-09-04 09:36:35'),
 (4237, 'SBI-002', 11, '2026-02-24', 49, 134.3, 2.4, 0.0, 131.9, 30, 37, 50.0, 0, '2026-09-04 09:36:35'),
 (4238, 'SBI-002', 12, '2026-02-24', 49, 34.5, 2.5, 0.0, 32.0, 28, 39, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6487,7 +7119,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4273, 'SBI-002', 49, '2026-02-24', 49, 2.6, 1.0, 0.0, 1.6, 16, 21, 50.0, 1, '2026-09-04 09:36:35'),
 (4274, 'SBI-002', 48, '2026-02-24', 49, 1.8, 0.5, 0.0, 1.3, 13, 16, 50.0, 1, '2026-09-04 09:36:35'),
 (4275, 'SBI-002', 47, '2026-02-24', 49, 2.1, 0.5, 0.0, 1.6, 19, 18, 50.0, 1, '2026-09-04 09:36:35'),
-(4276, 'SBI-002', 5, '2026-02-25', 94, 1374.7, 15.5, 0.0, 1359.2, 29, 36, 70.0, 0, '2026-09-04 09:36:35'),
+(4276, 'SBI-002', 5, '2026-02-25', 94, 8248.2, 93.0, 0.0, 8155.2, 29, 36, 420.0, 0, '2026-09-04 09:36:35'),
 (4277, 'SBI-002', 10, '2026-02-25', 94, 238.2, 4.5, 36.2, 269.9, 32, 33, 50.0, 0, '2026-09-04 09:36:35'),
 (4278, 'SBI-002', 11, '2026-02-25', 94, 131.9, 4.8, 25.5, 152.6, 56, 64, 50.0, 0, '2026-09-04 09:36:35'),
 (4279, 'SBI-002', 12, '2026-02-25', 94, 32.0, 5.0, 0.0, 27.0, 46, 47, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6528,7 +7160,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4314, 'SBI-002', 49, '2026-02-25', 94, 1.6, 1.9, 12.3, 12.0, 57, 51, 50.0, 1, '2026-09-04 09:36:35'),
 (4315, 'SBI-002', 48, '2026-02-25', 94, 1.3, 0.9, 0.0, 0.4, 34, 31, 50.0, 1, '2026-09-04 09:36:35'),
 (4316, 'SBI-002', 47, '2026-02-25', 94, 1.6, 0.9, 0.0, 0.7, 54, 68, 50.0, 1, '2026-09-04 09:36:35'),
-(4317, 'SBI-002', 5, '2026-02-26', 59, 1359.2, 8.8, 0.0, 1350.4, 31, 32, 70.0, 0, '2026-09-04 09:36:35'),
+(4317, 'SBI-002', 5, '2026-02-26', 59, 8155.2, 52.8, 0.0, 8102.4, 31, 32, 420.0, 0, '2026-09-04 09:36:35'),
 (4318, 'SBI-002', 10, '2026-02-26', 59, 269.9, 3.0, 0.0, 266.9, 27, 29, 50.0, 0, '2026-09-04 09:36:35'),
 (4319, 'SBI-002', 11, '2026-02-26', 59, 152.6, 3.0, 0.0, 149.6, 25, 29, 50.0, 0, '2026-09-04 09:36:35'),
 (4320, 'SBI-002', 12, '2026-02-26', 59, 27.0, 2.8, 0.0, 24.2, 34, 47, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6569,7 +7201,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4355, 'SBI-002', 49, '2026-02-26', 59, 12.0, 1.2, 0.0, 10.8, 38, 36, 50.0, 1, '2026-09-04 09:36:35'),
 (4356, 'SBI-002', 48, '2026-02-26', 59, 0.4, 0.6, 12.2, 12.0, 23, 31, 50.0, 1, '2026-09-04 09:36:35'),
 (4357, 'SBI-002', 47, '2026-02-26', 59, 0.7, 0.6, 0.0, 0.1, 15, 21, 50.0, 1, '2026-09-04 09:36:35'),
-(4358, 'SBI-002', 5, '2026-02-27', 34, 1350.4, 4.5, 0.0, 1345.9, 10, 13, 70.0, 0, '2026-09-04 09:36:35'),
+(4358, 'SBI-002', 5, '2026-02-27', 34, 8102.4, 27.0, 0.0, 8075.4, 10, 13, 420.0, 0, '2026-09-04 09:36:35'),
 (4359, 'SBI-002', 10, '2026-02-27', 34, 266.9, 1.7, 0.0, 265.2, 16, 16, 50.0, 0, '2026-09-04 09:36:35'),
 (4360, 'SBI-002', 11, '2026-02-27', 34, 149.6, 1.7, 0.0, 147.9, 13, 16, 50.0, 0, '2026-09-04 09:36:35'),
 (4361, 'SBI-002', 12, '2026-02-27', 34, 24.2, 1.7, 0.0, 22.5, 21, 20, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6610,7 +7242,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4396, 'SBI-002', 49, '2026-02-27', 34, 10.8, 0.7, 0.0, 10.1, 12, 14, 50.0, 1, '2026-09-04 09:36:35'),
 (4397, 'SBI-002', 48, '2026-02-27', 34, 12.0, 0.3, 0.0, 11.7, 18, 23, 50.0, 1, '2026-09-04 09:36:35'),
 (4398, 'SBI-002', 47, '2026-02-27', 34, 0.1, 0.3, 6.2, 6.0, 21, 24, 50.0, 1, '2026-09-04 09:36:35'),
-(4399, 'SBI-002', 5, '2026-02-28', 76, 1345.9, 11.4, 0.0, 1334.5, 42, 55, 70.0, 0, '2026-09-04 09:36:35'),
+(4399, 'SBI-002', 5, '2026-02-28', 76, 8075.4, 68.4, 0.0, 8007.0, 42, 55, 420.0, 0, '2026-09-04 09:36:35'),
 (4400, 'SBI-002', 10, '2026-02-28', 76, 265.2, 3.6, 0.0, 261.6, 46, 47, 50.0, 0, '2026-09-04 09:36:35'),
 (4401, 'SBI-002', 11, '2026-02-28', 76, 147.9, 3.7, 0.0, 144.2, 35, 47, 50.0, 0, '2026-09-04 09:36:35'),
 (4402, 'SBI-002', 12, '2026-02-28', 76, 22.5, 3.7, 0.0, 18.8, 44, 52, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6651,7 +7283,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4437, 'SBI-002', 49, '2026-02-28', 76, 10.1, 1.5, 0.0, 8.6, 45, 45, 50.0, 1, '2026-09-04 09:36:35'),
 (4438, 'SBI-002', 48, '2026-02-28', 76, 11.7, 0.8, 0.0, 10.9, 47, 64, 50.0, 1, '2026-09-04 09:36:35'),
 (4439, 'SBI-002', 47, '2026-02-28', 76, 6.0, 0.8, 0.0, 5.2, 28, 25, 50.0, 1, '2026-09-04 09:36:35'),
-(4440, 'SBI-002', 5, '2026-03-01', 25, 1334.5, 3.3, 0.0, 1331.2, 8, 8, 70.0, 0, '2026-09-04 09:36:35'),
+(4440, 'SBI-002', 5, '2026-03-01', 25, 8007.0, 19.8, 0.0, 7987.2, 8, 8, 420.0, 0, '2026-09-04 09:36:35'),
 (4441, 'SBI-002', 10, '2026-03-01', 25, 261.6, 1.3, 0.0, 260.3, 13, 14, 50.0, 0, '2026-09-04 09:36:35'),
 (4442, 'SBI-002', 11, '2026-03-01', 25, 144.2, 1.3, 0.0, 142.9, 12, 15, 50.0, 0, '2026-09-04 09:36:35'),
 (4443, 'SBI-002', 12, '2026-03-01', 25, 18.8, 1.3, 0.0, 17.5, 8, 10, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6666,11 +7298,11 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4452, 'SBI-002', 23, '2026-03-01', 25, 14.4, 0.1, 0.0, 14.3, 14, 19, 50.0, 1, '2026-09-04 09:36:35'),
 (4453, 'SBI-002', 24, '2026-03-01', 25, 32.4, 0.5, 0.0, 31.9, 14, 16, 50.0, 1, '2026-09-04 09:36:35'),
 (4454, 'SBI-002', 25, '2026-03-01', 25, 15.6, 0.5, 0.0, 15.1, 14, 16, 50.0, 1, '2026-09-04 09:36:35'),
-(4455, 'SBI-002', 26, '2026-03-01', 25, 15.1, 0.2, 0.0, 14.9, 6, 8, 50.0, 1, '2026-09-04 09:36:35'),
+(4455, 'SBI-002', 26, '2026-03-01', 25, 15.1, 0.2, 0.0, 14.9, 6, 8, 50.0, 1, '2026-09-04 09:36:35');
+INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
 (4456, 'SBI-002', 30, '2026-03-01', 25, 1125.2, 7.9, 181.1, 1298.4, 9, 12, 140.0, 0, '2026-09-04 09:36:35'),
 (4457, 'SBI-002', 31, '2026-03-01', 25, 4366.0, 4.9, 0.0, 4361.1, 11, 14, 100.0, 0, '2026-09-04 09:36:35'),
-(4458, 'SBI-002', 32, '2026-03-01', 25, 2917.8, 6.9, 0.0, 2910.9, 12, 16, 120.0, 0, '2026-09-04 09:36:35');
-INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(4458, 'SBI-002', 32, '2026-03-01', 25, 2917.8, 6.9, 0.0, 2910.9, 12, 16, 120.0, 0, '2026-09-04 09:36:35'),
 (4459, 'SBI-002', 34, '2026-03-01', 25, 1145.4, 7.4, 0.0, 1138.0, 15, 13, 150.0, 0, '2026-09-04 09:36:35'),
 (4460, 'SBI-002', 35, '2026-03-01', 25, 1457.4, 2.5, 0.0, 1454.9, 10, 13, 50.0, 0, '2026-09-04 09:36:35'),
 (4461, 'SBI-002', 36, '2026-03-01', 25, 2007.5, 2.6, 0.0, 2004.9, 15, 21, 50.0, 0, '2026-09-04 09:36:35'),
@@ -6693,7 +7325,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4478, 'SBI-002', 49, '2026-03-01', 25, 8.6, 0.5, 0.0, 8.1, 10, 11, 50.0, 1, '2026-09-04 09:36:35'),
 (4479, 'SBI-002', 48, '2026-03-01', 25, 10.9, 0.3, 0.0, 10.6, 8, 11, 50.0, 1, '2026-09-04 09:36:35'),
 (4480, 'SBI-002', 47, '2026-03-01', 25, 5.2, 0.2, 0.0, 5.0, 8, 6, 50.0, 1, '2026-09-04 09:36:35'),
-(4481, 'SBI-002', 5, '2026-03-02', 11, 1331.2, 1.7, 199.1, 1528.6, 4, 4, 70.0, 0, '2026-09-04 09:36:35'),
+(4481, 'SBI-002', 5, '2026-03-02', 11, 7987.2, 10.2, 1194.6, 9171.6, 4, 4, 420.0, 0, '2026-09-04 09:36:35'),
 (4482, 'SBI-002', 10, '2026-03-02', 11, 260.3, 0.5, 0.0, 259.8, 3, 4, 50.0, 0, '2026-09-04 09:36:35'),
 (4483, 'SBI-002', 11, '2026-03-02', 11, 142.9, 0.5, 0.0, 142.4, 4, 4, 50.0, 0, '2026-09-04 09:36:35'),
 (4484, 'SBI-002', 12, '2026-03-02', 11, 17.5, 0.5, 0.0, 17.0, 7, 9, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6734,7 +7366,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4519, 'SBI-002', 49, '2026-03-02', 11, 8.1, 0.2, 0.0, 7.9, 3, 4, 50.0, 1, '2026-09-04 09:36:35'),
 (4520, 'SBI-002', 48, '2026-03-02', 11, 10.6, 0.1, 0.0, 10.5, 6, 8, 50.0, 1, '2026-09-04 09:36:35'),
 (4521, 'SBI-002', 47, '2026-03-02', 11, 5.0, 0.1, 0.0, 4.9, 7, 9, 50.0, 1, '2026-09-04 09:36:35'),
-(4522, 'SBI-002', 5, '2026-03-03', 34, 1528.6, 5.3, 0.0, 1523.3, 12, 14, 70.0, 0, '2026-09-04 09:36:35'),
+(4522, 'SBI-002', 5, '2026-03-03', 34, 9171.6, 31.8, 0.0, 9139.8, 12, 14, 420.0, 0, '2026-09-04 09:36:35'),
 (4523, 'SBI-002', 10, '2026-03-03', 34, 259.8, 1.7, 0.0, 258.1, 21, 24, 50.0, 0, '2026-09-04 09:36:35'),
 (4524, 'SBI-002', 11, '2026-03-03', 34, 142.4, 1.8, 11.0, 151.6, 12, 16, 50.0, 0, '2026-09-04 09:36:35'),
 (4525, 'SBI-002', 12, '2026-03-03', 34, 17.0, 1.8, 0.0, 15.2, 17, 22, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6775,7 +7407,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4560, 'SBI-002', 49, '2026-03-03', 34, 7.9, 0.7, 0.0, 7.2, 11, 11, 50.0, 1, '2026-09-04 09:36:35'),
 (4561, 'SBI-002', 48, '2026-03-03', 34, 10.5, 0.3, 0.0, 10.2, 19, 26, 50.0, 1, '2026-09-04 09:36:35'),
 (4562, 'SBI-002', 47, '2026-03-03', 34, 4.9, 0.3, 0.0, 4.6, 13, 14, 50.0, 1, '2026-09-04 09:36:35'),
-(4563, 'SBI-002', 5, '2026-03-04', 7, 1523.3, 1.0, 0.0, 1522.3, 3, 3, 70.0, 0, '2026-09-04 09:36:35'),
+(4563, 'SBI-002', 5, '2026-03-04', 7, 9139.8, 6.0, 0.0, 9133.8, 3, 3, 420.0, 0, '2026-09-04 09:36:35'),
 (4564, 'SBI-002', 10, '2026-03-04', 7, 258.1, 0.4, 0.0, 257.7, 3, 2, 50.0, 0, '2026-09-04 09:36:35'),
 (4565, 'SBI-002', 11, '2026-03-04', 7, 151.6, 0.3, 0.0, 151.3, 4, 4, 50.0, 0, '2026-09-04 09:36:35'),
 (4566, 'SBI-002', 12, '2026-03-04', 7, 15.2, 0.3, 0.0, 14.9, 2, 3, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6816,7 +7448,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4601, 'SBI-002', 49, '2026-03-04', 7, 7.2, 0.1, 0.0, 7.1, 4, 5, 50.0, 1, '2026-09-04 09:36:35'),
 (4602, 'SBI-002', 48, '2026-03-04', 7, 10.2, 0.1, 0.0, 10.1, 3, 4, 50.0, 1, '2026-09-04 09:36:35'),
 (4603, 'SBI-002', 47, '2026-03-04', 7, 4.6, 0.1, 0.0, 4.5, 2, 3, 50.0, 1, '2026-09-04 09:36:35'),
-(4604, 'SBI-002', 5, '2026-03-05', 21, 1522.3, 3.4, 0.0, 1518.9, 11, 9, 70.0, 0, '2026-09-04 09:36:35'),
+(4604, 'SBI-002', 5, '2026-03-05', 21, 9133.8, 20.4, 0.0, 9113.4, 11, 9, 420.0, 0, '2026-09-04 09:36:35'),
 (4605, 'SBI-002', 10, '2026-03-05', 21, 257.7, 1.1, 25.5, 282.1, 5, 6, 50.0, 0, '2026-09-04 09:36:35'),
 (4606, 'SBI-002', 11, '2026-03-05', 21, 151.3, 1.0, 0.0, 150.3, 11, 13, 50.0, 0, '2026-09-04 09:36:35'),
 (4607, 'SBI-002', 12, '2026-03-05', 21, 14.9, 1.0, 0.0, 13.9, 7, 6, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6857,7 +7489,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4642, 'SBI-002', 49, '2026-03-05', 21, 7.1, 0.4, 0.0, 6.7, 13, 13, 50.0, 1, '2026-09-04 09:36:35'),
 (4643, 'SBI-002', 48, '2026-03-05', 21, 10.1, 0.2, 0.0, 9.9, 7, 6, 50.0, 1, '2026-09-04 09:36:35'),
 (4644, 'SBI-002', 47, '2026-03-05', 21, 4.5, 0.2, 0.0, 4.3, 9, 11, 50.0, 1, '2026-09-04 09:36:35'),
-(4645, 'SBI-002', 5, '2026-03-06', 81, 1518.9, 12.7, 0.0, 1506.2, 44, 46, 70.0, 0, '2026-09-04 09:36:35'),
+(4645, 'SBI-002', 5, '2026-03-06', 81, 9113.4, 76.2, 0.0, 9037.2, 44, 46, 420.0, 0, '2026-09-04 09:36:35'),
 (4646, 'SBI-002', 10, '2026-03-06', 81, 282.1, 3.8, 0.0, 278.3, 27, 29, 50.0, 0, '2026-09-04 09:36:35'),
 (4647, 'SBI-002', 11, '2026-03-06', 81, 150.3, 4.0, 0.0, 146.3, 27, 36, 50.0, 0, '2026-09-04 09:36:35'),
 (4648, 'SBI-002', 12, '2026-03-06', 81, 13.9, 4.1, 0.0, 9.8, 52, 65, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6898,7 +7530,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4683, 'SBI-002', 49, '2026-03-06', 81, 6.7, 1.6, 0.0, 5.1, 29, 35, 50.0, 1, '2026-09-04 09:36:35'),
 (4684, 'SBI-002', 48, '2026-03-06', 81, 9.9, 0.8, 0.0, 9.1, 35, 35, 50.0, 1, '2026-09-04 09:36:35'),
 (4685, 'SBI-002', 47, '2026-03-06', 81, 4.3, 0.8, 0.0, 3.5, 31, 38, 50.0, 1, '2026-09-04 09:36:35'),
-(4686, 'SBI-002', 5, '2026-03-07', 14, 1506.2, 2.2, 0.0, 1504.0, 5, 6, 70.0, 0, '2026-09-04 09:36:35'),
+(4686, 'SBI-002', 5, '2026-03-07', 14, 9037.2, 13.2, 0.0, 9024.0, 5, 6, 420.0, 0, '2026-09-04 09:36:35'),
 (4687, 'SBI-002', 10, '2026-03-07', 14, 278.3, 0.7, 0.0, 277.6, 7, 9, 50.0, 0, '2026-09-04 09:36:35'),
 (4688, 'SBI-002', 11, '2026-03-07', 14, 146.3, 0.6, 0.0, 145.7, 4, 3, 50.0, 0, '2026-09-04 09:36:35'),
 (4689, 'SBI-002', 12, '2026-03-07', 14, 9.8, 0.7, 0.0, 9.1, 5, 6, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6939,7 +7571,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4724, 'SBI-002', 49, '2026-03-07', 14, 5.1, 0.3, 0.0, 4.8, 5, 5, 50.0, 1, '2026-09-04 09:36:35'),
 (4725, 'SBI-002', 48, '2026-03-07', 14, 9.1, 0.1, 0.0, 9.0, 4, 3, 50.0, 1, '2026-09-04 09:36:35'),
 (4726, 'SBI-002', 47, '2026-03-07', 14, 3.5, 0.1, 0.0, 3.4, 5, 4, 50.0, 1, '2026-09-04 09:36:35'),
-(4727, 'SBI-002', 5, '2026-03-08', 30, 1504.0, 4.8, 0.0, 1499.2, 15, 12, 70.0, 0, '2026-09-04 09:36:35'),
+(4727, 'SBI-002', 5, '2026-03-08', 30, 9024.0, 28.8, 0.0, 8995.2, 15, 12, 420.0, 0, '2026-09-04 09:36:35'),
 (4728, 'SBI-002', 10, '2026-03-08', 30, 277.6, 1.5, 0.0, 276.1, 9, 9, 50.0, 0, '2026-09-04 09:36:35'),
 (4729, 'SBI-002', 11, '2026-03-08', 30, 145.7, 1.5, 0.0, 144.2, 9, 12, 50.0, 0, '2026-09-04 09:36:35'),
 (4730, 'SBI-002', 12, '2026-03-08', 30, 9.1, 1.6, 0.0, 7.5, 9, 10, 50.0, 1, '2026-09-04 09:36:35'),
@@ -6980,7 +7612,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4765, 'SBI-002', 49, '2026-03-08', 30, 4.8, 0.6, 0.0, 4.2, 15, 21, 50.0, 1, '2026-09-04 09:36:35'),
 (4766, 'SBI-002', 48, '2026-03-08', 30, 9.0, 0.3, 0.0, 8.7, 18, 21, 50.0, 1, '2026-09-04 09:36:35'),
 (4767, 'SBI-002', 47, '2026-03-08', 30, 3.4, 0.3, 0.0, 3.1, 14, 17, 50.0, 1, '2026-09-04 09:36:35'),
-(4768, 'SBI-002', 5, '2026-03-09', 22, 1499.2, 3.3, 146.3, 1642.2, 7, 8, 70.0, 0, '2026-09-04 09:36:35'),
+(4768, 'SBI-002', 5, '2026-03-09', 22, 8995.2, 19.8, 877.8, 9853.2, 7, 8, 420.0, 0, '2026-09-04 09:36:35'),
 (4769, 'SBI-002', 10, '2026-03-09', 22, 276.1, 1.2, 0.0, 274.9, 9, 10, 50.0, 0, '2026-09-04 09:36:35'),
 (4770, 'SBI-002', 11, '2026-03-09', 22, 144.2, 1.1, 0.0, 143.1, 11, 13, 50.0, 0, '2026-09-04 09:36:35'),
 (4771, 'SBI-002', 12, '2026-03-09', 22, 7.5, 1.1, 0.0, 6.4, 10, 8, 50.0, 1, '2026-09-04 09:36:35'),
@@ -7021,7 +7653,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4806, 'SBI-002', 49, '2026-03-09', 22, 4.2, 0.4, 0.0, 3.8, 10, 11, 50.0, 1, '2026-09-04 09:36:35'),
 (4807, 'SBI-002', 48, '2026-03-09', 22, 8.7, 0.2, 0.0, 8.5, 14, 18, 50.0, 1, '2026-09-04 09:36:35'),
 (4808, 'SBI-002', 47, '2026-03-09', 22, 3.1, 0.2, 0.0, 2.9, 10, 12, 50.0, 1, '2026-09-04 09:36:35'),
-(4809, 'SBI-002', 5, '2026-03-10', 6, 1642.2, 0.8, 0.0, 1641.4, 2, 2, 70.0, 0, '2026-09-04 09:36:35'),
+(4809, 'SBI-002', 5, '2026-03-10', 6, 9853.2, 4.8, 0.0, 9848.4, 2, 2, 420.0, 0, '2026-09-04 09:36:35'),
 (4810, 'SBI-002', 10, '2026-03-10', 6, 274.9, 0.3, 0.0, 274.6, 4, 3, 50.0, 0, '2026-09-04 09:36:35'),
 (4811, 'SBI-002', 11, '2026-03-10', 6, 143.1, 0.3, 0.0, 142.8, 2, 3, 50.0, 0, '2026-09-04 09:36:35'),
 (4812, 'SBI-002', 12, '2026-03-10', 6, 6.4, 0.3, 0.0, 6.1, 4, 4, 50.0, 1, '2026-09-04 09:36:35'),
@@ -7062,7 +7694,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4847, 'SBI-002', 49, '2026-03-10', 6, 3.8, 0.1, 0.0, 3.7, 2, 3, 50.0, 1, '2026-09-04 09:36:35'),
 (4848, 'SBI-002', 48, '2026-03-10', 6, 8.5, 0.1, 0.0, 8.4, 2, 2, 50.0, 1, '2026-09-04 09:36:35'),
 (4849, 'SBI-002', 47, '2026-03-10', 6, 2.9, 0.1, 0.0, 2.8, 2, 2, 50.0, 1, '2026-09-04 09:36:35'),
-(4850, 'SBI-002', 5, '2026-03-11', 24, 1641.4, 3.1, 0.0, 1638.3, 11, 10, 70.0, 0, '2026-09-04 09:36:35'),
+(4850, 'SBI-002', 5, '2026-03-11', 24, 9848.4, 18.6, 0.0, 9829.8, 11, 10, 420.0, 0, '2026-09-04 09:36:35'),
 (4851, 'SBI-002', 10, '2026-03-11', 24, 274.6, 1.1, 0.0, 273.5, 14, 14, 50.0, 0, '2026-09-04 09:36:35'),
 (4852, 'SBI-002', 11, '2026-03-11', 24, 142.8, 1.2, 0.0, 141.6, 13, 14, 50.0, 0, '2026-09-04 09:36:35'),
 (4853, 'SBI-002', 12, '2026-03-11', 24, 6.1, 1.2, 0.0, 4.9, 10, 12, 50.0, 1, '2026-09-04 09:36:35'),
@@ -7103,7 +7735,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4888, 'SBI-002', 49, '2026-03-11', 24, 3.7, 0.5, 0.0, 3.2, 14, 13, 50.0, 1, '2026-09-04 09:36:35'),
 (4889, 'SBI-002', 48, '2026-03-11', 24, 8.4, 0.2, 0.0, 8.2, 7, 8, 50.0, 1, '2026-09-04 09:36:35'),
 (4890, 'SBI-002', 47, '2026-03-11', 24, 2.8, 0.2, 0.0, 2.6, 6, 7, 50.0, 1, '2026-09-04 09:36:35'),
-(4891, 'SBI-002', 5, '2026-03-12', 91, 1638.3, 15.2, 0.0, 1623.1, 27, 31, 70.0, 0, '2026-09-04 09:36:35'),
+(4891, 'SBI-002', 5, '2026-03-12', 91, 9829.8, 91.2, 0.0, 9738.6, 27, 31, 420.0, 0, '2026-09-04 09:36:35'),
 (4892, 'SBI-002', 10, '2026-03-12', 91, 273.5, 4.5, 0.0, 269.0, 28, 28, 50.0, 0, '2026-09-04 09:36:35'),
 (4893, 'SBI-002', 11, '2026-03-12', 91, 141.6, 4.4, 0.0, 137.2, 55, 73, 50.0, 0, '2026-09-04 09:36:35'),
 (4894, 'SBI-002', 12, '2026-03-12', 91, 4.9, 4.6, 0.0, 0.3, 38, 45, 50.0, 1, '2026-09-04 09:36:35'),
@@ -7144,7 +7776,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4929, 'SBI-002', 49, '2026-03-12', 91, 3.2, 1.8, 0.0, 1.4, 31, 26, 50.0, 1, '2026-09-04 09:36:35'),
 (4930, 'SBI-002', 48, '2026-03-12', 91, 8.2, 0.9, 0.0, 7.3, 48, 55, 50.0, 1, '2026-09-04 09:36:35'),
 (4931, 'SBI-002', 47, '2026-03-12', 91, 2.6, 0.9, 0.0, 1.7, 37, 46, 50.0, 1, '2026-09-04 09:36:35'),
-(4932, 'SBI-002', 5, '2026-03-13', 25, 1623.1, 4.1, 0.0, 1619.0, 10, 9, 70.0, 0, '2026-09-04 09:36:35'),
+(4932, 'SBI-002', 5, '2026-03-13', 25, 9738.6, 24.6, 0.0, 9714.0, 10, 9, 420.0, 0, '2026-09-04 09:36:35'),
 (4933, 'SBI-002', 10, '2026-03-13', 25, 269.0, 1.3, 0.0, 267.7, 8, 9, 50.0, 0, '2026-09-04 09:36:35'),
 (4934, 'SBI-002', 11, '2026-03-13', 25, 137.2, 1.3, 25.5, 161.4, 12, 16, 50.0, 0, '2026-09-04 09:36:35'),
 (4935, 'SBI-002', 12, '2026-03-13', 25, 0.3, 1.2, 13.9, 13.0, 12, 15, 50.0, 1, '2026-09-04 09:36:35'),
@@ -7156,11 +7788,11 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4941, 'SBI-002', 15, '2026-03-13', 25, 13.3, 0.3, 0.0, 13.0, 10, 12, 50.0, 1, '2026-09-04 09:36:35'),
 (4942, 'SBI-002', 20, '2026-03-13', 25, 2303.7, 2.6, 123.8, 2424.9, 16, 20, 50.0, 0, '2026-09-04 09:36:35'),
 (4943, 'SBI-002', 21, '2026-03-13', 25, 204.9, 0.5, 0.0, 204.4, 9, 12, 50.0, 0, '2026-09-04 09:36:35'),
-(4944, 'SBI-002', 23, '2026-03-13', 25, 26.2, 0.1, 0.0, 26.1, 9, 12, 50.0, 1, '2026-09-04 09:36:35'),
+(4944, 'SBI-002', 23, '2026-03-13', 25, 26.2, 0.1, 0.0, 26.1, 9, 12, 50.0, 1, '2026-09-04 09:36:35');
+INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
 (4945, 'SBI-002', 24, '2026-03-13', 25, 25.1, 0.5, 0.0, 24.6, 11, 9, 50.0, 1, '2026-09-04 09:36:35'),
 (4946, 'SBI-002', 25, '2026-03-13', 25, 8.4, 0.5, 0.0, 7.9, 9, 11, 50.0, 1, '2026-09-04 09:36:35'),
-(4947, 'SBI-002', 26, '2026-03-13', 25, 11.6, 0.2, 0.0, 11.4, 13, 12, 50.0, 1, '2026-09-04 09:36:35');
-INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(4947, 'SBI-002', 26, '2026-03-13', 25, 11.6, 0.2, 0.0, 11.4, 13, 12, 50.0, 1, '2026-09-04 09:36:35'),
 (4948, 'SBI-002', 30, '2026-03-13', 25, 1842.8, 7.5, 0.0, 1835.3, 11, 14, 140.0, 0, '2026-09-04 09:36:35'),
 (4949, 'SBI-002', 31, '2026-03-13', 25, 5250.1, 4.2, 121.9, 5367.8, 8, 10, 100.0, 0, '2026-09-04 09:36:35'),
 (4950, 'SBI-002', 32, '2026-03-13', 25, 3508.1, 5.5, 0.0, 3502.6, 11, 10, 120.0, 0, '2026-09-04 09:36:35'),
@@ -7186,7 +7818,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (4970, 'SBI-002', 49, '2026-03-13', 25, 1.4, 0.5, 0.0, 0.9, 13, 15, 50.0, 1, '2026-09-04 09:36:35'),
 (4971, 'SBI-002', 48, '2026-03-13', 25, 7.3, 0.3, 0.0, 7.0, 15, 19, 50.0, 1, '2026-09-04 09:36:35'),
 (4972, 'SBI-002', 47, '2026-03-13', 25, 1.7, 0.3, 0.0, 1.4, 10, 8, 50.0, 1, '2026-09-04 09:36:35'),
-(4973, 'SBI-002', 5, '2026-03-14', 50, 1619.0, 8.6, 0.0, 1610.4, 20, 20, 70.0, 0, '2026-09-04 09:36:35'),
+(4973, 'SBI-002', 5, '2026-03-14', 50, 9714.0, 51.6, 0.0, 9662.4, 20, 20, 420.0, 0, '2026-09-04 09:36:35'),
 (4974, 'SBI-002', 10, '2026-03-14', 50, 267.7, 2.5, 0.0, 265.2, 16, 21, 50.0, 0, '2026-09-04 09:36:35'),
 (4975, 'SBI-002', 11, '2026-03-14', 50, 161.4, 2.5, 49.9, 208.8, 18, 17, 50.0, 0, '2026-09-04 09:36:35'),
 (4976, 'SBI-002', 12, '2026-03-14', 50, 13.0, 2.6, 0.0, 10.4, 30, 37, 50.0, 1, '2026-09-04 09:36:35'),
@@ -7227,7 +7859,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5011, 'SBI-002', 49, '2026-03-14', 50, 0.9, 1.0, 9.1, 9.0, 20, 27, 50.0, 1, '2026-09-04 09:36:35'),
 (5012, 'SBI-002', 48, '2026-03-14', 50, 7.0, 0.5, 0.0, 6.5, 27, 22, 50.0, 1, '2026-09-04 09:36:35'),
 (5013, 'SBI-002', 47, '2026-03-14', 50, 1.4, 0.5, 0.0, 0.9, 16, 17, 50.0, 1, '2026-09-04 09:36:35'),
-(5014, 'SBI-002', 5, '2026-03-15', 14, 1610.4, 1.9, 71.2, 1679.7, 4, 4, 70.0, 0, '2026-09-04 09:36:35'),
+(5014, 'SBI-002', 5, '2026-03-15', 14, 9662.4, 11.4, 427.2, 10078.2, 4, 4, 420.0, 0, '2026-09-04 09:36:35'),
 (5015, 'SBI-002', 10, '2026-03-15', 14, 265.2, 0.7, 0.0, 264.5, 6, 7, 50.0, 0, '2026-09-04 09:36:35'),
 (5016, 'SBI-002', 11, '2026-03-15', 14, 208.8, 0.7, 0.0, 208.1, 5, 6, 50.0, 0, '2026-09-04 09:36:35'),
 (5017, 'SBI-002', 12, '2026-03-15', 14, 10.4, 0.7, 0.0, 9.7, 5, 5, 50.0, 1, '2026-09-04 09:36:35'),
@@ -7268,7 +7900,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5052, 'SBI-002', 49, '2026-03-15', 14, 9.0, 0.3, 0.0, 8.7, 7, 9, 50.0, 1, '2026-09-04 09:36:35'),
 (5053, 'SBI-002', 48, '2026-03-15', 14, 6.5, 0.1, 0.0, 6.4, 5, 6, 50.0, 1, '2026-09-04 09:36:35'),
 (5054, 'SBI-002', 47, '2026-03-15', 14, 0.9, 0.1, 3.5, 4.3, 7, 6, 50.0, 1, '2026-09-04 09:36:35'),
-(5055, 'SBI-002', 5, '2026-03-16', 5, 1679.7, 0.6, 188.9, 1868.0, 3, 4, 70.0, 0, '2026-09-04 09:36:35'),
+(5055, 'SBI-002', 5, '2026-03-16', 5, 10078.2, 3.6, 1133.4, 11208.0, 3, 4, 420.0, 0, '2026-09-04 09:36:35'),
 (5056, 'SBI-002', 10, '2026-03-16', 5, 264.5, 0.2, 0.0, 264.3, 2, 2, 50.0, 0, '2026-09-04 09:36:35'),
 (5057, 'SBI-002', 11, '2026-03-16', 5, 208.1, 0.3, 0.0, 207.8, 1, 1, 50.0, 0, '2026-09-04 09:36:35'),
 (5058, 'SBI-002', 12, '2026-03-16', 5, 9.7, 0.2, 0.0, 9.5, 2, 2, 50.0, 1, '2026-09-04 09:36:35'),
@@ -7309,7 +7941,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5093, 'SBI-002', 49, '2026-03-16', 5, 8.7, 0.1, 0.0, 8.6, 2, 2, 50.0, 1, '2026-09-04 09:36:35'),
 (5094, 'SBI-002', 48, '2026-03-16', 5, 6.4, 0.0, 0.0, 6.4, 2, 2, 50.0, 1, '2026-09-04 09:36:35'),
 (5095, 'SBI-002', 47, '2026-03-16', 5, 4.3, 0.0, 0.0, 4.3, 2, 2, 50.0, 1, '2026-09-04 09:36:35'),
-(5096, 'SBI-002', 5, '2026-03-17', 37, 1868.0, 5.2, 0.0, 1862.8, 15, 15, 70.0, 0, '2026-09-04 09:36:35'),
+(5096, 'SBI-002', 5, '2026-03-17', 37, 11208.0, 31.2, 0.0, 11176.8, 15, 15, 420.0, 0, '2026-09-04 09:36:35'),
 (5097, 'SBI-002', 10, '2026-03-17', 37, 264.3, 1.9, 0.0, 262.4, 13, 15, 50.0, 0, '2026-09-04 09:36:35'),
 (5098, 'SBI-002', 11, '2026-03-17', 37, 207.8, 1.9, 0.0, 205.9, 24, 20, 50.0, 0, '2026-09-04 09:36:35'),
 (5099, 'SBI-002', 12, '2026-03-17', 37, 9.5, 1.7, 39.6, 47.4, 13, 12, 50.0, 1, '2026-09-04 09:36:35'),
@@ -7350,7 +7982,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5134, 'SBI-002', 49, '2026-03-17', 37, 8.6, 0.7, 0.0, 7.9, 18, 15, 50.0, 1, '2026-09-04 09:36:35'),
 (5135, 'SBI-002', 48, '2026-03-17', 37, 6.4, 0.4, 0.0, 6.0, 15, 19, 50.0, 1, '2026-09-04 09:36:35'),
 (5136, 'SBI-002', 47, '2026-03-17', 37, 4.3, 0.4, 0.0, 3.9, 10, 9, 50.0, 1, '2026-09-04 09:36:35'),
-(5137, 'SBI-002', 5, '2026-03-18', 42, 1862.8, 6.8, 0.0, 1856.0, 26, 22, 70.0, 0, '2026-09-04 09:36:35'),
+(5137, 'SBI-002', 5, '2026-03-18', 42, 11176.8, 40.8, 0.0, 11136.0, 26, 22, 420.0, 0, '2026-09-04 09:36:35'),
 (5138, 'SBI-002', 10, '2026-03-18', 42, 262.4, 2.3, 0.0, 260.1, 17, 22, 50.0, 0, '2026-09-04 09:36:35'),
 (5139, 'SBI-002', 11, '2026-03-18', 42, 205.9, 2.1, 0.0, 203.8, 24, 29, 50.0, 0, '2026-09-04 09:36:35'),
 (5140, 'SBI-002', 12, '2026-03-18', 42, 47.4, 2.1, 0.0, 45.3, 17, 19, 50.0, 1, '2026-09-04 09:36:35'),
@@ -7391,7 +8023,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5175, 'SBI-002', 49, '2026-03-18', 42, 7.9, 0.8, 0.0, 7.1, 18, 23, 50.0, 1, '2026-09-04 09:36:35'),
 (5176, 'SBI-002', 48, '2026-03-18', 42, 6.0, 0.4, 0.0, 5.6, 20, 21, 50.0, 1, '2026-09-04 09:36:35'),
 (5177, 'SBI-002', 47, '2026-03-18', 42, 3.9, 0.4, 0.0, 3.5, 20, 19, 50.0, 1, '2026-09-04 09:36:35'),
-(5178, 'SBI-002', 5, '2026-03-19', 78, 1856.0, 11.1, 0.0, 1844.9, 21, 18, 70.0, 0, '2026-09-04 09:36:35'),
+(5178, 'SBI-002', 5, '2026-03-19', 78, 11136.0, 66.6, 0.0, 11069.4, 21, 18, 420.0, 0, '2026-09-04 09:36:35'),
 (5179, 'SBI-002', 10, '2026-03-19', 78, 260.1, 3.9, 28.2, 284.4, 33, 40, 50.0, 0, '2026-09-04 09:36:35'),
 (5180, 'SBI-002', 11, '2026-03-19', 78, 203.8, 3.9, 0.0, 199.9, 26, 28, 50.0, 0, '2026-09-04 09:36:35'),
 (5181, 'SBI-002', 12, '2026-03-19', 78, 45.3, 3.9, 0.0, 41.4, 48, 62, 50.0, 1, '2026-09-04 09:36:35'),
@@ -7432,7 +8064,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5216, 'SBI-002', 49, '2026-03-19', 78, 7.1, 1.6, 0.0, 5.5, 32, 27, 50.0, 1, '2026-09-04 09:36:35'),
 (5217, 'SBI-002', 48, '2026-03-19', 78, 5.6, 0.8, 0.0, 4.8, 40, 55, 50.0, 1, '2026-09-04 09:36:35'),
 (5218, 'SBI-002', 47, '2026-03-19', 78, 3.5, 0.8, 0.0, 2.7, 42, 47, 50.0, 1, '2026-09-04 09:36:35'),
-(5219, 'SBI-002', 5, '2026-03-20', 33, 1844.9, 4.8, 0.0, 1840.1, 13, 16, 70.0, 0, '2026-09-04 09:36:35'),
+(5219, 'SBI-002', 5, '2026-03-20', 33, 11069.4, 28.8, 0.0, 11040.6, 13, 16, 420.0, 0, '2026-09-04 09:36:35'),
 (5220, 'SBI-002', 10, '2026-03-20', 33, 284.4, 1.6, 0.0, 282.8, 18, 23, 50.0, 0, '2026-09-04 09:36:35'),
 (5221, 'SBI-002', 11, '2026-03-20', 33, 199.9, 1.6, 0.0, 198.3, 10, 10, 50.0, 0, '2026-09-04 09:36:35'),
 (5222, 'SBI-002', 12, '2026-03-20', 33, 41.4, 1.6, 0.0, 39.8, 13, 17, 50.0, 1, '2026-09-04 09:36:35'),
@@ -7473,7 +8105,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5257, 'SBI-002', 49, '2026-03-20', 33, 5.5, 0.7, 0.0, 4.8, 10, 13, 50.0, 1, '2026-09-04 09:36:35'),
 (5258, 'SBI-002', 48, '2026-03-20', 33, 4.8, 0.3, 0.0, 4.5, 9, 10, 50.0, 1, '2026-09-04 09:36:35'),
 (5259, 'SBI-002', 47, '2026-03-20', 33, 2.7, 0.3, 0.0, 2.4, 9, 8, 50.0, 1, '2026-09-04 09:36:35'),
-(5260, 'SBI-002', 5, '2026-03-21', 47, 1840.1, 6.8, 0.0, 1833.3, 29, 29, 70.0, 0, '2026-09-04 09:36:35'),
+(5260, 'SBI-002', 5, '2026-03-21', 47, 11040.6, 40.8, 0.0, 10999.8, 29, 29, 420.0, 0, '2026-09-04 09:36:35'),
 (5261, 'SBI-002', 10, '2026-03-21', 47, 282.8, 2.3, 0.0, 280.5, 13, 18, 50.0, 0, '2026-09-04 09:36:35'),
 (5262, 'SBI-002', 11, '2026-03-21', 47, 198.3, 2.4, 0.0, 195.9, 13, 14, 50.0, 0, '2026-09-04 09:36:35'),
 (5263, 'SBI-002', 12, '2026-03-21', 47, 39.8, 2.4, 0.0, 37.4, 20, 21, 50.0, 1, '2026-09-04 09:36:35'),
@@ -7514,7 +8146,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5298, 'SBI-002', 49, '2026-03-21', 47, 4.8, 0.9, 0.0, 3.9, 24, 28, 50.0, 1, '2026-09-04 09:36:36'),
 (5299, 'SBI-002', 48, '2026-03-21', 47, 4.5, 0.5, 0.0, 4.0, 21, 28, 50.0, 1, '2026-09-04 09:36:36'),
 (5300, 'SBI-002', 47, '2026-03-21', 47, 2.4, 0.5, 0.0, 1.9, 16, 14, 50.0, 1, '2026-09-04 09:36:36'),
-(5301, 'SBI-002', 5, '2026-03-22', 23, 1833.3, 3.7, 0.0, 1829.6, 7, 7, 70.0, 0, '2026-09-04 09:36:36'),
+(5301, 'SBI-002', 5, '2026-03-22', 23, 10999.8, 22.2, 0.0, 10977.6, 7, 7, 420.0, 0, '2026-09-04 09:36:36'),
 (5302, 'SBI-002', 10, '2026-03-22', 23, 280.5, 1.2, 0.0, 279.3, 13, 16, 50.0, 0, '2026-09-04 09:36:36'),
 (5303, 'SBI-002', 11, '2026-03-22', 23, 195.9, 1.1, 0.0, 194.8, 10, 14, 50.0, 0, '2026-09-04 09:36:36'),
 (5304, 'SBI-002', 12, '2026-03-22', 23, 37.4, 1.1, 0.0, 36.3, 6, 8, 50.0, 1, '2026-09-04 09:36:36'),
@@ -7555,7 +8187,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5339, 'SBI-002', 49, '2026-03-22', 23, 3.9, 0.5, 0.0, 3.4, 13, 17, 50.0, 1, '2026-09-04 09:36:36'),
 (5340, 'SBI-002', 48, '2026-03-22', 23, 4.0, 0.2, 0.0, 3.8, 11, 10, 50.0, 1, '2026-09-04 09:36:36'),
 (5341, 'SBI-002', 47, '2026-03-22', 23, 1.9, 0.2, 0.0, 1.7, 9, 11, 50.0, 1, '2026-09-04 09:36:36'),
-(5342, 'SBI-002', 5, '2026-03-23', 59, 1829.6, 9.5, 0.0, 1820.1, 29, 26, 70.0, 0, '2026-09-04 09:36:36'),
+(5342, 'SBI-002', 5, '2026-03-23', 59, 10977.6, 57.0, 0.0, 10920.6, 29, 26, 420.0, 0, '2026-09-04 09:36:36'),
 (5343, 'SBI-002', 10, '2026-03-23', 59, 279.3, 3.1, 0.0, 276.2, 23, 26, 50.0, 0, '2026-09-04 09:36:36'),
 (5344, 'SBI-002', 11, '2026-03-23', 59, 194.8, 3.0, 0.0, 191.8, 25, 25, 50.0, 0, '2026-09-04 09:36:36'),
 (5345, 'SBI-002', 12, '2026-03-23', 59, 36.3, 2.8, 0.0, 33.5, 35, 41, 50.0, 1, '2026-09-04 09:36:36'),
@@ -7596,7 +8228,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5380, 'SBI-002', 49, '2026-03-23', 59, 3.4, 1.2, 7.6, 9.8, 36, 47, 50.0, 1, '2026-09-04 09:36:36'),
 (5381, 'SBI-002', 48, '2026-03-23', 59, 3.8, 0.6, 0.0, 3.2, 25, 23, 50.0, 1, '2026-09-04 09:36:36'),
 (5382, 'SBI-002', 47, '2026-03-23', 59, 1.7, 0.6, 0.0, 1.1, 23, 21, 50.0, 1, '2026-09-04 09:36:36'),
-(5383, 'SBI-002', 5, '2026-03-24', 65, 1820.1, 9.3, 149.9, 1960.7, 36, 38, 70.0, 0, '2026-09-04 09:36:36'),
+(5383, 'SBI-002', 5, '2026-03-24', 65, 10920.6, 55.8, 899.4, 11764.2, 36, 38, 420.0, 0, '2026-09-04 09:36:36'),
 (5384, 'SBI-002', 10, '2026-03-24', 65, 276.2, 3.2, 0.0, 273.0, 36, 46, 50.0, 0, '2026-09-04 09:36:36'),
 (5385, 'SBI-002', 11, '2026-03-24', 65, 191.8, 3.3, 0.0, 188.5, 23, 19, 50.0, 0, '2026-09-04 09:36:36'),
 (5386, 'SBI-002', 12, '2026-03-24', 65, 33.5, 3.4, 0.0, 30.1, 20, 26, 50.0, 1, '2026-09-04 09:36:36'),
@@ -7637,17 +8269,17 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5421, 'SBI-002', 49, '2026-03-24', 65, 9.8, 1.3, 0.0, 8.5, 38, 45, 50.0, 1, '2026-09-04 09:36:36'),
 (5422, 'SBI-002', 48, '2026-03-24', 65, 3.2, 0.7, 0.0, 2.5, 24, 21, 50.0, 1, '2026-09-04 09:36:36'),
 (5423, 'SBI-002', 47, '2026-03-24', 65, 1.1, 0.6, 0.0, 0.5, 20, 24, 50.0, 1, '2026-09-04 09:36:36'),
-(5424, 'SBI-002', 5, '2026-03-25', 50, 1960.7, 6.9, 0.0, 1953.8, 32, 33, 70.0, 0, '2026-09-04 09:36:36'),
+(5424, 'SBI-002', 5, '2026-03-25', 50, 11764.2, 41.4, 0.0, 11722.8, 32, 33, 420.0, 0, '2026-09-04 09:36:36'),
 (5425, 'SBI-002', 10, '2026-03-25', 50, 273.0, 2.4, 30.7, 301.3, 13, 16, 50.0, 0, '2026-09-04 09:36:36'),
 (5426, 'SBI-002', 11, '2026-03-25', 50, 188.5, 2.5, 0.0, 186.0, 24, 25, 50.0, 0, '2026-09-04 09:36:36'),
 (5427, 'SBI-002', 12, '2026-03-25', 50, 30.1, 2.5, 0.0, 27.6, 26, 34, 50.0, 1, '2026-09-04 09:36:36'),
 (5428, 'SBI-002', 2, '2026-03-25', 50, 35.6, 2.0, 0.0, 33.6, 26, 22, 50.0, 1, '2026-09-04 09:36:36'),
 (5429, 'SBI-002', 14, '2026-03-25', 50, 24.4, 1.0, 0.0, 23.4, 18, 24, 50.0, 1, '2026-09-04 09:36:36'),
-(5430, 'SBI-002', 17, '2026-03-25', 50, 42.5, 1.0, 0.0, 41.5, 27, 26, 50.0, 1, '2026-09-04 09:36:36'),
+(5430, 'SBI-002', 17, '2026-03-25', 50, 42.5, 1.0, 0.0, 41.5, 27, 26, 50.0, 1, '2026-09-04 09:36:36');
+INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
 (5431, 'SBI-002', 18, '2026-03-25', 50, 122.9, 1.0, 0.0, 121.9, 17, 14, 50.0, 0, '2026-09-04 09:36:36'),
 (5432, 'SBI-002', 19, '2026-03-25', 50, 21.6, 1.0, 0.0, 20.6, 29, 33, 50.0, 1, '2026-09-04 09:36:36'),
-(5433, 'SBI-002', 15, '2026-03-25', 50, 8.4, 0.5, 0.0, 7.9, 17, 16, 50.0, 1, '2026-09-04 09:36:36');
-INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(5433, 'SBI-002', 15, '2026-03-25', 50, 8.4, 0.5, 0.0, 7.9, 17, 16, 50.0, 1, '2026-09-04 09:36:36'),
 (5434, 'SBI-002', 20, '2026-03-25', 50, 2702.7, 4.8, 0.0, 2697.9, 26, 28, 50.0, 0, '2026-09-04 09:36:36'),
 (5435, 'SBI-002', 21, '2026-03-25', 50, 195.4, 1.0, 0.0, 194.4, 28, 36, 50.0, 0, '2026-09-04 09:36:36'),
 (5436, 'SBI-002', 23, '2026-03-25', 50, 23.8, 0.3, 0.0, 23.5, 16, 20, 50.0, 1, '2026-09-04 09:36:36'),
@@ -7679,7 +8311,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5462, 'SBI-002', 49, '2026-03-25', 50, 8.5, 1.0, 0.0, 7.5, 29, 29, 50.0, 1, '2026-09-04 09:36:36'),
 (5463, 'SBI-002', 48, '2026-03-25', 50, 2.5, 0.5, 0.0, 2.0, 18, 23, 50.0, 1, '2026-09-04 09:36:36'),
 (5464, 'SBI-002', 47, '2026-03-25', 50, 0.5, 0.5, 0.0, 0.0, 28, 35, 50.0, 1, '2026-09-04 09:36:36'),
-(5465, 'SBI-002', 5, '2026-03-26', 60, 1953.8, 8.5, 66.2, 2011.5, 23, 22, 70.0, 0, '2026-09-04 09:36:36'),
+(5465, 'SBI-002', 5, '2026-03-26', 60, 11722.8, 51.0, 397.2, 12069.0, 23, 22, 420.0, 0, '2026-09-04 09:36:36'),
 (5466, 'SBI-002', 10, '2026-03-26', 60, 301.3, 3.1, 0.0, 298.2, 20, 23, 50.0, 0, '2026-09-04 09:36:36'),
 (5467, 'SBI-002', 11, '2026-03-26', 60, 186.0, 2.9, 0.0, 183.1, 32, 39, 50.0, 0, '2026-09-04 09:36:36'),
 (5468, 'SBI-002', 12, '2026-03-26', 60, 27.6, 3.1, 14.8, 39.3, 26, 25, 50.0, 1, '2026-09-04 09:36:36'),
@@ -7720,7 +8352,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5503, 'SBI-002', 49, '2026-03-26', 60, 7.5, 1.2, 0.0, 6.3, 15, 13, 50.0, 1, '2026-09-04 09:36:36'),
 (5504, 'SBI-002', 48, '2026-03-26', 60, 2.0, 0.6, 0.0, 1.4, 29, 36, 50.0, 1, '2026-09-04 09:36:36'),
 (5505, 'SBI-002', 47, '2026-03-26', 60, 0.0, 0.6, 12.6, 12.0, 33, 29, 50.0, 1, '2026-09-04 09:36:36'),
-(5506, 'SBI-002', 5, '2026-03-27', 57, 2011.5, 7.8, 197.7, 2201.4, 18, 24, 70.0, 0, '2026-09-04 09:36:36'),
+(5506, 'SBI-002', 5, '2026-03-27', 57, 12069.0, 46.8, 1186.2, 13208.4, 18, 24, 420.0, 0, '2026-09-04 09:36:36'),
 (5507, 'SBI-002', 10, '2026-03-27', 57, 298.2, 2.9, 0.0, 295.3, 35, 33, 50.0, 0, '2026-09-04 09:36:36'),
 (5508, 'SBI-002', 11, '2026-03-27', 57, 183.1, 3.0, 0.0, 180.1, 26, 23, 50.0, 0, '2026-09-04 09:36:36'),
 (5509, 'SBI-002', 12, '2026-03-27', 57, 39.3, 2.8, 0.0, 36.5, 18, 15, 50.0, 1, '2026-09-04 09:36:36'),
@@ -7761,7 +8393,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5544, 'SBI-002', 49, '2026-03-27', 57, 6.3, 1.2, 0.0, 5.1, 29, 36, 50.0, 1, '2026-09-04 09:36:36'),
 (5545, 'SBI-002', 48, '2026-03-27', 57, 1.4, 0.6, 0.0, 0.8, 20, 17, 50.0, 1, '2026-09-04 09:36:36'),
 (5546, 'SBI-002', 47, '2026-03-27', 57, 12.0, 0.6, 0.0, 11.4, 22, 27, 50.0, 1, '2026-09-04 09:36:36'),
-(5547, 'SBI-002', 5, '2026-03-28', 97, 2201.4, 15.1, 0.0, 2186.3, 58, 64, 70.0, 0, '2026-09-04 09:36:36'),
+(5547, 'SBI-002', 5, '2026-03-28', 97, 13208.4, 90.6, 0.0, 13117.8, 58, 64, 420.0, 0, '2026-09-04 09:36:36'),
 (5548, 'SBI-002', 10, '2026-03-28', 97, 295.3, 4.7, 0.0, 290.6, 34, 46, 50.0, 0, '2026-09-04 09:36:36'),
 (5549, 'SBI-002', 11, '2026-03-28', 97, 180.1, 4.8, 0.0, 175.3, 62, 57, 50.0, 0, '2026-09-04 09:36:36'),
 (5550, 'SBI-002', 12, '2026-03-28', 97, 36.5, 4.8, 0.0, 31.7, 36, 31, 50.0, 1, '2026-09-04 09:36:36'),
@@ -7802,7 +8434,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5585, 'SBI-002', 49, '2026-03-28', 97, 5.1, 2.0, 0.0, 3.1, 44, 53, 50.0, 1, '2026-09-04 09:36:36'),
 (5586, 'SBI-002', 48, '2026-03-28', 97, 0.8, 1.0, 17.2, 17.0, 38, 30, 50.0, 1, '2026-09-04 09:36:36'),
 (5587, 'SBI-002', 47, '2026-03-28', 97, 11.4, 1.0, 0.0, 10.4, 57, 65, 50.0, 1, '2026-09-04 09:36:36'),
-(5588, 'SBI-002', 5, '2026-03-29', 53, 2186.3, 9.7, 0.0, 2176.6, 29, 27, 70.0, 0, '2026-09-04 09:36:36'),
+(5588, 'SBI-002', 5, '2026-03-29', 53, 13117.8, 58.2, 0.0, 13059.6, 29, 27, 420.0, 0, '2026-09-04 09:36:36'),
 (5589, 'SBI-002', 10, '2026-03-29', 53, 290.6, 2.6, 17.1, 305.1, 20, 16, 50.0, 0, '2026-09-04 09:36:36'),
 (5590, 'SBI-002', 11, '2026-03-29', 53, 175.3, 2.6, 0.0, 172.7, 26, 30, 50.0, 0, '2026-09-04 09:36:36'),
 (5591, 'SBI-002', 12, '2026-03-29', 53, 31.7, 2.6, 0.0, 29.1, 21, 19, 50.0, 1, '2026-09-04 09:36:36'),
@@ -7843,7 +8475,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5626, 'SBI-002', 49, '2026-03-29', 53, 3.1, 1.1, 0.0, 2.0, 32, 44, 50.0, 1, '2026-09-04 09:36:36'),
 (5627, 'SBI-002', 48, '2026-03-29', 53, 17.0, 0.5, 0.0, 16.5, 20, 20, 50.0, 1, '2026-09-04 09:36:36'),
 (5628, 'SBI-002', 47, '2026-03-29', 53, 10.4, 0.5, 0.0, 9.9, 16, 20, 50.0, 1, '2026-09-04 09:36:36'),
-(5629, 'SBI-002', 5, '2026-03-30', 19, 2176.6, 2.7, 0.0, 2173.9, 12, 12, 70.0, 0, '2026-09-04 09:36:36'),
+(5629, 'SBI-002', 5, '2026-03-30', 19, 13059.6, 16.2, 0.0, 13043.4, 12, 12, 420.0, 0, '2026-09-04 09:36:36'),
 (5630, 'SBI-002', 10, '2026-03-30', 19, 305.1, 1.0, 23.0, 327.1, 10, 14, 50.0, 0, '2026-09-04 09:36:36'),
 (5631, 'SBI-002', 11, '2026-03-30', 19, 172.7, 0.9, 0.0, 171.8, 11, 9, 50.0, 0, '2026-09-04 09:36:36'),
 (5632, 'SBI-002', 12, '2026-03-30', 19, 29.1, 1.0, 0.0, 28.1, 10, 10, 50.0, 1, '2026-09-04 09:36:36'),
@@ -7884,7 +8516,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5667, 'SBI-002', 49, '2026-03-30', 19, 2.0, 0.4, 0.0, 1.6, 10, 12, 50.0, 1, '2026-09-04 09:36:36'),
 (5668, 'SBI-002', 48, '2026-03-30', 19, 16.5, 0.2, 0.0, 16.3, 6, 6, 50.0, 1, '2026-09-04 09:36:36'),
 (5669, 'SBI-002', 47, '2026-03-30', 19, 9.9, 0.2, 0.0, 9.7, 8, 7, 50.0, 1, '2026-09-04 09:36:36'),
-(5670, 'SBI-002', 5, '2026-03-31', 14, 2173.9, 2.0, 0.0, 2171.9, 8, 8, 70.0, 0, '2026-09-04 09:36:36'),
+(5670, 'SBI-002', 5, '2026-03-31', 14, 13043.4, 12.0, 0.0, 13031.4, 8, 8, 420.0, 0, '2026-09-04 09:36:36'),
 (5671, 'SBI-002', 10, '2026-03-31', 14, 327.1, 0.7, 0.0, 326.4, 7, 9, 50.0, 0, '2026-09-04 09:36:36'),
 (5672, 'SBI-002', 11, '2026-03-31', 14, 171.8, 0.7, 0.0, 171.1, 4, 4, 50.0, 0, '2026-09-04 09:36:36'),
 (5673, 'SBI-002', 12, '2026-03-31', 14, 28.1, 0.7, 0.0, 27.4, 6, 5, 50.0, 1, '2026-09-04 09:36:36'),
@@ -7925,7 +8557,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5708, 'SBI-002', 49, '2026-03-31', 14, 1.6, 0.3, 0.0, 1.3, 5, 5, 50.0, 1, '2026-09-04 09:36:36'),
 (5709, 'SBI-002', 48, '2026-03-31', 14, 16.3, 0.1, 0.0, 16.2, 9, 12, 50.0, 1, '2026-09-04 09:36:36'),
 (5710, 'SBI-002', 47, '2026-03-31', 14, 9.7, 0.1, 0.0, 9.6, 8, 10, 50.0, 1, '2026-09-04 09:36:36'),
-(5711, 'SBI-002', 5, '2026-04-01', 56, 2171.9, 9.4, 0.0, 2162.5, 17, 17, 70.0, 0, '2026-09-04 09:36:36'),
+(5711, 'SBI-002', 5, '2026-04-01', 56, 13031.4, 56.4, 0.0, 12975.0, 17, 17, 420.0, 0, '2026-09-04 09:36:36'),
 (5712, 'SBI-002', 10, '2026-04-01', 56, 326.4, 2.7, 0.0, 323.7, 31, 31, 50.0, 0, '2026-09-04 09:36:36'),
 (5713, 'SBI-002', 11, '2026-04-01', 56, 171.1, 2.8, 41.9, 210.2, 23, 25, 50.0, 0, '2026-09-04 09:36:36'),
 (5714, 'SBI-002', 12, '2026-04-01', 56, 27.4, 2.7, 0.0, 24.7, 14, 17, 50.0, 1, '2026-09-04 09:36:36'),
@@ -7966,7 +8598,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5749, 'SBI-002', 49, '2026-04-01', 56, 1.3, 1.1, 0.0, 0.2, 17, 20, 50.0, 1, '2026-09-04 09:36:36'),
 (5750, 'SBI-002', 48, '2026-04-01', 56, 16.2, 0.6, 0.0, 15.6, 34, 42, 50.0, 1, '2026-09-04 09:36:36'),
 (5751, 'SBI-002', 47, '2026-04-01', 56, 9.6, 0.6, 0.0, 9.0, 33, 32, 50.0, 1, '2026-09-04 09:36:36'),
-(5752, 'SBI-002', 5, '2026-04-02', 100, 2162.5, 15.8, 0.0, 2146.7, 27, 27, 70.0, 0, '2026-09-04 09:36:36'),
+(5752, 'SBI-002', 5, '2026-04-02', 100, 12975.0, 94.8, 0.0, 12880.2, 27, 27, 420.0, 0, '2026-09-04 09:36:36'),
 (5753, 'SBI-002', 10, '2026-04-02', 100, 323.7, 5.0, 0.0, 318.7, 58, 52, 50.0, 0, '2026-09-04 09:36:36'),
 (5754, 'SBI-002', 11, '2026-04-02', 100, 210.2, 5.0, 0.0, 205.2, 29, 34, 50.0, 0, '2026-09-04 09:36:36'),
 (5755, 'SBI-002', 12, '2026-04-02', 100, 24.7, 5.0, 0.0, 19.7, 28, 38, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8007,7 +8639,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5790, 'SBI-002', 49, '2026-04-02', 100, 0.2, 2.0, 14.8, 13.0, 52, 58, 50.0, 1, '2026-09-04 09:36:36'),
 (5791, 'SBI-002', 48, '2026-04-02', 100, 15.6, 1.0, 0.0, 14.6, 62, 51, 50.0, 1, '2026-09-04 09:36:36'),
 (5792, 'SBI-002', 47, '2026-04-02', 100, 9.0, 1.0, 0.0, 8.0, 40, 46, 50.0, 1, '2026-09-04 09:36:36'),
-(5793, 'SBI-002', 5, '2026-04-03', 35, 2146.7, 5.4, 0.0, 2141.3, 19, 26, 70.0, 0, '2026-09-04 09:36:36'),
+(5793, 'SBI-002', 5, '2026-04-03', 35, 12880.2, 32.4, 0.0, 12847.8, 19, 26, 420.0, 0, '2026-09-04 09:36:36'),
 (5794, 'SBI-002', 10, '2026-04-03', 35, 318.7, 1.7, 0.0, 317.0, 18, 18, 50.0, 0, '2026-09-04 09:36:36'),
 (5795, 'SBI-002', 11, '2026-04-03', 35, 205.2, 1.8, 0.0, 203.4, 20, 22, 50.0, 0, '2026-09-04 09:36:36'),
 (5796, 'SBI-002', 12, '2026-04-03', 35, 19.7, 1.7, 0.0, 18.0, 21, 20, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8048,7 +8680,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5831, 'SBI-002', 49, '2026-04-03', 35, 13.0, 0.7, 0.0, 12.3, 19, 16, 50.0, 1, '2026-09-04 09:36:36'),
 (5832, 'SBI-002', 48, '2026-04-03', 35, 14.6, 0.4, 0.0, 14.2, 10, 11, 50.0, 1, '2026-09-04 09:36:36'),
 (5833, 'SBI-002', 47, '2026-04-03', 35, 8.0, 0.3, 0.0, 7.7, 23, 25, 50.0, 1, '2026-09-04 09:36:36'),
-(5834, 'SBI-002', 5, '2026-04-04', 99, 2141.3, 14.1, 76.0, 2203.2, 64, 54, 70.0, 0, '2026-09-04 09:36:36'),
+(5834, 'SBI-002', 5, '2026-04-04', 99, 12847.8, 84.6, 456.0, 13219.2, 64, 54, 420.0, 0, '2026-09-04 09:36:36'),
 (5835, 'SBI-002', 10, '2026-04-04', 99, 317.0, 5.0, 0.0, 312.0, 43, 40, 50.0, 0, '2026-09-04 09:36:36'),
 (5836, 'SBI-002', 11, '2026-04-04', 99, 203.4, 5.3, 0.0, 198.1, 59, 72, 50.0, 0, '2026-09-04 09:36:36'),
 (5837, 'SBI-002', 12, '2026-04-04', 99, 18.0, 4.9, 0.0, 13.1, 34, 29, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8089,7 +8721,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5872, 'SBI-002', 49, '2026-04-04', 99, 12.3, 2.0, 0.0, 10.3, 41, 38, 50.0, 1, '2026-09-04 09:36:36'),
 (5873, 'SBI-002', 48, '2026-04-04', 99, 14.2, 1.0, 0.0, 13.2, 52, 51, 50.0, 1, '2026-09-04 09:36:36'),
 (5874, 'SBI-002', 47, '2026-04-04', 99, 7.7, 1.0, 0.0, 6.7, 58, 77, 50.0, 1, '2026-09-04 09:36:36'),
-(5875, 'SBI-002', 5, '2026-04-05', 23, 2203.2, 3.2, 196.4, 2396.4, 12, 13, 70.0, 0, '2026-09-04 09:36:36'),
+(5875, 'SBI-002', 5, '2026-04-05', 23, 13219.2, 19.2, 1178.4, 14378.4, 12, 13, 420.0, 0, '2026-09-04 09:36:36'),
 (5876, 'SBI-002', 10, '2026-04-05', 23, 312.0, 1.2, 0.0, 310.8, 7, 7, 50.0, 0, '2026-09-04 09:36:36'),
 (5877, 'SBI-002', 11, '2026-04-05', 23, 198.1, 1.1, 0.0, 197.0, 9, 11, 50.0, 0, '2026-09-04 09:36:36'),
 (5878, 'SBI-002', 12, '2026-04-05', 23, 13.1, 1.1, 0.0, 12.0, 7, 6, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8128,12 +8760,12 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5911, 'SBI-002', 50, '2026-04-05', 23, 25.8, 0.5, 0.0, 25.3, 11, 14, 50.0, 1, '2026-09-04 09:36:36'),
 (5912, 'SBI-002', 6, '2026-04-05', 23, 2.1, 0.1, 0.0, 2.0, 8, 10, 50.0, 1, '2026-09-04 09:36:36'),
 (5913, 'SBI-002', 49, '2026-04-05', 23, 10.3, 0.5, 0.0, 9.8, 11, 14, 50.0, 1, '2026-09-04 09:36:36'),
-(5914, 'SBI-002', 48, '2026-04-05', 23, 13.2, 0.2, 0.0, 13.0, 6, 8, 50.0, 1, '2026-09-04 09:36:36'),
-(5915, 'SBI-002', 47, '2026-04-05', 23, 6.7, 0.2, 0.0, 6.5, 12, 14, 50.0, 1, '2026-09-04 09:36:36'),
-(5916, 'SBI-002', 5, '2026-04-06', 68, 2396.4, 8.8, 0.0, 2387.6, 37, 50, 70.0, 0, '2026-09-04 09:36:36'),
-(5917, 'SBI-002', 10, '2026-04-06', 68, 310.8, 3.3, 0.0, 307.5, 35, 41, 50.0, 0, '2026-09-04 09:36:36'),
-(5918, 'SBI-002', 11, '2026-04-06', 68, 197.0, 3.3, 0.0, 193.7, 26, 24, 50.0, 0, '2026-09-04 09:36:36');
+(5914, 'SBI-002', 48, '2026-04-05', 23, 13.2, 0.2, 0.0, 13.0, 6, 8, 50.0, 1, '2026-09-04 09:36:36');
 INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(5915, 'SBI-002', 47, '2026-04-05', 23, 6.7, 0.2, 0.0, 6.5, 12, 14, 50.0, 1, '2026-09-04 09:36:36'),
+(5916, 'SBI-002', 5, '2026-04-06', 68, 14378.4, 52.8, 0.0, 14325.6, 37, 50, 420.0, 0, '2026-09-04 09:36:36'),
+(5917, 'SBI-002', 10, '2026-04-06', 68, 310.8, 3.3, 0.0, 307.5, 35, 41, 50.0, 0, '2026-09-04 09:36:36'),
+(5918, 'SBI-002', 11, '2026-04-06', 68, 197.0, 3.3, 0.0, 193.7, 26, 24, 50.0, 0, '2026-09-04 09:36:36'),
 (5919, 'SBI-002', 12, '2026-04-06', 68, 12.0, 3.3, 0.0, 8.7, 39, 50, 50.0, 1, '2026-09-04 09:36:36'),
 (5920, 'SBI-002', 2, '2026-04-06', 68, 26.6, 2.7, 0.0, 23.9, 36, 44, 50.0, 1, '2026-09-04 09:36:36'),
 (5921, 'SBI-002', 14, '2026-04-06', 68, 11.0, 1.4, 0.0, 9.6, 20, 28, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8172,7 +8804,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5954, 'SBI-002', 49, '2026-04-06', 68, 9.8, 1.3, 0.0, 8.5, 18, 24, 50.0, 1, '2026-09-04 09:36:36'),
 (5955, 'SBI-002', 48, '2026-04-06', 68, 13.0, 0.7, 0.0, 12.3, 21, 29, 50.0, 1, '2026-09-04 09:36:36'),
 (5956, 'SBI-002', 47, '2026-04-06', 68, 6.5, 0.7, 0.0, 5.8, 39, 38, 50.0, 1, '2026-09-04 09:36:36'),
-(5957, 'SBI-002', 5, '2026-04-07', 58, 2387.6, 8.1, 0.0, 2379.5, 25, 32, 70.0, 0, '2026-09-04 09:36:36'),
+(5957, 'SBI-002', 5, '2026-04-07', 58, 14325.6, 48.6, 0.0, 14277.0, 25, 32, 420.0, 0, '2026-09-04 09:36:36'),
 (5958, 'SBI-002', 10, '2026-04-07', 58, 307.5, 2.9, 0.0, 304.6, 35, 41, 50.0, 0, '2026-09-04 09:36:36'),
 (5959, 'SBI-002', 11, '2026-04-07', 58, 193.7, 2.9, 0.0, 190.8, 29, 25, 50.0, 0, '2026-09-04 09:36:36'),
 (5960, 'SBI-002', 12, '2026-04-07', 58, 8.7, 2.7, 23.1, 29.1, 29, 34, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8213,7 +8845,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (5995, 'SBI-002', 49, '2026-04-07', 58, 8.5, 1.2, 0.0, 7.3, 18, 20, 50.0, 1, '2026-09-04 09:36:36'),
 (5996, 'SBI-002', 48, '2026-04-07', 58, 12.3, 0.6, 0.0, 11.7, 33, 41, 50.0, 1, '2026-09-04 09:36:36'),
 (5997, 'SBI-002', 47, '2026-04-07', 58, 5.8, 0.6, 0.0, 5.2, 15, 17, 50.0, 1, '2026-09-04 09:36:36'),
-(5998, 'SBI-002', 5, '2026-04-08', 67, 2379.5, 10.7, 0.0, 2368.8, 24, 20, 70.0, 0, '2026-09-04 09:36:36'),
+(5998, 'SBI-002', 5, '2026-04-08', 67, 14277.0, 64.2, 0.0, 14212.8, 24, 20, 420.0, 0, '2026-09-04 09:36:36'),
 (5999, 'SBI-002', 10, '2026-04-08', 67, 304.6, 3.3, 0.0, 301.3, 18, 16, 50.0, 0, '2026-09-04 09:36:36'),
 (6000, 'SBI-002', 11, '2026-04-08', 67, 190.8, 3.5, 0.0, 187.3, 35, 39, 50.0, 0, '2026-09-04 09:36:36'),
 (6001, 'SBI-002', 12, '2026-04-08', 67, 29.1, 3.2, 0.0, 25.9, 27, 33, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8254,7 +8886,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6036, 'SBI-002', 49, '2026-04-08', 67, 7.3, 1.3, 0.0, 6.0, 26, 29, 50.0, 1, '2026-09-04 09:36:36'),
 (6037, 'SBI-002', 48, '2026-04-08', 67, 11.7, 0.7, 0.0, 11.0, 35, 33, 50.0, 1, '2026-09-04 09:36:36'),
 (6038, 'SBI-002', 47, '2026-04-08', 67, 5.2, 0.7, 0.0, 4.5, 27, 30, 50.0, 1, '2026-09-04 09:36:36'),
-(6039, 'SBI-002', 5, '2026-04-09', 89, 2368.8, 12.5, 0.0, 2356.3, 24, 19, 70.0, 0, '2026-09-04 09:36:36'),
+(6039, 'SBI-002', 5, '2026-04-09', 89, 14212.8, 75.0, 0.0, 14137.8, 24, 19, 420.0, 0, '2026-09-04 09:36:36'),
 (6040, 'SBI-002', 10, '2026-04-09', 89, 301.3, 4.5, 0.0, 296.8, 36, 50, 50.0, 0, '2026-09-04 09:36:36'),
 (6041, 'SBI-002', 11, '2026-04-09', 89, 187.3, 4.5, 0.0, 182.8, 56, 56, 50.0, 0, '2026-09-04 09:36:36'),
 (6042, 'SBI-002', 12, '2026-04-09', 89, 25.9, 4.4, 0.0, 21.5, 39, 42, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8295,7 +8927,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6077, 'SBI-002', 49, '2026-04-09', 89, 6.0, 1.8, 0.0, 4.2, 52, 61, 50.0, 1, '2026-09-04 09:36:36'),
 (6078, 'SBI-002', 48, '2026-04-09', 89, 11.0, 0.9, 0.0, 10.1, 53, 54, 50.0, 1, '2026-09-04 09:36:36'),
 (6079, 'SBI-002', 47, '2026-04-09', 89, 4.5, 0.9, 0.0, 3.6, 28, 33, 50.0, 1, '2026-09-04 09:36:36'),
-(6080, 'SBI-002', 5, '2026-04-10', 7, 2356.3, 0.9, 0.0, 2355.4, 2, 2, 70.0, 0, '2026-09-04 09:36:36'),
+(6080, 'SBI-002', 5, '2026-04-10', 7, 14137.8, 5.4, 0.0, 14132.4, 2, 2, 420.0, 0, '2026-09-04 09:36:36'),
 (6081, 'SBI-002', 10, '2026-04-10', 7, 296.8, 0.3, 0.0, 296.5, 4, 5, 50.0, 0, '2026-09-04 09:36:36'),
 (6082, 'SBI-002', 11, '2026-04-10', 7, 182.8, 0.3, 29.2, 211.7, 2, 2, 50.0, 0, '2026-09-04 09:36:36'),
 (6083, 'SBI-002', 12, '2026-04-10', 7, 21.5, 0.3, 0.0, 21.2, 3, 3, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8336,7 +8968,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6118, 'SBI-002', 49, '2026-04-10', 7, 4.2, 0.1, 0.0, 4.1, 4, 5, 50.0, 1, '2026-09-04 09:36:36'),
 (6119, 'SBI-002', 48, '2026-04-10', 7, 10.1, 0.1, 0.0, 10.0, 3, 3, 50.0, 1, '2026-09-04 09:36:36'),
 (6120, 'SBI-002', 47, '2026-04-10', 7, 3.6, 0.1, 0.0, 3.5, 2, 2, 50.0, 1, '2026-09-04 09:36:36'),
-(6121, 'SBI-002', 5, '2026-04-11', 65, 2355.4, 10.5, 143.4, 2488.3, 24, 20, 70.0, 0, '2026-09-04 09:36:36'),
+(6121, 'SBI-002', 5, '2026-04-11', 65, 14132.4, 63.0, 860.4, 14929.8, 24, 20, 420.0, 0, '2026-09-04 09:36:36'),
 (6122, 'SBI-002', 10, '2026-04-11', 65, 296.5, 3.2, 0.0, 293.3, 20, 21, 50.0, 0, '2026-09-04 09:36:36'),
 (6123, 'SBI-002', 11, '2026-04-11', 65, 211.7, 3.3, 0.0, 208.4, 40, 54, 50.0, 0, '2026-09-04 09:36:36'),
 (6124, 'SBI-002', 12, '2026-04-11', 65, 21.2, 3.1, 0.0, 18.1, 18, 17, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8377,7 +9009,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6159, 'SBI-002', 49, '2026-04-11', 65, 4.1, 1.3, 0.0, 2.8, 42, 34, 50.0, 1, '2026-09-04 09:36:36'),
 (6160, 'SBI-002', 48, '2026-04-11', 65, 10.0, 0.6, 0.0, 9.4, 20, 23, 50.0, 1, '2026-09-04 09:36:36'),
 (6161, 'SBI-002', 47, '2026-04-11', 65, 3.5, 0.7, 0.0, 2.8, 26, 23, 50.0, 1, '2026-09-04 09:36:36'),
-(6162, 'SBI-002', 5, '2026-04-12', 27, 2488.3, 3.8, 0.0, 2484.5, 13, 13, 70.0, 0, '2026-09-04 09:36:36'),
+(6162, 'SBI-002', 5, '2026-04-12', 27, 14929.8, 22.8, 0.0, 14907.0, 13, 13, 420.0, 0, '2026-09-04 09:36:36'),
 (6163, 'SBI-002', 10, '2026-04-12', 27, 293.3, 1.4, 0.0, 291.9, 8, 8, 50.0, 0, '2026-09-04 09:36:36'),
 (6164, 'SBI-002', 11, '2026-04-12', 27, 208.4, 1.3, 12.5, 219.6, 11, 15, 50.0, 0, '2026-09-04 09:36:36'),
 (6165, 'SBI-002', 12, '2026-04-12', 27, 18.1, 1.4, 0.0, 16.7, 10, 12, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8418,7 +9050,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6200, 'SBI-002', 49, '2026-04-12', 27, 2.8, 0.5, 0.0, 2.3, 10, 8, 50.0, 1, '2026-09-04 09:36:36'),
 (6201, 'SBI-002', 48, '2026-04-12', 27, 9.4, 0.3, 0.0, 9.1, 17, 16, 50.0, 1, '2026-09-04 09:36:36'),
 (6202, 'SBI-002', 47, '2026-04-12', 27, 2.8, 0.3, 0.0, 2.5, 15, 14, 50.0, 1, '2026-09-04 09:36:36'),
-(6203, 'SBI-002', 5, '2026-04-13', 58, 2484.5, 10.1, 0.0, 2474.4, 33, 42, 70.0, 0, '2026-09-04 09:36:36'),
+(6203, 'SBI-002', 5, '2026-04-13', 58, 14907.0, 60.6, 0.0, 14846.4, 33, 42, 420.0, 0, '2026-09-04 09:36:36'),
 (6204, 'SBI-002', 10, '2026-04-13', 58, 291.9, 2.8, 43.4, 332.5, 31, 35, 50.0, 0, '2026-09-04 09:36:36'),
 (6205, 'SBI-002', 11, '2026-04-13', 58, 219.6, 2.8, 0.0, 216.8, 23, 21, 50.0, 0, '2026-09-04 09:36:36'),
 (6206, 'SBI-002', 12, '2026-04-13', 58, 16.7, 2.8, 0.0, 13.9, 21, 24, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8459,7 +9091,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6241, 'SBI-002', 49, '2026-04-13', 58, 2.3, 1.2, 0.0, 1.1, 29, 33, 50.0, 1, '2026-09-04 09:36:36'),
 (6242, 'SBI-002', 48, '2026-04-13', 58, 9.1, 0.6, 0.0, 8.5, 29, 24, 50.0, 1, '2026-09-04 09:36:36'),
 (6243, 'SBI-002', 47, '2026-04-13', 58, 2.5, 0.6, 0.0, 1.9, 34, 37, 50.0, 1, '2026-09-04 09:36:36'),
-(6244, 'SBI-002', 5, '2026-04-14', 6, 2474.4, 0.8, 0.0, 2473.6, 2, 2, 70.0, 0, '2026-09-04 09:36:36'),
+(6244, 'SBI-002', 5, '2026-04-14', 6, 14846.4, 4.8, 0.0, 14841.6, 2, 2, 420.0, 0, '2026-09-04 09:36:36'),
 (6245, 'SBI-002', 10, '2026-04-14', 6, 332.5, 0.3, 0.0, 332.2, 2, 3, 50.0, 0, '2026-09-04 09:36:36'),
 (6246, 'SBI-002', 11, '2026-04-14', 6, 216.8, 0.3, 0.0, 216.5, 3, 3, 50.0, 0, '2026-09-04 09:36:36'),
 (6247, 'SBI-002', 12, '2026-04-14', 6, 13.9, 0.3, 0.0, 13.6, 2, 2, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8500,7 +9132,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6282, 'SBI-002', 49, '2026-04-14', 6, 1.1, 0.1, 0.0, 1.0, 3, 4, 50.0, 1, '2026-09-04 09:36:36'),
 (6283, 'SBI-002', 48, '2026-04-14', 6, 8.5, 0.1, 0.0, 8.4, 4, 4, 50.0, 1, '2026-09-04 09:36:36'),
 (6284, 'SBI-002', 47, '2026-04-14', 6, 1.9, 0.1, 0.0, 1.8, 3, 4, 50.0, 1, '2026-09-04 09:36:36'),
-(6285, 'SBI-002', 5, '2026-04-15', 20, 2473.6, 3.0, 0.0, 2470.6, 12, 16, 70.0, 0, '2026-09-04 09:36:36'),
+(6285, 'SBI-002', 5, '2026-04-15', 20, 14841.6, 18.0, 0.0, 14823.6, 12, 16, 420.0, 0, '2026-09-04 09:36:36'),
 (6286, 'SBI-002', 10, '2026-04-15', 20, 332.2, 0.9, 0.0, 331.3, 7, 6, 50.0, 0, '2026-09-04 09:36:36'),
 (6287, 'SBI-002', 11, '2026-04-15', 20, 216.5, 1.0, 23.6, 239.1, 8, 8, 50.0, 0, '2026-09-04 09:36:36'),
 (6288, 'SBI-002', 12, '2026-04-15', 20, 13.6, 1.0, 0.0, 12.6, 6, 6, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8541,7 +9173,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6323, 'SBI-002', 49, '2026-04-15', 20, 1.0, 0.4, 0.0, 0.6, 9, 7, 50.0, 1, '2026-09-04 09:36:36'),
 (6324, 'SBI-002', 48, '2026-04-15', 20, 8.4, 0.2, 0.0, 8.2, 7, 6, 50.0, 1, '2026-09-04 09:36:36'),
 (6325, 'SBI-002', 47, '2026-04-15', 20, 1.8, 0.2, 0.0, 1.6, 10, 11, 50.0, 1, '2026-09-04 09:36:36'),
-(6326, 'SBI-002', 5, '2026-04-16', 63, 2470.6, 8.7, 155.7, 2617.6, 16, 17, 70.0, 0, '2026-09-04 09:36:36'),
+(6326, 'SBI-002', 5, '2026-04-16', 63, 14823.6, 52.2, 934.2, 15705.6, 16, 17, 420.0, 0, '2026-09-04 09:36:36'),
 (6327, 'SBI-002', 10, '2026-04-16', 63, 331.3, 3.1, 0.0, 328.2, 17, 17, 50.0, 0, '2026-09-04 09:36:36'),
 (6328, 'SBI-002', 11, '2026-04-16', 63, 239.1, 3.2, 0.0, 235.9, 34, 41, 50.0, 0, '2026-09-04 09:36:36'),
 (6329, 'SBI-002', 12, '2026-04-16', 63, 12.6, 3.2, 0.0, 9.4, 21, 23, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8582,7 +9214,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6364, 'SBI-002', 49, '2026-04-16', 63, 0.6, 1.3, 19.7, 19.0, 37, 48, 50.0, 1, '2026-09-04 09:36:36'),
 (6365, 'SBI-002', 48, '2026-04-16', 63, 8.2, 0.6, 0.0, 7.6, 40, 45, 50.0, 1, '2026-09-04 09:36:36'),
 (6366, 'SBI-002', 47, '2026-04-16', 63, 1.6, 0.6, 0.0, 1.0, 20, 25, 50.0, 1, '2026-09-04 09:36:36'),
-(6367, 'SBI-002', 5, '2026-04-17', 16, 2617.6, 2.6, 0.0, 2615.0, 8, 11, 70.0, 0, '2026-09-04 09:36:36'),
+(6367, 'SBI-002', 5, '2026-04-17', 16, 15705.6, 15.6, 0.0, 15690.0, 8, 11, 420.0, 0, '2026-09-04 09:36:36'),
 (6368, 'SBI-002', 10, '2026-04-17', 16, 328.2, 0.8, 0.0, 327.4, 7, 6, 50.0, 0, '2026-09-04 09:36:36'),
 (6369, 'SBI-002', 11, '2026-04-17', 16, 235.9, 0.9, 0.0, 235.0, 7, 7, 50.0, 0, '2026-09-04 09:36:36'),
 (6370, 'SBI-002', 12, '2026-04-17', 16, 9.4, 0.8, 0.0, 8.6, 9, 8, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8616,15 +9248,15 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6398, 'SBI-002', 51, '2026-04-17', 16, 76.0, 0.8, 0.0, 75.2, 8, 10, 50.0, 0, '2026-09-04 09:36:36'),
 (6399, 'SBI-002', 41, '2026-04-17', 16, 86.3, 0.5, 0.0, 85.8, 10, 9, 50.0, 0, '2026-09-04 09:36:36'),
 (6400, 'SBI-002', 53, '2026-04-17', 16, 14.5, 0.2, 0.0, 14.3, 9, 8, 50.0, 1, '2026-09-04 09:36:36'),
-(6401, 'SBI-002', 46, '2026-04-17', 16, 26.0, 0.3, 0.0, 25.7, 7, 6, 50.0, 1, '2026-09-04 09:36:36'),
+(6401, 'SBI-002', 46, '2026-04-17', 16, 26.0, 0.3, 0.0, 25.7, 7, 6, 50.0, 1, '2026-09-04 09:36:36');
+INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
 (6402, 'SBI-002', 52, '2026-04-17', 16, 6.2, 0.1, 0.0, 6.1, 8, 8, 50.0, 1, '2026-09-04 09:36:36'),
 (6403, 'SBI-002', 50, '2026-04-17', 16, 14.7, 0.3, 0.0, 14.4, 9, 8, 50.0, 1, '2026-09-04 09:36:36'),
 (6404, 'SBI-002', 6, '2026-04-17', 16, 1.8, 0.1, 0.0, 1.7, 10, 9, 50.0, 1, '2026-09-04 09:36:36'),
-(6405, 'SBI-002', 49, '2026-04-17', 16, 19.0, 0.3, 0.0, 18.7, 9, 8, 50.0, 1, '2026-09-04 09:36:36');
-INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(6405, 'SBI-002', 49, '2026-04-17', 16, 19.0, 0.3, 0.0, 18.7, 9, 8, 50.0, 1, '2026-09-04 09:36:36'),
 (6406, 'SBI-002', 48, '2026-04-17', 16, 7.6, 0.2, 0.0, 7.4, 7, 7, 50.0, 1, '2026-09-04 09:36:36'),
 (6407, 'SBI-002', 47, '2026-04-17', 16, 1.0, 0.2, 0.0, 0.8, 6, 7, 50.0, 1, '2026-09-04 09:36:36'),
-(6408, 'SBI-002', 5, '2026-04-18', 45, 2615.0, 6.6, 0.0, 2608.4, 20, 21, 70.0, 0, '2026-09-04 09:36:36'),
+(6408, 'SBI-002', 5, '2026-04-18', 45, 15690.0, 39.6, 0.0, 15650.4, 20, 21, 420.0, 0, '2026-09-04 09:36:36'),
 (6409, 'SBI-002', 10, '2026-04-18', 45, 327.4, 2.4, 49.2, 374.2, 17, 22, 50.0, 0, '2026-09-04 09:36:36'),
 (6410, 'SBI-002', 11, '2026-04-18', 45, 235.0, 2.1, 0.0, 232.9, 28, 27, 50.0, 0, '2026-09-04 09:36:36'),
 (6411, 'SBI-002', 12, '2026-04-18', 45, 8.6, 2.1, 0.0, 6.5, 20, 27, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8665,7 +9297,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6446, 'SBI-002', 49, '2026-04-18', 45, 18.7, 0.9, 0.0, 17.8, 14, 20, 50.0, 1, '2026-09-04 09:36:36'),
 (6447, 'SBI-002', 48, '2026-04-18', 45, 7.4, 0.4, 0.0, 7.0, 22, 28, 50.0, 1, '2026-09-04 09:36:36'),
 (6448, 'SBI-002', 47, '2026-04-18', 45, 0.8, 0.5, 0.0, 0.3, 25, 27, 50.0, 1, '2026-09-04 09:36:36'),
-(6449, 'SBI-002', 5, '2026-04-19', 69, 2608.4, 10.4, 0.0, 2598.0, 39, 45, 70.0, 0, '2026-09-04 09:36:36'),
+(6449, 'SBI-002', 5, '2026-04-19', 69, 15650.4, 62.4, 0.0, 15588.0, 39, 45, 420.0, 0, '2026-09-04 09:36:36'),
 (6450, 'SBI-002', 10, '2026-04-19', 69, 374.2, 3.3, 0.0, 370.9, 22, 25, 50.0, 0, '2026-09-04 09:36:36'),
 (6451, 'SBI-002', 11, '2026-04-19', 69, 232.9, 3.5, 0.0, 229.4, 33, 31, 50.0, 0, '2026-09-04 09:36:36'),
 (6452, 'SBI-002', 12, '2026-04-19', 69, 6.5, 3.3, 0.0, 3.2, 40, 36, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8706,7 +9338,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6487, 'SBI-002', 49, '2026-04-19', 69, 17.8, 1.4, 0.0, 16.4, 34, 36, 50.0, 1, '2026-09-04 09:36:36'),
 (6488, 'SBI-002', 48, '2026-04-19', 69, 7.0, 0.7, 0.0, 6.3, 28, 39, 50.0, 1, '2026-09-04 09:36:36'),
 (6489, 'SBI-002', 47, '2026-04-19', 69, 0.3, 0.7, 19.4, 19.0, 31, 27, 50.0, 1, '2026-09-04 09:36:36'),
-(6490, 'SBI-002', 5, '2026-04-20', 81, 2598.0, 11.9, 0.0, 2586.1, 30, 39, 70.0, 0, '2026-09-04 09:36:36'),
+(6490, 'SBI-002', 5, '2026-04-20', 81, 15588.0, 71.4, 0.0, 15516.6, 30, 39, 420.0, 0, '2026-09-04 09:36:36'),
 (6491, 'SBI-002', 10, '2026-04-20', 81, 370.9, 4.1, 0.0, 366.8, 48, 53, 50.0, 0, '2026-09-04 09:36:36'),
 (6492, 'SBI-002', 11, '2026-04-20', 81, 229.4, 4.1, 0.0, 225.3, 39, 34, 50.0, 0, '2026-09-04 09:36:36'),
 (6493, 'SBI-002', 12, '2026-04-20', 81, 3.2, 3.8, 20.6, 20.0, 36, 49, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8747,7 +9379,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6528, 'SBI-002', 49, '2026-04-20', 81, 16.4, 1.6, 0.0, 14.8, 22, 21, 50.0, 1, '2026-09-04 09:36:36'),
 (6529, 'SBI-002', 48, '2026-04-20', 81, 6.3, 0.8, 0.0, 5.5, 46, 40, 50.0, 1, '2026-09-04 09:36:36'),
 (6530, 'SBI-002', 47, '2026-04-20', 81, 19.0, 0.8, 0.0, 18.2, 34, 30, 50.0, 1, '2026-09-04 09:36:36'),
-(6531, 'SBI-002', 5, '2026-04-21', 5, 2586.1, 0.7, 0.0, 2585.4, 2, 3, 70.0, 0, '2026-09-04 09:36:36'),
+(6531, 'SBI-002', 5, '2026-04-21', 5, 15516.6, 4.2, 0.0, 15512.4, 2, 3, 420.0, 0, '2026-09-04 09:36:36'),
 (6532, 'SBI-002', 10, '2026-04-21', 5, 366.8, 0.3, 0.0, 366.5, 2, 2, 50.0, 0, '2026-09-04 09:36:36'),
 (6533, 'SBI-002', 11, '2026-04-21', 5, 225.3, 0.3, 0.0, 225.0, 3, 2, 50.0, 0, '2026-09-04 09:36:36'),
 (6534, 'SBI-002', 12, '2026-04-21', 5, 20.0, 0.2, 0.0, 19.8, 2, 3, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8788,7 +9420,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6569, 'SBI-002', 49, '2026-04-21', 5, 14.8, 0.1, 0.0, 14.7, 3, 4, 50.0, 1, '2026-09-04 09:36:36'),
 (6570, 'SBI-002', 48, '2026-04-21', 5, 5.5, 0.1, 0.0, 5.4, 3, 4, 50.0, 1, '2026-09-04 09:36:36'),
 (6571, 'SBI-002', 47, '2026-04-21', 5, 18.2, 0.0, 0.0, 18.2, 2, 2, 50.0, 1, '2026-09-04 09:36:36'),
-(6572, 'SBI-002', 5, '2026-04-22', 62, 2585.4, 9.6, 0.0, 2575.8, 23, 24, 70.0, 0, '2026-09-04 09:36:36'),
+(6572, 'SBI-002', 5, '2026-04-22', 62, 15512.4, 57.6, 0.0, 15454.8, 23, 24, 420.0, 0, '2026-09-04 09:36:36'),
 (6573, 'SBI-002', 10, '2026-04-22', 62, 366.5, 3.1, 0.0, 363.4, 40, 40, 50.0, 0, '2026-09-04 09:36:36'),
 (6574, 'SBI-002', 11, '2026-04-22', 62, 225.0, 3.1, 0.0, 221.9, 27, 35, 50.0, 0, '2026-09-04 09:36:36'),
 (6575, 'SBI-002', 12, '2026-04-22', 62, 19.8, 3.1, 0.0, 16.7, 17, 20, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8829,7 +9461,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6610, 'SBI-002', 49, '2026-04-22', 62, 14.7, 1.3, 0.0, 13.4, 19, 24, 50.0, 1, '2026-09-04 09:36:36'),
 (6611, 'SBI-002', 48, '2026-04-22', 62, 5.4, 0.6, 0.0, 4.8, 37, 37, 50.0, 1, '2026-09-04 09:36:36'),
 (6612, 'SBI-002', 47, '2026-04-22', 62, 18.2, 0.6, 0.0, 17.6, 21, 23, 50.0, 1, '2026-09-04 09:36:36'),
-(6613, 'SBI-002', 5, '2026-04-23', 11, 2575.8, 1.6, 0.0, 2574.2, 5, 7, 70.0, 0, '2026-09-04 09:36:36'),
+(6613, 'SBI-002', 5, '2026-04-23', 11, 15454.8, 9.6, 0.0, 15445.2, 5, 7, 420.0, 0, '2026-09-04 09:36:36'),
 (6614, 'SBI-002', 10, '2026-04-23', 11, 363.4, 0.6, 0.0, 362.8, 4, 4, 50.0, 0, '2026-09-04 09:36:36'),
 (6615, 'SBI-002', 11, '2026-04-23', 11, 221.9, 0.5, 40.1, 261.5, 3, 3, 50.0, 0, '2026-09-04 09:36:36'),
 (6616, 'SBI-002', 12, '2026-04-23', 11, 16.7, 0.6, 0.0, 16.1, 7, 9, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8870,7 +9502,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6651, 'SBI-002', 49, '2026-04-23', 11, 13.4, 0.2, 0.0, 13.2, 3, 3, 50.0, 1, '2026-09-04 09:36:36'),
 (6652, 'SBI-002', 48, '2026-04-23', 11, 4.8, 0.1, 3.8, 8.5, 4, 5, 50.0, 1, '2026-09-04 09:36:36'),
 (6653, 'SBI-002', 47, '2026-04-23', 11, 17.6, 0.1, 0.0, 17.5, 3, 3, 50.0, 1, '2026-09-04 09:36:36'),
-(6654, 'SBI-002', 5, '2026-04-24', 12, 2574.2, 1.8, 0.0, 2572.4, 4, 5, 70.0, 0, '2026-09-04 09:36:36'),
+(6654, 'SBI-002', 5, '2026-04-24', 12, 15445.2, 10.8, 0.0, 15434.4, 4, 5, 420.0, 0, '2026-09-04 09:36:36'),
 (6655, 'SBI-002', 10, '2026-04-24', 12, 362.8, 0.6, 0.0, 362.2, 4, 4, 50.0, 0, '2026-09-04 09:36:36'),
 (6656, 'SBI-002', 11, '2026-04-24', 12, 261.5, 0.6, 0.0, 260.9, 4, 5, 50.0, 0, '2026-09-04 09:36:36'),
 (6657, 'SBI-002', 12, '2026-04-24', 12, 16.1, 0.6, 23.8, 39.3, 7, 8, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8911,7 +9543,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6692, 'SBI-002', 49, '2026-04-24', 12, 13.2, 0.2, 0.0, 13.0, 5, 5, 50.0, 1, '2026-09-04 09:36:36'),
 (6693, 'SBI-002', 48, '2026-04-24', 12, 8.5, 0.1, 0.0, 8.4, 3, 3, 50.0, 1, '2026-09-04 09:36:36'),
 (6694, 'SBI-002', 47, '2026-04-24', 12, 17.5, 0.1, 0.0, 17.4, 7, 7, 50.0, 1, '2026-09-04 09:36:36'),
-(6695, 'SBI-002', 5, '2026-04-25', 8, 2572.4, 1.1, 0.0, 2571.3, 3, 4, 70.0, 0, '2026-09-04 09:36:36'),
+(6695, 'SBI-002', 5, '2026-04-25', 8, 15434.4, 6.6, 0.0, 15427.8, 3, 4, 420.0, 0, '2026-09-04 09:36:36'),
 (6696, 'SBI-002', 10, '2026-04-25', 8, 362.2, 0.4, 0.0, 361.8, 3, 3, 50.0, 0, '2026-09-04 09:36:36'),
 (6697, 'SBI-002', 11, '2026-04-25', 8, 260.9, 0.4, 0.0, 260.5, 4, 5, 50.0, 0, '2026-09-04 09:36:36'),
 (6698, 'SBI-002', 12, '2026-04-25', 8, 39.3, 0.4, 0.0, 38.9, 2, 2, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8952,7 +9584,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6733, 'SBI-002', 49, '2026-04-25', 8, 13.0, 0.2, 0.0, 12.8, 4, 4, 50.0, 1, '2026-09-04 09:36:36'),
 (6734, 'SBI-002', 48, '2026-04-25', 8, 8.4, 0.1, 0.0, 8.3, 5, 6, 50.0, 1, '2026-09-04 09:36:36'),
 (6735, 'SBI-002', 47, '2026-04-25', 8, 17.4, 0.1, 0.0, 17.3, 4, 5, 50.0, 1, '2026-09-04 09:36:36'),
-(6736, 'SBI-002', 5, '2026-04-26', 21, 2571.3, 3.1, 0.0, 2568.2, 12, 14, 70.0, 0, '2026-09-04 09:36:36'),
+(6736, 'SBI-002', 5, '2026-04-26', 21, 15427.8, 18.6, 0.0, 15409.2, 12, 14, 420.0, 0, '2026-09-04 09:36:36'),
 (6737, 'SBI-002', 10, '2026-04-26', 21, 361.8, 1.1, 0.0, 360.7, 7, 7, 50.0, 0, '2026-09-04 09:36:36'),
 (6738, 'SBI-002', 11, '2026-04-26', 21, 260.5, 1.1, 0.0, 259.4, 8, 11, 50.0, 0, '2026-09-04 09:36:36'),
 (6739, 'SBI-002', 12, '2026-04-26', 21, 38.9, 1.0, 0.0, 37.9, 13, 18, 50.0, 1, '2026-09-04 09:36:36'),
@@ -8993,7 +9625,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6774, 'SBI-002', 49, '2026-04-26', 21, 12.8, 0.4, 0.0, 12.4, 8, 10, 50.0, 1, '2026-09-04 09:36:36'),
 (6775, 'SBI-002', 48, '2026-04-26', 21, 8.3, 0.2, 0.0, 8.1, 9, 8, 50.0, 1, '2026-09-04 09:36:36'),
 (6776, 'SBI-002', 47, '2026-04-26', 21, 17.3, 0.2, 0.0, 17.1, 6, 8, 50.0, 1, '2026-09-04 09:36:36'),
-(6777, 'SBI-002', 5, '2026-04-27', 57, 2568.2, 8.2, 0.0, 2560.0, 24, 20, 70.0, 0, '2026-09-04 09:36:36'),
+(6777, 'SBI-002', 5, '2026-04-27', 57, 15409.2, 49.2, 0.0, 15360.0, 24, 20, 420.0, 0, '2026-09-04 09:36:36'),
 (6778, 'SBI-002', 10, '2026-04-27', 57, 360.7, 3.0, 0.0, 357.7, 23, 25, 50.0, 0, '2026-09-04 09:36:36'),
 (6779, 'SBI-002', 11, '2026-04-27', 57, 259.4, 2.8, 0.0, 256.6, 15, 17, 50.0, 0, '2026-09-04 09:36:36'),
 (6780, 'SBI-002', 12, '2026-04-27', 57, 37.9, 2.8, 27.7, 62.8, 21, 19, 50.0, 0, '2026-09-04 09:36:36'),
@@ -9034,7 +9666,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6815, 'SBI-002', 49, '2026-04-27', 57, 12.4, 1.1, 0.0, 11.3, 35, 36, 50.0, 1, '2026-09-04 09:36:36'),
 (6816, 'SBI-002', 48, '2026-04-27', 57, 8.1, 0.6, 0.0, 7.5, 30, 25, 50.0, 1, '2026-09-04 09:36:36'),
 (6817, 'SBI-002', 47, '2026-04-27', 57, 17.1, 0.6, 0.0, 16.5, 21, 23, 50.0, 1, '2026-09-04 09:36:36'),
-(6818, 'SBI-002', 5, '2026-04-28', 34, 2560.0, 5.3, 0.0, 2554.7, 17, 24, 70.0, 0, '2026-09-04 09:36:36'),
+(6818, 'SBI-002', 5, '2026-04-28', 34, 15360.0, 31.8, 0.0, 15328.2, 17, 24, 420.0, 0, '2026-09-04 09:36:36'),
 (6819, 'SBI-002', 10, '2026-04-28', 34, 357.7, 1.8, 0.0, 355.9, 20, 24, 50.0, 0, '2026-09-04 09:36:36'),
 (6820, 'SBI-002', 11, '2026-04-28', 34, 256.6, 1.7, 0.0, 254.9, 15, 13, 50.0, 0, '2026-09-04 09:36:36'),
 (6821, 'SBI-002', 12, '2026-04-28', 34, 62.8, 1.8, 0.0, 61.0, 20, 22, 50.0, 0, '2026-09-04 09:36:36'),
@@ -9075,7 +9707,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6856, 'SBI-002', 49, '2026-04-28', 34, 11.3, 0.7, 0.0, 10.6, 14, 12, 50.0, 1, '2026-09-04 09:36:36'),
 (6857, 'SBI-002', 48, '2026-04-28', 34, 7.5, 0.3, 0.0, 7.2, 21, 18, 50.0, 1, '2026-09-04 09:36:36'),
 (6858, 'SBI-002', 47, '2026-04-28', 34, 16.5, 0.3, 0.0, 16.2, 19, 22, 50.0, 1, '2026-09-04 09:36:36'),
-(6859, 'SBI-002', 5, '2026-04-29', 77, 2554.7, 10.7, 0.0, 2544.0, 35, 30, 70.0, 0, '2026-09-04 09:36:36'),
+(6859, 'SBI-002', 5, '2026-04-29', 77, 15328.2, 64.2, 0.0, 15264.0, 35, 30, 420.0, 0, '2026-09-04 09:36:36'),
 (6860, 'SBI-002', 10, '2026-04-29', 77, 355.9, 3.9, 0.0, 352.0, 49, 67, 50.0, 0, '2026-09-04 09:36:36'),
 (6861, 'SBI-002', 11, '2026-04-29', 77, 254.9, 3.8, 0.0, 251.1, 32, 31, 50.0, 0, '2026-09-04 09:36:36'),
 (6862, 'SBI-002', 12, '2026-04-29', 77, 61.0, 3.7, 0.0, 57.3, 44, 36, 50.0, 0, '2026-09-04 09:36:36'),
@@ -9105,19 +9737,19 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6886, 'SBI-002', 40, '2026-04-29', 77, 13.4, 0.4, 0.0, 13.0, 49, 40, 50.0, 1, '2026-09-04 09:36:36'),
 (6887, 'SBI-002', 39, '2026-04-29', 77, 9.2, 0.4, 0.0, 8.8, 32, 28, 50.0, 1, '2026-09-04 09:36:36'),
 (6888, 'SBI-002', 44, '2026-04-29', 77, 1673.8, 13.7, 0.0, 1660.1, 24, 27, 100.0, 0, '2026-09-04 09:36:36'),
-(6889, 'SBI-002', 45, '2026-04-29', 77, 1617.0, 16.9, 0.0, 1600.1, 21, 22, 100.0, 0, '2026-09-04 09:36:36'),
+(6889, 'SBI-002', 45, '2026-04-29', 77, 1617.0, 16.9, 0.0, 1600.1, 21, 22, 100.0, 0, '2026-09-04 09:36:36');
+INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
 (6890, 'SBI-002', 51, '2026-04-29', 77, 54.9, 3.7, 0.0, 51.2, 39, 54, 50.0, 0, '2026-09-04 09:36:36'),
 (6891, 'SBI-002', 41, '2026-04-29', 77, 94.7, 2.3, 0.0, 92.4, 50, 64, 50.0, 0, '2026-09-04 09:36:36'),
 (6892, 'SBI-002', 53, '2026-04-29', 77, 15.2, 0.8, 0.0, 14.4, 47, 42, 50.0, 1, '2026-09-04 09:36:36'),
-(6893, 'SBI-002', 46, '2026-04-29', 77, 17.6, 1.5, 0.0, 16.1, 41, 43, 50.0, 1, '2026-09-04 09:36:36');
-INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(6893, 'SBI-002', 46, '2026-04-29', 77, 17.6, 1.5, 0.0, 16.1, 41, 43, 50.0, 1, '2026-09-04 09:36:36'),
 (6894, 'SBI-002', 52, '2026-04-29', 77, 7.7, 0.4, 0.0, 7.3, 50, 53, 50.0, 1, '2026-09-04 09:36:36'),
 (6895, 'SBI-002', 50, '2026-04-29', 77, 6.4, 1.6, 0.0, 4.8, 42, 43, 50.0, 1, '2026-09-04 09:36:36'),
 (6896, 'SBI-002', 6, '2026-04-29', 77, 16.8, 0.4, 0.0, 16.4, 30, 33, 50.0, 1, '2026-09-04 09:36:36'),
 (6897, 'SBI-002', 49, '2026-04-29', 77, 10.6, 1.6, 0.0, 9.0, 38, 46, 50.0, 1, '2026-09-04 09:36:36'),
 (6898, 'SBI-002', 48, '2026-04-29', 77, 7.2, 0.8, 0.0, 6.4, 22, 26, 50.0, 1, '2026-09-04 09:36:36'),
 (6899, 'SBI-002', 47, '2026-04-29', 77, 16.2, 0.8, 0.0, 15.4, 26, 26, 50.0, 1, '2026-09-04 09:36:36'),
-(6900, 'SBI-002', 5, '2026-04-30', 47, 2544.0, 7.3, 0.0, 2536.7, 20, 24, 70.0, 0, '2026-09-04 09:36:36'),
+(6900, 'SBI-002', 5, '2026-04-30', 47, 15264.0, 43.8, 0.0, 15220.2, 20, 24, 420.0, 0, '2026-09-04 09:36:36'),
 (6901, 'SBI-002', 10, '2026-04-30', 47, 352.0, 2.5, 0.0, 349.5, 16, 16, 50.0, 0, '2026-09-04 09:36:36'),
 (6902, 'SBI-002', 11, '2026-04-30', 47, 251.1, 2.3, 0.0, 248.8, 30, 39, 50.0, 0, '2026-09-04 09:36:36'),
 (6903, 'SBI-002', 12, '2026-04-30', 47, 57.3, 2.3, 0.0, 55.0, 30, 41, 50.0, 0, '2026-09-04 09:36:36'),
@@ -9158,7 +9790,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6938, 'SBI-002', 49, '2026-04-30', 47, 9.0, 0.9, 0.0, 8.1, 30, 31, 50.0, 1, '2026-09-04 09:36:36'),
 (6939, 'SBI-002', 48, '2026-04-30', 47, 6.4, 0.5, 0.0, 5.9, 20, 26, 50.0, 1, '2026-09-04 09:36:36'),
 (6940, 'SBI-002', 47, '2026-04-30', 47, 15.4, 0.5, 0.0, 14.9, 17, 23, 50.0, 1, '2026-09-04 09:36:36'),
-(6941, 'SBI-002', 5, '2026-05-01', 37, 2536.7, 5.3, 0.0, 2531.4, 18, 17, 70.0, 0, '2026-09-04 09:36:36'),
+(6941, 'SBI-002', 5, '2026-05-01', 37, 15220.2, 31.8, 0.0, 15188.4, 18, 17, 420.0, 0, '2026-09-04 09:36:36'),
 (6942, 'SBI-002', 10, '2026-05-01', 37, 349.5, 1.8, 11.1, 358.8, 19, 21, 50.0, 0, '2026-09-04 09:36:36'),
 (6943, 'SBI-002', 11, '2026-05-01', 37, 248.8, 1.9, 0.0, 246.9, 18, 22, 50.0, 0, '2026-09-04 09:36:36'),
 (6944, 'SBI-002', 12, '2026-05-01', 37, 55.0, 2.1, 0.0, 52.9, 14, 13, 50.0, 0, '2026-09-04 09:36:36'),
@@ -9199,7 +9831,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (6979, 'SBI-002', 49, '2026-05-01', 37, 8.1, 0.7, 0.0, 7.4, 13, 14, 50.0, 1, '2026-09-04 09:36:37'),
 (6980, 'SBI-002', 48, '2026-05-01', 37, 5.9, 0.4, 0.0, 5.5, 23, 31, 50.0, 1, '2026-09-04 09:36:37'),
 (6981, 'SBI-002', 47, '2026-05-01', 37, 14.9, 0.4, 0.0, 14.5, 14, 13, 50.0, 1, '2026-09-04 09:36:37'),
-(6982, 'SBI-002', 5, '2026-05-02', 81, 2531.4, 11.1, 165.9, 2686.2, 52, 69, 70.0, 0, '2026-09-04 09:36:37'),
+(6982, 'SBI-002', 5, '2026-05-02', 81, 15188.4, 66.6, 995.4, 16117.2, 52, 69, 420.0, 0, '2026-09-04 09:36:37'),
 (6983, 'SBI-002', 10, '2026-05-02', 81, 358.8, 4.0, 0.0, 354.8, 28, 36, 50.0, 0, '2026-09-04 09:36:37'),
 (6984, 'SBI-002', 11, '2026-05-02', 81, 246.9, 4.2, 0.0, 242.7, 44, 38, 50.0, 0, '2026-09-04 09:36:37'),
 (6985, 'SBI-002', 12, '2026-05-02', 81, 52.9, 4.1, 0.0, 48.8, 39, 44, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9240,7 +9872,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7020, 'SBI-002', 49, '2026-05-02', 81, 7.4, 1.6, 0.0, 5.8, 26, 23, 50.0, 1, '2026-09-04 09:36:37'),
 (7021, 'SBI-002', 48, '2026-05-02', 81, 5.5, 0.8, 0.0, 4.7, 40, 48, 50.0, 1, '2026-09-04 09:36:37'),
 (7022, 'SBI-002', 47, '2026-05-02', 81, 14.5, 0.8, 0.0, 13.7, 39, 41, 50.0, 1, '2026-09-04 09:36:37'),
-(7023, 'SBI-002', 5, '2026-05-03', 73, 2686.2, 10.1, 0.0, 2676.1, 41, 36, 70.0, 0, '2026-09-04 09:36:37'),
+(7023, 'SBI-002', 5, '2026-05-03', 73, 16117.2, 60.6, 0.0, 16056.6, 41, 36, 420.0, 0, '2026-09-04 09:36:37'),
 (7024, 'SBI-002', 10, '2026-05-03', 73, 354.8, 3.6, 0.0, 351.2, 29, 41, 50.0, 0, '2026-09-04 09:36:37'),
 (7025, 'SBI-002', 11, '2026-05-03', 73, 242.7, 3.9, 0.0, 238.8, 26, 35, 50.0, 0, '2026-09-04 09:36:37'),
 (7026, 'SBI-002', 12, '2026-05-03', 73, 48.8, 3.8, 0.0, 45.0, 46, 64, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9281,7 +9913,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7061, 'SBI-002', 49, '2026-05-03', 73, 5.8, 1.5, 0.0, 4.3, 18, 15, 50.0, 1, '2026-09-04 09:36:37'),
 (7062, 'SBI-002', 48, '2026-05-03', 73, 4.7, 0.7, 0.0, 4.0, 34, 41, 50.0, 1, '2026-09-04 09:36:37'),
 (7063, 'SBI-002', 47, '2026-05-03', 73, 13.7, 0.7, 0.0, 13.0, 20, 20, 50.0, 1, '2026-09-04 09:36:37'),
-(7064, 'SBI-002', 5, '2026-05-04', 10, 2676.1, 1.5, 0.0, 2674.6, 6, 8, 70.0, 0, '2026-09-04 09:36:37'),
+(7064, 'SBI-002', 5, '2026-05-04', 10, 16056.6, 9.0, 0.0, 16047.6, 6, 8, 420.0, 0, '2026-09-04 09:36:37'),
 (7065, 'SBI-002', 10, '2026-05-04', 10, 351.2, 0.5, 0.0, 350.7, 3, 4, 50.0, 0, '2026-09-04 09:36:37'),
 (7066, 'SBI-002', 11, '2026-05-04', 10, 238.8, 0.5, 0.0, 238.3, 5, 7, 50.0, 0, '2026-09-04 09:36:37'),
 (7067, 'SBI-002', 12, '2026-05-04', 10, 45.0, 0.5, 0.0, 44.5, 3, 3, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9322,7 +9954,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7102, 'SBI-002', 49, '2026-05-04', 10, 4.3, 0.2, 0.0, 4.1, 4, 4, 50.0, 1, '2026-09-04 09:36:37'),
 (7103, 'SBI-002', 48, '2026-05-04', 10, 4.0, 0.1, 0.0, 3.9, 6, 6, 50.0, 1, '2026-09-04 09:36:37'),
 (7104, 'SBI-002', 47, '2026-05-04', 10, 13.0, 0.1, 0.0, 12.9, 3, 4, 50.0, 1, '2026-09-04 09:36:37'),
-(7105, 'SBI-002', 5, '2026-05-05', 99, 2674.6, 16.2, 0.0, 2658.4, 39, 44, 70.0, 0, '2026-09-04 09:36:37'),
+(7105, 'SBI-002', 5, '2026-05-05', 99, 16047.6, 97.2, 0.0, 15950.4, 39, 44, 420.0, 0, '2026-09-04 09:36:37'),
 (7106, 'SBI-002', 10, '2026-05-05', 99, 350.7, 5.0, 0.0, 345.7, 42, 35, 50.0, 0, '2026-09-04 09:36:37'),
 (7107, 'SBI-002', 11, '2026-05-05', 99, 238.3, 5.0, 0.0, 233.3, 30, 35, 50.0, 0, '2026-09-04 09:36:37'),
 (7108, 'SBI-002', 12, '2026-05-05', 99, 44.5, 4.7, 0.0, 39.8, 40, 51, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9363,7 +9995,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7143, 'SBI-002', 49, '2026-05-05', 99, 4.1, 2.0, 0.0, 2.1, 44, 56, 50.0, 1, '2026-09-04 09:36:37'),
 (7144, 'SBI-002', 48, '2026-05-05', 99, 3.9, 1.0, 0.0, 2.9, 47, 42, 50.0, 1, '2026-09-04 09:36:37'),
 (7145, 'SBI-002', 47, '2026-05-05', 99, 12.9, 1.0, 0.0, 11.9, 58, 58, 50.0, 1, '2026-09-04 09:36:37'),
-(7146, 'SBI-002', 5, '2026-05-06', 93, 2658.4, 15.3, 0.0, 2643.1, 52, 53, 70.0, 0, '2026-09-04 09:36:37'),
+(7146, 'SBI-002', 5, '2026-05-06', 93, 15950.4, 91.8, 0.0, 15858.6, 52, 53, 420.0, 0, '2026-09-04 09:36:37'),
 (7147, 'SBI-002', 10, '2026-05-06', 93, 345.7, 4.7, 25.4, 366.4, 48, 44, 50.0, 0, '2026-09-04 09:36:37'),
 (7148, 'SBI-002', 11, '2026-05-06', 93, 233.3, 4.4, 0.0, 228.9, 33, 28, 50.0, 0, '2026-09-04 09:36:37'),
 (7149, 'SBI-002', 12, '2026-05-06', 93, 39.8, 5.0, 0.0, 34.8, 41, 52, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9404,7 +10036,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7184, 'SBI-002', 49, '2026-05-06', 93, 2.1, 1.9, 0.0, 0.2, 48, 64, 50.0, 1, '2026-09-04 09:36:37'),
 (7185, 'SBI-002', 48, '2026-05-06', 93, 2.9, 0.9, 0.0, 2.0, 28, 24, 50.0, 1, '2026-09-04 09:36:37'),
 (7186, 'SBI-002', 47, '2026-05-06', 93, 11.9, 0.9, 0.0, 11.0, 39, 39, 50.0, 1, '2026-09-04 09:36:37'),
-(7187, 'SBI-002', 5, '2026-05-07', 100, 2643.1, 14.5, 0.0, 2628.6, 37, 41, 70.0, 0, '2026-09-04 09:36:37'),
+(7187, 'SBI-002', 5, '2026-05-07', 100, 15858.6, 87.0, 0.0, 15771.6, 37, 41, 420.0, 0, '2026-09-04 09:36:37'),
 (7188, 'SBI-002', 10, '2026-05-07', 100, 366.4, 5.1, 0.0, 361.3, 52, 61, 50.0, 0, '2026-09-04 09:36:37'),
 (7189, 'SBI-002', 11, '2026-05-07', 100, 228.9, 4.9, 0.0, 224.0, 30, 35, 50.0, 0, '2026-09-04 09:36:37'),
 (7190, 'SBI-002', 12, '2026-05-07', 100, 34.8, 4.9, 0.0, 29.9, 34, 43, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9445,7 +10077,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7225, 'SBI-002', 49, '2026-05-07', 100, 0.2, 2.0, 6.8, 5.0, 54, 75, 50.0, 1, '2026-09-04 09:36:37'),
 (7226, 'SBI-002', 48, '2026-05-07', 100, 2.0, 1.0, 0.0, 1.0, 51, 68, 50.0, 1, '2026-09-04 09:36:37'),
 (7227, 'SBI-002', 47, '2026-05-07', 100, 11.0, 1.0, 0.0, 10.0, 39, 33, 50.0, 1, '2026-09-04 09:36:37'),
-(7228, 'SBI-002', 5, '2026-05-08', 39, 2628.6, 6.0, 0.0, 2622.6, 10, 14, 70.0, 0, '2026-09-04 09:36:37'),
+(7228, 'SBI-002', 5, '2026-05-08', 39, 15771.6, 36.0, 0.0, 15735.6, 10, 14, 420.0, 0, '2026-09-04 09:36:37'),
 (7229, 'SBI-002', 10, '2026-05-08', 39, 361.3, 2.0, 0.0, 359.3, 12, 11, 50.0, 0, '2026-09-04 09:36:37'),
 (7230, 'SBI-002', 11, '2026-05-08', 39, 224.0, 1.9, 0.0, 222.1, 25, 21, 50.0, 0, '2026-09-04 09:36:37'),
 (7231, 'SBI-002', 12, '2026-05-08', 39, 29.9, 1.9, 0.0, 28.0, 24, 30, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9486,7 +10118,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7266, 'SBI-002', 49, '2026-05-08', 39, 5.0, 0.8, 0.0, 4.2, 19, 26, 50.0, 1, '2026-09-04 09:36:37'),
 (7267, 'SBI-002', 48, '2026-05-08', 39, 1.0, 0.4, 0.0, 0.6, 22, 26, 50.0, 1, '2026-09-04 09:36:37'),
 (7268, 'SBI-002', 47, '2026-05-08', 39, 10.0, 0.4, 0.0, 9.6, 11, 14, 50.0, 1, '2026-09-04 09:36:37'),
-(7269, 'SBI-002', 5, '2026-05-09', 59, 2622.6, 8.4, 0.0, 2614.2, 31, 25, 70.0, 0, '2026-09-04 09:36:37'),
+(7269, 'SBI-002', 5, '2026-05-09', 59, 15735.6, 50.4, 0.0, 15685.2, 31, 25, 420.0, 0, '2026-09-04 09:36:37'),
 (7270, 'SBI-002', 10, '2026-05-09', 59, 359.3, 3.1, 0.0, 356.2, 32, 40, 50.0, 0, '2026-09-04 09:36:37'),
 (7271, 'SBI-002', 11, '2026-05-09', 59, 222.1, 2.9, 0.0, 219.2, 21, 23, 50.0, 0, '2026-09-04 09:36:37'),
 (7272, 'SBI-002', 12, '2026-05-09', 59, 28.0, 2.8, 0.0, 25.2, 19, 23, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9527,7 +10159,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7307, 'SBI-002', 49, '2026-05-09', 59, 4.2, 1.2, 0.0, 3.0, 27, 26, 50.0, 1, '2026-09-04 09:36:37'),
 (7308, 'SBI-002', 48, '2026-05-09', 59, 0.6, 0.6, 0.0, 0.0, 16, 17, 50.0, 1, '2026-09-04 09:36:37'),
 (7309, 'SBI-002', 47, '2026-05-09', 59, 9.6, 0.6, 0.0, 9.0, 25, 23, 50.0, 1, '2026-09-04 09:36:37'),
-(7310, 'SBI-002', 5, '2026-05-10', 93, 2614.2, 14.7, 0.0, 2599.5, 57, 74, 70.0, 0, '2026-09-04 09:36:37'),
+(7310, 'SBI-002', 5, '2026-05-10', 93, 15685.2, 88.2, 0.0, 15597.0, 57, 74, 420.0, 0, '2026-09-04 09:36:37'),
 (7311, 'SBI-002', 10, '2026-05-10', 93, 356.2, 4.6, 0.0, 351.6, 50, 68, 50.0, 0, '2026-09-04 09:36:37'),
 (7312, 'SBI-002', 11, '2026-05-10', 93, 219.2, 5.0, 0.0, 214.2, 25, 26, 50.0, 0, '2026-09-04 09:36:37'),
 (7313, 'SBI-002', 12, '2026-05-10', 93, 25.2, 4.9, 0.0, 20.3, 56, 60, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9568,7 +10200,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7348, 'SBI-002', 49, '2026-05-10', 93, 3.0, 1.9, 0.0, 1.1, 60, 79, 50.0, 1, '2026-09-04 09:36:37'),
 (7349, 'SBI-002', 48, '2026-05-10', 93, 0.0, 0.9, 14.9, 14.0, 49, 61, 50.0, 1, '2026-09-04 09:36:37'),
 (7350, 'SBI-002', 47, '2026-05-10', 93, 9.0, 0.9, 0.0, 8.1, 26, 26, 50.0, 1, '2026-09-04 09:36:37'),
-(7351, 'SBI-002', 5, '2026-05-11', 90, 2599.5, 12.7, 0.0, 2586.8, 55, 61, 70.0, 0, '2026-09-04 09:36:37'),
+(7351, 'SBI-002', 5, '2026-05-11', 90, 15597.0, 76.2, 0.0, 15520.8, 55, 61, 420.0, 0, '2026-09-04 09:36:37'),
 (7352, 'SBI-002', 10, '2026-05-11', 90, 351.6, 4.7, 0.0, 346.9, 46, 61, 50.0, 0, '2026-09-04 09:36:37'),
 (7353, 'SBI-002', 11, '2026-05-11', 90, 214.2, 4.4, 22.8, 232.6, 39, 54, 50.0, 0, '2026-09-04 09:36:37'),
 (7354, 'SBI-002', 12, '2026-05-11', 90, 20.3, 4.4, 0.0, 15.9, 46, 45, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9590,12 +10222,12 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7370, 'SBI-002', 34, '2026-05-11', 90, 1257.0, 32.5, 0.0, 1224.5, 57, 60, 150.0, 0, '2026-09-04 09:36:37'),
 (7371, 'SBI-002', 35, '2026-05-11', 90, 2721.9, 9.2, 0.0, 2712.7, 39, 32, 50.0, 0, '2026-09-04 09:36:37'),
 (7372, 'SBI-002', 36, '2026-05-11', 90, 3064.2, 8.2, 0.0, 3056.0, 34, 47, 50.0, 0, '2026-09-04 09:36:37'),
-(7373, 'SBI-002', 33, '2026-05-11', 90, 5062.3, 19.2, 0.0, 5043.1, 24, 30, 100.0, 0, '2026-09-04 09:36:37'),
+(7373, 'SBI-002', 33, '2026-05-11', 90, 5062.3, 19.2, 0.0, 5043.1, 24, 30, 100.0, 0, '2026-09-04 09:36:37');
+INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
 (7374, 'SBI-002', 37, '2026-05-11', 90, 1518.9, 4.5, 0.0, 1514.4, 24, 24, 50.0, 0, '2026-09-04 09:36:37'),
 (7375, 'SBI-002', 38, '2026-05-11', 90, 1558.8, 4.4, 0.0, 1554.4, 37, 36, 50.0, 0, '2026-09-04 09:36:37'),
 (7376, 'SBI-002', 43, '2026-05-11', 90, 366.2, 9.1, 0.0, 357.1, 56, 65, 50.0, 0, '2026-09-04 09:36:37'),
-(7377, 'SBI-002', 42, '2026-05-11', 90, 4619.0, 49.5, 0.0, 4569.5, 49, 68, 240.0, 0, '2026-09-04 09:36:37');
-INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(7377, 'SBI-002', 42, '2026-05-11', 90, 4619.0, 49.5, 0.0, 4569.5, 49, 68, 240.0, 0, '2026-09-04 09:36:37'),
 (7378, 'SBI-002', 40, '2026-05-11', 90, 9.3, 0.5, 0.0, 8.8, 35, 34, 50.0, 1, '2026-09-04 09:36:37'),
 (7379, 'SBI-002', 39, '2026-05-11', 90, 5.1, 0.5, 0.0, 4.6, 57, 78, 50.0, 1, '2026-09-04 09:36:37'),
 (7380, 'SBI-002', 44, '2026-05-11', 90, 1695.4, 18.7, 0.0, 1676.7, 38, 38, 100.0, 0, '2026-09-04 09:36:37'),
@@ -9610,7 +10242,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7389, 'SBI-002', 49, '2026-05-11', 90, 1.1, 1.8, 8.7, 8.0, 46, 62, 50.0, 1, '2026-09-04 09:36:37'),
 (7390, 'SBI-002', 48, '2026-05-11', 90, 14.0, 0.9, 0.0, 13.1, 40, 48, 50.0, 1, '2026-09-04 09:36:37'),
 (7391, 'SBI-002', 47, '2026-05-11', 90, 8.1, 0.9, 0.0, 7.2, 27, 25, 50.0, 1, '2026-09-04 09:36:37'),
-(7392, 'SBI-002', 5, '2026-05-12', 79, 2586.8, 13.1, 0.0, 2573.7, 48, 55, 70.0, 0, '2026-09-04 09:36:37'),
+(7392, 'SBI-002', 5, '2026-05-12', 79, 15520.8, 78.6, 0.0, 15442.2, 48, 55, 420.0, 0, '2026-09-04 09:36:37'),
 (7393, 'SBI-002', 10, '2026-05-12', 79, 346.9, 3.9, 47.4, 390.4, 37, 34, 50.0, 0, '2026-09-04 09:36:37'),
 (7394, 'SBI-002', 11, '2026-05-12', 79, 232.6, 4.0, 0.0, 228.6, 29, 38, 50.0, 0, '2026-09-04 09:36:37'),
 (7395, 'SBI-002', 12, '2026-05-12', 79, 15.9, 4.1, 0.0, 11.8, 47, 39, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9651,7 +10283,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7430, 'SBI-002', 49, '2026-05-12', 79, 8.0, 1.6, 0.0, 6.4, 50, 58, 50.0, 1, '2026-09-04 09:36:37'),
 (7431, 'SBI-002', 48, '2026-05-12', 79, 13.1, 0.8, 0.0, 12.3, 33, 41, 50.0, 1, '2026-09-04 09:36:37'),
 (7432, 'SBI-002', 47, '2026-05-12', 79, 7.2, 0.8, 0.0, 6.4, 31, 41, 50.0, 1, '2026-09-04 09:36:37'),
-(7433, 'SBI-002', 5, '2026-05-13', 53, 2573.7, 8.6, 0.0, 2565.1, 21, 17, 70.0, 0, '2026-09-04 09:36:37'),
+(7433, 'SBI-002', 5, '2026-05-13', 53, 15442.2, 51.6, 0.0, 15390.6, 21, 17, 420.0, 0, '2026-09-04 09:36:37'),
 (7434, 'SBI-002', 10, '2026-05-13', 53, 390.4, 2.7, 0.0, 387.7, 21, 26, 50.0, 0, '2026-09-04 09:36:37'),
 (7435, 'SBI-002', 11, '2026-05-13', 53, 228.6, 2.6, 0.0, 226.0, 33, 33, 50.0, 0, '2026-09-04 09:36:37'),
 (7436, 'SBI-002', 12, '2026-05-13', 53, 11.8, 2.6, 0.0, 9.2, 15, 20, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9692,7 +10324,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7471, 'SBI-002', 49, '2026-05-13', 53, 6.4, 1.1, 0.0, 5.3, 23, 30, 50.0, 1, '2026-09-04 09:36:37'),
 (7472, 'SBI-002', 48, '2026-05-13', 53, 12.3, 0.5, 0.0, 11.8, 15, 13, 50.0, 1, '2026-09-04 09:36:37'),
 (7473, 'SBI-002', 47, '2026-05-13', 53, 6.4, 0.5, 0.0, 5.9, 15, 16, 50.0, 1, '2026-09-04 09:36:37'),
-(7474, 'SBI-002', 5, '2026-05-14', 25, 2565.1, 3.7, 88.5, 2649.9, 8, 10, 70.0, 0, '2026-09-04 09:36:37'),
+(7474, 'SBI-002', 5, '2026-05-14', 25, 15390.6, 22.2, 531.0, 15899.4, 8, 10, 420.0, 0, '2026-09-04 09:36:37'),
 (7475, 'SBI-002', 10, '2026-05-14', 25, 387.7, 1.2, 0.0, 386.5, 9, 9, 50.0, 0, '2026-09-04 09:36:37'),
 (7476, 'SBI-002', 11, '2026-05-14', 25, 226.0, 1.3, 15.0, 239.7, 11, 10, 50.0, 0, '2026-09-04 09:36:37'),
 (7477, 'SBI-002', 12, '2026-05-14', 25, 9.2, 1.2, 0.0, 8.0, 14, 13, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9733,7 +10365,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7512, 'SBI-002', 49, '2026-05-14', 25, 5.3, 0.5, 0.0, 4.8, 13, 13, 50.0, 1, '2026-09-04 09:36:37'),
 (7513, 'SBI-002', 48, '2026-05-14', 25, 11.8, 0.2, 0.0, 11.6, 11, 13, 50.0, 1, '2026-09-04 09:36:37'),
 (7514, 'SBI-002', 47, '2026-05-14', 25, 5.9, 0.2, 0.0, 5.7, 12, 14, 50.0, 1, '2026-09-04 09:36:37'),
-(7515, 'SBI-002', 5, '2026-05-15', 85, 2649.9, 11.6, 0.0, 2638.3, 23, 23, 70.0, 0, '2026-09-04 09:36:37'),
+(7515, 'SBI-002', 5, '2026-05-15', 85, 15899.4, 69.6, 0.0, 15829.8, 23, 23, 420.0, 0, '2026-09-04 09:36:37'),
 (7516, 'SBI-002', 10, '2026-05-15', 85, 386.5, 4.1, 0.0, 382.4, 52, 45, 50.0, 0, '2026-09-04 09:36:37'),
 (7517, 'SBI-002', 11, '2026-05-15', 85, 239.7, 4.5, 0.0, 235.2, 54, 62, 50.0, 0, '2026-09-04 09:36:37'),
 (7518, 'SBI-002', 12, '2026-05-15', 85, 8.0, 4.1, 0.0, 3.9, 21, 26, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9774,7 +10406,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7553, 'SBI-002', 49, '2026-05-15', 85, 4.8, 1.7, 0.0, 3.1, 38, 31, 50.0, 1, '2026-09-04 09:36:37'),
 (7554, 'SBI-002', 48, '2026-05-15', 85, 11.6, 0.9, 0.0, 10.7, 46, 44, 50.0, 1, '2026-09-04 09:36:37'),
 (7555, 'SBI-002', 47, '2026-05-15', 85, 5.7, 0.9, 0.0, 4.8, 28, 29, 50.0, 1, '2026-09-04 09:36:37'),
-(7556, 'SBI-002', 5, '2026-05-16', 49, 2638.3, 7.4, 0.0, 2630.9, 21, 23, 70.0, 0, '2026-09-04 09:36:37'),
+(7556, 'SBI-002', 5, '2026-05-16', 49, 15829.8, 44.4, 0.0, 15785.4, 21, 23, 420.0, 0, '2026-09-04 09:36:37'),
 (7557, 'SBI-002', 10, '2026-05-16', 49, 382.4, 2.4, 0.0, 380.0, 23, 25, 50.0, 0, '2026-09-04 09:36:37'),
 (7558, 'SBI-002', 11, '2026-05-16', 49, 235.2, 2.3, 0.0, 232.9, 27, 36, 50.0, 0, '2026-09-04 09:36:37'),
 (7559, 'SBI-002', 12, '2026-05-16', 49, 3.9, 2.5, 0.0, 1.4, 31, 42, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9815,7 +10447,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7594, 'SBI-002', 49, '2026-05-16', 49, 3.1, 1.0, 0.0, 2.1, 20, 23, 50.0, 1, '2026-09-04 09:36:37'),
 (7595, 'SBI-002', 48, '2026-05-16', 49, 10.7, 0.5, 0.0, 10.2, 25, 26, 50.0, 1, '2026-09-04 09:36:37'),
 (7596, 'SBI-002', 47, '2026-05-16', 49, 4.8, 0.5, 0.0, 4.3, 31, 29, 50.0, 1, '2026-09-04 09:36:37'),
-(7597, 'SBI-002', 5, '2026-05-17', 68, 2630.9, 11.1, 0.0, 2619.8, 32, 37, 70.0, 0, '2026-09-04 09:36:37'),
+(7597, 'SBI-002', 5, '2026-05-17', 68, 15785.4, 66.6, 0.0, 15718.8, 32, 37, 420.0, 0, '2026-09-04 09:36:37'),
 (7598, 'SBI-002', 10, '2026-05-17', 68, 380.0, 3.4, 47.9, 424.5, 25, 20, 50.0, 0, '2026-09-04 09:36:37'),
 (7599, 'SBI-002', 11, '2026-05-17', 68, 232.9, 3.4, 0.0, 229.5, 31, 30, 50.0, 0, '2026-09-04 09:36:37'),
 (7600, 'SBI-002', 12, '2026-05-17', 68, 1.4, 3.3, 10.9, 9.0, 18, 21, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9856,7 +10488,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7635, 'SBI-002', 49, '2026-05-17', 68, 2.1, 1.4, 0.0, 0.7, 21, 23, 50.0, 1, '2026-09-04 09:36:37'),
 (7636, 'SBI-002', 48, '2026-05-17', 68, 10.2, 0.7, 0.0, 9.5, 39, 53, 50.0, 1, '2026-09-04 09:36:37'),
 (7637, 'SBI-002', 47, '2026-05-17', 68, 4.3, 0.7, 0.0, 3.6, 32, 41, 50.0, 1, '2026-09-04 09:36:37'),
-(7638, 'SBI-002', 5, '2026-05-18', 43, 2619.8, 6.0, 0.0, 2613.8, 17, 15, 70.0, 0, '2026-09-04 09:36:37'),
+(7638, 'SBI-002', 5, '2026-05-18', 43, 15718.8, 36.0, 0.0, 15682.8, 17, 15, 420.0, 0, '2026-09-04 09:36:37'),
 (7639, 'SBI-002', 10, '2026-05-18', 43, 424.5, 2.1, 0.0, 422.4, 13, 11, 50.0, 0, '2026-09-04 09:36:37'),
 (7640, 'SBI-002', 11, '2026-05-18', 43, 229.5, 2.2, 35.2, 262.5, 28, 35, 50.0, 0, '2026-09-04 09:36:37'),
 (7641, 'SBI-002', 12, '2026-05-18', 43, 9.0, 2.2, 0.0, 6.8, 21, 25, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9897,7 +10529,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7676, 'SBI-002', 49, '2026-05-18', 43, 0.7, 0.9, 6.2, 6.0, 13, 13, 50.0, 1, '2026-09-04 09:36:37'),
 (7677, 'SBI-002', 48, '2026-05-18', 43, 9.5, 0.4, 0.0, 9.1, 18, 15, 50.0, 1, '2026-09-04 09:36:37'),
 (7678, 'SBI-002', 47, '2026-05-18', 43, 3.6, 0.4, 0.0, 3.2, 12, 16, 50.0, 1, '2026-09-04 09:36:37'),
-(7679, 'SBI-002', 5, '2026-05-19', 47, 2613.8, 7.7, 0.0, 2606.1, 30, 41, 70.0, 0, '2026-09-04 09:36:37'),
+(7679, 'SBI-002', 5, '2026-05-19', 47, 15682.8, 46.2, 0.0, 15636.6, 30, 41, 420.0, 0, '2026-09-04 09:36:37'),
 (7680, 'SBI-002', 10, '2026-05-19', 47, 422.4, 2.4, 0.0, 420.0, 29, 32, 50.0, 0, '2026-09-04 09:36:37'),
 (7681, 'SBI-002', 11, '2026-05-19', 47, 262.5, 2.2, 0.0, 260.3, 13, 11, 50.0, 0, '2026-09-04 09:36:37'),
 (7682, 'SBI-002', 12, '2026-05-19', 47, 6.8, 2.4, 0.0, 4.4, 28, 32, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9938,7 +10570,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7717, 'SBI-002', 49, '2026-05-19', 47, 6.0, 0.9, 0.0, 5.1, 14, 13, 50.0, 1, '2026-09-04 09:36:37'),
 (7718, 'SBI-002', 48, '2026-05-19', 47, 9.1, 0.5, 0.0, 8.6, 20, 24, 50.0, 1, '2026-09-04 09:36:37'),
 (7719, 'SBI-002', 47, '2026-05-19', 47, 3.2, 0.5, 0.0, 2.7, 26, 29, 50.0, 1, '2026-09-04 09:36:37'),
-(7720, 'SBI-002', 5, '2026-05-20', 18, 2606.1, 2.6, 0.0, 2603.5, 7, 6, 70.0, 0, '2026-09-04 09:36:37'),
+(7720, 'SBI-002', 5, '2026-05-20', 18, 15636.6, 15.6, 0.0, 15621.0, 7, 6, 420.0, 0, '2026-09-04 09:36:37'),
 (7721, 'SBI-002', 10, '2026-05-20', 18, 420.0, 0.9, 0.0, 419.1, 9, 9, 50.0, 0, '2026-09-04 09:36:37'),
 (7722, 'SBI-002', 11, '2026-05-20', 18, 260.3, 0.9, 0.0, 259.4, 8, 10, 50.0, 0, '2026-09-04 09:36:37'),
 (7723, 'SBI-002', 12, '2026-05-20', 18, 4.4, 0.9, 0.0, 3.5, 12, 11, 50.0, 1, '2026-09-04 09:36:37'),
@@ -9979,7 +10611,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7758, 'SBI-002', 49, '2026-05-20', 18, 5.1, 0.4, 0.0, 4.7, 8, 8, 50.0, 1, '2026-09-04 09:36:37'),
 (7759, 'SBI-002', 48, '2026-05-20', 18, 8.6, 0.2, 0.0, 8.4, 6, 7, 50.0, 1, '2026-09-04 09:36:37'),
 (7760, 'SBI-002', 47, '2026-05-20', 18, 2.7, 0.2, 3.7, 6.2, 8, 10, 50.0, 1, '2026-09-04 09:36:37'),
-(7761, 'SBI-002', 5, '2026-05-21', 21, 2603.5, 3.0, 0.0, 2600.5, 8, 8, 70.0, 0, '2026-09-04 09:36:37'),
+(7761, 'SBI-002', 5, '2026-05-21', 21, 15621.0, 18.0, 0.0, 15603.0, 8, 8, 420.0, 0, '2026-09-04 09:36:37'),
 (7762, 'SBI-002', 10, '2026-05-21', 21, 419.1, 1.0, 0.0, 418.1, 11, 14, 50.0, 0, '2026-09-04 09:36:37'),
 (7763, 'SBI-002', 11, '2026-05-21', 21, 259.4, 1.1, 0.0, 258.3, 9, 8, 50.0, 0, '2026-09-04 09:36:37'),
 (7764, 'SBI-002', 12, '2026-05-21', 21, 3.5, 1.0, 0.0, 2.5, 12, 15, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10020,7 +10652,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7799, 'SBI-002', 49, '2026-05-21', 21, 4.7, 0.4, 0.0, 4.3, 10, 9, 50.0, 1, '2026-09-04 09:36:37'),
 (7800, 'SBI-002', 48, '2026-05-21', 21, 8.4, 0.2, 0.0, 8.2, 11, 10, 50.0, 1, '2026-09-04 09:36:37'),
 (7801, 'SBI-002', 47, '2026-05-21', 21, 6.2, 0.2, 0.0, 6.0, 8, 10, 50.0, 1, '2026-09-04 09:36:37'),
-(7802, 'SBI-002', 5, '2026-05-22', 94, 2600.5, 15.8, 0.0, 2584.7, 54, 61, 70.0, 0, '2026-09-04 09:36:37'),
+(7802, 'SBI-002', 5, '2026-05-22', 94, 15603.0, 94.8, 0.0, 15508.2, 54, 61, 420.0, 0, '2026-09-04 09:36:37'),
 (7803, 'SBI-002', 10, '2026-05-22', 94, 418.1, 4.7, 0.0, 413.4, 56, 50, 50.0, 0, '2026-09-04 09:36:37'),
 (7804, 'SBI-002', 11, '2026-05-22', 94, 258.3, 4.7, 0.0, 253.6, 34, 35, 50.0, 0, '2026-09-04 09:36:37'),
 (7805, 'SBI-002', 12, '2026-05-22', 94, 2.5, 4.8, 48.9, 46.6, 57, 50, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10061,7 +10693,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7840, 'SBI-002', 49, '2026-05-22', 94, 4.3, 1.9, 0.0, 2.4, 55, 72, 50.0, 1, '2026-09-04 09:36:37'),
 (7841, 'SBI-002', 48, '2026-05-22', 94, 8.2, 0.9, 0.0, 7.3, 44, 37, 50.0, 1, '2026-09-04 09:36:37'),
 (7842, 'SBI-002', 47, '2026-05-22', 94, 6.0, 1.0, 0.0, 5.0, 32, 36, 50.0, 1, '2026-09-04 09:36:37'),
-(7843, 'SBI-002', 5, '2026-05-23', 95, 2584.7, 14.4, 0.0, 2570.3, 51, 45, 70.0, 0, '2026-09-04 09:36:37'),
+(7843, 'SBI-002', 5, '2026-05-23', 95, 15508.2, 86.4, 0.0, 15421.8, 51, 45, 420.0, 0, '2026-09-04 09:36:37'),
 (7844, 'SBI-002', 10, '2026-05-23', 95, 413.4, 4.6, 0.0, 408.8, 43, 53, 50.0, 0, '2026-09-04 09:36:37'),
 (7845, 'SBI-002', 11, '2026-05-23', 95, 253.6, 4.6, 0.0, 249.0, 30, 33, 50.0, 0, '2026-09-04 09:36:37'),
 (7846, 'SBI-002', 12, '2026-05-23', 95, 46.6, 4.7, 0.0, 41.9, 39, 34, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10077,12 +10709,12 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7856, 'SBI-002', 24, '2026-05-23', 95, 48.3, 1.9, 0.0, 46.4, 42, 38, 50.0, 1, '2026-09-04 09:36:37'),
 (7857, 'SBI-002', 25, '2026-05-23', 95, 4.4, 1.9, 0.0, 2.5, 32, 28, 50.0, 1, '2026-09-04 09:36:37'),
 (7858, 'SBI-002', 26, '2026-05-23', 95, 52.8, 0.9, 0.0, 51.9, 50, 42, 50.0, 0, '2026-09-04 09:36:37'),
-(7859, 'SBI-002', 30, '2026-05-23', 95, 4461.2, 30.4, 0.0, 4430.8, 53, 59, 140.0, 0, '2026-09-04 09:36:37'),
+(7859, 'SBI-002', 30, '2026-05-23', 95, 4461.2, 30.4, 0.0, 4430.8, 53, 59, 140.0, 0, '2026-09-04 09:36:37');
+INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
 (7860, 'SBI-002', 31, '2026-05-23', 95, 8524.7, 22.6, 0.0, 8502.1, 37, 48, 100.0, 0, '2026-09-04 09:36:37'),
 (7861, 'SBI-002', 32, '2026-05-23', 95, 6763.5, 28.9, 0.0, 6734.6, 60, 53, 120.0, 0, '2026-09-04 09:36:37'),
 (7862, 'SBI-002', 34, '2026-05-23', 95, 1169.7, 21.4, 0.0, 1148.3, 25, 31, 150.0, 0, '2026-09-04 09:36:37'),
-(7863, 'SBI-002', 35, '2026-05-23', 95, 2756.8, 9.8, 0.0, 2747.0, 29, 30, 50.0, 0, '2026-09-04 09:36:37');
-INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(7863, 'SBI-002', 35, '2026-05-23', 95, 2756.8, 9.8, 0.0, 2747.0, 29, 30, 50.0, 0, '2026-09-04 09:36:37'),
 (7864, 'SBI-002', 36, '2026-05-23', 95, 3121.0, 9.4, 0.0, 3111.6, 46, 38, 50.0, 0, '2026-09-04 09:36:37'),
 (7865, 'SBI-002', 33, '2026-05-23', 95, 5246.8, 19.3, 0.0, 5227.5, 50, 56, 100.0, 0, '2026-09-04 09:36:37'),
 (7866, 'SBI-002', 37, '2026-05-23', 95, 1573.1, 4.7, 0.0, 1568.4, 33, 31, 50.0, 0, '2026-09-04 09:36:37'),
@@ -10103,7 +10735,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7881, 'SBI-002', 49, '2026-05-23', 95, 2.4, 1.9, 0.0, 0.5, 54, 72, 50.0, 1, '2026-09-04 09:36:37'),
 (7882, 'SBI-002', 48, '2026-05-23', 95, 7.3, 0.9, 0.0, 6.4, 31, 43, 50.0, 1, '2026-09-04 09:36:37'),
 (7883, 'SBI-002', 47, '2026-05-23', 95, 5.0, 0.9, 0.0, 4.1, 61, 78, 50.0, 1, '2026-09-04 09:36:37'),
-(7884, 'SBI-002', 5, '2026-05-24', 25, 2570.3, 4.0, 0.0, 2566.3, 13, 15, 70.0, 0, '2026-09-04 09:36:37'),
+(7884, 'SBI-002', 5, '2026-05-24', 25, 15421.8, 24.0, 0.0, 15397.8, 13, 15, 420.0, 0, '2026-09-04 09:36:37'),
 (7885, 'SBI-002', 10, '2026-05-24', 25, 408.8, 1.3, 0.0, 407.5, 7, 9, 50.0, 0, '2026-09-04 09:36:37'),
 (7886, 'SBI-002', 11, '2026-05-24', 25, 249.0, 1.2, 0.0, 247.8, 13, 12, 50.0, 0, '2026-09-04 09:36:37'),
 (7887, 'SBI-002', 12, '2026-05-24', 25, 41.9, 1.3, 0.0, 40.6, 12, 16, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10144,7 +10776,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7922, 'SBI-002', 49, '2026-05-24', 25, 0.5, 0.5, 0.0, 0.0, 13, 14, 50.0, 1, '2026-09-04 09:36:37'),
 (7923, 'SBI-002', 48, '2026-05-24', 25, 6.4, 0.3, 0.0, 6.1, 7, 8, 50.0, 1, '2026-09-04 09:36:37'),
 (7924, 'SBI-002', 47, '2026-05-24', 25, 4.1, 0.3, 0.0, 3.8, 7, 8, 50.0, 1, '2026-09-04 09:36:37'),
-(7925, 'SBI-002', 5, '2026-05-25', 33, 2566.3, 6.2, 114.1, 2674.2, 12, 13, 70.0, 0, '2026-09-04 09:36:37'),
+(7925, 'SBI-002', 5, '2026-05-25', 33, 15397.8, 37.2, 684.6, 16045.2, 12, 13, 420.0, 0, '2026-09-04 09:36:37'),
 (7926, 'SBI-002', 10, '2026-05-25', 33, 407.5, 1.6, 0.0, 405.9, 9, 9, 50.0, 0, '2026-09-04 09:36:37'),
 (7927, 'SBI-002', 11, '2026-05-25', 33, 247.8, 1.8, 0.0, 246.0, 15, 14, 50.0, 0, '2026-09-04 09:36:37'),
 (7928, 'SBI-002', 12, '2026-05-25', 33, 40.6, 1.6, 0.0, 39.0, 10, 12, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10185,7 +10817,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (7963, 'SBI-002', 49, '2026-05-25', 33, 0.0, 0.7, 17.7, 17.0, 21, 26, 50.0, 1, '2026-09-04 09:36:37'),
 (7964, 'SBI-002', 48, '2026-05-25', 33, 6.1, 0.3, 0.0, 5.8, 10, 14, 50.0, 1, '2026-09-04 09:36:37'),
 (7965, 'SBI-002', 47, '2026-05-25', 33, 3.8, 0.3, 0.0, 3.5, 14, 15, 50.0, 1, '2026-09-04 09:36:37'),
-(7966, 'SBI-002', 5, '2026-05-26', 66, 2674.2, 10.3, 0.0, 2663.9, 40, 55, 70.0, 0, '2026-09-04 09:36:37'),
+(7966, 'SBI-002', 5, '2026-05-26', 66, 16045.2, 61.8, 0.0, 15983.4, 40, 55, 420.0, 0, '2026-09-04 09:36:37'),
 (7967, 'SBI-002', 10, '2026-05-26', 66, 405.9, 3.3, 0.0, 402.6, 40, 44, 50.0, 0, '2026-09-04 09:36:37'),
 (7968, 'SBI-002', 11, '2026-05-26', 66, 246.0, 3.3, 0.0, 242.7, 42, 49, 50.0, 0, '2026-09-04 09:36:37'),
 (7969, 'SBI-002', 12, '2026-05-26', 66, 39.0, 3.3, 0.0, 35.7, 40, 48, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10226,7 +10858,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8004, 'SBI-002', 49, '2026-05-26', 66, 17.0, 1.3, 0.0, 15.7, 33, 36, 50.0, 1, '2026-09-04 09:36:37'),
 (8005, 'SBI-002', 48, '2026-05-26', 66, 5.8, 0.7, 0.0, 5.1, 40, 40, 50.0, 1, '2026-09-04 09:36:37'),
 (8006, 'SBI-002', 47, '2026-05-26', 66, 3.5, 0.7, 0.0, 2.8, 18, 25, 50.0, 1, '2026-09-04 09:36:37'),
-(8007, 'SBI-002', 5, '2026-05-27', 58, 2663.9, 9.7, 0.0, 2654.2, 34, 32, 70.0, 0, '2026-09-04 09:36:37'),
+(8007, 'SBI-002', 5, '2026-05-27', 58, 15983.4, 58.2, 0.0, 15925.2, 34, 32, 420.0, 0, '2026-09-04 09:36:37'),
 (8008, 'SBI-002', 10, '2026-05-27', 58, 402.6, 3.1, 0.0, 399.5, 30, 31, 50.0, 0, '2026-09-04 09:36:37'),
 (8009, 'SBI-002', 11, '2026-05-27', 58, 242.7, 2.9, 15.5, 255.3, 23, 29, 50.0, 0, '2026-09-04 09:36:37'),
 (8010, 'SBI-002', 12, '2026-05-27', 58, 35.7, 3.1, 0.0, 32.6, 20, 20, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10267,7 +10899,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8045, 'SBI-002', 49, '2026-05-27', 58, 15.7, 1.2, 0.0, 14.5, 17, 14, 50.0, 1, '2026-09-04 09:36:37'),
 (8046, 'SBI-002', 48, '2026-05-27', 58, 5.1, 0.6, 0.0, 4.5, 35, 34, 50.0, 1, '2026-09-04 09:36:37'),
 (8047, 'SBI-002', 47, '2026-05-27', 58, 2.8, 0.6, 0.0, 2.2, 16, 14, 50.0, 1, '2026-09-04 09:36:37'),
-(8048, 'SBI-002', 5, '2026-05-28', 25, 2654.2, 4.5, 0.0, 2649.7, 10, 12, 70.0, 0, '2026-09-04 09:36:37'),
+(8048, 'SBI-002', 5, '2026-05-28', 25, 15925.2, 27.0, 0.0, 15898.2, 10, 12, 420.0, 0, '2026-09-04 09:36:37'),
 (8049, 'SBI-002', 10, '2026-05-28', 25, 399.5, 1.3, 25.1, 423.3, 8, 9, 50.0, 0, '2026-09-04 09:36:37'),
 (8050, 'SBI-002', 11, '2026-05-28', 25, 255.3, 1.2, 0.0, 254.1, 11, 15, 50.0, 0, '2026-09-04 09:36:37'),
 (8051, 'SBI-002', 12, '2026-05-28', 25, 32.6, 1.3, 0.0, 31.3, 9, 9, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10308,7 +10940,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8086, 'SBI-002', 49, '2026-05-28', 25, 14.5, 0.5, 0.0, 14.0, 9, 10, 50.0, 1, '2026-09-04 09:36:37'),
 (8087, 'SBI-002', 48, '2026-05-28', 25, 4.5, 0.2, 0.0, 4.3, 6, 5, 50.0, 1, '2026-09-04 09:36:37'),
 (8088, 'SBI-002', 47, '2026-05-28', 25, 2.2, 0.3, 0.0, 1.9, 15, 18, 50.0, 1, '2026-09-04 09:36:37'),
-(8089, 'SBI-002', 5, '2026-05-29', 55, 2649.7, 7.3, 0.0, 2642.4, 23, 30, 70.0, 0, '2026-09-04 09:36:37'),
+(8089, 'SBI-002', 5, '2026-05-29', 55, 15898.2, 43.8, 0.0, 15854.4, 23, 30, 420.0, 0, '2026-09-04 09:36:37'),
 (8090, 'SBI-002', 10, '2026-05-29', 55, 423.3, 2.6, 0.0, 420.7, 25, 20, 50.0, 0, '2026-09-04 09:36:37'),
 (8091, 'SBI-002', 11, '2026-05-29', 55, 254.1, 2.7, 0.0, 251.4, 16, 17, 50.0, 0, '2026-09-04 09:36:37'),
 (8092, 'SBI-002', 12, '2026-05-29', 55, 31.3, 2.9, 26.3, 54.7, 32, 35, 50.0, 0, '2026-09-04 09:36:37'),
@@ -10349,7 +10981,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8127, 'SBI-002', 49, '2026-05-29', 55, 14.0, 1.1, 0.0, 12.9, 35, 41, 50.0, 1, '2026-09-04 09:36:37'),
 (8128, 'SBI-002', 48, '2026-05-29', 55, 4.3, 0.6, 0.0, 3.7, 25, 22, 50.0, 1, '2026-09-04 09:36:37'),
 (8129, 'SBI-002', 47, '2026-05-29', 55, 1.9, 0.5, 0.0, 1.4, 14, 12, 50.0, 1, '2026-09-04 09:36:37'),
-(8130, 'SBI-002', 5, '2026-05-30', 68, 2642.4, 11.2, 52.2, 2683.4, 24, 20, 70.0, 0, '2026-09-04 09:36:37'),
+(8130, 'SBI-002', 5, '2026-05-30', 68, 15854.4, 67.2, 313.2, 16100.4, 24, 20, 420.0, 0, '2026-09-04 09:36:37'),
 (8131, 'SBI-002', 10, '2026-05-30', 68, 420.7, 3.4, 0.0, 417.3, 44, 60, 50.0, 0, '2026-09-04 09:36:37'),
 (8132, 'SBI-002', 11, '2026-05-30', 68, 251.4, 3.5, 0.0, 247.9, 44, 39, 50.0, 0, '2026-09-04 09:36:37'),
 (8133, 'SBI-002', 12, '2026-05-30', 68, 54.7, 3.3, 0.0, 51.4, 23, 25, 50.0, 0, '2026-09-04 09:36:37'),
@@ -10390,7 +11022,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8168, 'SBI-002', 49, '2026-05-30', 68, 12.9, 1.4, 0.0, 11.5, 43, 46, 50.0, 1, '2026-09-04 09:36:37'),
 (8169, 'SBI-002', 48, '2026-05-30', 68, 3.7, 0.7, 0.0, 3.0, 33, 35, 50.0, 1, '2026-09-04 09:36:37'),
 (8170, 'SBI-002', 47, '2026-05-30', 68, 1.4, 0.7, 4.6, 5.3, 26, 29, 50.0, 1, '2026-09-04 09:36:37'),
-(8171, 'SBI-002', 5, '2026-05-31', 42, 2683.4, 6.2, 0.0, 2677.2, 17, 18, 70.0, 0, '2026-09-04 09:36:37'),
+(8171, 'SBI-002', 5, '2026-05-31', 42, 16100.4, 37.2, 0.0, 16063.2, 17, 18, 420.0, 0, '2026-09-04 09:36:37'),
 (8172, 'SBI-002', 10, '2026-05-31', 42, 417.3, 2.1, 0.0, 415.2, 23, 27, 50.0, 0, '2026-09-04 09:36:37'),
 (8173, 'SBI-002', 11, '2026-05-31', 42, 247.9, 2.2, 0.0, 245.7, 17, 17, 50.0, 0, '2026-09-04 09:36:37'),
 (8174, 'SBI-002', 12, '2026-05-31', 42, 51.4, 2.0, 0.0, 49.4, 20, 19, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10431,7 +11063,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8209, 'SBI-002', 49, '2026-05-31', 42, 11.5, 0.8, 0.0, 10.7, 25, 23, 50.0, 1, '2026-09-04 09:36:37'),
 (8210, 'SBI-002', 48, '2026-05-31', 42, 3.0, 0.4, 0.0, 2.6, 14, 17, 50.0, 1, '2026-09-04 09:36:37'),
 (8211, 'SBI-002', 47, '2026-05-31', 42, 5.3, 0.4, 0.0, 4.9, 15, 20, 50.0, 1, '2026-09-04 09:36:37'),
-(8212, 'SBI-002', 5, '2026-06-01', 96, 2677.2, 13.5, 0.0, 2663.7, 37, 47, 70.0, 0, '2026-09-04 09:36:37'),
+(8212, 'SBI-002', 5, '2026-06-01', 96, 16063.2, 81.0, 0.0, 15982.2, 37, 47, 420.0, 0, '2026-09-04 09:36:37'),
 (8213, 'SBI-002', 10, '2026-06-01', 96, 415.2, 4.8, 0.0, 410.4, 39, 45, 50.0, 0, '2026-09-04 09:36:37'),
 (8214, 'SBI-002', 11, '2026-06-01', 96, 245.7, 4.9, 0.0, 240.8, 45, 50, 50.0, 0, '2026-09-04 09:36:37'),
 (8215, 'SBI-002', 12, '2026-06-01', 96, 49.4, 4.9, 0.0, 44.5, 33, 45, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10472,7 +11104,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8250, 'SBI-002', 49, '2026-06-01', 96, 10.7, 2.0, 0.0, 8.7, 32, 38, 50.0, 1, '2026-09-04 09:36:37'),
 (8251, 'SBI-002', 48, '2026-06-01', 96, 2.6, 1.0, 0.0, 1.6, 41, 47, 50.0, 1, '2026-09-04 09:36:37'),
 (8252, 'SBI-002', 47, '2026-06-01', 96, 4.9, 1.0, 0.0, 3.9, 32, 42, 50.0, 1, '2026-09-04 09:36:37'),
-(8253, 'SBI-002', 5, '2026-06-02', 86, 2663.7, 9.5, 0.0, 2654.2, 22, 22, 70.0, 0, '2026-09-04 09:36:37'),
+(8253, 'SBI-002', 5, '2026-06-02', 86, 15982.2, 57.0, 0.0, 15925.2, 22, 22, 420.0, 0, '2026-09-04 09:36:37'),
 (8254, 'SBI-002', 10, '2026-06-02', 86, 410.4, 4.5, 0.0, 405.9, 55, 49, 50.0, 0, '2026-09-04 09:36:37'),
 (8255, 'SBI-002', 11, '2026-06-02', 86, 240.8, 4.2, 18.7, 255.3, 30, 38, 50.0, 0, '2026-09-04 09:36:37'),
 (8256, 'SBI-002', 12, '2026-06-02', 86, 44.5, 4.2, 0.0, 40.3, 42, 59, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10513,7 +11145,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8291, 'SBI-002', 49, '2026-06-02', 86, 8.7, 1.7, 0.0, 7.0, 44, 52, 50.0, 1, '2026-09-04 09:36:37'),
 (8292, 'SBI-002', 48, '2026-06-02', 86, 1.6, 0.9, 0.0, 0.7, 34, 45, 50.0, 1, '2026-09-04 09:36:37'),
 (8293, 'SBI-002', 47, '2026-06-02', 86, 3.9, 0.9, 0.0, 3.0, 24, 27, 50.0, 1, '2026-09-04 09:36:37'),
-(8294, 'SBI-002', 5, '2026-06-03', 57, 2654.2, 8.5, 162.5, 2808.2, 36, 31, 70.0, 0, '2026-09-04 09:36:37'),
+(8294, 'SBI-002', 5, '2026-06-03', 57, 15925.2, 51.0, 975.0, 16849.2, 36, 31, 420.0, 0, '2026-09-04 09:36:37'),
 (8295, 'SBI-002', 10, '2026-06-03', 57, 405.9, 2.8, 0.0, 403.1, 37, 50, 50.0, 0, '2026-09-04 09:36:37'),
 (8296, 'SBI-002', 11, '2026-06-03', 57, 255.3, 3.0, 0.0, 252.3, 23, 26, 50.0, 0, '2026-09-04 09:36:37'),
 (8297, 'SBI-002', 12, '2026-06-03', 57, 40.3, 2.8, 0.0, 37.5, 36, 35, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10554,7 +11186,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8332, 'SBI-002', 49, '2026-06-03', 57, 7.0, 1.2, 0.0, 5.8, 22, 21, 50.0, 1, '2026-09-04 09:36:37'),
 (8333, 'SBI-002', 48, '2026-06-03', 57, 0.7, 0.6, 0.0, 0.1, 25, 35, 50.0, 1, '2026-09-04 09:36:37'),
 (8334, 'SBI-002', 47, '2026-06-03', 57, 3.0, 0.6, 0.0, 2.4, 28, 37, 50.0, 1, '2026-09-04 09:36:37'),
-(8335, 'SBI-002', 5, '2026-06-04', 11, 2808.2, 1.8, 0.0, 2806.4, 4, 5, 70.0, 0, '2026-09-04 09:36:37'),
+(8335, 'SBI-002', 5, '2026-06-04', 11, 16849.2, 10.8, 0.0, 16838.4, 4, 5, 420.0, 0, '2026-09-04 09:36:37'),
 (8336, 'SBI-002', 10, '2026-06-04', 11, 403.1, 0.5, 0.0, 402.6, 5, 7, 50.0, 0, '2026-09-04 09:36:37'),
 (8337, 'SBI-002', 11, '2026-06-04', 11, 252.3, 0.5, 0.0, 251.8, 3, 4, 50.0, 0, '2026-09-04 09:36:37'),
 (8338, 'SBI-002', 12, '2026-06-04', 11, 37.5, 0.6, 0.0, 36.9, 3, 4, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10562,13 +11194,13 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8340, 'SBI-002', 14, '2026-06-04', 11, 14.0, 0.2, 0.0, 13.8, 7, 7, 50.0, 1, '2026-09-04 09:36:37'),
 (8341, 'SBI-002', 17, '2026-06-04', 11, 22.1, 0.2, 0.0, 21.9, 4, 5, 50.0, 1, '2026-09-04 09:36:37'),
 (8342, 'SBI-002', 18, '2026-06-04', 11, 102.1, 0.2, 0.0, 101.9, 4, 4, 50.0, 0, '2026-09-04 09:36:37'),
-(8343, 'SBI-002', 19, '2026-06-04', 11, 40.1, 0.2, 0.0, 39.9, 6, 6, 50.0, 1, '2026-09-04 09:36:37'),
+(8343, 'SBI-002', 19, '2026-06-04', 11, 40.1, 0.2, 0.0, 39.9, 6, 6, 50.0, 1, '2026-09-04 09:36:37');
+INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
 (8344, 'SBI-002', 15, '2026-06-04', 11, 8.7, 0.1, 0.0, 8.6, 7, 9, 50.0, 1, '2026-09-04 09:36:37'),
 (8345, 'SBI-002', 20, '2026-06-04', 11, 5155.4, 1.1, 0.0, 5154.3, 5, 6, 50.0, 0, '2026-09-04 09:36:37'),
 (8346, 'SBI-002', 21, '2026-06-04', 11, 272.4, 0.2, 0.0, 272.2, 3, 3, 50.0, 0, '2026-09-04 09:36:37'),
 (8347, 'SBI-002', 23, '2026-06-04', 11, 14.0, 0.1, 0.0, 13.9, 6, 6, 50.0, 1, '2026-09-04 09:36:37'),
-(8348, 'SBI-002', 24, '2026-06-04', 11, 62.2, 0.2, 0.0, 62.0, 5, 5, 50.0, 0, '2026-09-04 09:36:37');
-INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(8348, 'SBI-002', 24, '2026-06-04', 11, 62.2, 0.2, 0.0, 62.0, 5, 5, 50.0, 0, '2026-09-04 09:36:37'),
 (8349, 'SBI-002', 25, '2026-06-04', 11, 16.8, 0.2, 0.0, 16.6, 6, 5, 50.0, 1, '2026-09-04 09:36:37'),
 (8350, 'SBI-002', 26, '2026-06-04', 11, 45.8, 0.1, 0.0, 45.7, 4, 4, 50.0, 1, '2026-09-04 09:36:37'),
 (8351, 'SBI-002', 30, '2026-06-04', 11, 5270.4, 3.2, 0.0, 5267.2, 3, 3, 140.0, 0, '2026-09-04 09:36:37'),
@@ -10596,7 +11228,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8373, 'SBI-002', 49, '2026-06-04', 11, 5.8, 0.2, 0.0, 5.6, 3, 4, 50.0, 1, '2026-09-04 09:36:37'),
 (8374, 'SBI-002', 48, '2026-06-04', 11, 0.1, 0.1, 0.0, 0.0, 5, 6, 50.0, 1, '2026-09-04 09:36:37'),
 (8375, 'SBI-002', 47, '2026-06-04', 11, 2.4, 0.1, 0.0, 2.3, 3, 3, 50.0, 1, '2026-09-04 09:36:37'),
-(8376, 'SBI-002', 5, '2026-06-05', 23, 2806.4, 3.9, 0.0, 2802.5, 14, 15, 70.0, 0, '2026-09-04 09:36:37'),
+(8376, 'SBI-002', 5, '2026-06-05', 23, 16838.4, 23.4, 0.0, 16815.0, 14, 15, 420.0, 0, '2026-09-04 09:36:37'),
 (8377, 'SBI-002', 10, '2026-06-05', 23, 402.6, 1.2, 0.0, 401.4, 14, 13, 50.0, 0, '2026-09-04 09:36:37'),
 (8378, 'SBI-002', 11, '2026-06-05', 23, 251.8, 1.2, 0.0, 250.6, 8, 9, 50.0, 0, '2026-09-04 09:36:37'),
 (8379, 'SBI-002', 12, '2026-06-05', 23, 36.9, 1.1, 0.0, 35.8, 12, 13, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10637,7 +11269,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8414, 'SBI-002', 49, '2026-06-05', 23, 5.6, 0.5, 0.0, 5.1, 14, 18, 50.0, 1, '2026-09-04 09:36:37'),
 (8415, 'SBI-002', 48, '2026-06-05', 23, 0.0, 0.2, 11.2, 11.0, 10, 12, 50.0, 1, '2026-09-04 09:36:37'),
 (8416, 'SBI-002', 47, '2026-06-05', 23, 2.3, 0.2, 0.0, 2.1, 9, 13, 50.0, 1, '2026-09-04 09:36:37'),
-(8417, 'SBI-002', 5, '2026-06-06', 22, 2802.5, 3.5, 0.0, 2799.0, 10, 13, 70.0, 0, '2026-09-04 09:36:37'),
+(8417, 'SBI-002', 5, '2026-06-06', 22, 16815.0, 21.0, 0.0, 16794.0, 10, 13, 420.0, 0, '2026-09-04 09:36:37'),
 (8418, 'SBI-002', 10, '2026-06-06', 22, 401.4, 1.1, 0.0, 400.3, 14, 14, 50.0, 0, '2026-09-04 09:36:37'),
 (8419, 'SBI-002', 11, '2026-06-06', 22, 250.6, 1.1, 0.0, 249.5, 7, 6, 50.0, 0, '2026-09-04 09:36:37'),
 (8420, 'SBI-002', 12, '2026-06-06', 22, 35.8, 1.1, 0.0, 34.7, 12, 17, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10678,7 +11310,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8455, 'SBI-002', 49, '2026-06-06', 22, 5.1, 0.4, 0.0, 4.7, 11, 11, 50.0, 1, '2026-09-04 09:36:37'),
 (8456, 'SBI-002', 48, '2026-06-06', 22, 11.0, 0.2, 0.0, 10.8, 13, 13, 50.0, 1, '2026-09-04 09:36:37'),
 (8457, 'SBI-002', 47, '2026-06-06', 22, 2.1, 0.2, 0.0, 1.9, 14, 12, 50.0, 1, '2026-09-04 09:36:37'),
-(8458, 'SBI-002', 5, '2026-06-07', 87, 2799.0, 10.8, 0.0, 2788.2, 50, 40, 70.0, 0, '2026-09-04 09:36:37'),
+(8458, 'SBI-002', 5, '2026-06-07', 87, 16794.0, 64.8, 0.0, 16729.2, 50, 40, 420.0, 0, '2026-09-04 09:36:37'),
 (8459, 'SBI-002', 10, '2026-06-07', 87, 400.3, 4.6, 0.0, 395.7, 28, 28, 50.0, 0, '2026-09-04 09:36:37'),
 (8460, 'SBI-002', 11, '2026-06-07', 87, 249.5, 4.1, 0.0, 245.4, 47, 61, 50.0, 0, '2026-09-04 09:36:37'),
 (8461, 'SBI-002', 12, '2026-06-07', 87, 34.7, 4.3, 0.0, 30.4, 52, 70, 50.0, 1, '2026-09-04 09:36:37'),
@@ -10719,7 +11351,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8496, 'SBI-002', 49, '2026-06-07', 87, 4.7, 1.7, 5.2, 8.2, 36, 39, 50.0, 1, '2026-09-04 09:36:38'),
 (8497, 'SBI-002', 48, '2026-06-07', 87, 10.8, 0.9, 0.0, 9.9, 52, 56, 50.0, 1, '2026-09-04 09:36:38'),
 (8498, 'SBI-002', 47, '2026-06-07', 87, 1.9, 0.9, 0.0, 1.0, 23, 21, 50.0, 1, '2026-09-04 09:36:38'),
-(8499, 'SBI-002', 5, '2026-06-08', 5, 2788.2, 0.8, 0.0, 2787.4, 2, 3, 70.0, 0, '2026-09-04 09:36:38'),
+(8499, 'SBI-002', 5, '2026-06-08', 5, 16729.2, 4.8, 0.0, 16724.4, 2, 3, 420.0, 0, '2026-09-04 09:36:38'),
 (8500, 'SBI-002', 10, '2026-06-08', 5, 395.7, 0.3, 0.0, 395.4, 3, 4, 50.0, 0, '2026-09-04 09:36:38'),
 (8501, 'SBI-002', 11, '2026-06-08', 5, 245.4, 0.2, 0.0, 245.2, 1, 1, 50.0, 0, '2026-09-04 09:36:38'),
 (8502, 'SBI-002', 12, '2026-06-08', 5, 30.4, 0.3, 0.0, 30.1, 3, 4, 50.0, 1, '2026-09-04 09:36:38'),
@@ -10760,7 +11392,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8537, 'SBI-002', 49, '2026-06-08', 5, 8.2, 0.1, 0.0, 8.1, 3, 3, 50.0, 1, '2026-09-04 09:36:38'),
 (8538, 'SBI-002', 48, '2026-06-08', 5, 9.9, 0.1, 0.0, 9.8, 3, 4, 50.0, 1, '2026-09-04 09:36:38'),
 (8539, 'SBI-002', 47, '2026-06-08', 5, 1.0, 0.1, 0.0, 0.9, 3, 3, 50.0, 1, '2026-09-04 09:36:38'),
-(8540, 'SBI-002', 5, '2026-06-09', 14, 2787.4, 1.9, 0.0, 2785.5, 4, 4, 70.0, 0, '2026-09-04 09:36:38'),
+(8540, 'SBI-002', 5, '2026-06-09', 14, 16724.4, 11.4, 0.0, 16713.0, 4, 4, 420.0, 0, '2026-09-04 09:36:38'),
 (8541, 'SBI-002', 10, '2026-06-09', 14, 395.4, 0.7, 0.0, 394.7, 8, 10, 50.0, 0, '2026-09-04 09:36:38'),
 (8542, 'SBI-002', 11, '2026-06-09', 14, 245.2, 0.7, 0.0, 244.5, 7, 6, 50.0, 0, '2026-09-04 09:36:38'),
 (8543, 'SBI-002', 12, '2026-06-09', 14, 30.1, 0.7, 0.0, 29.4, 5, 7, 50.0, 1, '2026-09-04 09:36:38'),
@@ -10801,7 +11433,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8578, 'SBI-002', 49, '2026-06-09', 14, 8.1, 0.3, 0.0, 7.8, 8, 8, 50.0, 1, '2026-09-04 09:36:38'),
 (8579, 'SBI-002', 48, '2026-06-09', 14, 9.8, 0.1, 0.0, 9.7, 8, 10, 50.0, 1, '2026-09-04 09:36:38'),
 (8580, 'SBI-002', 47, '2026-06-09', 14, 0.9, 0.1, 0.0, 0.8, 7, 7, 50.0, 1, '2026-09-04 09:36:38'),
-(8581, 'SBI-002', 5, '2026-06-10', 44, 2785.5, 7.2, 0.0, 2778.3, 24, 27, 70.0, 0, '2026-09-04 09:36:38'),
+(8581, 'SBI-002', 5, '2026-06-10', 44, 16713.0, 43.2, 0.0, 16669.8, 24, 27, 420.0, 0, '2026-09-04 09:36:38'),
 (8582, 'SBI-002', 10, '2026-06-10', 44, 394.7, 2.2, 0.0, 392.5, 16, 15, 50.0, 0, '2026-09-04 09:36:38'),
 (8583, 'SBI-002', 11, '2026-06-10', 44, 244.5, 2.1, 0.0, 242.4, 22, 22, 50.0, 0, '2026-09-04 09:36:38'),
 (8584, 'SBI-002', 12, '2026-06-10', 44, 29.4, 2.1, 0.0, 27.3, 12, 10, 50.0, 1, '2026-09-04 09:36:38'),
@@ -10842,7 +11474,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8619, 'SBI-002', 49, '2026-06-10', 44, 7.8, 0.9, 0.0, 6.9, 27, 28, 50.0, 1, '2026-09-04 09:36:38'),
 (8620, 'SBI-002', 48, '2026-06-10', 44, 9.7, 0.4, 0.0, 9.3, 19, 26, 50.0, 1, '2026-09-04 09:36:38'),
 (8621, 'SBI-002', 47, '2026-06-10', 44, 0.8, 0.4, 0.0, 0.4, 23, 26, 50.0, 1, '2026-09-04 09:36:38'),
-(8622, 'SBI-002', 5, '2026-06-11', 11, 2778.3, 1.4, 0.0, 2776.9, 6, 5, 70.0, 0, '2026-09-04 09:36:38'),
+(8622, 'SBI-002', 5, '2026-06-11', 11, 16669.8, 8.4, 0.0, 16661.4, 6, 5, 420.0, 0, '2026-09-04 09:36:38'),
 (8623, 'SBI-002', 10, '2026-06-11', 11, 392.5, 0.5, 0.0, 392.0, 6, 6, 50.0, 0, '2026-09-04 09:36:38'),
 (8624, 'SBI-002', 11, '2026-06-11', 11, 242.4, 0.6, 0.0, 241.8, 7, 8, 50.0, 0, '2026-09-04 09:36:38'),
 (8625, 'SBI-002', 12, '2026-06-11', 11, 27.3, 0.6, 11.4, 38.1, 6, 6, 50.0, 1, '2026-09-04 09:36:38'),
@@ -10883,7 +11515,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8660, 'SBI-002', 49, '2026-06-11', 11, 6.9, 0.2, 0.0, 6.7, 6, 6, 50.0, 1, '2026-09-04 09:36:38'),
 (8661, 'SBI-002', 48, '2026-06-11', 11, 9.3, 0.1, 0.0, 9.2, 4, 4, 50.0, 1, '2026-09-04 09:36:38'),
 (8662, 'SBI-002', 47, '2026-06-11', 11, 0.4, 0.1, 0.0, 0.3, 3, 3, 50.0, 1, '2026-09-04 09:36:38'),
-(8663, 'SBI-002', 5, '2026-06-12', 79, 2776.9, 11.4, 181.0, 2946.5, 25, 29, 70.0, 0, '2026-09-04 09:36:38'),
+(8663, 'SBI-002', 5, '2026-06-12', 79, 16661.4, 68.4, 1086.0, 17679.0, 25, 29, 420.0, 0, '2026-09-04 09:36:38'),
 (8664, 'SBI-002', 10, '2026-06-12', 79, 392.0, 4.0, 0.0, 388.0, 43, 55, 50.0, 0, '2026-09-04 09:36:38'),
 (8665, 'SBI-002', 11, '2026-06-12', 79, 241.8, 4.0, 10.7, 248.5, 40, 47, 50.0, 0, '2026-09-04 09:36:38'),
 (8666, 'SBI-002', 12, '2026-06-12', 79, 38.1, 3.9, 0.0, 34.2, 22, 31, 50.0, 1, '2026-09-04 09:36:38'),
@@ -10924,7 +11556,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8701, 'SBI-002', 49, '2026-06-12', 79, 6.7, 1.6, 0.0, 5.1, 34, 29, 50.0, 1, '2026-09-04 09:36:38'),
 (8702, 'SBI-002', 48, '2026-06-12', 79, 9.2, 0.8, 0.0, 8.4, 40, 42, 50.0, 1, '2026-09-04 09:36:38'),
 (8703, 'SBI-002', 47, '2026-06-12', 79, 0.3, 0.8, 19.5, 19.0, 30, 30, 50.0, 1, '2026-09-04 09:36:38'),
-(8704, 'SBI-002', 5, '2026-06-13', 72, 2946.5, 11.3, 0.0, 2935.2, 45, 40, 70.0, 0, '2026-09-04 09:36:38'),
+(8704, 'SBI-002', 5, '2026-06-13', 72, 17679.0, 67.8, 0.0, 17611.2, 45, 40, 420.0, 0, '2026-09-04 09:36:38'),
 (8705, 'SBI-002', 10, '2026-06-13', 72, 388.0, 3.7, 0.0, 384.3, 46, 62, 50.0, 0, '2026-09-04 09:36:38'),
 (8706, 'SBI-002', 11, '2026-06-13', 72, 248.5, 3.6, 0.0, 244.9, 21, 25, 50.0, 0, '2026-09-04 09:36:38'),
 (8707, 'SBI-002', 12, '2026-06-13', 72, 34.2, 3.7, 0.0, 30.5, 28, 37, 50.0, 1, '2026-09-04 09:36:38'),
@@ -10965,7 +11597,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8742, 'SBI-002', 49, '2026-06-13', 72, 5.1, 1.4, 0.0, 3.7, 42, 48, 50.0, 1, '2026-09-04 09:36:38'),
 (8743, 'SBI-002', 48, '2026-06-13', 72, 8.4, 0.7, 0.0, 7.7, 33, 29, 50.0, 1, '2026-09-04 09:36:38'),
 (8744, 'SBI-002', 47, '2026-06-13', 72, 19.0, 0.7, 0.0, 18.3, 27, 26, 50.0, 1, '2026-09-04 09:36:38'),
-(8745, 'SBI-002', 5, '2026-06-14', 98, 2935.2, 15.3, 0.0, 2919.9, 25, 33, 70.0, 0, '2026-09-04 09:36:38'),
+(8745, 'SBI-002', 5, '2026-06-14', 98, 17611.2, 91.8, 0.0, 17519.4, 25, 33, 420.0, 0, '2026-09-04 09:36:38'),
 (8746, 'SBI-002', 10, '2026-06-14', 98, 384.3, 4.9, 0.0, 379.4, 26, 21, 50.0, 0, '2026-09-04 09:36:38'),
 (8747, 'SBI-002', 11, '2026-06-14', 98, 244.9, 4.9, 18.8, 258.8, 56, 76, 50.0, 0, '2026-09-04 09:36:38'),
 (8748, 'SBI-002', 12, '2026-06-14', 98, 30.5, 5.0, 0.0, 25.5, 44, 44, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11006,7 +11638,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8783, 'SBI-002', 49, '2026-06-14', 98, 3.7, 2.0, 0.0, 1.7, 33, 27, 50.0, 1, '2026-09-04 09:36:38'),
 (8784, 'SBI-002', 48, '2026-06-14', 98, 7.7, 1.0, 0.0, 6.7, 45, 62, 50.0, 1, '2026-09-04 09:36:38'),
 (8785, 'SBI-002', 47, '2026-06-14', 98, 18.3, 1.0, 0.0, 17.3, 39, 52, 50.0, 1, '2026-09-04 09:36:38'),
-(8786, 'SBI-002', 5, '2026-06-15', 43, 2919.9, 5.5, 0.0, 2914.4, 19, 16, 70.0, 0, '2026-09-04 09:36:38'),
+(8786, 'SBI-002', 5, '2026-06-15', 43, 17519.4, 33.0, 0.0, 17486.4, 19, 16, 420.0, 0, '2026-09-04 09:36:38'),
 (8787, 'SBI-002', 10, '2026-06-15', 43, 379.4, 2.1, 0.0, 377.3, 24, 32, 50.0, 0, '2026-09-04 09:36:38'),
 (8788, 'SBI-002', 11, '2026-06-15', 43, 258.8, 2.1, 0.0, 256.7, 15, 15, 50.0, 0, '2026-09-04 09:36:38'),
 (8789, 'SBI-002', 12, '2026-06-15', 43, 25.5, 2.2, 0.0, 23.3, 20, 17, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11047,17 +11679,17 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8824, 'SBI-002', 49, '2026-06-15', 43, 1.7, 0.9, 0.0, 0.8, 27, 34, 50.0, 1, '2026-09-04 09:36:38'),
 (8825, 'SBI-002', 48, '2026-06-15', 43, 6.7, 0.4, 0.0, 6.3, 22, 26, 50.0, 1, '2026-09-04 09:36:38'),
 (8826, 'SBI-002', 47, '2026-06-15', 43, 17.3, 0.4, 0.0, 16.9, 24, 25, 50.0, 1, '2026-09-04 09:36:38'),
-(8827, 'SBI-002', 5, '2026-06-16', 71, 2914.4, 11.9, 80.6, 2983.1, 37, 45, 70.0, 0, '2026-09-04 09:36:38'),
+(8827, 'SBI-002', 5, '2026-06-16', 71, 17486.4, 71.4, 483.6, 17898.6, 37, 45, 420.0, 0, '2026-09-04 09:36:38'),
 (8828, 'SBI-002', 10, '2026-06-16', 71, 377.3, 3.4, 0.0, 373.9, 23, 26, 50.0, 0, '2026-09-04 09:36:38'),
 (8829, 'SBI-002', 11, '2026-06-16', 71, 256.7, 3.5, 0.0, 253.2, 30, 33, 50.0, 0, '2026-09-04 09:36:38'),
-(8830, 'SBI-002', 12, '2026-06-16', 71, 23.3, 3.7, 0.0, 19.6, 40, 48, 50.0, 1, '2026-09-04 09:36:38'),
+(8830, 'SBI-002', 12, '2026-06-16', 71, 23.3, 3.7, 0.0, 19.6, 40, 48, 50.0, 1, '2026-09-04 09:36:38');
+INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
 (8831, 'SBI-002', 2, '2026-06-16', 71, 2.4, 2.9, 12.4, 11.9, 42, 36, 50.0, 1, '2026-09-04 09:36:38'),
 (8832, 'SBI-002', 14, '2026-06-16', 71, 3.9, 1.4, 0.0, 2.5, 24, 32, 50.0, 1, '2026-09-04 09:36:38'),
 (8833, 'SBI-002', 17, '2026-06-16', 71, 34.7, 1.4, 0.0, 33.3, 35, 35, 50.0, 1, '2026-09-04 09:36:38'),
 (8834, 'SBI-002', 18, '2026-06-16', 71, 92.0, 1.4, 0.0, 90.6, 22, 21, 50.0, 0, '2026-09-04 09:36:38'),
 (8835, 'SBI-002', 19, '2026-06-16', 71, 29.9, 1.4, 0.0, 28.5, 45, 57, 50.0, 1, '2026-09-04 09:36:38'),
-(8836, 'SBI-002', 15, '2026-06-16', 71, 3.7, 0.7, 0.0, 3.0, 25, 23, 50.0, 1, '2026-09-04 09:36:38');
-INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(8836, 'SBI-002', 15, '2026-06-16', 71, 3.7, 0.7, 0.0, 3.0, 25, 23, 50.0, 1, '2026-09-04 09:36:38'),
 (8837, 'SBI-002', 20, '2026-06-16', 71, 5202.6, 6.7, 0.0, 5195.9, 38, 53, 50.0, 0, '2026-09-04 09:36:38'),
 (8838, 'SBI-002', 21, '2026-06-16', 71, 326.5, 1.4, 0.0, 325.1, 24, 25, 50.0, 0, '2026-09-04 09:36:38'),
 (8839, 'SBI-002', 23, '2026-06-16', 71, 11.4, 0.4, 0.0, 11.0, 35, 34, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11089,7 +11721,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8865, 'SBI-002', 49, '2026-06-16', 71, 0.8, 1.4, 14.1, 13.5, 34, 41, 50.0, 1, '2026-09-04 09:36:38'),
 (8866, 'SBI-002', 48, '2026-06-16', 71, 6.3, 0.7, 0.0, 5.6, 45, 47, 50.0, 1, '2026-09-04 09:36:38'),
 (8867, 'SBI-002', 47, '2026-06-16', 71, 16.9, 0.7, 0.0, 16.2, 45, 60, 50.0, 1, '2026-09-04 09:36:38'),
-(8868, 'SBI-002', 5, '2026-06-17', 97, 2983.1, 14.6, 0.0, 2968.5, 36, 41, 70.0, 0, '2026-09-04 09:36:38'),
+(8868, 'SBI-002', 5, '2026-06-17', 97, 17898.6, 87.6, 0.0, 17811.0, 36, 41, 420.0, 0, '2026-09-04 09:36:38'),
 (8869, 'SBI-002', 10, '2026-06-17', 97, 373.9, 4.8, 16.3, 385.4, 58, 58, 50.0, 0, '2026-09-04 09:36:38'),
 (8870, 'SBI-002', 11, '2026-06-17', 97, 253.2, 4.9, 0.0, 248.3, 55, 44, 50.0, 0, '2026-09-04 09:36:38'),
 (8871, 'SBI-002', 12, '2026-06-17', 97, 19.6, 4.9, 0.0, 14.7, 54, 62, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11130,7 +11762,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8906, 'SBI-002', 49, '2026-06-17', 97, 13.5, 1.9, 0.0, 11.6, 47, 61, 50.0, 1, '2026-09-04 09:36:38'),
 (8907, 'SBI-002', 48, '2026-06-17', 97, 5.6, 1.0, 0.0, 4.6, 45, 42, 50.0, 1, '2026-09-04 09:36:38'),
 (8908, 'SBI-002', 47, '2026-06-17', 97, 16.2, 1.0, 0.0, 15.2, 31, 41, 50.0, 1, '2026-09-04 09:36:38'),
-(8909, 'SBI-002', 5, '2026-06-18', 98, 2968.5, 14.9, 0.0, 2953.6, 59, 69, 70.0, 0, '2026-09-04 09:36:38'),
+(8909, 'SBI-002', 5, '2026-06-18', 98, 17811.0, 89.4, 0.0, 17721.6, 59, 69, 420.0, 0, '2026-09-04 09:36:38'),
 (8910, 'SBI-002', 10, '2026-06-18', 98, 385.4, 4.9, 0.0, 380.5, 62, 80, 50.0, 0, '2026-09-04 09:36:38'),
 (8911, 'SBI-002', 11, '2026-06-18', 98, 248.3, 4.7, 0.0, 243.6, 34, 29, 50.0, 0, '2026-09-04 09:36:38'),
 (8912, 'SBI-002', 12, '2026-06-18', 98, 14.7, 4.6, 0.0, 10.1, 33, 33, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11171,7 +11803,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8947, 'SBI-002', 49, '2026-06-18', 98, 11.6, 1.9, 0.0, 9.7, 40, 43, 50.0, 1, '2026-09-04 09:36:38'),
 (8948, 'SBI-002', 48, '2026-06-18', 98, 4.6, 1.0, 0.0, 3.6, 29, 32, 50.0, 1, '2026-09-04 09:36:38'),
 (8949, 'SBI-002', 47, '2026-06-18', 98, 15.2, 1.0, 0.0, 14.2, 34, 44, 50.0, 1, '2026-09-04 09:36:38'),
-(8950, 'SBI-002', 5, '2026-06-19', 69, 2953.6, 10.6, 0.0, 2943.0, 26, 25, 70.0, 0, '2026-09-04 09:36:38'),
+(8950, 'SBI-002', 5, '2026-06-19', 69, 17721.6, 63.6, 0.0, 17658.0, 26, 25, 420.0, 0, '2026-09-04 09:36:38'),
 (8951, 'SBI-002', 10, '2026-06-19', 69, 380.5, 3.3, 0.0, 377.2, 26, 31, 50.0, 0, '2026-09-04 09:36:38'),
 (8952, 'SBI-002', 11, '2026-06-19', 69, 243.6, 3.5, 0.0, 240.1, 22, 22, 50.0, 0, '2026-09-04 09:36:38'),
 (8953, 'SBI-002', 12, '2026-06-19', 69, 10.1, 3.4, 0.0, 6.7, 22, 23, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11212,7 +11844,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (8988, 'SBI-002', 49, '2026-06-19', 69, 9.7, 1.4, 0.0, 8.3, 44, 60, 50.0, 1, '2026-09-04 09:36:38'),
 (8989, 'SBI-002', 48, '2026-06-19', 69, 3.6, 0.7, 0.0, 2.9, 23, 18, 50.0, 1, '2026-09-04 09:36:38'),
 (8990, 'SBI-002', 47, '2026-06-19', 69, 14.2, 0.7, 0.0, 13.5, 18, 17, 50.0, 1, '2026-09-04 09:36:38'),
-(8991, 'SBI-002', 5, '2026-06-20', 12, 2943.0, 1.9, 0.0, 2941.1, 5, 6, 70.0, 0, '2026-09-04 09:36:38'),
+(8991, 'SBI-002', 5, '2026-06-20', 12, 17658.0, 11.4, 0.0, 17646.6, 5, 6, 420.0, 0, '2026-09-04 09:36:38'),
 (8992, 'SBI-002', 10, '2026-06-20', 12, 377.2, 0.6, 47.9, 424.5, 7, 7, 50.0, 0, '2026-09-04 09:36:38'),
 (8993, 'SBI-002', 11, '2026-06-20', 12, 240.1, 0.6, 0.0, 239.5, 4, 3, 50.0, 0, '2026-09-04 09:36:38'),
 (8994, 'SBI-002', 12, '2026-06-20', 12, 6.7, 0.6, 0.0, 6.1, 4, 5, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11253,7 +11885,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9029, 'SBI-002', 49, '2026-06-20', 12, 8.3, 0.2, 0.0, 8.1, 3, 3, 50.0, 1, '2026-09-04 09:36:38'),
 (9030, 'SBI-002', 48, '2026-06-20', 12, 2.9, 0.1, 0.0, 2.8, 7, 6, 50.0, 1, '2026-09-04 09:36:38'),
 (9031, 'SBI-002', 47, '2026-06-20', 12, 13.5, 0.1, 0.0, 13.4, 6, 6, 50.0, 1, '2026-09-04 09:36:38'),
-(9032, 'SBI-002', 5, '2026-06-21', 34, 2941.1, 5.0, 51.5, 2987.6, 17, 14, 70.0, 0, '2026-09-04 09:36:38'),
+(9032, 'SBI-002', 5, '2026-06-21', 34, 17646.6, 30.0, 309.0, 17925.6, 17, 14, 420.0, 0, '2026-09-04 09:36:38'),
 (9033, 'SBI-002', 10, '2026-06-21', 34, 424.5, 1.7, 0.0, 422.8, 16, 16, 50.0, 0, '2026-09-04 09:36:38'),
 (9034, 'SBI-002', 11, '2026-06-21', 34, 239.5, 1.8, 0.0, 237.7, 16, 18, 50.0, 0, '2026-09-04 09:36:38'),
 (9035, 'SBI-002', 12, '2026-06-21', 34, 6.1, 1.7, 0.0, 4.4, 17, 23, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11294,7 +11926,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9070, 'SBI-002', 49, '2026-06-21', 34, 8.1, 0.7, 0.0, 7.4, 14, 17, 50.0, 1, '2026-09-04 09:36:38'),
 (9071, 'SBI-002', 48, '2026-06-21', 34, 2.8, 0.3, 0.0, 2.5, 18, 15, 50.0, 1, '2026-09-04 09:36:38'),
 (9072, 'SBI-002', 47, '2026-06-21', 34, 13.4, 0.3, 0.0, 13.1, 20, 23, 50.0, 1, '2026-09-04 09:36:38'),
-(9073, 'SBI-002', 5, '2026-06-22', 71, 2987.6, 10.8, 0.0, 2976.8, 26, 33, 70.0, 0, '2026-09-04 09:36:38'),
+(9073, 'SBI-002', 5, '2026-06-22', 71, 17925.6, 64.8, 0.0, 17860.8, 26, 33, 420.0, 0, '2026-09-04 09:36:38'),
 (9074, 'SBI-002', 10, '2026-06-22', 71, 422.8, 3.7, 0.0, 419.1, 46, 44, 50.0, 0, '2026-09-04 09:36:38'),
 (9075, 'SBI-002', 11, '2026-06-22', 71, 237.7, 3.4, 0.0, 234.3, 44, 52, 50.0, 0, '2026-09-04 09:36:38'),
 (9076, 'SBI-002', 12, '2026-06-22', 71, 4.4, 3.6, 0.0, 0.8, 32, 42, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11335,7 +11967,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9111, 'SBI-002', 49, '2026-06-22', 71, 7.4, 1.4, 0.0, 6.0, 19, 26, 50.0, 1, '2026-09-04 09:36:38'),
 (9112, 'SBI-002', 48, '2026-06-22', 71, 2.5, 0.7, 0.0, 1.8, 41, 39, 50.0, 1, '2026-09-04 09:36:38'),
 (9113, 'SBI-002', 47, '2026-06-22', 71, 13.1, 0.7, 0.0, 12.4, 42, 54, 50.0, 1, '2026-09-04 09:36:38'),
-(9114, 'SBI-002', 5, '2026-06-23', 54, 2976.8, 8.1, 0.0, 2968.7, 33, 40, 70.0, 0, '2026-09-04 09:36:38'),
+(9114, 'SBI-002', 5, '2026-06-23', 54, 17860.8, 48.6, 0.0, 17812.2, 33, 40, 420.0, 0, '2026-09-04 09:36:38'),
 (9115, 'SBI-002', 10, '2026-06-23', 54, 419.1, 2.7, 0.0, 416.4, 24, 21, 50.0, 0, '2026-09-04 09:36:38'),
 (9116, 'SBI-002', 11, '2026-06-23', 54, 234.3, 2.6, 0.0, 231.7, 31, 42, 50.0, 0, '2026-09-04 09:36:38'),
 (9117, 'SBI-002', 12, '2026-06-23', 54, 0.8, 2.7, 20.9, 19.0, 18, 24, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11376,7 +12008,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9152, 'SBI-002', 49, '2026-06-23', 54, 6.0, 1.1, 0.0, 4.9, 34, 47, 50.0, 1, '2026-09-04 09:36:38'),
 (9153, 'SBI-002', 48, '2026-06-23', 54, 1.8, 0.5, 0.0, 1.3, 20, 23, 50.0, 1, '2026-09-04 09:36:38'),
 (9154, 'SBI-002', 47, '2026-06-23', 54, 12.4, 0.5, 0.0, 11.9, 25, 31, 50.0, 1, '2026-09-04 09:36:38'),
-(9155, 'SBI-002', 5, '2026-06-24', 38, 2968.7, 6.0, 0.0, 2962.7, 17, 16, 70.0, 0, '2026-09-04 09:36:38'),
+(9155, 'SBI-002', 5, '2026-06-24', 38, 17812.2, 36.0, 0.0, 17776.2, 17, 16, 420.0, 0, '2026-09-04 09:36:38'),
 (9156, 'SBI-002', 10, '2026-06-24', 38, 416.4, 2.0, 0.0, 414.4, 20, 19, 50.0, 0, '2026-09-04 09:36:38'),
 (9157, 'SBI-002', 11, '2026-06-24', 38, 231.7, 1.8, 0.0, 229.9, 21, 28, 50.0, 0, '2026-09-04 09:36:38'),
 (9158, 'SBI-002', 12, '2026-06-24', 38, 19.0, 1.9, 0.0, 17.1, 21, 22, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11417,7 +12049,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9193, 'SBI-002', 49, '2026-06-24', 38, 4.9, 0.8, 0.0, 4.1, 16, 22, 50.0, 1, '2026-09-04 09:36:38'),
 (9194, 'SBI-002', 48, '2026-06-24', 38, 1.3, 0.4, 0.0, 0.9, 24, 25, 50.0, 1, '2026-09-04 09:36:38'),
 (9195, 'SBI-002', 47, '2026-06-24', 38, 11.9, 0.4, 0.0, 11.5, 13, 11, 50.0, 1, '2026-09-04 09:36:38'),
-(9196, 'SBI-002', 5, '2026-06-25', 10, 2962.7, 1.5, 0.0, 2961.2, 5, 5, 70.0, 0, '2026-09-04 09:36:38'),
+(9196, 'SBI-002', 5, '2026-06-25', 10, 17776.2, 9.0, 0.0, 17767.2, 5, 5, 420.0, 0, '2026-09-04 09:36:38'),
 (9197, 'SBI-002', 10, '2026-06-25', 10, 414.4, 0.5, 0.0, 413.9, 3, 3, 50.0, 0, '2026-09-04 09:36:38'),
 (9198, 'SBI-002', 11, '2026-06-25', 10, 229.9, 0.5, 0.0, 229.4, 5, 5, 50.0, 0, '2026-09-04 09:36:38'),
 (9199, 'SBI-002', 12, '2026-06-25', 10, 17.1, 0.5, 0.0, 16.6, 3, 4, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11458,7 +12090,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9234, 'SBI-002', 49, '2026-06-25', 10, 4.1, 0.2, 0.0, 3.9, 3, 3, 50.0, 1, '2026-09-04 09:36:38'),
 (9235, 'SBI-002', 48, '2026-06-25', 10, 0.9, 0.1, 0.0, 0.8, 4, 5, 50.0, 1, '2026-09-04 09:36:38'),
 (9236, 'SBI-002', 47, '2026-06-25', 10, 11.5, 0.1, 0.0, 11.4, 6, 5, 50.0, 1, '2026-09-04 09:36:38'),
-(9237, 'SBI-002', 5, '2026-06-26', 61, 2961.2, 9.0, 0.0, 2952.2, 34, 27, 70.0, 0, '2026-09-04 09:36:38'),
+(9237, 'SBI-002', 5, '2026-06-26', 61, 17767.2, 54.0, 0.0, 17713.2, 34, 27, 420.0, 0, '2026-09-04 09:36:38'),
 (9238, 'SBI-002', 10, '2026-06-26', 61, 413.9, 3.0, 0.0, 410.9, 39, 50, 50.0, 0, '2026-09-04 09:36:38'),
 (9239, 'SBI-002', 11, '2026-06-26', 61, 229.4, 2.9, 0.0, 226.5, 33, 36, 50.0, 0, '2026-09-04 09:36:38'),
 (9240, 'SBI-002', 12, '2026-06-26', 61, 16.6, 3.1, 0.0, 13.5, 30, 25, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11499,7 +12131,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9275, 'SBI-002', 49, '2026-06-26', 61, 3.9, 1.2, 0.0, 2.7, 23, 25, 50.0, 1, '2026-09-04 09:36:38'),
 (9276, 'SBI-002', 48, '2026-06-26', 61, 0.8, 0.6, 0.0, 0.2, 32, 38, 50.0, 1, '2026-09-04 09:36:38'),
 (9277, 'SBI-002', 47, '2026-06-26', 61, 11.4, 0.6, 0.0, 10.8, 16, 18, 50.0, 1, '2026-09-04 09:36:38'),
-(9278, 'SBI-002', 5, '2026-06-27', 50, 2952.2, 7.6, 154.5, 3099.1, 29, 38, 70.0, 0, '2026-09-04 09:36:38'),
+(9278, 'SBI-002', 5, '2026-06-27', 50, 17713.2, 45.6, 927.0, 18594.6, 29, 38, 420.0, 0, '2026-09-04 09:36:38'),
 (9279, 'SBI-002', 10, '2026-06-27', 50, 410.9, 2.5, 0.0, 408.4, 32, 35, 50.0, 0, '2026-09-04 09:36:38'),
 (9280, 'SBI-002', 11, '2026-06-27', 50, 226.5, 2.5, 0.0, 224.0, 28, 24, 50.0, 0, '2026-09-04 09:36:38'),
 (9281, 'SBI-002', 12, '2026-06-27', 50, 13.5, 2.4, 0.0, 11.1, 28, 26, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11536,15 +12168,15 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9312, 'SBI-002', 46, '2026-06-27', 50, 24.0, 1.0, 20.4, 43.4, 21, 21, 50.0, 1, '2026-09-04 09:36:38'),
 (9313, 'SBI-002', 52, '2026-06-27', 50, 5.9, 0.2, 0.0, 5.7, 32, 32, 50.0, 1, '2026-09-04 09:36:38'),
 (9314, 'SBI-002', 50, '2026-06-27', 50, 16.2, 1.0, 0.0, 15.2, 15, 16, 50.0, 1, '2026-09-04 09:36:38'),
-(9315, 'SBI-002', 6, '2026-06-27', 50, 1.8, 0.3, 0.0, 1.5, 27, 35, 50.0, 1, '2026-09-04 09:36:38'),
+(9315, 'SBI-002', 6, '2026-06-27', 50, 1.8, 0.3, 0.0, 1.5, 27, 35, 50.0, 1, '2026-09-04 09:36:38');
+INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
 (9316, 'SBI-002', 49, '2026-06-27', 50, 2.7, 1.0, 0.0, 1.7, 30, 32, 50.0, 1, '2026-09-04 09:36:38'),
 (9317, 'SBI-002', 48, '2026-06-27', 50, 0.2, 0.5, 10.3, 10.0, 16, 22, 50.0, 1, '2026-09-04 09:36:38'),
 (9318, 'SBI-002', 47, '2026-06-27', 50, 10.8, 0.5, 0.0, 10.3, 27, 28, 50.0, 1, '2026-09-04 09:36:38'),
-(9319, 'SBI-002', 5, '2026-06-28', 10, 3099.1, 1.5, 0.0, 3097.6, 4, 5, 70.0, 0, '2026-09-04 09:36:38'),
+(9319, 'SBI-002', 5, '2026-06-28', 10, 18594.6, 9.0, 0.0, 18585.6, 4, 5, 420.0, 0, '2026-09-04 09:36:38'),
 (9320, 'SBI-002', 10, '2026-06-28', 10, 408.4, 0.5, 0.0, 407.9, 6, 7, 50.0, 0, '2026-09-04 09:36:38'),
 (9321, 'SBI-002', 11, '2026-06-28', 10, 224.0, 0.5, 0.0, 223.5, 6, 8, 50.0, 0, '2026-09-04 09:36:38'),
-(9322, 'SBI-002', 12, '2026-06-28', 10, 11.1, 0.5, 0.0, 10.6, 6, 8, 50.0, 1, '2026-09-04 09:36:38');
-INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
+(9322, 'SBI-002', 12, '2026-06-28', 10, 11.1, 0.5, 0.0, 10.6, 6, 8, 50.0, 1, '2026-09-04 09:36:38'),
 (9323, 'SBI-002', 2, '2026-06-28', 10, 6.8, 0.4, 0.0, 6.4, 3, 3, 50.0, 1, '2026-09-04 09:36:38'),
 (9324, 'SBI-002', 14, '2026-06-28', 10, 35.7, 0.2, 0.0, 35.5, 6, 7, 50.0, 1, '2026-09-04 09:36:38'),
 (9325, 'SBI-002', 17, '2026-06-28', 10, 21.3, 0.2, 0.0, 21.1, 6, 8, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11582,7 +12214,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9357, 'SBI-002', 49, '2026-06-28', 10, 1.7, 0.2, 0.0, 1.5, 3, 4, 50.0, 1, '2026-09-04 09:36:38'),
 (9358, 'SBI-002', 48, '2026-06-28', 10, 10.0, 0.1, 0.0, 9.9, 4, 3, 50.0, 1, '2026-09-04 09:36:38'),
 (9359, 'SBI-002', 47, '2026-06-28', 10, 10.3, 0.1, 0.0, 10.2, 6, 5, 50.0, 1, '2026-09-04 09:36:38'),
-(9360, 'SBI-002', 5, '2026-06-29', 22, 3097.6, 3.4, 0.0, 3094.2, 14, 17, 70.0, 0, '2026-09-04 09:36:38'),
+(9360, 'SBI-002', 5, '2026-06-29', 22, 18585.6, 20.4, 0.0, 18565.2, 14, 17, 420.0, 0, '2026-09-04 09:36:38'),
 (9361, 'SBI-002', 10, '2026-06-29', 22, 407.9, 1.1, 0.0, 406.8, 9, 10, 50.0, 0, '2026-09-04 09:36:38'),
 (9362, 'SBI-002', 11, '2026-06-29', 22, 223.5, 1.1, 0.0, 222.4, 11, 14, 50.0, 0, '2026-09-04 09:36:38'),
 (9363, 'SBI-002', 12, '2026-06-29', 22, 10.6, 1.2, 0.0, 9.4, 7, 6, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11623,7 +12255,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9398, 'SBI-002', 49, '2026-06-29', 22, 1.5, 0.4, 0.0, 1.1, 11, 13, 50.0, 1, '2026-09-04 09:36:38'),
 (9399, 'SBI-002', 48, '2026-06-29', 22, 9.9, 0.2, 0.0, 9.7, 9, 12, 50.0, 1, '2026-09-04 09:36:38'),
 (9400, 'SBI-002', 47, '2026-06-29', 22, 10.2, 0.2, 0.0, 10.0, 13, 16, 50.0, 1, '2026-09-04 09:36:38'),
-(9401, 'SBI-002', 5, '2026-06-30', 58, 3094.2, 9.1, 0.0, 3085.1, 31, 41, 70.0, 0, '2026-09-04 09:36:38'),
+(9401, 'SBI-002', 5, '2026-06-30', 58, 18565.2, 54.6, 0.0, 18510.6, 31, 41, 420.0, 0, '2026-09-04 09:36:38'),
 (9402, 'SBI-002', 10, '2026-06-30', 58, 406.8, 2.9, 0.0, 403.9, 15, 15, 50.0, 0, '2026-09-04 09:36:38'),
 (9403, 'SBI-002', 11, '2026-06-30', 58, 222.4, 2.9, 0.0, 219.5, 33, 30, 50.0, 0, '2026-09-04 09:36:38'),
 (9404, 'SBI-002', 12, '2026-06-30', 58, 9.4, 2.9, 0.0, 6.5, 26, 26, 50.0, 1, '2026-09-04 09:36:38'),
@@ -11664,7 +12296,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9439, 'SBI-002', 49, '2026-06-30', 58, 1.1, 1.2, 15.1, 15.0, 35, 42, 50.0, 1, '2026-09-04 09:36:38'),
 (9440, 'SBI-002', 48, '2026-06-30', 58, 9.7, 0.6, 0.0, 9.1, 33, 46, 50.0, 1, '2026-09-04 09:36:38'),
 (9441, 'SBI-002', 47, '2026-06-30', 58, 10.0, 0.6, 0.0, 9.4, 20, 25, 50.0, 1, '2026-09-04 09:36:38'),
-(9442, 'SBI-002', 5, '2026-07-01', 55, 3085.1, 8.8, 0.0, 3076.3, 14, 17, 70.0, 0, '2026-09-04 09:36:39'),
+(9442, 'SBI-002', 5, '2026-07-01', 55, 18510.6, 52.8, 0.0, 18457.8, 14, 17, 420.0, 0, '2026-09-04 09:36:39'),
 (9443, 'SBI-002', 10, '2026-07-01', 55, 403.9, 2.7, 0.0, 401.2, 28, 32, 50.0, 0, '2026-09-04 09:36:39'),
 (9444, 'SBI-002', 11, '2026-07-01', 55, 219.5, 2.9, 0.0, 216.6, 32, 44, 50.0, 0, '2026-09-04 09:36:39'),
 (9445, 'SBI-002', 12, '2026-07-01', 55, 6.5, 2.7, 29.4, 33.2, 26, 29, 50.0, 1, '2026-09-04 09:36:39'),
@@ -11705,7 +12337,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9480, 'SBI-002', 49, '2026-07-01', 55, 15.0, 1.1, 0.0, 13.9, 23, 19, 50.0, 1, '2026-09-04 09:36:39'),
 (9481, 'SBI-002', 48, '2026-07-01', 55, 9.1, 0.5, 0.0, 8.6, 29, 29, 50.0, 1, '2026-09-04 09:36:39'),
 (9482, 'SBI-002', 47, '2026-07-01', 55, 9.4, 0.6, 0.0, 8.8, 32, 40, 50.0, 1, '2026-09-04 09:36:39'),
-(9483, 'SBI-002', 5, '2026-07-02', 41, 3076.3, 6.6, 0.0, 3069.7, 18, 16, 70.0, 0, '2026-09-04 09:36:39'),
+(9483, 'SBI-002', 5, '2026-07-02', 41, 18457.8, 39.6, 0.0, 18418.2, 18, 16, 420.0, 0, '2026-09-04 09:36:39'),
 (9484, 'SBI-002', 10, '2026-07-02', 41, 401.2, 2.0, 0.0, 399.2, 14, 17, 50.0, 0, '2026-09-04 09:36:39'),
 (9485, 'SBI-002', 11, '2026-07-02', 41, 216.6, 2.0, 0.0, 214.6, 20, 25, 50.0, 0, '2026-09-04 09:36:39'),
 (9486, 'SBI-002', 12, '2026-07-02', 41, 33.2, 2.0, 0.0, 31.2, 18, 21, 50.0, 1, '2026-09-04 09:36:39'),
@@ -11746,7 +12378,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9521, 'SBI-002', 49, '2026-07-02', 41, 13.9, 0.8, 0.0, 13.1, 19, 20, 50.0, 1, '2026-09-04 09:36:39'),
 (9522, 'SBI-002', 48, '2026-07-02', 41, 8.6, 0.4, 0.0, 8.2, 14, 16, 50.0, 1, '2026-09-04 09:36:39'),
 (9523, 'SBI-002', 47, '2026-07-02', 41, 8.8, 0.4, 0.0, 8.4, 21, 17, 50.0, 1, '2026-09-04 09:36:39'),
-(9524, 'SBI-002', 5, '2026-07-03', 18, 3069.7, 3.1, 0.0, 3066.6, 5, 4, 70.0, 0, '2026-09-04 09:36:39'),
+(9524, 'SBI-002', 5, '2026-07-03', 18, 18418.2, 18.6, 0.0, 18399.6, 5, 4, 420.0, 0, '2026-09-04 09:36:39'),
 (9525, 'SBI-002', 10, '2026-07-03', 18, 399.2, 0.9, 0.0, 398.3, 5, 4, 50.0, 0, '2026-09-04 09:36:39'),
 (9526, 'SBI-002', 11, '2026-07-03', 18, 214.6, 0.9, 40.8, 254.5, 5, 6, 50.0, 0, '2026-09-04 09:36:39'),
 (9527, 'SBI-002', 12, '2026-07-03', 18, 31.2, 0.8, 0.0, 30.4, 7, 7, 50.0, 1, '2026-09-04 09:36:39'),
@@ -11787,7 +12419,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9562, 'SBI-002', 49, '2026-07-03', 18, 13.1, 0.4, 0.0, 12.7, 5, 6, 50.0, 1, '2026-09-04 09:36:39'),
 (9563, 'SBI-002', 48, '2026-07-03', 18, 8.2, 0.2, 0.0, 8.0, 9, 11, 50.0, 1, '2026-09-04 09:36:39'),
 (9564, 'SBI-002', 47, '2026-07-03', 18, 8.4, 0.2, 0.0, 8.2, 8, 7, 50.0, 1, '2026-09-04 09:36:39'),
-(9565, 'SBI-002', 5, '2026-07-04', 14, 3066.6, 2.3, 0.0, 3064.3, 5, 6, 70.0, 0, '2026-09-04 09:36:39'),
+(9565, 'SBI-002', 5, '2026-07-04', 14, 18399.6, 13.8, 0.0, 18385.8, 5, 6, 420.0, 0, '2026-09-04 09:36:39'),
 (9566, 'SBI-002', 10, '2026-07-04', 14, 398.3, 0.7, 0.0, 397.6, 8, 10, 50.0, 0, '2026-09-04 09:36:39'),
 (9567, 'SBI-002', 11, '2026-07-04', 14, 254.5, 0.7, 0.0, 253.8, 4, 5, 50.0, 0, '2026-09-04 09:36:39'),
 (9568, 'SBI-002', 12, '2026-07-04', 14, 30.4, 0.7, 0.0, 29.7, 9, 10, 50.0, 1, '2026-09-04 09:36:39'),
@@ -11828,7 +12460,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9603, 'SBI-002', 49, '2026-07-04', 14, 12.7, 0.3, 9.2, 21.6, 9, 12, 50.0, 1, '2026-09-04 09:36:39'),
 (9604, 'SBI-002', 48, '2026-07-04', 14, 8.0, 0.1, 0.0, 7.9, 4, 4, 50.0, 1, '2026-09-04 09:36:39'),
 (9605, 'SBI-002', 47, '2026-07-04', 14, 8.2, 0.1, 0.0, 8.1, 7, 6, 50.0, 1, '2026-09-04 09:36:39'),
-(9606, 'SBI-002', 5, '2026-07-05', 5, 3064.3, 0.7, 0.0, 3063.6, 1, 1, 70.0, 0, '2026-09-04 09:36:39'),
+(9606, 'SBI-002', 5, '2026-07-05', 5, 18385.8, 4.2, 0.0, 18381.6, 1, 1, 420.0, 0, '2026-09-04 09:36:39'),
 (9607, 'SBI-002', 10, '2026-07-05', 5, 397.6, 0.2, 0.0, 397.4, 2, 2, 50.0, 0, '2026-09-04 09:36:39'),
 (9608, 'SBI-002', 11, '2026-07-05', 5, 253.8, 0.3, 0.0, 253.5, 1, 1, 50.0, 0, '2026-09-04 09:36:39'),
 (9609, 'SBI-002', 12, '2026-07-05', 5, 29.7, 0.2, 0.0, 29.5, 2, 2, 50.0, 1, '2026-09-04 09:36:39'),
@@ -11869,7 +12501,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9644, 'SBI-002', 49, '2026-07-05', 5, 21.6, 0.1, 0.0, 21.5, 1, 1, 50.0, 1, '2026-09-04 09:36:39'),
 (9645, 'SBI-002', 48, '2026-07-05', 5, 7.9, 0.1, 0.0, 7.8, 3, 3, 50.0, 1, '2026-09-04 09:36:39'),
 (9646, 'SBI-002', 47, '2026-07-05', 5, 8.1, 0.1, 0.0, 8.0, 3, 3, 50.0, 1, '2026-09-04 09:36:39'),
-(9647, 'SBI-002', 5, '2026-07-06', 32, 3063.6, 4.8, 170.5, 3229.3, 14, 15, 70.0, 0, '2026-09-04 09:36:39'),
+(9647, 'SBI-002', 5, '2026-07-06', 32, 18381.6, 28.8, 1023.0, 19375.8, 14, 15, 420.0, 0, '2026-09-04 09:36:39'),
 (9648, 'SBI-002', 10, '2026-07-06', 32, 397.4, 1.6, 0.0, 395.8, 14, 15, 50.0, 0, '2026-09-04 09:36:39'),
 (9649, 'SBI-002', 11, '2026-07-06', 32, 253.5, 1.6, 0.0, 251.9, 10, 12, 50.0, 0, '2026-09-04 09:36:39'),
 (9650, 'SBI-002', 12, '2026-07-06', 32, 29.5, 1.6, 0.0, 27.9, 12, 13, 50.0, 1, '2026-09-04 09:36:39'),
@@ -11910,7 +12542,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9685, 'SBI-002', 49, '2026-07-06', 32, 21.5, 0.6, 0.0, 20.9, 11, 15, 50.0, 1, '2026-09-04 09:36:39'),
 (9686, 'SBI-002', 48, '2026-07-06', 32, 7.8, 0.3, 0.0, 7.5, 12, 14, 50.0, 1, '2026-09-04 09:36:39'),
 (9687, 'SBI-002', 47, '2026-07-06', 32, 8.0, 0.3, 0.0, 7.7, 16, 13, 50.0, 1, '2026-09-04 09:36:39'),
-(9688, 'SBI-002', 5, '2026-07-07', 29, 3229.3, 3.9, 0.0, 3225.4, 8, 11, 70.0, 0, '2026-09-04 09:36:39'),
+(9688, 'SBI-002', 5, '2026-07-07', 29, 19375.8, 23.4, 0.0, 19352.4, 8, 11, 420.0, 0, '2026-09-04 09:36:39'),
 (9689, 'SBI-002', 10, '2026-07-07', 29, 395.8, 1.4, 0.0, 394.4, 14, 18, 50.0, 0, '2026-09-04 09:36:39'),
 (9690, 'SBI-002', 11, '2026-07-07', 29, 251.9, 1.5, 0.0, 250.4, 17, 20, 50.0, 0, '2026-09-04 09:36:39'),
 (9691, 'SBI-002', 12, '2026-07-07', 29, 27.9, 1.4, 27.7, 54.2, 14, 16, 50.0, 0, '2026-09-04 09:36:39'),
@@ -11951,7 +12583,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9726, 'SBI-002', 49, '2026-07-07', 29, 20.9, 0.6, 0.0, 20.3, 13, 14, 50.0, 1, '2026-09-04 09:36:39'),
 (9727, 'SBI-002', 48, '2026-07-07', 29, 7.5, 0.3, 0.0, 7.2, 12, 10, 50.0, 1, '2026-09-04 09:36:39'),
 (9728, 'SBI-002', 47, '2026-07-07', 29, 7.7, 0.3, 0.0, 7.4, 9, 8, 50.0, 1, '2026-09-04 09:36:39'),
-(9729, 'SBI-002', 5, '2026-07-08', 29, 3225.4, 4.0, 0.0, 3221.4, 14, 18, 70.0, 0, '2026-09-04 09:36:39'),
+(9729, 'SBI-002', 5, '2026-07-08', 29, 19352.4, 24.0, 0.0, 19328.4, 14, 18, 420.0, 0, '2026-09-04 09:36:39'),
 (9730, 'SBI-002', 10, '2026-07-08', 29, 394.4, 1.5, 0.0, 392.9, 15, 18, 50.0, 0, '2026-09-04 09:36:39'),
 (9731, 'SBI-002', 11, '2026-07-08', 29, 250.4, 1.5, 0.0, 248.9, 12, 13, 50.0, 0, '2026-09-04 09:36:39'),
 (9732, 'SBI-002', 12, '2026-07-08', 29, 54.2, 1.4, 0.0, 52.8, 12, 11, 50.0, 0, '2026-09-04 09:36:39'),
@@ -11992,7 +12624,7 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9767, 'SBI-002', 49, '2026-07-08', 29, 20.3, 0.6, 0.0, 19.7, 7, 9, 50.0, 1, '2026-09-04 09:36:39'),
 (9768, 'SBI-002', 48, '2026-07-08', 29, 7.2, 0.3, 0.0, 6.9, 13, 12, 50.0, 1, '2026-09-04 09:36:39'),
 (9769, 'SBI-002', 47, '2026-07-08', 29, 7.4, 0.3, 0.0, 7.1, 10, 10, 50.0, 1, '2026-09-04 09:36:39'),
-(9770, 'SBI-002', 5, '2026-07-09', 29, 3221.4, 4.0, 0.0, 3217.4, 8, 6, 70.0, 0, '2026-09-04 09:36:39'),
+(9770, 'SBI-002', 5, '2026-07-09', 29, 19328.4, 24.0, 0.0, 19304.4, 8, 6, 420.0, 0, '2026-09-04 09:36:39'),
 (9771, 'SBI-002', 10, '2026-07-09', 29, 392.9, 1.5, 0.0, 391.4, 17, 15, 50.0, 0, '2026-09-04 09:36:39'),
 (9772, 'SBI-002', 11, '2026-07-09', 29, 248.9, 1.4, 0.0, 247.5, 7, 10, 50.0, 0, '2026-09-04 09:36:39'),
 (9773, 'SBI-002', 12, '2026-07-09', 29, 52.8, 1.4, 0.0, 51.4, 16, 17, 50.0, 0, '2026-09-04 09:36:39'),
@@ -12025,16 +12657,16 @@ INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_d
 (9800, 'SBI-002', 45, '2026-07-09', 29, 2700.5, 5.2, 0.0, 2695.3, 18, 21, 100.0, 0, '2026-09-04 09:36:39'),
 (9801, 'SBI-002', 51, '2026-07-09', 29, 109.4, 1.4, 0.0, 108.0, 17, 19, 50.0, 0, '2026-09-04 09:36:39'),
 (9802, 'SBI-002', 41, '2026-07-09', 29, 214.4, 0.9, 0.0, 213.5, 9, 10, 50.0, 0, '2026-09-04 09:36:39'),
-(9803, 'SBI-002', 53, '2026-07-09', 29, 6.1, 0.3, 0.0, 5.8, 18, 15, 50.0, 1, '2026-09-04 09:36:39'),
+(9803, 'SBI-002', 53, '2026-07-09', 29, 6.1, 0.3, 0.0, 5.8, 18, 15, 50.0, 1, '2026-09-04 09:36:39');
+INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
 (9804, 'SBI-002', 46, '2026-07-09', 29, 83.3, 0.6, 0.0, 82.7, 18, 22, 50.0, 0, '2026-09-04 09:36:39'),
 (9805, 'SBI-002', 52, '2026-07-09', 29, 12.1, 0.1, 0.0, 12.0, 11, 9, 50.0, 1, '2026-09-04 09:36:39'),
 (9806, 'SBI-002', 50, '2026-07-09', 29, 8.8, 0.6, 0.0, 8.2, 7, 8, 50.0, 1, '2026-09-04 09:36:39'),
 (9807, 'SBI-002', 6, '2026-07-09', 29, 3.1, 0.1, 0.0, 3.0, 14, 13, 50.0, 1, '2026-09-04 09:36:39'),
 (9808, 'SBI-002', 49, '2026-07-09', 29, 19.7, 0.6, 0.0, 19.1, 12, 11, 50.0, 1, '2026-09-04 09:36:39'),
 (9809, 'SBI-002', 48, '2026-07-09', 29, 6.9, 0.3, 0.0, 6.6, 16, 15, 50.0, 1, '2026-09-04 09:36:39'),
-(9810, 'SBI-002', 47, '2026-07-09', 29, 7.1, 0.3, 0.0, 6.8, 13, 11, 50.0, 1, '2026-09-04 09:36:39');
-INSERT INTO `training_dataset` (`training_id`, `branch_id`, `item_id`, `record_date`, `patient_count`, `beginning_stock`, `quantity_used`, `stock_received`, `ending_stock`, `animal_bite_cases`, `vaccinations_administered`, `minimum_stock_level`, `low_stock_target`, `created_at`) VALUES
-(9811, 'SBI-002', 5, '2026-07-10', 22, 3217.4, 3.3, 0.0, 3214.1, 6, 8, 70.0, 0, '2026-09-04 09:36:39'),
+(9810, 'SBI-002', 47, '2026-07-09', 29, 7.1, 0.3, 0.0, 6.8, 13, 11, 50.0, 1, '2026-09-04 09:36:39'),
+(9811, 'SBI-002', 5, '2026-07-10', 22, 19304.4, 19.8, 0.0, 19284.6, 6, 8, 420.0, 0, '2026-09-04 09:36:39'),
 (9812, 'SBI-002', 10, '2026-07-10', 22, 391.4, 1.1, 0.0, 390.3, 8, 10, 50.0, 0, '2026-09-04 09:36:39'),
 (9813, 'SBI-002', 11, '2026-07-10', 22, 247.5, 1.1, 0.0, 246.4, 13, 11, 50.0, 0, '2026-09-04 09:36:39'),
 (9814, 'SBI-002', 12, '2026-07-10', 22, 51.4, 1.1, 0.0, 50.3, 6, 5, 50.0, 0, '2026-09-04 09:36:39'),
@@ -12125,18 +12757,22 @@ CREATE TABLE `users` (
 --
 
 INSERT INTO `users` (`user_id`, `branch_id`, `role_id`, `username`, `email`, `password`, `status`, `created_at`, `last_login`) VALUES
-(1, 'SBI-001', 1, 'superadmin', 'garabillo_jojanajean@plpasig.edu.ph', '$2y$10$gTUuk2.GeUd5BNNryWGq8OhJWjQcdqk8rOMPUMJ1VkFaxc7eJajHe', 'Active', '2026-07-04 07:53:47', '2026-09-10 11:41:14'),
-(6, 'SBI-002', 2, 'Jojana Garabillo', 'jojanajeangarabillo@gmail.com', '$2y$10$Gundsv.vdvdqOT1M3VIcP.r/8y/MqzNxDPnxfh2qypFd44fL6xZta', 'Active', '2026-07-04 09:59:45', '2026-09-08 14:07:14'),
-(8, 'SBI-002', 4, 'Shane Cacho', 'pam066198@gmail.com', '$2a$12$rfw67uNcLetmfn6M2Dv5e.ff49vAitKIHni3Q7iKV.zgMruHVfkIa', 'Active', '2026-07-04 14:41:02', '2026-09-08 13:55:06'),
-(9, 'SBI-002', 3, 'Marc Beringuela', 'ruberducky032518@gmail.com', '$2y$10$mRG5TnwyVCEkohLgsXiCe.INa226POltPF/0M4fYuXX8mq925V7kO', 'Active', '2026-07-04 14:55:07', '2026-09-10 11:39:02'),
-(11, 'SBI-002', 5, 'Jean Montero', 'joepatlacerna54@gmail.com', '$2y$10$ga5HM6WcD0wQSSvnpCAvue4UdqknCryN93mJVLatoI4GAiEDHctNO', 'Active', '2026-07-04 15:09:39', '2026-09-10 10:00:31'),
-(14, 'SBI-003', 2, 'Joepat Lacerna', 'opat09252005@gmail.com', '$2y$10$JB4.S8HI8Zu.IbvLHuMhH.3mnmqmyWMdV4ID/nRxcotOs.tmdCasm', 'Active', '2026-07-05 11:56:22', '2026-09-10 13:20:42'),
+(1, 'SBI-001', 1, 'superadmin', 'superadmin8472@example.com', '$2y$10$Mi5HOtkfjlBSSce5uH9Q/.WKJtV0KkkmkW0Oukc5bKo.ioncyUBA2', 'Active', '2026-07-04 07:53:47', '2026-09-11 17:00:28'),
+(6, 'SBI-002', 2, 'Jojana Garabillo', 'jojanagarabillo5631@example.com', '$2y$10$Gundsv.vdvdqOT1M3VIcP.r/8y/MqzNxDPnxfh2qypFd44fL6xZta', 'Active', '2026-07-04 09:59:45', '2026-09-11 22:18:46'),
+(8, 'SBI-002', 4, 'Shane Cacho', 'shanecacho2917@example.com', '$2a$12$rfw67uNcLetmfn6M2Dv5e.ff49vAitKIHni3Q7iKV.zgMruHVfkIa', 'Active', '2026-07-04 14:41:02', '2026-09-08 13:55:06'),
+(9, 'SBI-002', 3, 'Marc Beringuela', 'marcberinguela6843@example.com', '$2y$10$mRG5TnwyVCEkohLgsXiCe.INa226POltPF/0M4fYuXX8mq925V7kO', 'Active', '2026-07-04 14:55:07', '2026-09-11 18:40:34'),
+(11, 'SBI-002', 5, 'Jean Montero', 'jeanmontero3159@example.com', '$2y$10$ga5HM6WcD0wQSSvnpCAvue4UdqknCryN93mJVLatoI4GAiEDHctNO', 'Active', '2026-07-04 15:09:39', '2026-09-11 17:08:01'),
+(14, 'SBI-003', 2, 'Joepat Lacerna', 'joepatlacerna7284@example.com', '$2y$10$JB4.S8HI8Zu.IbvLHuMhH.3mnmqmyWMdV4ID/nRxcotOs.tmdCasm', 'Active', '2026-07-05 11:56:22', '2026-09-11 16:18:09'),
 (15, 'SBI-003', 2, 'Mae Ben', 'sheyn.cacho@gmail.com', '$2y$10$knOsicB5IV6qD4SqIaF3WOBBnyrFDJYTknP8yqBSXlo35gIp8mLim', 'Active', '2026-07-05 16:19:46', '2026-07-09 19:33:48'),
-(16, 'SBI-002', 4, 'Ella Franco', 'cachosheyn@gmail.com', '$2y$10$lLv3F5B3Yu1QGQU1GkAbq./clNj/7RMlMH1noMMwNAqv/45mymWfm', 'Active', '2026-07-07 06:24:22', '2026-09-05 16:10:55'),
-(24, 'SB-0013', 2, 'Sharpay Evans', 'SharpayEvans@gmail.com', '$2y$10$AW8hhqA1/TAtM5RZdtWTk.AMVvcWUfw9Fh5Y1oBGRIiJULmmxnTUC', 'Active', '2026-09-08 06:04:57', NULL),
+(16, 'SBI-002', 4, 'Ella Franco', 'cachosheyn@gmail.com', '$2y$10$lLv3F5B3Yu1QGQU1GkAbq./clNj/7RMlMH1noMMwNAqv/45mymWfm', 'Active', '2026-07-07 06:24:22', '2026-09-11 21:17:19'),
+(24, 'SBI-008', 2, 'Sharpay Evans', 'SharpayEvans@gmail.com', '$2y$10$AW8hhqA1/TAtM5RZdtWTk.AMVvcWUfw9Fh5Y1oBGRIiJULmmxnTUC', 'Active', '2026-09-08 06:04:57', NULL),
 (25, 'SBI-002', 4, 'Sarah Princess', 'princess_sarah@gmail.com', '$2y$10$eCltMnFYRsAfCZT8f0H7.O/u.jJPa6yH9KmVqegZTApLY0bAEZCHu', 'Active', '2026-09-08 06:07:41', NULL),
 (26, 'SBI-001', 2, 'Micha Almo', 'ewyouseff123@gmail.com', '$2y$10$vSG7sV7GzKaDHRE4QTAwX.KCAvboTe6GmKvOIhn6yxbTwhZM8WPV6', 'Active', '2026-09-08 07:32:10', '2026-09-08 15:45:48'),
-(27, 'SBI-001', 5, 'Katsupot', 'cacho_shaneellamae@plpasig.edu.ph', '$2y$10$TGxzFE/Aepxnnx.Q8R2T0uUpIkVf4F.GIfnmnUhuuo6OqN1lEIZu2', 'Active', '2026-09-08 07:46:55', '2026-09-09 22:56:49');
+(27, 'SBI-001', 5, 'Katsupot', 'cacho_shaneellamae@plpasig.edu.ph', '$2y$10$TGxzFE/Aepxnnx.Q8R2T0uUpIkVf4F.GIfnmnUhuuo6OqN1lEIZu2', 'Active', '2026-09-08 07:46:55', '2026-09-09 22:56:49'),
+(31, 'SBI-003', 5, 'Ana Ella', 'pam066198@gmail.com', '$2y$10$j7hpgdi1BMu/VbReqrak2O4m51aBRIl9nWXY2KB4qnNKwnlNdMmgi', 'Active', '2026-09-11 07:38:15', '2026-09-11 16:02:15'),
+(32, 'SBI-005', 2, 'Ferdi Nand', 'ruberducky032518@gmail.com', '$2y$10$UxeCj7mL4G9.bToZE5xSM.JTxnb29USi.an0SDC8wn.GNw.fI7/kK', 'Active', '2026-09-11 08:12:45', '2026-09-11 16:13:26'),
+(33, 'SBI-003', 4, 'Jodi Garcia', 'garabillo_jojanajean@plpasig.edu.ph', '$2y$10$/kBGrfuqf87JRf8AyPCg2e0AM671/2r9mg5C0ogx8ICP.ip6TU7SW', 'Active', '2026-09-11 08:14:41', '2026-09-11 16:16:20'),
+(34, 'SBI-003', 3, 'Roni Antonio', 'jojanajeangarabillo@gmail.com', '$2y$10$HzTNxx7RCnICWdWjUF0N2O8w1ZScqXXwn3KI/MgJQ17.Tm1TCKW3C', 'Active', '2026-09-11 08:17:21', '2026-09-11 16:18:45');
 
 -- --------------------------------------------------------
 
@@ -12169,7 +12805,14 @@ INSERT INTO `user_tokens` (`token_id`, `user_id`, `token`, `token_type`, `expire
 (21, 24, '69c1bbeea720615d488065791522ef7c7b34771e8cd320a66a51352ce45705b0', 'password_reset', '2026-09-09 08:04:57', NULL, '2026-09-08 06:04:57'),
 (22, 25, 'c1b65c35f7cc99f83533cf462fe0f74ab7d2f1f1cbca204c0607dba4462aa44d', 'password_reset', '2026-09-09 08:07:41', NULL, '2026-09-08 06:07:41'),
 (23, 26, '3c5000aa13e15512f836a4d0f81da68eff36e439b481d0f9a02aa00fea265a47', 'password_reset', '2026-09-09 09:32:10', NULL, '2026-09-08 07:32:10'),
-(24, 27, '494ce1ec00255189166e1bb499ac62e07dff2fa294879ea3356bf7847db93172', 'password_reset', '2026-09-09 09:46:55', NULL, '2026-09-08 07:46:55');
+(24, 27, '494ce1ec00255189166e1bb499ac62e07dff2fa294879ea3356bf7847db93172', 'password_reset', '2026-09-09 09:46:55', NULL, '2026-09-08 07:46:55'),
+(26, 29, 'cf877ed30fbe5c3a6b5540d37e3d4a5727dc647db4f78cb84c318849d32fc807', 'password_reset', '2026-09-12 15:05:27', '2026-09-11 15:06:01', '2026-09-11 07:05:27'),
+(27, 30, '66db867942a96b737c9ef378a08c7ec01501fcb669f4987d92279d4a5cd5c8c7', 'password_reset', '2026-09-12 15:23:48', '2026-09-11 15:24:51', '2026-09-11 07:23:48'),
+(28, 31, '18ca216508c9b32f05d770ac1600a3f98fa7b97308c95a0c2dcb0fd42a5afdf6', 'password_reset', '2026-09-12 15:38:15', '2026-09-11 15:39:53', '2026-09-11 07:38:15'),
+(29, 31, '23fa1110f1ce447aaedb6acc3556b585b08bea5dd0847411ba38e182bf172e1b', 'password_reset', '2026-09-12 16:00:24', '2026-09-11 16:02:04', '2026-09-11 08:00:24'),
+(30, 32, '49dd388337a6b3ac6f22c51a6f1796209e87735071f640d921a8838479d2585b', 'password_reset', '2026-09-12 16:12:45', '2026-09-11 16:13:17', '2026-09-11 08:12:45'),
+(31, 33, 'a4a44b17c0bb6fa40c9eeccdc1ac891c77bc7878eb4835b3b06c54f7ad481626', 'password_reset', '2026-09-12 16:14:41', '2026-09-11 16:16:06', '2026-09-11 08:14:41'),
+(32, 34, '4854a2fc6648428eb4e4f6997f60b73c4c2a19e639e73560d6bbb8885e55e644', 'password_reset', '2026-09-12 16:17:21', '2026-09-11 16:18:32', '2026-09-11 08:17:21');
 
 -- --------------------------------------------------------
 
@@ -12185,7 +12828,10 @@ CREATE TABLE `vaccination_records` (
   `item_id` int(11) DEFAULT NULL,
   `vaccine_name` varchar(255) DEFAULT NULL,
   `unit_id` int(11) DEFAULT NULL,
-  `quantity_used` decimal(12,2) NOT NULL DEFAULT 0.00,
+  `quantity_used` decimal(12,4) DEFAULT NULL,
+  `quantity_unit_label` varchar(30) DEFAULT NULL,
+  `display_unit_label_snapshot` varchar(30) DEFAULT NULL,
+  `conversion_to_base_snapshot` decimal(12,4) DEFAULT NULL,
   `branch_id` varchar(10) NOT NULL,
   `dose_number` int(11) NOT NULL,
   `treatment_profile` varchar(30) DEFAULT NULL,
@@ -12208,153 +12854,168 @@ CREATE TABLE `vaccination_records` (
 -- Dumping data for table `vaccination_records`
 --
 
-INSERT INTO `vaccination_records` (`vaccination_id`, `patient_id`, `case_id`, `visit_id`, `item_id`, `vaccine_name`, `unit_id`, `quantity_used`, `branch_id`, `dose_number`, `treatment_profile`, `date_administered`, `administered_datetime`, `scheduled_date`, `scheduled_by`, `next_schedule`, `vaccination_status`, `is_final_dose`, `remarks`, `nurse_id`, `is_archived`, `archived_at`, `archived_by`, `created_at`) VALUES
-(4, 18, 15, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 1, NULL, '2026-07-07', NULL, NULL, NULL, NULL, 'Completed', 0, NULL, 16, 0, NULL, NULL, '2026-07-07 09:17:21'),
-(5, 18, 15, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 2, NULL, '2026-07-10', NULL, NULL, NULL, NULL, 'Completed', 0, NULL, 16, 0, NULL, NULL, '2026-07-07 09:17:21'),
-(14, 31, 25, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 1, NULL, '2026-07-09', NULL, '2026-07-09', NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
-(15, 31, 25, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 2, NULL, '2026-07-09', NULL, '2026-07-12', NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
-(16, 31, 25, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 3, NULL, '2026-07-09', NULL, NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
-(17, 31, 25, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 4, NULL, '2026-07-09', NULL, NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
-(18, 31, 25, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 5, NULL, '2026-07-09', NULL, NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
-(19, 31, 25, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 6, NULL, '2026-07-09', NULL, NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
-(25, 33, 27, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 1, NULL, '2026-07-09', NULL, '2026-07-09', NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-09 02:23:52'),
-(26, 33, 27, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 2, NULL, NULL, NULL, '2026-07-12', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-09 02:23:52'),
-(27, 33, 27, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 3, NULL, NULL, NULL, '2026-07-16', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-09 02:23:52'),
-(28, 33, 27, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 6, NULL, NULL, NULL, '2026-08-06', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-09 02:23:52'),
-(45, 50, 44, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 1, NULL, NULL, NULL, NULL, NULL, NULL, '', 0, '', 16, 1, '2026-09-01 15:17:53', NULL, '2026-07-11 11:07:38'),
-(46, 50, 44, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 2, NULL, NULL, NULL, NULL, NULL, NULL, '', 0, '', 16, 1, '2026-09-01 15:17:53', NULL, '2026-07-11 11:07:38'),
-(47, 50, 44, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 3, NULL, NULL, NULL, NULL, NULL, NULL, '', 0, '', 16, 1, '2026-09-01 15:17:53', NULL, '2026-07-11 11:07:38'),
-(48, 50, 44, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 6, NULL, NULL, NULL, NULL, NULL, NULL, '', 0, '', 16, 1, '2026-09-01 15:17:53', NULL, '2026-07-11 11:07:38'),
-(49, 70, 64, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 1, NULL, '2026-07-11', NULL, '2026-07-11', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:18:54'),
-(50, 70, 64, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 2, NULL, NULL, NULL, '2026-07-14', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-11 13:18:54'),
-(51, 70, 64, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 3, NULL, NULL, NULL, '2026-07-18', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-11 13:18:54'),
-(52, 70, 64, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 6, NULL, NULL, NULL, '2026-08-08', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-11 13:18:54'),
-(53, 71, 65, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 1, NULL, '2026-07-11', NULL, '2026-07-11', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
-(54, 71, 65, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 2, NULL, NULL, NULL, '2026-07-14', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-11 13:31:15'),
-(55, 71, 65, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 3, NULL, NULL, NULL, '2026-07-18', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-11 13:31:15'),
-(56, 71, 65, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 4, NULL, NULL, NULL, '2026-07-25', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-11 13:31:15'),
-(57, 71, 65, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 6, NULL, NULL, NULL, '2026-08-08', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-11 13:31:15'),
-(71, 72, 66, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 2, NULL, '2026-07-14', NULL, '2026-07-14', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-07-11 13:56:51'),
-(72, 72, 66, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 3, NULL, '2026-07-18', NULL, '2026-07-18', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:56:51'),
-(73, 72, 66, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.00, 'SBI-002', 6, NULL, '2026-08-08', NULL, '2026-08-08', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:56:51'),
-(82, 72, 66, NULL, 5, 'Rabies Vaccine', 6, 0.00, 'SBI-002', 1, NULL, '2026-07-14', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-07-16 07:31:56'),
-(107, 74, 68, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.00, 'SBI-002', 1, NULL, '2026-08-24', NULL, '2026-08-24', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:22:14'),
-(108, 74, 68, NULL, 5, 'Rabies Vaccine', 6, 0.00, 'SBI-002', 2, NULL, '2026-08-31', NULL, '2026-08-27', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:22:14'),
-(109, 74, 68, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 3, NULL, '2026-08-24', NULL, '2026-08-31', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:22:14'),
-(110, 74, 68, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-21', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-08-24 14:22:14'),
-(111, 75, 69, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 1, NULL, '2026-08-24', NULL, '2026-08-24', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:37:04'),
-(112, 75, 69, NULL, 4, 'TT (Tetanus Toxoid)', 6, 0.00, 'SBI-002', 2, NULL, '2026-08-31', NULL, '2026-08-27', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:37:04'),
-(113, 75, 69, NULL, 5, 'Rabies Vaccine', 6, 0.00, 'SBI-002', 3, NULL, '2026-08-24', NULL, '2026-08-31', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:37:04'),
-(114, 75, 69, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-21', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 14:37:04'),
-(115, 71, 65, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.00, 'SBI-002', 1, NULL, '2026-07-07', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:12:05'),
-(116, 71, 65, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 1, NULL, '2026-07-07', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:12:05'),
-(117, 71, 65, NULL, 5, 'Rabies Vaccine', 6, 0.00, 'SBI-002', 2, NULL, '2026-07-14', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:13:01'),
-(118, 71, 65, NULL, 4, 'TT (Tetanus Toxoid)', 6, 0.00, 'SBI-002', 1, NULL, '2026-07-14', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:13:01'),
-(119, 70, 64, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.00, 'SBI-002', 1, NULL, '2026-07-11', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:18:05'),
-(120, 70, 64, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 1, NULL, '2026-07-11', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:18:05'),
-(124, 74, 68, NULL, 4, 'TT (Tetanus Toxoid)', 6, 0.00, 'SBI-002', 4, NULL, '2026-09-21', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:22:45'),
-(125, 74, 68, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.00, 'SBI-002', 1, NULL, '2026-09-21', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:22:45'),
-(126, 74, 68, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.00, 'SBI-002', 5, NULL, '2026-09-21', NULL, NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-08-24 16:24:13'),
-(127, 74, 68, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 1, NULL, '2026-09-21', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:24:13'),
-(128, 74, 68, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.00, 'SBI-002', 6, NULL, '2026-08-21', NULL, NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-08-24 16:25:31'),
-(129, 74, 68, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.00, 'SBI-002', 6, NULL, '2026-09-21', NULL, NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-08-24 16:31:56'),
-(130, 74, 68, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 6, NULL, '2026-09-21', NULL, NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-08-24 16:31:56'),
-(135, 76, 70, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 1, NULL, NULL, NULL, '2026-08-05', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 16:39:06'),
-(136, 76, 70, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 2, NULL, NULL, NULL, '2026-08-08', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 16:39:06'),
-(137, 76, 70, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 3, NULL, NULL, NULL, '2026-08-12', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 16:39:06'),
-(138, 76, 70, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-02', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 16:39:06'),
-(139, 73, 67, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 1, NULL, '2026-07-16', NULL, '2026-07-11', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 17:10:55'),
-(140, 73, 67, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 2, NULL, '2026-07-16', NULL, '2026-07-19', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 17:10:55'),
-(141, 73, 67, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 3, NULL, NULL, NULL, '2026-08-25', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 17:10:55'),
-(142, 73, 67, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.00, 'SBI-002', 6, NULL, NULL, NULL, '2026-08-13', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 17:10:55'),
-(143, 72, 66, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.00, 'SBI-002', 3, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 12:19:47'),
-(144, 72, 66, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.00, 'SBI-002', 4, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 12:20:08'),
-(145, 72, 66, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.00, 'SBI-002', 5, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-09-01 12:20:47'),
-(146, 75, 69, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.00, 'SBI-002', 4, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 13:11:53'),
-(147, 75, 69, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 5, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-09-01 13:12:14'),
-(148, 75, 69, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.00, 'SBI-002', 5, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-09-01 13:12:14'),
-(149, 77, 71, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.00, 'SBI-002', 1, NULL, NULL, NULL, '2026-09-01', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-09-01 14:28:52'),
-(150, 77, 71, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.00, 'SBI-002', 2, NULL, NULL, NULL, '2026-09-04', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-09-01 14:28:52'),
-(151, 77, 71, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.00, 'SBI-002', 3, NULL, NULL, NULL, '2026-09-08', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-09-01 14:28:52'),
-(152, 77, 71, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.00, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-29', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-09-01 14:28:52'),
-(153, 77, 71, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.00, 'SBI-002', 1, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 14:29:45'),
-(154, 78, 72, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 1, NULL, NULL, NULL, '2026-09-01', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:10:16'),
-(155, 78, 72, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 2, NULL, NULL, NULL, '2026-09-04', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:10:16'),
-(156, 78, 72, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 3, NULL, NULL, NULL, '2026-09-08', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:10:16'),
-(157, 78, 72, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 4, NULL, NULL, NULL, '2026-09-15', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:10:16'),
-(158, 78, 72, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 5, NULL, NULL, NULL, '2026-09-22', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:10:16'),
-(159, 78, 72, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-29', NULL, NULL, 'Scheduled', 1, '', NULL, 0, NULL, NULL, '2026-09-01 15:10:16'),
-(160, 78, 72, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.00, 'SBI-002', 1, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 15:10:42'),
-(161, 79, 73, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 1, NULL, NULL, NULL, '2026-09-01', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:13:44'),
-(162, 79, 73, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 2, NULL, NULL, NULL, '2026-09-04', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:13:44'),
-(163, 79, 73, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 3, NULL, NULL, NULL, '2026-09-08', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:13:44'),
-(164, 79, 73, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 4, NULL, NULL, NULL, '2026-09-15', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:13:44'),
-(165, 79, 73, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 5, NULL, NULL, NULL, '2026-09-22', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:13:44'),
-(166, 79, 73, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-29', NULL, NULL, 'Scheduled', 1, '', NULL, 0, NULL, NULL, '2026-09-01 15:13:44'),
-(167, 79, 73, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.00, 'SBI-002', 1, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 15:14:04'),
-(168, 80, 74, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 1, NULL, NULL, NULL, '2026-09-01', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:24:27'),
-(169, 80, 74, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 2, NULL, NULL, NULL, '2026-09-04', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:24:27'),
-(170, 80, 74, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 3, NULL, NULL, NULL, '2026-09-08', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:24:27'),
-(171, 80, 74, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 4, NULL, NULL, NULL, '2026-09-15', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:24:27'),
-(172, 80, 74, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 5, NULL, NULL, NULL, '2026-09-22', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:24:27'),
-(173, 80, 74, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-29', NULL, NULL, 'Scheduled', 1, '', NULL, 0, NULL, NULL, '2026-09-01 15:24:27'),
-(174, 80, 74, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.00, 'SBI-002', 1, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 15:24:48'),
-(175, 81, 75, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 1, NULL, NULL, NULL, '2026-09-01', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-05 09:29:28', 9, '2026-09-01 15:29:52'),
-(176, 81, 75, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 2, NULL, NULL, NULL, '2026-09-04', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-05 09:29:28', 9, '2026-09-01 15:29:52'),
-(177, 81, 75, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 3, NULL, NULL, NULL, '2026-09-08', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-05 09:29:28', 9, '2026-09-01 15:29:52'),
-(178, 81, 75, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 4, NULL, NULL, NULL, '2026-09-15', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-05 09:29:28', 9, '2026-09-01 15:29:52'),
-(179, 81, 75, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 5, NULL, NULL, NULL, '2026-09-22', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-05 09:29:28', 9, '2026-09-01 15:29:52'),
-(180, 81, 75, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-29', NULL, NULL, 'Scheduled', 1, '', NULL, 1, '2026-09-05 09:29:28', 9, '2026-09-01 15:29:52'),
-(181, 81, 75, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 1, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 15:30:08'),
-(182, 15, 12, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 1, NULL, '2026-09-03', '2026-09-03 14:31:35', '2026-09-03', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:31:10'),
-(183, 15, 12, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 2, NULL, NULL, NULL, '2026-09-06', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:31:10'),
-(184, 15, 12, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 3, NULL, NULL, NULL, '2026-09-10', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:31:10'),
-(185, 15, 12, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 4, NULL, NULL, NULL, '2026-09-17', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:31:10'),
-(186, 15, 12, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 5, NULL, NULL, NULL, '2026-09-24', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:31:10'),
-(187, 15, 12, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 6, NULL, NULL, NULL, '2026-10-01', NULL, NULL, 'Scheduled', 1, '', NULL, 0, NULL, NULL, '2026-09-03 06:31:10'),
-(188, 15, 12, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.00, 'SBI-002', 1, NULL, '2026-09-03', '2026-09-03 14:31:35', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:31:35'),
-(189, 16, 13, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 1, NULL, '2026-09-03', '2026-09-03 14:40:13', '2026-09-03', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:39:52'),
-(190, 16, 13, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 2, NULL, NULL, NULL, '2026-09-06', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:39:52'),
-(191, 16, 13, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 3, NULL, NULL, NULL, '2026-09-10', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:39:52'),
-(192, 16, 13, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 4, NULL, NULL, NULL, '2026-09-17', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:39:52'),
-(193, 16, 13, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 5, NULL, NULL, NULL, '2026-09-24', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:39:52'),
-(194, 16, 13, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 6, NULL, NULL, NULL, '2026-10-01', NULL, NULL, 'Scheduled', 1, '', NULL, 0, NULL, NULL, '2026-09-03 06:39:52'),
-(195, 16, 13, NULL, 4, 'TT (Tetanus Toxoid)', 7, 0.00, 'SBI-002', 1, NULL, '2026-09-03', '2026-09-03 14:40:13', '2026-09-03', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:40:13'),
-(196, 14, 11, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.00, 'SBI-002', 1, NULL, '2026-08-01', '2026-09-03 14:49:28', '2026-08-01', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:48:19'),
-(197, 14, 11, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 2, NULL, '2026-08-04', '2026-09-03 14:50:50', '2026-08-04', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:48:19'),
-(198, 14, 11, NULL, 5, 'Speeda ', 5, 0.00, 'SBI-002', 3, NULL, '2026-08-08', '2026-09-03 14:51:28', '2026-08-08', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:48:19'),
-(199, 14, 11, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 4, NULL, NULL, NULL, '2026-08-15', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-08 01:49:38', 9, '2026-09-03 06:48:19'),
-(200, 14, 11, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 5, NULL, NULL, NULL, '2026-08-22', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-08 01:49:38', 9, '2026-09-03 06:48:19'),
-(201, 14, 11, NULL, NULL, NULL, NULL, 0.00, 'SBI-002', 6, NULL, NULL, NULL, '2026-08-29', NULL, NULL, 'Scheduled', 1, '', NULL, 1, '2026-09-08 01:49:38', 9, '2026-09-03 06:48:19'),
-(202, 14, 11, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.00, 'SBI-002', 1, NULL, '2026-08-01', '2026-09-03 14:49:28', '2026-08-01', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:49:28'),
-(203, 81, 75, 1, 3, 'ATS (Anti-Tetanus Serum)', 5, 1.00, 'SBI-002', 1, 'PEP_ID', '2026-09-05', '2026-09-05 17:30:36', '2026-09-05', 9, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-05 09:29:28'),
-(204, 81, 75, 1, 3, 'ATS (Anti-Tetanus Serum)', 5, 1.00, 'SBI-002', 2, 'PEP_ID', '2026-09-08', '2026-09-08 09:48:39', '2026-09-08', 9, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-05 09:29:28'),
-(205, 81, 75, 1, 5, 'Speeda ', 5, 1.00, 'SBI-002', 3, 'PEP_ID', '2026-09-08', '2026-09-08 10:59:16', '2026-09-12', 9, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-05 09:29:28'),
-(206, 81, 75, 1, NULL, NULL, NULL, 0.00, 'SBI-002', 6, 'PEP_ID', NULL, NULL, '2026-10-03', 9, NULL, 'Scheduled', 1, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 0, NULL, NULL, '2026-09-05 09:29:28'),
-(207, 82, 76, 2, 5, 'Speeda ', 5, 1.00, 'SBI-002', 1, 'PEP_ID', '2026-09-08', '2026-09-08 09:41:44', '2026-09-08', 9, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 01:40:22'),
-(208, 82, 76, 2, NULL, NULL, NULL, 0.00, 'SBI-002', 2, 'PEP_ID', NULL, NULL, '2026-09-11', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 1, '2026-09-08 01:41:53', 9, '2026-09-08 01:40:22'),
-(209, 82, 76, 2, NULL, NULL, NULL, 0.00, 'SBI-002', 3, 'PEP_ID', NULL, NULL, '2026-09-15', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 1, '2026-09-08 01:41:53', 9, '2026-09-08 01:40:22'),
-(210, 82, 76, 2, NULL, NULL, NULL, 0.00, 'SBI-002', 6, 'PEP_ID', NULL, NULL, '2026-10-06', 9, NULL, 'Scheduled', 1, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 1, '2026-09-08 01:41:53', 9, '2026-09-08 01:40:22'),
-(211, 82, 76, NULL, 4, 'TT (Tetanus Toxoid)', 7, 1.00, 'SBI-002', 1, NULL, '2026-09-08', '2026-09-08 09:41:44', '2026-09-08', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 01:41:44'),
-(212, 82, 76, 2, NULL, NULL, NULL, 0.00, 'SBI-002', 1, 'PEP_ID', NULL, NULL, '2026-09-08', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 0, NULL, NULL, '2026-09-08 01:41:53'),
-(213, 82, 76, 2, NULL, NULL, NULL, 0.00, 'SBI-002', 2, 'PEP_ID', NULL, NULL, '2026-09-11', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 0, NULL, NULL, '2026-09-08 01:41:53'),
-(214, 82, 76, 2, NULL, NULL, NULL, 0.00, 'SBI-002', 3, 'PEP_ID', NULL, NULL, '2026-09-15', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 0, NULL, NULL, '2026-09-08 01:41:53'),
-(215, 82, 76, 2, NULL, NULL, NULL, 0.00, 'SBI-002', 6, 'PEP_ID', NULL, NULL, '2026-10-06', 9, NULL, 'Scheduled', 1, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 0, NULL, NULL, '2026-09-08 01:41:53'),
-(216, 83, 77, NULL, 5, 'Speeda ', 5, 1.00, 'SBI-002', 1, NULL, '2026-09-08', '2026-09-08 09:48:15', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 01:48:15'),
-(217, 83, 77, NULL, 4, 'TT (Tetanus Toxoid)', 7, 1.00, 'SBI-002', 1, NULL, '2026-09-08', '2026-09-08 09:48:15', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 01:48:15'),
-(218, 83, 77, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 1.00, 'SBI-002', 1, NULL, '2026-09-08', '2026-09-08 09:48:15', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 01:48:15'),
-(219, 14, 11, 3, NULL, NULL, NULL, 0.00, 'SBI-002', 1, 'BOOSTER', NULL, NULL, '2026-09-08', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed BOOSTER profile.', NULL, 0, NULL, NULL, '2026-09-08 01:49:38'),
-(220, 14, 11, 3, NULL, NULL, NULL, 0.00, 'SBI-002', 2, 'BOOSTER', NULL, NULL, '2026-09-11', 9, NULL, 'Scheduled', 1, 'Schedule created from nurse-confirmed BOOSTER profile.', NULL, 0, NULL, NULL, '2026-09-08 01:49:38'),
-(221, 81, 75, NULL, 5, 'Speeda ', 5, 1.00, 'SBI-002', 4, NULL, '2026-09-08', '2026-09-08 11:22:46', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 03:22:46'),
-(222, 76, 70, NULL, 5, 'Speeda ', 5, 1.00, 'SBI-002', 1, NULL, '2026-09-08', '2026-09-08 11:24:23', '2026-08-05', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 03:24:23'),
-(223, 84, 78, NULL, 5, 'Speeda ', 5, 1.00, 'SBI-002', 1, NULL, '2026-09-08', '2026-09-08 13:49:34', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 05:49:34'),
-(224, 84, 78, 4, NULL, NULL, NULL, 0.00, 'SBI-002', 1, 'BOOSTER', NULL, NULL, '2026-09-08', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed BOOSTER profile.', NULL, 0, NULL, NULL, '2026-09-08 05:54:23'),
-(225, 84, 78, 4, NULL, NULL, NULL, 0.00, 'SBI-002', 2, 'BOOSTER', NULL, NULL, '2026-09-11', 9, NULL, 'Scheduled', 1, 'Schedule created from nurse-confirmed BOOSTER profile.', NULL, 0, NULL, NULL, '2026-09-08 05:54:23'),
-(226, 85, 79, 5, NULL, NULL, NULL, 0.00, 'SBI-002', 1, 'PEP_IM', NULL, NULL, '2026-09-08', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_IM profile.', NULL, 0, NULL, NULL, '2026-09-08 05:58:28'),
-(227, 85, 79, 5, NULL, NULL, NULL, 0.00, 'SBI-002', 2, 'PEP_IM', NULL, NULL, '2026-09-11', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_IM profile.', NULL, 0, NULL, NULL, '2026-09-08 05:58:28'),
-(228, 85, 79, 5, NULL, NULL, NULL, 0.00, 'SBI-002', 3, 'PEP_IM', NULL, NULL, '2026-09-15', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_IM profile.', NULL, 0, NULL, NULL, '2026-09-08 05:58:28'),
-(229, 85, 79, 5, NULL, NULL, NULL, 0.00, 'SBI-002', 4, 'PEP_IM', NULL, NULL, '2026-09-22', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_IM profile.', NULL, 0, NULL, NULL, '2026-09-08 05:58:28'),
-(230, 85, 79, 5, NULL, NULL, NULL, 0.00, 'SBI-002', 6, 'PEP_IM', NULL, NULL, '2026-10-06', 9, NULL, 'Scheduled', 1, 'Schedule created from nurse-confirmed PEP_IM profile.', NULL, 0, NULL, NULL, '2026-09-08 05:58:28');
+INSERT INTO `vaccination_records` (`vaccination_id`, `patient_id`, `case_id`, `visit_id`, `item_id`, `vaccine_name`, `unit_id`, `quantity_used`, `quantity_unit_label`, `display_unit_label_snapshot`, `conversion_to_base_snapshot`, `branch_id`, `dose_number`, `treatment_profile`, `date_administered`, `administered_datetime`, `scheduled_date`, `scheduled_by`, `next_schedule`, `vaccination_status`, `is_final_dose`, `remarks`, `nurse_id`, `is_archived`, `archived_at`, `archived_by`, `created_at`) VALUES
+(4, 18, 15, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-07-07', NULL, NULL, NULL, NULL, 'Completed', 0, NULL, 16, 0, NULL, NULL, '2026-07-07 09:17:21'),
+(5, 18, 15, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, NULL, '2026-07-10', NULL, NULL, NULL, NULL, 'Completed', 0, NULL, 16, 0, NULL, NULL, '2026-07-07 09:17:21'),
+(14, 31, 25, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-07-09', NULL, '2026-07-09', NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
+(15, 31, 25, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, NULL, '2026-07-09', NULL, '2026-07-12', NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
+(16, 31, 25, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, NULL, '2026-07-09', NULL, NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
+(17, 31, 25, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 4, NULL, '2026-07-09', NULL, NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
+(18, 31, 25, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 5, NULL, '2026-07-09', NULL, NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
+(19, 31, 25, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, '2026-07-09', NULL, NULL, NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-08 22:23:31'),
+(25, 33, 27, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-07-09', NULL, '2026-07-09', NULL, NULL, 'Completed', 0, '', 8, 0, NULL, NULL, '2026-07-09 02:23:52'),
+(26, 33, 27, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, NULL, NULL, NULL, '2026-07-12', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-09 02:23:52'),
+(27, 33, 27, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, NULL, NULL, NULL, '2026-07-16', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-09 02:23:52'),
+(28, 33, 27, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, NULL, NULL, '2026-08-06', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-09 02:23:52'),
+(45, 50, 44, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, NULL, NULL, NULL, NULL, NULL, '', 0, '', 16, 1, '2026-09-01 15:17:53', NULL, '2026-07-11 11:07:38'),
+(46, 50, 44, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, NULL, NULL, NULL, NULL, NULL, NULL, '', 0, '', 16, 1, '2026-09-01 15:17:53', NULL, '2026-07-11 11:07:38'),
+(47, 50, 44, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, NULL, NULL, NULL, NULL, NULL, NULL, '', 0, '', 16, 1, '2026-09-01 15:17:53', NULL, '2026-07-11 11:07:38'),
+(48, 50, 44, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, NULL, NULL, NULL, NULL, NULL, '', 0, '', 16, 1, '2026-09-01 15:17:53', NULL, '2026-07-11 11:07:38'),
+(49, 70, 64, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-07-11', NULL, '2026-07-11', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:18:54'),
+(50, 70, 64, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, NULL, NULL, NULL, '2026-07-14', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-11 13:18:54'),
+(51, 70, 64, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, NULL, NULL, NULL, '2026-07-18', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-11 13:18:54'),
+(52, 70, 64, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, NULL, NULL, '2026-08-08', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-11 13:18:54'),
+(53, 71, 65, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-07-11', NULL, '2026-07-11', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:31:15'),
+(54, 71, 65, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, NULL, NULL, NULL, '2026-07-14', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-11 13:31:15'),
+(55, 71, 65, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, NULL, NULL, NULL, '2026-07-18', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-11 13:31:15'),
+(56, 71, 65, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 4, NULL, NULL, NULL, '2026-07-25', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-11 13:31:15'),
+(57, 71, 65, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, NULL, NULL, '2026-08-08', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-07-11 13:31:15'),
+(71, 72, 66, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, NULL, '2026-07-14', NULL, '2026-07-14', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-07-11 13:56:51'),
+(72, 72, 66, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, NULL, '2026-07-18', NULL, '2026-07-18', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:56:51'),
+(73, 72, 66, NULL, NULL, 'Rabies Vaccine (Default)', 1, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, '2026-08-08', NULL, '2026-08-08', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-07-11 13:56:51'),
+(82, 72, 66, NULL, 5, 'Rabies Vaccine', 6, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 1, NULL, '2026-07-14', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-07-16 07:31:56'),
+(107, 74, 68, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-08-24', NULL, '2026-08-24', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:22:14'),
+(108, 74, 68, NULL, 5, 'Rabies Vaccine', 6, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 2, NULL, '2026-08-31', NULL, '2026-08-27', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:22:14'),
+(109, 74, 68, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, NULL, '2026-08-24', NULL, '2026-08-31', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:22:14'),
+(110, 74, 68, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-21', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-08-24 14:22:14'),
+(111, 75, 69, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-08-24', NULL, '2026-08-24', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:37:04'),
+(112, 75, 69, NULL, 4, 'TT (Tetanus Toxoid)', 6, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, NULL, '2026-08-31', NULL, '2026-08-27', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:37:04'),
+(113, 75, 69, NULL, 5, 'Rabies Vaccine', 6, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 3, NULL, '2026-08-24', NULL, '2026-08-31', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 14:37:04'),
+(114, 75, 69, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-21', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 14:37:04'),
+(115, 71, 65, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-07-07', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:12:05'),
+(116, 71, 65, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-07-07', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:12:05'),
+(117, 71, 65, NULL, 5, 'Rabies Vaccine', 6, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 2, NULL, '2026-07-14', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:13:01'),
+(118, 71, 65, NULL, 4, 'TT (Tetanus Toxoid)', 6, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-07-14', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:13:01'),
+(119, 70, 64, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-07-11', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:18:05'),
+(120, 70, 64, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-07-11', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:18:05'),
+(124, 74, 68, NULL, 4, 'TT (Tetanus Toxoid)', 6, 0.0000, NULL, NULL, NULL, 'SBI-002', 4, NULL, '2026-09-21', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:22:45'),
+(125, 74, 68, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-09-21', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:22:45'),
+(126, 74, 68, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 5, NULL, '2026-09-21', NULL, NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-08-24 16:24:13'),
+(127, 74, 68, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-09-21', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-08-24 16:24:13'),
+(128, 74, 68, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, '2026-08-21', NULL, NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-08-24 16:25:31'),
+(129, 74, 68, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, '2026-09-21', NULL, NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-08-24 16:31:56'),
+(130, 74, 68, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, '2026-09-21', NULL, NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-08-24 16:31:56'),
+(135, 76, 70, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, NULL, NULL, '2026-08-05', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 16:39:06'),
+(136, 76, 70, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, NULL, NULL, NULL, '2026-08-08', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 16:39:06'),
+(137, 76, 70, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, NULL, NULL, NULL, '2026-08-12', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 16:39:06'),
+(138, 76, 70, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-02', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 16:39:06'),
+(139, 73, 67, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-07-16', NULL, '2026-07-11', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 17:10:55'),
+(140, 73, 67, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, NULL, '2026-07-16', NULL, '2026-07-19', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 17:10:55'),
+(141, 73, 67, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, NULL, NULL, NULL, '2026-08-25', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 17:10:55'),
+(142, 73, 67, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 4, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, NULL, NULL, '2026-08-13', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-08-24 17:10:55'),
+(143, 72, 66, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 12:19:47'),
+(144, 72, 66, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 4, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 12:20:08'),
+(145, 72, 66, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 5, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-09-01 12:20:47'),
+(146, 75, 69, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 4, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 13:11:53'),
+(147, 75, 69, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 5, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-09-01 13:12:14'),
+(148, 75, 69, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 5, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-09-01 13:12:14'),
+(149, 77, 71, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, NULL, NULL, '2026-09-01', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-09-01 14:28:52'),
+(150, 77, 71, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, NULL, NULL, NULL, '2026-09-04', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-09-01 14:28:52'),
+(151, 77, 71, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, NULL, NULL, NULL, '2026-09-08', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-09-01 14:28:52'),
+(152, 77, 71, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-29', NULL, NULL, '', 0, '', 16, 0, NULL, NULL, '2026-09-01 14:28:52'),
+(153, 77, 71, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 14:29:45'),
+(154, 78, 72, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 1, NULL, NULL, NULL, '2026-09-01', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-11 13:20:54', 9, '2026-09-01 15:10:16'),
+(155, 78, 72, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 2, NULL, NULL, NULL, '2026-09-04', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-11 13:20:54', 9, '2026-09-01 15:10:16'),
+(156, 78, 72, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 3, NULL, NULL, NULL, '2026-09-08', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-11 13:20:54', 9, '2026-09-01 15:10:16'),
+(157, 78, 72, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 4, NULL, NULL, NULL, '2026-09-15', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-11 13:20:54', 9, '2026-09-01 15:10:16'),
+(158, 78, 72, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 5, NULL, NULL, NULL, '2026-09-22', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-11 13:20:54', 9, '2026-09-01 15:10:16'),
+(159, 78, 72, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-29', NULL, NULL, 'Scheduled', 1, '', NULL, 1, '2026-09-11 13:20:54', 9, '2026-09-01 15:10:16'),
+(160, 78, 72, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 15:10:42'),
+(161, 79, 73, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 1, NULL, NULL, NULL, '2026-09-01', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:13:44'),
+(162, 79, 73, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 2, NULL, NULL, NULL, '2026-09-04', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:13:44'),
+(163, 79, 73, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 3, NULL, NULL, NULL, '2026-09-08', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:13:44'),
+(164, 79, 73, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 4, NULL, NULL, NULL, '2026-09-15', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:13:44'),
+(165, 79, 73, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 5, NULL, NULL, NULL, '2026-09-22', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:13:44'),
+(166, 79, 73, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-29', NULL, NULL, 'Scheduled', 1, '', NULL, 0, NULL, NULL, '2026-09-01 15:13:44'),
+(167, 79, 73, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 15:14:04'),
+(168, 80, 74, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, NULL, NULL, '2026-09-01', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:24:27'),
+(169, 80, 74, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, NULL, NULL, NULL, '2026-09-04', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:24:27'),
+(170, 80, 74, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, NULL, NULL, NULL, '2026-09-08', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:24:27'),
+(171, 80, 74, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 4, NULL, NULL, NULL, '2026-09-15', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:24:27'),
+(172, 80, 74, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 5, NULL, NULL, NULL, '2026-09-22', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-01 15:24:27'),
+(173, 80, 74, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-29', NULL, NULL, 'Scheduled', 1, '', NULL, 0, NULL, NULL, '2026-09-01 15:24:27'),
+(174, 80, 74, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 15:24:48'),
+(175, 81, 75, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, NULL, NULL, '2026-09-01', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-05 09:29:28', 9, '2026-09-01 15:29:52'),
+(176, 81, 75, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, NULL, NULL, NULL, '2026-09-04', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-05 09:29:28', 9, '2026-09-01 15:29:52'),
+(177, 81, 75, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, NULL, NULL, NULL, '2026-09-08', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-05 09:29:28', 9, '2026-09-01 15:29:52'),
+(178, 81, 75, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 4, NULL, NULL, NULL, '2026-09-15', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-05 09:29:28', 9, '2026-09-01 15:29:52'),
+(179, 81, 75, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 5, NULL, NULL, NULL, '2026-09-22', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-05 09:29:28', 9, '2026-09-01 15:29:52'),
+(180, 81, 75, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, NULL, NULL, '2026-09-29', NULL, NULL, 'Scheduled', 1, '', NULL, 1, '2026-09-05 09:29:28', 9, '2026-09-01 15:29:52'),
+(181, 81, 75, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 1, NULL, '2026-09-01', NULL, NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-01 15:30:08'),
+(182, 15, 12, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 1, NULL, '2026-09-03', '2026-09-03 14:31:35', '2026-09-03', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:31:10'),
+(183, 15, 12, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, NULL, NULL, NULL, '2026-09-06', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:31:10'),
+(184, 15, 12, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, NULL, NULL, NULL, '2026-09-10', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:31:10'),
+(185, 15, 12, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 4, NULL, NULL, NULL, '2026-09-17', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:31:10'),
+(186, 15, 12, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 5, NULL, NULL, NULL, '2026-09-24', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:31:10'),
+(187, 15, 12, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, NULL, NULL, '2026-10-01', NULL, NULL, 'Scheduled', 1, '', NULL, 0, NULL, NULL, '2026-09-03 06:31:10'),
+(188, 15, 12, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-09-03', '2026-09-03 14:31:35', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:31:35'),
+(189, 16, 13, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 1, NULL, '2026-09-03', '2026-09-03 14:40:13', '2026-09-03', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:39:52'),
+(190, 16, 13, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, NULL, NULL, NULL, '2026-09-06', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:39:52'),
+(191, 16, 13, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, NULL, NULL, NULL, '2026-09-10', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:39:52'),
+(192, 16, 13, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 4, NULL, NULL, NULL, '2026-09-17', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:39:52'),
+(193, 16, 13, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 5, NULL, NULL, NULL, '2026-09-24', NULL, NULL, 'Scheduled', 0, '', NULL, 0, NULL, NULL, '2026-09-03 06:39:52'),
+(194, 16, 13, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, NULL, NULL, '2026-10-01', NULL, NULL, 'Scheduled', 1, '', NULL, 0, NULL, NULL, '2026-09-03 06:39:52'),
+(195, 16, 13, NULL, 4, 'TT (Tetanus Toxoid)', 7, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-09-03', '2026-09-03 14:40:13', '2026-09-03', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:40:13'),
+(196, 14, 11, NULL, 3, 'ATS (Anti-Tetanus Serum)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-08-01', '2026-09-03 14:49:28', '2026-08-01', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:48:19'),
+(197, 14, 11, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 2, NULL, '2026-08-04', '2026-09-03 14:50:50', '2026-08-04', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:48:19'),
+(198, 14, 11, NULL, 5, 'Speeda ', 5, 0.0000, 'site', 'Vial', 6.0000, 'SBI-002', 3, NULL, '2026-08-08', '2026-09-03 14:51:28', '2026-08-08', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:48:19'),
+(199, 14, 11, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 4, NULL, NULL, NULL, '2026-08-15', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-08 01:49:38', 9, '2026-09-03 06:48:19'),
+(200, 14, 11, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 5, NULL, NULL, NULL, '2026-08-22', NULL, NULL, 'Scheduled', 0, '', NULL, 1, '2026-09-08 01:49:38', 9, '2026-09-03 06:48:19'),
+(201, 14, 11, NULL, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, NULL, NULL, NULL, '2026-08-29', NULL, NULL, 'Scheduled', 1, '', NULL, 1, '2026-09-08 01:49:38', 9, '2026-09-03 06:48:19'),
+(202, 14, 11, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-08-01', '2026-09-03 14:49:28', '2026-08-01', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-03 06:49:28'),
+(203, 81, 75, 1, 3, 'ATS (Anti-Tetanus Serum)', 5, 1.0000, NULL, NULL, NULL, 'SBI-002', 1, 'PEP_ID', '2026-09-05', '2026-09-05 17:30:36', '2026-09-05', 9, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-05 09:29:28'),
+(204, 81, 75, 1, 3, 'ATS (Anti-Tetanus Serum)', 5, 1.0000, NULL, NULL, NULL, 'SBI-002', 2, 'PEP_ID', '2026-09-08', '2026-09-08 09:48:39', '2026-09-08', 9, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-05 09:29:28'),
+(205, 81, 75, 1, 5, 'Speeda ', 5, 36.0000, 'site', 'Vial', 6.0000, 'SBI-002', 3, 'PEP_ID', '2026-09-08', '2026-09-08 10:59:16', '2026-09-12', 9, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-05 09:29:28'),
+(206, 81, 75, 1, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.5000, 'Vial', 'Vial', 1.0000, 'SBI-002', 6, 'PEP_ID', '2026-09-11', '2026-09-11 20:57:48', '2026-10-03', 9, NULL, 'Completed', 1, '', 9, 0, NULL, NULL, '2026-09-05 09:29:28'),
+(207, 82, 76, 2, 5, 'Speeda ', 5, 36.0000, 'site', 'Vial', 6.0000, 'SBI-002', 1, 'PEP_ID', '2026-09-08', '2026-09-08 09:41:44', '2026-09-08', 9, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 01:40:22'),
+(208, 82, 76, 2, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, 'PEP_ID', NULL, NULL, '2026-09-11', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 1, '2026-09-08 01:41:53', 9, '2026-09-08 01:40:22'),
+(209, 82, 76, 2, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, 'PEP_ID', NULL, NULL, '2026-09-15', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 1, '2026-09-08 01:41:53', 9, '2026-09-08 01:40:22'),
+(210, 82, 76, 2, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, 'PEP_ID', NULL, NULL, '2026-10-06', 9, NULL, 'Scheduled', 1, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 1, '2026-09-08 01:41:53', 9, '2026-09-08 01:40:22'),
+(211, 82, 76, NULL, 4, 'TT (Tetanus Toxoid)', 7, 1.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-09-08', '2026-09-08 09:41:44', '2026-09-08', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 01:41:44'),
+(212, 82, 76, 2, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, 'PEP_ID', NULL, NULL, '2026-09-08', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 0, NULL, NULL, '2026-09-08 01:41:53'),
+(213, 82, 76, 2, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, 'PEP_ID', NULL, NULL, '2026-09-11', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 0, NULL, NULL, '2026-09-08 01:41:53'),
+(214, 82, 76, 2, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, 'PEP_ID', NULL, NULL, '2026-09-15', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 0, NULL, NULL, '2026-09-08 01:41:53'),
+(215, 82, 76, 2, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, 'PEP_ID', NULL, NULL, '2026-10-06', 9, NULL, 'Scheduled', 1, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 0, NULL, NULL, '2026-09-08 01:41:53'),
+(216, 83, 77, NULL, 5, 'Speeda ', 5, 36.0000, 'site', 'Vial', 6.0000, 'SBI-002', 1, NULL, '2026-09-08', '2026-09-08 09:48:15', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 01:48:15'),
+(217, 83, 77, NULL, 4, 'TT (Tetanus Toxoid)', 7, 1.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-09-08', '2026-09-08 09:48:15', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 01:48:15'),
+(218, 83, 77, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 1.0000, NULL, NULL, NULL, 'SBI-002', 1, NULL, '2026-09-08', '2026-09-08 09:48:15', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 01:48:15'),
+(219, 14, 11, 3, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, 'BOOSTER', NULL, NULL, '2026-09-08', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed BOOSTER profile.', NULL, 0, NULL, NULL, '2026-09-08 01:49:38'),
+(220, 14, 11, 3, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, 'BOOSTER', NULL, NULL, '2026-09-11', 9, NULL, 'Scheduled', 1, 'Schedule created from nurse-confirmed BOOSTER profile.', NULL, 0, NULL, NULL, '2026-09-08 01:49:38'),
+(221, 81, 75, NULL, 5, 'Speeda ', 5, 36.0000, 'site', 'Vial', 6.0000, 'SBI-002', 4, NULL, '2026-09-08', '2026-09-08 11:22:46', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 03:22:46'),
+(222, 76, 70, NULL, 5, 'Speeda ', 5, 36.0000, 'site', 'Vial', 6.0000, 'SBI-002', 1, NULL, '2026-09-08', '2026-09-08 11:24:23', '2026-08-05', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 03:24:23'),
+(223, 84, 78, NULL, 5, 'Speeda ', 5, 36.0000, 'site', 'Vial', 6.0000, 'SBI-002', 1, NULL, '2026-09-08', '2026-09-08 13:49:34', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 05:49:34'),
+(224, 84, 78, 4, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, 'BOOSTER', NULL, NULL, '2026-09-08', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed BOOSTER profile.', NULL, 0, NULL, NULL, '2026-09-08 05:54:23'),
+(225, 84, 78, 4, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, 'BOOSTER', NULL, NULL, '2026-09-11', 9, NULL, 'Scheduled', 1, 'Schedule created from nurse-confirmed BOOSTER profile.', NULL, 0, NULL, NULL, '2026-09-08 05:54:23'),
+(226, 85, 79, 5, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.0500, 'Vial', 'Vial', 1.0000, 'SBI-002', 1, 'PEP_IM', '2026-09-08', '2026-09-11 21:30:49', '2026-09-08', 9, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 05:58:28'),
+(227, 85, 79, 5, 5, 'Speeda ', 5, 2.0000, 'site', 'Vial', 6.0000, 'SBI-002', 2, 'PEP_IM', '2026-09-11', '2026-09-11 21:46:01', '2026-09-11', 9, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-08 05:58:28'),
+(228, 85, 79, 5, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, 'PEP_IM', NULL, NULL, '2026-09-15', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_IM profile.', NULL, 0, NULL, NULL, '2026-09-08 05:58:28'),
+(229, 85, 79, 5, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 4, 'PEP_IM', NULL, NULL, '2026-09-22', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_IM profile.', NULL, 0, NULL, NULL, '2026-09-08 05:58:28'),
+(230, 85, 79, 5, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, 'PEP_IM', NULL, NULL, '2026-10-06', 9, NULL, 'Scheduled', 1, 'Schedule created from nurse-confirmed PEP_IM profile.', NULL, 0, NULL, NULL, '2026-09-08 05:58:28'),
+(231, 76, 70, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.4998, 'Vial', 'Vial', 1.0000, 'SBI-002', 2, NULL, '2026-09-11', '2026-09-11 21:12:11', '2026-08-08', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-11 13:12:11'),
+(233, 78, 72, NULL, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.0002, 'Vial', 'Vial', 1.0000, 'SBI-002', 2, NULL, '2026-09-11', '2026-09-11 21:14:08', '2026-09-04', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-11 13:14:08'),
+(234, 83, 77, 6, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, 'PREP', NULL, NULL, '2026-09-11', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PREP profile.', NULL, 0, NULL, NULL, '2026-09-11 13:16:01'),
+(235, 83, 77, 6, 23, 'PPD', 5, 1.0000, 'Vial', 'Vial', 1.0000, 'SBI-002', 3, 'PREP', '2026-09-11', '2026-09-11 21:47:57', '2026-09-18', 9, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-11 13:16:01'),
+(236, 83, 77, 6, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 5, 'PREP', NULL, NULL, '2026-10-02', 9, NULL, 'Scheduled', 1, 'Schedule created from nurse-confirmed PREP profile.', NULL, 0, NULL, NULL, '2026-09-11 13:16:01'),
+(237, 78, 72, 7, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 1, 'PEP_ID', NULL, NULL, '2026-09-11', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 0, NULL, NULL, '2026-09-11 13:20:54'),
+(238, 78, 72, 7, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, 'PEP_ID', NULL, NULL, '2026-09-14', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 0, NULL, NULL, '2026-09-11 13:20:54'),
+(239, 78, 72, 7, 4, 'TT (Tetanus Toxoid)', 7, 1.0000, 'Ampule', 'Ampule', 1.0000, 'SBI-002', 3, 'PEP_ID', '2026-09-11', '2026-09-11 21:22:04', '2026-09-18', 9, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-11 13:20:54'),
+(240, 78, 72, 7, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, 'PEP_ID', NULL, NULL, '2026-10-09', 9, NULL, 'Scheduled', 1, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 0, NULL, NULL, '2026-09-11 13:20:54'),
+(241, 73, 67, NULL, 5, 'Speeda ', 5, 2.0000, 'site', 'Vial', 6.0000, 'SBI-002', 3, NULL, '2026-08-25', '2026-09-11 21:23:18', '2026-08-25', NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-11 13:23:18'),
+(242, 83, 77, NULL, 5, 'Speeda ', 5, 2.0000, 'site', 'Vial', 6.0000, 'SBI-002', 4, NULL, '2026-09-11', '2026-09-11 21:49:05', NULL, NULL, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-11 13:49:05'),
+(243, 86, 80, 8, 2, 'ERIG (Equine Rabies Immunoglobulin)', 5, 0.5000, 'Vial', 'Vial', 1.0000, 'SBI-002', 1, 'PEP_ID', '2026-09-11', '2026-09-11 21:57:07', '2026-09-11', 9, NULL, 'Completed', 0, '', 9, 0, NULL, NULL, '2026-09-11 13:56:06'),
+(244, 86, 80, 8, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 2, 'PEP_ID', NULL, NULL, '2026-09-14', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 0, NULL, NULL, '2026-09-11 13:56:06'),
+(245, 86, 80, 8, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 3, 'PEP_ID', NULL, NULL, '2026-09-18', 9, NULL, 'Scheduled', 0, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 0, NULL, NULL, '2026-09-11 13:56:06'),
+(246, 86, 80, 8, NULL, NULL, NULL, 0.0000, NULL, NULL, NULL, 'SBI-002', 6, 'PEP_ID', NULL, NULL, '2026-10-09', 9, NULL, 'Scheduled', 1, 'Schedule created from nurse-confirmed PEP_ID profile.', NULL, 0, NULL, NULL, '2026-09-11 13:56:06');
 
 -- --------------------------------------------------------
 
@@ -12709,6 +13370,12 @@ ALTER TABLE `stock_transactions`
   ADD KEY `fk_transaction_vaccination` (`vaccination_id`);
 
 --
+-- Indexes for table `system_migrations`
+--
+ALTER TABLE `system_migrations`
+  ADD PRIMARY KEY (`migration_key`);
+
+--
 -- Indexes for table `training_dataset`
 --
 ALTER TABLE `training_dataset`
@@ -12784,7 +13451,7 @@ ALTER TABLE `vaccination_session_items`
 -- AUTO_INCREMENT for table `animal_bite_cases`
 --
 ALTER TABLE `animal_bite_cases`
-  MODIFY `case_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=80;
+  MODIFY `case_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=81;
 
 --
 -- AUTO_INCREMENT for table `animal_bite_cases_archive`
@@ -12796,13 +13463,13 @@ ALTER TABLE `animal_bite_cases_archive`
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `log_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=695;
+  MODIFY `log_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=775;
 
 --
 -- AUTO_INCREMENT for table `clinical_assessments`
 --
 ALTER TABLE `clinical_assessments`
-  MODIFY `assessment_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `assessment_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
 
 --
 -- AUTO_INCREMENT for table `daily_inventory_closings`
@@ -12820,7 +13487,7 @@ ALTER TABLE `document_tracking`
 -- AUTO_INCREMENT for table `forecast_results`
 --
 ALTER TABLE `forecast_results`
-  MODIFY `forecast_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=67;
+  MODIFY `forecast_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=100;
 
 --
 -- AUTO_INCREMENT for table `inventory_categories`
@@ -12844,7 +13511,7 @@ ALTER TABLE `inventory_returns`
 -- AUTO_INCREMENT for table `inventory_stocks`
 --
 ALTER TABLE `inventory_stocks`
-  MODIFY `stock_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=27;
+  MODIFY `stock_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=28;
 
 --
 -- AUTO_INCREMENT for table `inventory_stocks_archive`
@@ -12856,7 +13523,7 @@ ALTER TABLE `inventory_stocks_archive`
 -- AUTO_INCREMENT for table `inventory_usage_history`
 --
 ALTER TABLE `inventory_usage_history`
-  MODIFY `usage_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=62;
+  MODIFY `usage_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=72;
 
 --
 -- AUTO_INCREMENT for table `medical_documents`
@@ -12868,13 +13535,13 @@ ALTER TABLE `medical_documents`
 -- AUTO_INCREMENT for table `notifications`
 --
 ALTER TABLE `notifications`
-  MODIFY `notification_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3629;
+  MODIFY `notification_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4472;
 
 --
 -- AUTO_INCREMENT for table `patients`
 --
 ALTER TABLE `patients`
-  MODIFY `patient_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=86;
+  MODIFY `patient_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=87;
 
 --
 -- AUTO_INCREMENT for table `patients_archive`
@@ -12886,13 +13553,13 @@ ALTER TABLE `patients_archive`
 -- AUTO_INCREMENT for table `patient_visits`
 --
 ALTER TABLE `patient_visits`
-  MODIFY `visit_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
+  MODIFY `visit_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
 
 --
 -- AUTO_INCREMENT for table `philhealth_records`
 --
 ALTER TABLE `philhealth_records`
-  MODIFY `philhealth_record_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=48;
+  MODIFY `philhealth_record_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=49;
 
 --
 -- AUTO_INCREMENT for table `philhealth_records_archive`
@@ -12922,7 +13589,7 @@ ALTER TABLE `registry_patients_archive`
 -- AUTO_INCREMENT for table `registry_records`
 --
 ALTER TABLE `registry_records`
-  MODIFY `registry_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=48;
+  MODIFY `registry_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=49;
 
 --
 -- AUTO_INCREMENT for table `registry_records_archive`
@@ -12946,309 +13613,25 @@ ALTER TABLE `registry_vaccination_doses_archive`
 -- AUTO_INCREMENT for table `stock_transactions`
 --
 ALTER TABLE `stock_transactions`
-  MODIFY `transaction_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=78;
-
---
--- AUTO_INCREMENT for table `training_dataset`
---
-ALTER TABLE `training_dataset`
-  MODIFY `training_id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9852;
-
---
--- AUTO_INCREMENT for table `units`
---
-ALTER TABLE `units`
-  MODIFY `unit_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=12;
+  MODIFY `transaction_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=89;
 
 --
 -- AUTO_INCREMENT for table `users`
 --
 ALTER TABLE `users`
-  MODIFY `user_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=28;
+  MODIFY `user_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=35;
 
 --
 -- AUTO_INCREMENT for table `user_tokens`
 --
 ALTER TABLE `user_tokens`
-  MODIFY `token_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=25;
+  MODIFY `token_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=33;
 
 --
 -- AUTO_INCREMENT for table `vaccination_records`
 --
 ALTER TABLE `vaccination_records`
-  MODIFY `vaccination_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=231;
-
---
--- AUTO_INCREMENT for table `vaccination_records_archive`
---
-ALTER TABLE `vaccination_records_archive`
-  MODIFY `archive_id` int(11) NOT NULL AUTO_INCREMENT;
-
---
--- AUTO_INCREMENT for table `vaccination_sessions`
---
-ALTER TABLE `vaccination_sessions`
-  MODIFY `session_id` int(11) NOT NULL AUTO_INCREMENT;
-
---
--- AUTO_INCREMENT for table `vaccination_session_items`
---
-ALTER TABLE `vaccination_session_items`
-  MODIFY `item_id_pk` int(11) NOT NULL AUTO_INCREMENT;
-
---
--- Constraints for dumped tables
---
-
---
--- Constraints for table `animal_bite_cases`
---
-ALTER TABLE `animal_bite_cases`
-  ADD CONSTRAINT `animal_bite_cases_ibfk_1` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`patient_id`),
-  ADD CONSTRAINT `animal_bite_cases_ibfk_2` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `animal_bite_cases_ibfk_3` FOREIGN KEY (`admin_staff_id`) REFERENCES `users` (`user_id`),
-  ADD CONSTRAINT `fk_case_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`);
-
---
--- Constraints for table `animal_bite_cases_archive`
---
-ALTER TABLE `animal_bite_cases_archive`
-  ADD CONSTRAINT `animal_bite_cases_archive_ibfk_1` FOREIGN KEY (`archived_by`) REFERENCES `users` (`user_id`);
-
---
--- Constraints for table `audit_logs`
---
-ALTER TABLE `audit_logs`
-  ADD CONSTRAINT `audit_logs_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`),
-  ADD CONSTRAINT `audit_logs_ibfk_2` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `fk_audit_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`);
-
---
--- Constraints for table `clinical_assessments`
---
-ALTER TABLE `clinical_assessments`
-  ADD CONSTRAINT `fk_assessment_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `fk_assessment_case` FOREIGN KEY (`case_id`) REFERENCES `animal_bite_cases` (`case_id`),
-  ADD CONSTRAINT `fk_assessment_nurse` FOREIGN KEY (`nurse_id`) REFERENCES `users` (`user_id`),
-  ADD CONSTRAINT `fk_assessment_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`patient_id`),
-  ADD CONSTRAINT `fk_assessment_visit` FOREIGN KEY (`visit_id`) REFERENCES `patient_visits` (`visit_id`);
-
---
--- Constraints for table `daily_inventory_closings`
---
-ALTER TABLE `daily_inventory_closings`
-  ADD CONSTRAINT `fk_closing_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `fk_closing_item` FOREIGN KEY (`item_id`) REFERENCES `inventory_items` (`item_id`),
-  ADD CONSTRAINT `fk_closing_reviewer` FOREIGN KEY (`reviewed_by`) REFERENCES `users` (`user_id`),
-  ADD CONSTRAINT `fk_closing_submitter` FOREIGN KEY (`submitted_by`) REFERENCES `users` (`user_id`);
-
---
--- Constraints for table `document_tracking`
---
-ALTER TABLE `document_tracking`
-  ADD CONSTRAINT `document_tracking_ibfk_1` FOREIGN KEY (`case_id`) REFERENCES `animal_bite_cases` (`case_id`),
-  ADD CONSTRAINT `document_tracking_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`user_id`);
-
---
--- Constraints for table `forecast_results`
---
-ALTER TABLE `forecast_results`
-  ADD CONSTRAINT `fk_prediction_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `forecast_results_ibfk_1` FOREIGN KEY (`item_id`) REFERENCES `inventory_items` (`item_id`),
-  ADD CONSTRAINT `forecast_results_ibfk_2` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `forecast_results_ibfk_3` FOREIGN KEY (`generated_by`) REFERENCES `users` (`user_id`);
-
---
--- Constraints for table `inventory_items`
---
-ALTER TABLE `inventory_items`
-  ADD CONSTRAINT `inventory_items_ibfk_1` FOREIGN KEY (`category_id`) REFERENCES `inventory_categories` (`category_id`),
-  ADD CONSTRAINT `inventory_items_ibfk_2` FOREIGN KEY (`unit_id`) REFERENCES `units` (`unit_id`);
-
---
--- Constraints for table `inventory_returns`
---
-ALTER TABLE `inventory_returns`
-  ADD CONSTRAINT `fk_return_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `fk_return_created_by` FOREIGN KEY (`created_by`) REFERENCES `users` (`user_id`),
-  ADD CONSTRAINT `fk_return_destination` FOREIGN KEY (`destination_branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `fk_return_processed_by` FOREIGN KEY (`processed_by`) REFERENCES `users` (`user_id`),
-  ADD CONSTRAINT `fk_return_unit` FOREIGN KEY (`unit_id`) REFERENCES `units` (`unit_id`);
-
---
--- Constraints for table `inventory_stocks`
---
-ALTER TABLE `inventory_stocks`
-  ADD CONSTRAINT `fk_stock_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `inventory_stocks_ibfk_1` FOREIGN KEY (`item_id`) REFERENCES `inventory_items` (`item_id`),
-  ADD CONSTRAINT `inventory_stocks_ibfk_2` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`);
-
---
--- Constraints for table `inventory_usage_history`
---
-ALTER TABLE `inventory_usage_history`
-  ADD CONSTRAINT `fk_usage_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `inventory_usage_history_ibfk_1` FOREIGN KEY (`item_id`) REFERENCES `inventory_items` (`item_id`),
-  ADD CONSTRAINT `inventory_usage_history_ibfk_2` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`);
-
---
--- Constraints for table `medical_documents`
---
-ALTER TABLE `medical_documents`
-  ADD CONSTRAINT `fk_doc_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `fk_doc_uploader` FOREIGN KEY (`uploaded_by`) REFERENCES `users` (`user_id`);
-
---
--- Constraints for table `notifications`
---
-ALTER TABLE `notifications`
-  ADD CONSTRAINT `notifications_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`);
-
---
--- Constraints for table `patients`
---
-ALTER TABLE `patients`
-  ADD CONSTRAINT `fk_patient_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `fk_patients_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`);
-
---
--- Constraints for table `patients_archive`
---
-ALTER TABLE `patients_archive`
-  ADD CONSTRAINT `patients_archive_ibfk_1` FOREIGN KEY (`archived_by`) REFERENCES `users` (`user_id`);
-
---
--- Constraints for table `patient_visits`
---
-ALTER TABLE `patient_visits`
-  ADD CONSTRAINT `fk_visit_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `fk_visit_case` FOREIGN KEY (`case_id`) REFERENCES `animal_bite_cases` (`case_id`),
-  ADD CONSTRAINT `fk_visit_checkin_user` FOREIGN KEY (`checked_in_by`) REFERENCES `users` (`user_id`),
-  ADD CONSTRAINT `fk_visit_nurse` FOREIGN KEY (`assigned_nurse`) REFERENCES `users` (`user_id`),
-  ADD CONSTRAINT `fk_visit_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`patient_id`);
-
---
--- Constraints for table `philhealth_records`
---
-ALTER TABLE `philhealth_records`
-  ADD CONSTRAINT `philhealth_records_ibfk_1` FOREIGN KEY (`case_id`) REFERENCES `animal_bite_cases` (`case_id`),
-  ADD CONSTRAINT `philhealth_records_ibfk_2` FOREIGN KEY (`updated_by`) REFERENCES `users` (`user_id`);
-
---
--- Constraints for table `philhealth_records_archive`
---
-ALTER TABLE `philhealth_records_archive`
-  ADD CONSTRAINT `philhealth_records_archive_ibfk_1` FOREIGN KEY (`archived_by`) REFERENCES `users` (`user_id`);
-
---
--- Constraints for table `philhealth_status_history`
---
-ALTER TABLE `philhealth_status_history`
-  ADD CONSTRAINT `fk_ph_history_record` FOREIGN KEY (`philhealth_record_id`) REFERENCES `philhealth_records` (`philhealth_record_id`),
-  ADD CONSTRAINT `fk_ph_history_user` FOREIGN KEY (`changed_by`) REFERENCES `users` (`user_id`);
-
---
--- Constraints for table `registry_patients`
---
-ALTER TABLE `registry_patients`
-  ADD CONSTRAINT `registry_patients_ibfk_1` FOREIGN KEY (`registry_id`) REFERENCES `registry_records` (`registry_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `registry_patients_ibfk_2` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`patient_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `registry_patients_ibfk_3` FOREIGN KEY (`case_id`) REFERENCES `animal_bite_cases` (`case_id`) ON DELETE CASCADE;
-
---
--- Constraints for table `registry_patients_archive`
---
-ALTER TABLE `registry_patients_archive`
-  ADD CONSTRAINT `registry_patients_archive_ibfk_1` FOREIGN KEY (`archived_by`) REFERENCES `users` (`user_id`);
-
---
--- Constraints for table `registry_records`
---
-ALTER TABLE `registry_records`
-  ADD CONSTRAINT `fk_registry_case` FOREIGN KEY (`case_id`) REFERENCES `animal_bite_cases` (`case_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `registry_records_ibfk_1` FOREIGN KEY (`case_id`) REFERENCES `animal_bite_cases` (`case_id`),
-  ADD CONSTRAINT `registry_records_ibfk_2` FOREIGN KEY (`updated_by`) REFERENCES `users` (`user_id`),
-  ADD CONSTRAINT `registry_records_ibfk_3` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `registry_records_ibfk_4` FOREIGN KEY (`created_by`) REFERENCES `users` (`user_id`),
-  ADD CONSTRAINT `registry_records_ibfk_5` FOREIGN KEY (`vaccine_item_id`) REFERENCES `inventory_items` (`item_id`),
-  ADD CONSTRAINT `registry_records_ibfk_6` FOREIGN KEY (`vaccine_unit_id`) REFERENCES `units` (`unit_id`);
-
---
--- Constraints for table `registry_records_archive`
---
-ALTER TABLE `registry_records_archive`
-  ADD CONSTRAINT `registry_records_archive_ibfk_1` FOREIGN KEY (`archived_by`) REFERENCES `users` (`user_id`);
-
---
--- Constraints for table `registry_vaccination_doses`
---
-ALTER TABLE `registry_vaccination_doses`
-  ADD CONSTRAINT `registry_vaccination_doses_ibfk_1` FOREIGN KEY (`registry_id`) REFERENCES `registry_records` (`registry_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `registry_vaccination_doses_ibfk_2` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`patient_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `registry_vaccination_doses_ibfk_3` FOREIGN KEY (`vaccination_id`) REFERENCES `vaccination_records` (`vaccination_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `registry_vaccination_doses_ibfk_4` FOREIGN KEY (`vaccine_item_id`) REFERENCES `inventory_items` (`item_id`),
-  ADD CONSTRAINT `registry_vaccination_doses_ibfk_5` FOREIGN KEY (`unit_id`) REFERENCES `units` (`unit_id`),
-  ADD CONSTRAINT `registry_vaccination_doses_ibfk_6` FOREIGN KEY (`administered_by`) REFERENCES `users` (`user_id`);
-
---
--- Constraints for table `registry_vaccination_doses_archive`
---
-ALTER TABLE `registry_vaccination_doses_archive`
-  ADD CONSTRAINT `registry_vaccination_doses_archive_ibfk_1` FOREIGN KEY (`archived_by`) REFERENCES `users` (`user_id`);
-
---
--- Constraints for table `stock_transactions`
---
-ALTER TABLE `stock_transactions`
-  ADD CONSTRAINT `fk_transaction_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `fk_transaction_inventory` FOREIGN KEY (`item_id`) REFERENCES `inventory_items` (`item_id`),
-  ADD CONSTRAINT `fk_transaction_vaccination` FOREIGN KEY (`vaccination_id`) REFERENCES `vaccination_records` (`vaccination_id`) ON DELETE CASCADE,
-  ADD CONSTRAINT `stock_transactions_ibfk_1` FOREIGN KEY (`item_id`) REFERENCES `inventory_items` (`item_id`),
-  ADD CONSTRAINT `stock_transactions_ibfk_2` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`),
-  ADD CONSTRAINT `stock_transactions_ibfk_3` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`);
-
---
--- Constraints for table `training_dataset`
---
-ALTER TABLE `training_dataset`
-  ADD CONSTRAINT `training_dataset_ibfk_1` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `training_dataset_ibfk_2` FOREIGN KEY (`item_id`) REFERENCES `inventory_items` (`item_id`);
-
---
--- Constraints for table `users`
---
-ALTER TABLE `users`
-  ADD CONSTRAINT `fk_user_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `users_ibfk_1` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `users_ibfk_2` FOREIGN KEY (`role_id`) REFERENCES `roles` (`role_id`);
-
---
--- Constraints for table `user_tokens`
---
-ALTER TABLE `user_tokens`
-  ADD CONSTRAINT `fk_user_tokens_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE;
-
---
--- Constraints for table `vaccination_records`
---
-ALTER TABLE `vaccination_records`
-  ADD CONSTRAINT `fk_vaccination_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `fk_vaccination_case` FOREIGN KEY (`case_id`) REFERENCES `animal_bite_cases` (`case_id`),
-  ADD CONSTRAINT `fk_vaccination_inventory` FOREIGN KEY (`item_id`) REFERENCES `inventory_items` (`item_id`),
-  ADD CONSTRAINT `fk_vaccination_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`patient_id`),
-  ADD CONSTRAINT `fk_vaccination_unit` FOREIGN KEY (`unit_id`) REFERENCES `units` (`unit_id`),
-  ADD CONSTRAINT `vaccination_records_ibfk_1` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`patient_id`),
-  ADD CONSTRAINT `vaccination_records_ibfk_2` FOREIGN KEY (`case_id`) REFERENCES `animal_bite_cases` (`case_id`),
-  ADD CONSTRAINT `vaccination_records_ibfk_3` FOREIGN KEY (`item_id`) REFERENCES `inventory_items` (`item_id`),
-  ADD CONSTRAINT `vaccination_records_ibfk_4` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`branch_id`),
-  ADD CONSTRAINT `vaccination_records_ibfk_5` FOREIGN KEY (`nurse_id`) REFERENCES `users` (`user_id`),
-  ADD CONSTRAINT `vaccination_records_ibfk_6` FOREIGN KEY (`unit_id`) REFERENCES `units` (`unit_id`);
-
---
--- Constraints for table `vaccination_records_archive`
---
-ALTER TABLE `vaccination_records_archive`
-  ADD CONSTRAINT `vaccination_records_archive_ibfk_1` FOREIGN KEY (`archived_by`) REFERENCES `users` (`user_id`);
+  MODIFY `vaccination_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=247;
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;

@@ -886,7 +886,8 @@ body{
     align-items:center;
     justify-content:space-between;
     padding:0 35px;
-    box-shadow:0 2px 8px rgba(0,0,0,.08);
+    box-shadow:0 2px 8px rgba(0,0,0,.06);
+    border-bottom:1px solid #e9edf5;
 }
 
 .topbar h3{
@@ -904,8 +905,18 @@ body{
 }
 
 .profile{
+    display:flex;
+    align-items:center;
+    gap:6px;
     font-weight:600;
     color:var(--primary);
+}
+
+.role-label{
+    font-size:12px;
+    color:#adb5bd;
+    font-weight:400;
+    margin-left:4px;
 }
 
 .page-body{
@@ -1261,10 +1272,29 @@ body{
 
     <div class="topbar">
         <h3>Stock Management<small><?php echo h($branch_name); ?></small></h3>
-        <div class="profile">
-            <i class="bi bi-person-circle"></i>
-            <?php echo h($username); ?>
-            <span style="font-size:12px;color:#adb5bd;font-weight:400;margin-left:4px;">| Inventory Officer</span>
+        <div class="dropdown">
+            <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
+                    type="button" id="inventoryOfficerProfileMenu"
+                    data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="bi bi-person-circle"></i>
+                <span><?php echo h($username); ?></span>
+                <span class="role-label">| Inventory Officer</span>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2"
+                aria-labelledby="inventoryOfficerProfileMenu">
+                <li><h6 class="dropdown-header">Account options</h6></li>
+                <li>
+                    <a class="dropdown-item rounded-2 py-2" href="Account_ChangePassword.php">
+                        <i class="bi bi-key-fill me-2"></i>Change Password
+                    </a>
+                </li>
+                <li><hr class="dropdown-divider"></li>
+                <li>
+                    <a class="dropdown-item rounded-2 py-2 text-danger" href="logout.php">
+                        <i class="bi bi-box-arrow-right me-2"></i>Logout
+                    </a>
+                </li>
+            </ul>
         </div>
     </div>
 

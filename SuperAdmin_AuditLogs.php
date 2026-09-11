@@ -711,13 +711,71 @@ $pdf_url = '?' . http_build_query($filter_params);
             margin: 0;
             letter-spacing: -0.3px;
         }
-        .profile {
+         .profile {
             font-weight: 600;
             color: var(--primary);
-            cursor: default;
+            cursor: pointer;
             display: flex;
             align-items: center;
             gap: 6px;
+        }
+
+        .profile-button {
+            border: 0;
+            background: transparent;
+            padding: 10px 12px;
+            border-radius: 10px;
+            transition: background-color 0.2s ease;
+        }
+
+        
+
+        .profile-button::after {
+            margin-left: 4px;
+        }
+
+        .profile-role {
+            color: #adb5bd;
+            font-size: 12px;
+            font-weight: 400;
+            margin-left: 4px;
+        }
+
+        .profile-menu {
+            min-width: 220px;
+            padding: 8px;
+            margin-top: 10px !important;
+            border: 1px solid #e4e8f1;
+            border-radius: 12px;
+            box-shadow: 0 10px 28px rgba(32, 45, 110, 0.14);
+        }
+
+        .profile-menu .dropdown-header {
+            padding: 8px 12px 10px;
+            color: #6c757d;
+            font-size: 12px;
+        }
+
+        .profile-menu .dropdown-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            color: #24315f;
+            font-weight: 500;
+        }
+
+        .profile-menu .dropdown-item:hover,
+        .profile-menu .dropdown-item:focus {
+            color: var(--primary);
+            background: #f1f3fb;
+        }
+
+        .profile-menu .dropdown-item.text-danger:hover,
+        .profile-menu .dropdown-item.text-danger:focus {
+            color: #b42332 !important;
+            background: #fff0f2;
         }
 
         .content {
@@ -1320,10 +1378,37 @@ $pdf_url = '?' . http_build_query($filter_params);
     <div class="topbar">
         <h3>Audit Logs</h3>
 
-        <div class="profile">
-            <i class="bi bi-person-circle"></i>
-            <?php echo htmlspecialchars($_SESSION['username'] ?? 'SUPER ADMIN'); ?>
-            <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Super Admin</span>
+        <div class="dropdown">
+            <button
+                class="profile profile-button dropdown-toggle"
+                type="button"
+                id="superAdminProfileMenu"
+                data-bs-toggle="dropdown"
+                aria-expanded="false"
+            >
+                <i class="bi bi-person-circle"></i>
+                <span><?php echo htmlspecialchars($_SESSION['username'] ?? 'SUPER ADMIN', ENT_QUOTES, 'UTF-8'); ?></span>
+                <span class="profile-role">| Super Admin</span>
+            </button>
+
+            <ul class="dropdown-menu dropdown-menu-end profile-menu" aria-labelledby="superAdminProfileMenu">
+                <li>
+                    <div class="dropdown-header">Account options</div>
+                </li>
+                <li>
+                    <a class="dropdown-item" href="Account_ChangePassword.php">
+                        <i class="bi bi-key-fill"></i>
+                        <span>Change Password</span>
+                    </a>
+                </li>
+                <li><hr class="dropdown-divider"></li>
+                <li>
+                    <a class="dropdown-item text-danger" href="logout.php">
+                        <i class="bi bi-box-arrow-right"></i>
+                        <span>Logout</span>
+                    </a>
+                </li>
+            </ul>
         </div>
     </div>
 

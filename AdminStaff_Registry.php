@@ -159,6 +159,7 @@ $flash = workflowTakeFlash();
     <style>
         :root {
             --primary: #2B3A8C;
+            --primary-dark: #1f2d6e;
             --accent: #F21D2F;
             --success: #28a745;
             --warning: #ffc107;
@@ -487,6 +488,119 @@ $flash = workflowTakeFlash();
             box-shadow: 0 2px 8px rgba(0, 0, 0, .05);
         }
 
+        /* Styled confirmation dialogs */
+        .confirm-modal .modal-dialog {
+            max-width: 480px;
+        }
+
+        .confirm-modal .modal-content {
+            overflow: hidden;
+            border: 0;
+            border-radius: 20px;
+            box-shadow: 0 24px 70px rgba(31, 45, 110, .24);
+        }
+
+        .confirm-modal .modal-header {
+            display: block;
+            padding: 28px 28px 10px;
+            border: 0;
+            text-align: center;
+        }
+
+        .confirm-modal .modal-icon {
+            width: 66px;
+            height: 66px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 15px;
+            color: #fff;
+            background: linear-gradient(135deg, var(--primary), #5265c7);
+            border-radius: 50%;
+            box-shadow: 0 10px 24px rgba(43, 58, 140, .25);
+            font-size: 29px;
+        }
+
+        .confirm-modal .modal-icon.logout-icon {
+            background: linear-gradient(135deg, #dc3545, #f06b77);
+            box-shadow: 0 10px 24px rgba(220, 53, 69, .22);
+        }
+
+        .confirm-modal .modal-title {
+            color: var(--primary-dark);
+            font-size: 22px;
+            font-weight: 750;
+        }
+
+        .confirm-modal .modal-body {
+            padding: 8px 28px 20px;
+            color: #6f7b91;
+            text-align: center;
+        }
+
+        .confirm-modal .confirmation-summary {
+            margin-top: 16px;
+            padding: 13px 15px;
+            color: #354160;
+            background: #f6f7fc;
+            border: 1px solid #e5e9f3;
+            border-radius: 12px;
+            text-align: left;
+        }
+
+        .confirm-modal .confirmation-summary strong {
+            display: block;
+            margin-bottom: 2px;
+            color: var(--primary);
+        }
+
+        .confirm-modal .confirmation-summary span {
+            display: block;
+            font-size: 13px;
+        }
+
+        .confirm-modal .confirmation-warning {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            margin-top: 12px;
+            padding: 11px 13px;
+            color: #73510b;
+            background: #fff8e6;
+            border: 1px solid #ffe4a3;
+            border-radius: 10px;
+            font-size: 13px;
+            text-align: left;
+        }
+
+        .confirm-modal .modal-footer {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            padding: 0 28px 28px;
+            border: 0;
+        }
+
+        .confirm-modal .modal-footer .btn {
+            min-height: 46px;
+            margin: 0;
+            border-radius: 10px;
+            font-weight: 700;
+        }
+
+        .confirm-modal .btn-confirm {
+            color: #fff;
+            background: var(--success);
+            border-color: var(--success);
+        }
+
+        .confirm-modal .btn-confirm:hover,
+        .confirm-modal .btn-confirm:focus {
+            color: #fff;
+            background: #218838;
+            border-color: #218838;
+        }
+
         @media (max-width: 991px) {
             .main {
                 margin-left: 90px;
@@ -547,17 +661,39 @@ $flash = workflowTakeFlash();
         </nav>
 
         <div class="logout">
-            <a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
+            <a href="#" data-bs-toggle="modal" data-bs-target="#logoutConfirmModal">
+                <i class="bi bi-box-arrow-right"></i><span>Logout</span>
+            </a>
         </div>
     </div>
 
     <div class="main">
         <div class="topbar">
             <h3>Registry Queue <small><?php echo workflowH($branchName); ?></small></h3>
-            <div class="profile">
-                <i class="bi bi-person-circle"></i>
-                <span><?php echo workflowH($username); ?></span>
-                <span class="profile-role">| Administrative Staff</span>
+            <div class="dropdown">
+                <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
+                        type="button" id="adminStaffProfileMenu"
+                        data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="bi bi-person-circle"></i>
+                    <span><?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?></span>
+                    <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Admin Staff</span>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2"
+                    aria-labelledby="adminStaffProfileMenu">
+                    <li><h6 class="dropdown-header">Account options</h6></li>
+                    <li>
+                        <a class="dropdown-item rounded-2 py-2" href="Account_ChangePassword.php">
+                            <i class="bi bi-key-fill me-2"></i>Change Password
+                        </a>
+                    </li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li>
+                        <a class="dropdown-item rounded-2 py-2 text-danger" href="#"
+                           data-bs-toggle="modal" data-bs-target="#logoutConfirmModal">
+                            <i class="bi bi-box-arrow-right me-2"></i>Logout
+                        </a>
+                    </li>
+                </ul>
             </div>
         </div>
 
@@ -660,7 +796,9 @@ $flash = workflowTakeFlash();
                                     </td>
                                     <td>
                                         <?php if ($row['workflow_status'] === 'For Registry'): ?>
-                                            <form method="post" class="registry-form">
+                                            <form method="post" class="registry-form"
+                                                  data-patient="<?php echo workflowH($row['full_name']); ?>"
+                                                  data-case="<?php echo workflowH($row['case_number']); ?>">
                                                 <input type="hidden" name="csrf_token" value="<?php echo workflowH($csrf); ?>">
                                                 <input type="hidden" name="visit_id" value="<?php echo (int)$row['visit_id']; ?>">
 
@@ -734,7 +872,6 @@ $flash = workflowTakeFlash();
                                                         <button
                                                             type="submit"
                                                             class="btn-verify w-100"
-                                                            onclick="return confirm('Verify and save this registry record?');"
                                                         >
                                                             <i class="bi bi-check2-circle"></i> Verify
                                                         </button>
@@ -764,6 +901,104 @@ $flash = workflowTakeFlash();
         </div>
     </div>
 
+    <div class="modal fade confirm-modal" id="registryConfirmModal" tabindex="-1"
+         aria-labelledby="registryConfirmModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div class="modal-icon"><i class="bi bi-journal-check"></i></div>
+                    <h2 class="modal-title" id="registryConfirmModalLabel">Verify registry record?</h2>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-0">Please review the registry information before saving this patient record.</p>
+                    <div class="confirmation-summary">
+                        <strong id="confirmPatientName">Patient</strong>
+                        <span id="confirmCaseNumber">Case</span>
+                        <span id="confirmRegistryNumber">Registry number</span>
+                    </div>
+                    <div class="confirmation-warning">
+                        <i class="bi bi-exclamation-triangle-fill"></i>
+                        <span>This marks the visit as Registered and notifies the assigned Nurse. Make sure the registry number and treatment entries are correct.</span>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light border" data-bs-dismiss="modal">
+                        <i class="bi bi-x-circle me-1"></i>Cancel
+                    </button>
+                    <button type="button" class="btn btn-confirm" id="confirmRegistryButton">
+                        <i class="bi bi-check-circle-fill me-1"></i>Yes, Verify Record
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade confirm-modal" id="logoutConfirmModal" tabindex="-1"
+         aria-labelledby="logoutConfirmModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div class="modal-icon logout-icon"><i class="bi bi-box-arrow-right"></i></div>
+                    <h2 class="modal-title" id="logoutConfirmModalLabel">Log out of Smart Bite Care?</h2>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-0">Make sure you have saved any unfinished registry entry before leaving your account.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light border" data-bs-dismiss="modal">Cancel</button>
+                    <a href="logout.php" class="btn btn-danger d-flex align-items-center justify-content-center">
+                        <i class="bi bi-box-arrow-right me-1"></i>Yes, Log Out
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const modalElement = document.getElementById('registryConfirmModal');
+            const confirmButton = document.getElementById('confirmRegistryButton');
+            const patientOutput = document.getElementById('confirmPatientName');
+            const caseOutput = document.getElementById('confirmCaseNumber');
+            const registryOutput = document.getElementById('confirmRegistryNumber');
+            let pendingForm = null;
+
+            document.querySelectorAll('.registry-form').forEach(function (form) {
+                form.addEventListener('submit', function (event) {
+                    if (form.dataset.confirmed === 'true') {
+                        return;
+                    }
+
+                    event.preventDefault();
+                    pendingForm = form;
+
+                    const registryInput = form.querySelector('[name="registry_number"]');
+                    patientOutput.textContent = form.dataset.patient || 'Patient';
+                    caseOutput.textContent = 'Case: ' + (form.dataset.case || '—');
+                    registryOutput.textContent = 'Registry number: ' + (registryInput ? registryInput.value : '—');
+
+                    bootstrap.Modal.getOrCreateInstance(modalElement).show();
+                });
+            });
+
+            confirmButton.addEventListener('click', function () {
+                if (!pendingForm) {
+                    return;
+                }
+
+                pendingForm.dataset.confirmed = 'true';
+                confirmButton.disabled = true;
+                confirmButton.innerHTML = '<span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>Saving...';
+                pendingForm.requestSubmit();
+            });
+
+            modalElement.addEventListener('hidden.bs.modal', function () {
+                pendingForm = null;
+                confirmButton.disabled = false;
+                confirmButton.innerHTML = '<i class="bi bi-check-circle-fill me-1"></i>Yes, Verify Record';
+            });
+        });
+    </script>
 </body>
 </html>

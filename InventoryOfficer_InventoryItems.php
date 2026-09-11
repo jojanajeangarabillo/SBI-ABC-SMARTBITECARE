@@ -1321,6 +1321,65 @@ $search =
 
 
 /* =========================================================
+   SERVER-SIDE PAGINATION
+   ========================================================= */
+
+$allowed_per_page = [10, 25, 50, 100];
+
+$per_page =
+    filter_input(
+        INPUT_GET,
+        'per_page',
+        FILTER_VALIDATE_INT
+    );
+
+if (
+    $per_page === false ||
+    $per_page === null ||
+    !in_array($per_page, $allowed_per_page, true)
+) {
+    $per_page = 10;
+}
+
+$current_page =
+    filter_input(
+        INPUT_GET,
+        'page',
+        FILTER_VALIDATE_INT
+    );
+
+if (
+    $current_page === false ||
+    $current_page === null ||
+    $current_page < 1
+) {
+    $current_page = 1;
+}
+
+$total_items = 0;
+$total_pages = 1;
+$offset = 0;
+
+function inventoryItemsPageUrl(
+    $page,
+    $search,
+    $per_page
+) {
+    $query = [
+        'page' => max(1, (int)$page),
+        'per_page' => (int)$per_page
+    ];
+
+    if ($search !== '') {
+        $query['search'] = $search;
+    }
+
+    return 'InventoryOfficer_InventoryItems.php?' .
+        http_build_query($query);
+}
+
+
+/* =========================================================
    LOAD INVENTORY ITEMS
 
    IMPORTANT:
@@ -1337,6 +1396,77 @@ $items = [];
 
 
 if (!empty($branch_id)) {
+
+    /* -----------------------------------------------------
+       COUNT MATCHING ITEMS BEFORE APPLYING LIMIT/OFFSET
+       ----------------------------------------------------- */
+
+    $countSQL = "
+        SELECT COUNT(*) AS total
+        FROM inventory_items i
+        INNER JOIN inventory_categories c
+            ON i.category_id = c.category_id
+        INNER JOIN units u
+            ON i.unit_id = u.unit_id
+        WHERE 1 = 1
+    ";
+
+    $countParams = [];
+    $countTypes = '';
+
+    if ($search !== '') {
+        $countSQL .= "
+            AND
+            (
+                i.item_name LIKE ?
+                OR c.category_name LIKE ?
+                OR u.unit_name LIKE ?
+            )
+        ";
+
+        $searchParam = '%' . $search . '%';
+        $countParams = [
+            $searchParam,
+            $searchParam,
+            $searchParam
+        ];
+        $countTypes = 'sss';
+    }
+
+    $countStmt = $conn->prepare($countSQL);
+
+    if ($countStmt) {
+        if ($countTypes !== '') {
+            $countStmt->bind_param(
+                $countTypes,
+                ...$countParams
+            );
+        }
+
+        $countStmt->execute();
+        $countRow =
+            $countStmt
+                ->get_result()
+                ->fetch_assoc();
+
+        $total_items =
+            (int)($countRow['total'] ?? 0);
+
+        $countStmt->close();
+    }
+
+    $total_pages = max(
+        1,
+        (int)ceil($total_items / $per_page)
+    );
+
+    if ($current_page > $total_pages) {
+        $current_page = $total_pages;
+    }
+
+    $offset =
+        ($current_page - 1) *
+        $per_page;
 
     $itemsSQL = "
         SELECT
@@ -1436,7 +1566,13 @@ if (!empty($branch_id)) {
 
         ORDER BY
             i.item_name ASC
+
+        LIMIT ? OFFSET ?
     ";
+
+    $params[] = $per_page;
+    $params[] = $offset;
+    $types .= 'ii';
 
 
     $itemsStmt =
@@ -1544,6 +1680,18 @@ if (!empty($branch_id) && !empty($items)) {
 
     $batchMap = [];
 
+    $pageItemIds = array_map(
+        static function ($item) {
+            return (int)$item['item_id'];
+        },
+        $items
+    );
+
+    $itemPlaceholders = implode(
+        ',',
+        array_fill(0, count($pageItemIds), '?')
+    );
+
     $batchSQL = "
         SELECT
             stock_id,
@@ -1553,6 +1701,7 @@ if (!empty($branch_id) && !empty($items)) {
             expiration_date
         FROM inventory_stocks
         WHERE branch_id = ?
+          AND item_id IN ($itemPlaceholders)
           AND quantity_available > 0
         ORDER BY
             item_id ASC,
@@ -1569,9 +1718,18 @@ if (!empty($branch_id) && !empty($items)) {
 
     if ($batchStmt) {
 
+        $batchTypes =
+            's' .
+            str_repeat('i', count($pageItemIds));
+
+        $batchParams = array_merge(
+            [$branch_id],
+            $pageItemIds
+        );
+
         $batchStmt->bind_param(
-            "s",
-            $branch_id
+            $batchTypes,
+            ...$batchParams
         );
 
         $batchStmt->execute();
@@ -1711,36 +1869,44 @@ body {
 }
 
 
-.topbar {
-    background: white;
-    height: 80px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 35px;
-    box-shadow: 0 2px 8px rgba(0,0,0,.08);
+.topbar{
+    background:white;
+    height:80px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:0 35px;
+    box-shadow:0 2px 8px rgba(0,0,0,.06);
+    border-bottom:1px solid #e9edf5;
 }
 
-
-.topbar h3 {
-    font-size: 28px;
-    font-weight: 700;
-    color: var(--primary);
-    margin: 0;
+.topbar h3{
+    font-size:28px;
+    font-weight:700;
+    color:var(--primary);
+    margin:0;
 }
 
-
-.topbar h3 small {
-    font-size: 16px;
-    font-weight: 400;
-    color: #777;
-    margin-left: 10px;
+.topbar h3 small{
+    font-size:15px;
+    font-weight:400;
+    color:#6c757d;
+    margin-left:10px;
 }
 
+.profile{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    font-weight:600;
+    color:var(--primary);
+}
 
-.profile {
-    font-weight: 600;
-    color: var(--primary);
+.role-label{
+    font-size:12px;
+    color:#adb5bd;
+    font-weight:400;
+    margin-left:4px;
 }
 
 
@@ -1789,6 +1955,52 @@ body {
     border-color: var(--primary);
     box-shadow: 0 0 0 3px rgba(43,58,140,.12);
     outline: none;
+}
+
+
+.toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+
+.rows-selector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px 6px 12px;
+    background: #fff;
+    border: 1px solid #dcdee8;
+    border-radius: 9px;
+}
+
+
+.rows-selector label {
+    margin: 0;
+    color: #60697c;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+
+.rows-selector select {
+    min-width: 74px;
+    padding: 4px 28px 4px 8px;
+    border: 0;
+    color: var(--primary);
+    background-color: transparent;
+    font-size: 13px;
+    font-weight: 700;
+    box-shadow: none;
+}
+
+
+.rows-selector select:focus {
+    outline: none;
+    box-shadow: none;
 }
 
 
@@ -1867,6 +2079,56 @@ body {
 
 .data-table tbody tr:hover {
     background: #f7f8fc;
+}
+
+
+.table-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 16px 18px;
+    background: #fff;
+    border-top: 1px solid #e8ebf3;
+}
+
+
+.table-results {
+    color: #6c7589;
+    font-size: 13px;
+}
+
+
+.pagination {
+    margin: 0;
+}
+
+
+.page-link {
+    min-width: 35px;
+    color: var(--primary);
+    border-color: #dfe3ec;
+    text-align: center;
+}
+
+
+.page-link:hover {
+    color: #fff;
+    background: var(--primary);
+    border-color: var(--primary);
+}
+
+
+.page-item.active .page-link {
+    color: #fff;
+    background: var(--primary);
+    border-color: var(--primary);
+}
+
+
+.page-item.disabled .page-link {
+    color: #aeb4c2;
+    background: #f7f8fb;
 }
 
 
@@ -2152,12 +2414,32 @@ body {
         align-items: stretch;
     }
 
+    .toolbar-actions {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .rows-selector,
+    .btn-custom {
+        width: 100%;
+    }
+
+    .rows-selector select {
+        flex: 1;
+    }
+
     .search-box {
         max-width: 100%;
     }
 
     .table-wrap {
         overflow-x: auto;
+    }
+
+    .table-footer {
+        align-items: flex-start;
+        flex-direction: column;
+        min-width: 560px;
     }
 }
 
@@ -2357,23 +2639,29 @@ body {
         </h3>
 
 
-        <div class="profile">
-
-            <i class="bi bi-person-circle"></i>
-
-            <?php echo h($username); ?>
-
-            <span
-                style="
-                    font-size: 12px;
-                    color: #adb5bd;
-                    font-weight: 400;
-                    margin-left: 4px;
-                "
-            >
-                | Inventory Officer
-            </span>
-
+        <div class="dropdown">
+            <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
+                    type="button" id="inventoryOfficerProfileMenu"
+                    data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="bi bi-person-circle"></i>
+                <span><?php echo h($username); ?></span>
+                <span class="role-label">| Inventory Officer</span>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2"
+                aria-labelledby="inventoryOfficerProfileMenu">
+                <li><h6 class="dropdown-header">Account options</h6></li>
+                <li>
+                    <a class="dropdown-item rounded-2 py-2" href="Account_ChangePassword.php">
+                        <i class="bi bi-key-fill me-2"></i>Change Password
+                    </a>
+                </li>
+                <li><hr class="dropdown-divider"></li>
+                <li>
+                    <a class="dropdown-item rounded-2 py-2 text-danger" href="logout.php">
+                        <i class="bi bi-box-arrow-right me-2"></i>Logout
+                    </a>
+                </li>
+            </ul>
         </div>
 
     </div>
@@ -2433,6 +2721,12 @@ body {
                 class="search-box"
             >
 
+                <input
+                    type="hidden"
+                    name="per_page"
+                    value="<?php echo (int)$per_page; ?>"
+                >
+
                 <i class="bi bi-search"></i>
 
                 <input
@@ -2445,21 +2739,62 @@ body {
 
             </form>
 
+            <div class="toolbar-actions">
 
-            <!-- ADD ITEM -->
+                <!-- ROWS PER PAGE -->
 
-            <button
-                type="button"
-                class="btn-custom"
-                data-bs-toggle="modal"
-                data-bs-target="#addItemModal"
-            >
+                <form
+                    method="GET"
+                    action="<?php echo h($_SERVER['PHP_SELF']); ?>"
+                    class="rows-selector"
+                >
+                    <?php if ($search !== ''): ?>
+                        <input
+                            type="hidden"
+                            name="search"
+                            value="<?php echo h($search); ?>"
+                        >
+                    <?php endif; ?>
 
-                <i class="bi bi-plus-lg me-1"></i>
+                    <input type="hidden" name="page" value="1">
 
-                Add Item
+                    <label for="per-page-select">Rows per page</label>
 
-            </button>
+                    <select
+                        id="per-page-select"
+                        name="per_page"
+                        class="form-select form-select-sm"
+                        onchange="this.form.submit()"
+                        aria-label="Rows per page"
+                    >
+                        <?php foreach ($allowed_per_page as $option): ?>
+                            <option
+                                value="<?php echo $option; ?>"
+                                <?php echo $per_page === $option ? 'selected' : ''; ?>
+                            >
+                                <?php echo $option; ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </form>
+
+
+                <!-- ADD ITEM -->
+
+                <button
+                    type="button"
+                    class="btn-custom"
+                    data-bs-toggle="modal"
+                    data-bs-target="#addItemModal"
+                >
+
+                    <i class="bi bi-plus-lg me-1"></i>
+
+                    Add Item
+
+                </button>
+
+            </div>
 
         </div>
 
@@ -2794,6 +3129,170 @@ body {
                 </tbody>
 
             </table>
+
+            <?php if ($total_items > 0): ?>
+
+                <div class="table-footer">
+
+                    <div class="table-results">
+                        Showing
+                        <strong><?php echo $offset + 1; ?></strong>
+                        to
+                        <strong><?php echo min($offset + $per_page, $total_items); ?></strong>
+                        of
+                        <strong><?php echo number_format($total_items); ?></strong>
+                        item<?php echo $total_items === 1 ? '' : 's'; ?>
+                    </div>
+
+
+                    <?php if ($total_pages > 1): ?>
+
+                        <nav aria-label="Inventory item pages">
+
+                            <ul class="pagination pagination-sm">
+
+                                <li class="page-item <?php echo $current_page <= 1 ? 'disabled' : ''; ?>">
+                                    <a
+                                        class="page-link"
+                                        href="<?php
+                                        echo $current_page > 1
+                                            ? h(
+                                                inventoryItemsPageUrl(
+                                                    $current_page - 1,
+                                                    $search,
+                                                    $per_page
+                                                )
+                                            )
+                                            : '#';
+                                        ?>"
+                                        aria-label="Previous page"
+                                    >
+                                        <i class="bi bi-chevron-left"></i>
+                                    </a>
+                                </li>
+
+
+                                <?php
+                                $start_page = max(
+                                    1,
+                                    $current_page - 2
+                                );
+
+                                $end_page = min(
+                                    $total_pages,
+                                    $current_page + 2
+                                );
+
+                                if ($start_page > 1):
+                                ?>
+
+                                    <li class="page-item">
+                                        <a
+                                            class="page-link"
+                                            href="<?php
+                                            echo h(
+                                                inventoryItemsPageUrl(
+                                                    1,
+                                                    $search,
+                                                    $per_page
+                                                )
+                                            );
+                                            ?>"
+                                        >1</a>
+                                    </li>
+
+                                    <?php if ($start_page > 2): ?>
+                                        <li class="page-item disabled">
+                                            <span class="page-link">…</span>
+                                        </li>
+                                    <?php endif; ?>
+
+                                <?php endif; ?>
+
+
+                                <?php
+                                for (
+                                    $page_number = $start_page;
+                                    $page_number <= $end_page;
+                                    $page_number++
+                                ):
+                                ?>
+
+                                    <li class="page-item <?php echo $page_number === $current_page ? 'active' : ''; ?>">
+                                        <a
+                                            class="page-link"
+                                            href="<?php
+                                            echo h(
+                                                inventoryItemsPageUrl(
+                                                    $page_number,
+                                                    $search,
+                                                    $per_page
+                                                )
+                                            );
+                                            ?>"
+                                        >
+                                            <?php echo $page_number; ?>
+                                        </a>
+                                    </li>
+
+                                <?php endfor; ?>
+
+
+                                <?php if ($end_page < $total_pages): ?>
+
+                                    <?php if ($end_page < $total_pages - 1): ?>
+                                        <li class="page-item disabled">
+                                            <span class="page-link">…</span>
+                                        </li>
+                                    <?php endif; ?>
+
+                                    <li class="page-item">
+                                        <a
+                                            class="page-link"
+                                            href="<?php
+                                            echo h(
+                                                inventoryItemsPageUrl(
+                                                    $total_pages,
+                                                    $search,
+                                                    $per_page
+                                                )
+                                            );
+                                            ?>"
+                                        ><?php echo $total_pages; ?></a>
+                                    </li>
+
+                                <?php endif; ?>
+
+
+                                <li class="page-item <?php echo $current_page >= $total_pages ? 'disabled' : ''; ?>">
+                                    <a
+                                        class="page-link"
+                                        href="<?php
+                                        echo $current_page < $total_pages
+                                            ? h(
+                                                inventoryItemsPageUrl(
+                                                    $current_page + 1,
+                                                    $search,
+                                                    $per_page
+                                                )
+                                            )
+                                            : '#';
+                                        ?>"
+                                        aria-label="Next page"
+                                    >
+                                        <i class="bi bi-chevron-right"></i>
+                                    </a>
+                                </li>
+
+                            </ul>
+
+                        </nav>
+
+                    <?php endif; ?>
+
+                </div>
+
+            <?php endif; ?>
 
         </div>
 
