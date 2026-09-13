@@ -1,39 +1,13 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/notification_helper.php';
 
-// ============================================================
-// NURSE - MEDICAL SUPPLIES MANAGEMENT
-// ============================================================
-// IMPORTANT INVENTORY RULES:
-//
-// inventory_items
-//      = master item information
-//
-// inventory_stocks
-//      = actual branch/batch stock
-//
-// stock_transactions
-//      = stock movement history
-//
-// inventory_usage_history
-//      = usage / consumption history
-//
-// Vaccines are already categorized under:
-//      Medical Supplies
-//
-// Medical supply usage uses FEFO:
-//      First Expiring, First Out
-//
-// Expired stock is never administered to patients.
-// ============================================================
+// Get logged-in Nurse
+$user_id = (int)$_SESSION['user_id'];
+// Get unread notification count
+$notification_count = getUnreadNotificationCount($conn, $user_id);
 
-
-// ============================================================
-// ACCESS CONTROL
-// Nurse = role_id 3
-// Super Admin = role_id 1
-// ============================================================
 
 if (
     !isset($_SESSION['user_id']) ||
@@ -3233,7 +3207,6 @@ body {
 
     </div>
 
-
        <nav class="nav-menu">
         <ul>
             <li><a href="Nurse_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
@@ -3243,7 +3216,21 @@ body {
             <li><a href="Nurse_DailyInventory.php"><i class="bi bi-clipboard-data-fill"></i><span>Daily Inventory</span></a></li>
             <li><a class="active" href="Nurse_MedicalSuppliesManagement.php"><i class="bi bi-calendar-check"></i><span>Medical Supplies Management</span></a></li>
             <li><a href="Nurse_Supplyforecasting.php"><i class="bi bi-box-seam"></i><span>Supply Forecasting</span></a></li>
-            <li><a href="Nurse_Notification.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+            <li>
+                <a href="Nurse_Notification.php">
+                    <i class="bi bi-bell-fill"></i>
+
+                    <span class="notification-label">
+                        Notifications
+
+                        <?php if ($notification_count > 0): ?>
+                            <span class="notification-badge">
+                                <?php echo $notification_count; ?>
+                            </span>
+                        <?php endif; ?>
+                    </span>
+                </a>
+            </li>
         </ul>
     </nav>
 

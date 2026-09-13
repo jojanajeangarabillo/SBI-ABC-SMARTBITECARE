@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/notification_helper.php';
 
 // Check if user is logged in and is a branch admin
 checkUserRole([2]); // role_id 2 = Branch Admin
@@ -8,6 +9,7 @@ checkUserRole([2]); // role_id 2 = Branch Admin
 // Get user data
 $userData = getUserData($conn, $_SESSION['user_id']);
 $branchId = $userData['branch_id'];
+$notification_count = getUnreadNotificationCount($conn, (int)$_SESSION['user_id']);
 
 // Handle AJAX request for patient details
 if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_patient') {
@@ -849,17 +851,15 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
                 <li><a href="BranchAdmin_Forecasting.php"><i class="bi bi-graph-up-arrow"></i><span>Supply Forecasting</span></a></li>
                 <li><a href="BranchAdmin_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
                 <li><a href="BranchAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
-                <li><a href="BranchAdmin_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+                <li><a href="BranchAdmin_Notifications.php" class="notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
+                <?php if ($notification_count > 0): ?>
+                    <span class="notification-badge"><?php echo $notification_count; ?></span>
+                <?php endif; ?>
+            </a></li>
                 <li><a href="BranchAdmin_Settings.php"><i class="bi bi-gear-fill"></i><span>Settings</span></a></li>
             </ul>
         </nav>
-
-        <div class="logout">
-            <a href="logout.php"> <i class="bi bi-box-arrow-right"></i>
-                <span>Logout</span>
-            </a>
-        </div>
-    </div>
+</div>
 
     <!-- MAIN CONTENT -->
     <div class="main">

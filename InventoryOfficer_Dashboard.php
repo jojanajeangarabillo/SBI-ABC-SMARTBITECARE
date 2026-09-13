@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/notification_helper.php';
 
 /* =========================================================
    ACCESS CONTROL
@@ -137,6 +138,8 @@ if (!$userData) {
 $branch_id = $userData['branch_id'] ?? null;
 $username = $userData['username'] ?: 'Inventory Officer';
 $branch_name = $userData['branch_name'] ?: 'No Branch Assigned';
+
+$notification_count = getUnreadNotificationCount($conn, $user_id);
 
 /* =========================================================
    DASHBOARD DATA
@@ -949,13 +952,13 @@ body{
             <li><a href="InventoryOfficer_StockTransactions.php"><i class="bi bi-arrow-left-right"></i><span>Stock Transactions</span></a></li>
             <li><a href="InventoryOfficer_ReturnManagement.php"><i class="bi bi-arrow-return-left"></i><span>Return Management</span></a></li>
             <li><a href="InventoryOfficer_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Inventory Reports</span></a></li>
-            <li><a href="InventoryOfficer_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+            <li><a  href="InventoryOfficer_Notifications.php" class="notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
+                        <?php if ($notification_count > 0): ?>
+                            <span class="notification-badge"><?php echo $notification_count; ?></span>
+                        <?php endif; ?>
+                    </a></li>
         </ul>
     </nav>
-
-    <div class="logout">
-        <a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
-    </div>
 </div>
 
 <!-- MAIN CONTENT -->

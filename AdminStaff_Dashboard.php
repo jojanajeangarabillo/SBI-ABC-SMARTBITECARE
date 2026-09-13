@@ -1,12 +1,13 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/notification_helper.php';
 
 // Check if user is logged in and is an admin staff
 if (
     !isset($_SESSION['user_id']) ||
     !isset($_SESSION['role_id']) ||
-    $_SESSION['role_id'] != 4 // role_id 4 is for Admin Staff
+    $_SESSION['role_id'] != 4 
 ) {
     header("Location: login.php");
     exit();
@@ -38,6 +39,9 @@ if ($userResult->num_rows > 0) {
 if (!$branch_id) {
     $branch_name = 'No Branch Assigned';
 }
+
+// Get Admin Staff notification count
+$notification_count = getAdminStaffNotificationCount($conn, $branch_id);
 
 // ----------------------------------------------------------------------
 // FETCH DASHBOARD STATISTICS
@@ -804,13 +808,21 @@ while ($row = $trendResult->fetch_assoc()) {
                 <li><a href="AdminStaff_Registry.php"><i class="bi bi-journal-check"></i><span>Registry Queue</span></a></li>
                 <li><a href="AdminStaff_PhilhealthWorkflow.php"><i class="bi bi-check2-all"></i><span>PhilHealth Workflow</span></a></li>
                 <li><a href="AdminStaff_MedicalDocuments.php"><i class="bi bi-file-earmark-ruled"></i><span>Medical Documents</span></a></li>
-                <li><a href="AdminStaff_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+                <li>
+                    <a href="AdminStaff_Notifications.php" style="position: relative;">
+                        <i class="bi bi-bell-fill"></i>
+                        <span>Notifications</span>
+
+                        <?php if ($notification_count > 0): ?>
+                            <span class="notification-badge">
+                                <?php echo $notification_count; ?>
+                            </span>
+                        <?php endif; ?>
+                    </a>
+                </li>
             </ul>
         </nav>
 
-        <div class="logout">
-            <a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
-        </div>
     </div>
 
     <!-- MAIN CONTENT -->

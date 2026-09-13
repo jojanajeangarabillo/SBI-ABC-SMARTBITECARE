@@ -3,6 +3,7 @@
 session_start();
 
 require_once 'sources/db_connect.php';
+require_once 'sources/notification_helper.php';
 
 
 /* =========================================================
@@ -118,6 +119,8 @@ $userStmt->close();
 if (empty($branch_id)) {
     $branch_name = 'No Branch Assigned';
 }
+
+$notification_count = getUnreadNotificationCount($conn, $user_id);
 
 
 /* =========================================================
@@ -2583,7 +2586,7 @@ body {
 
             <li>
 
-                <a href="InventoryOfficer_Notifications.php">
+                <a  href="InventoryOfficer_Notifications.php" class="notification-link">
 
                     <i class="bi bi-bell-fill"></i>
 
@@ -2591,28 +2594,17 @@ body {
                         Notifications
                     </span>
 
-                </a>
+                
+                        <?php if ($notification_count > 0): ?>
+                            <span class="notification-badge"><?php echo $notification_count; ?></span>
+                        <?php endif; ?>
+                    </a>
 
             </li>
 
         </ul>
 
     </nav>
-
-
-    <div class="logout">
-
-        <a href="logout.php">
-
-            <i class="bi bi-box-arrow-right"></i>
-
-            <span>
-                Logout
-            </span>
-
-        </a>
-
-    </div>
 
 </div>
 

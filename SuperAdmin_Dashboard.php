@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once __DIR__ . '/sources/db_connect.php';
+require_once 'sources/notification_helper.php';
 
 // Check if user is Super Admin
 if (
@@ -12,6 +13,9 @@ if (
     exit();
 }
 
+
+$user_id = (int)$_SESSION['user_id'];
+$notification_count = getUnreadNotificationCount($conn, $user_id);
 // ============================================
 // AUDIT LOG FUNCTION
 // ============================================
@@ -526,7 +530,33 @@ $today_data = $today_result->fetch_assoc();
             }
         }
             
-    </style>
+            /* Notification sidebar badge */
+        .notification-link {
+            display: flex !important;
+            align-items: center;
+            width: 100%;
+        }
+
+        .notification-badge {
+            display: inline-flex !important;
+            align-items: center;
+            justify-content: center;
+            min-width: 20px;
+            height: 20px;
+            padding: 0 6px;
+            margin-left: auto;
+            border-radius: 999px;
+            background: #F21D2F;
+            color: #fff !important;
+            font-size: 10px !important;
+            font-weight: 700 !important;
+            line-height: 1;
+            white-space: nowrap;
+            flex: 0 0 auto;
+        }
+
+</style>
+
 </head>
 <body>
 
@@ -547,13 +577,15 @@ $today_data = $today_result->fetch_assoc();
             <li><a href="SuperAdmin_BranchPerformanceMonitoring.php"><i class="bi bi-graph-up-arrow"></i><span>Branch Performance Monitoring</span></a></li>
             <li><a href="SuperAdmin_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
             <li><a href="SuperAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
-            <li><a href="SuperAdmin_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+            <li><a href="SuperAdmin_Notifications.php" class="notification-link">
+                <i class="bi bi-bell-fill"></i><span>Notifications</span>
+                <?php if ($notification_count > 0): ?>
+                    <span class="notification-badge"><?php echo $notification_count; ?></span>
+                <?php endif; ?>
+            </a></li>
         </ul>
     </nav>
 
-    <div class="logout">
-        <a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
-    </div>
 </div>
 
 <!-- ========== MAIN CONTENT ========== -->

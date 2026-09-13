@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once __DIR__ . '/sources/db_connect.php';
+require_once __DIR__ . '/sources/notification_helper.php';
 
 if (
     !isset($_SESSION['user_id']) ||
@@ -66,6 +67,8 @@ if ($userResult->num_rows > 0) {
 if (!$branch_id) {
     $branch_name = 'No Branch Assigned';
 }
+
+$notification_count = getUnreadNotificationCount($conn, $user_id);
 
 $search = trim((string)($_GET['search'] ?? ''));
 $search = substr($search, 0, 100);
@@ -558,15 +561,13 @@ margin-left:90px;
 <li><a class="active" href="InventoryOfficer_StockTransactions.php"><i class="bi bi-arrow-left-right"></i><span>Stock Transactions</span></a></li>
 <li><a href="InventoryOfficer_ReturnManagement.php"><i class="bi bi-arrow-return-left"></i><span>Return Management</span></a></li>
 <li><a href="InventoryOfficer_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Inventory Reports</span></a></li>
-<li><a href="InventoryOfficer_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+<li><a  href="InventoryOfficer_Notifications.php" class="notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
+                        <?php if ($notification_count > 0): ?>
+                            <span class="notification-badge"><?php echo $notification_count; ?></span>
+                        <?php endif; ?>
+                    </a></li>
 </ul>
 </nav>
-
-<div class="logout">
-<a href="logout.php"> <i class="bi bi-box-arrow-right"></i>
-<span>Logout</span>
-</a>
-</div>
 
 </div>
 

@@ -2,6 +2,7 @@
 session_start();
 
 require_once 'sources/db_connect.php';
+require_once 'sources/notification_helper.php';
 
 
 /* =========================================================
@@ -190,6 +191,9 @@ if (
 
 
 $user_stmt->close();
+
+$notification_count = getUnreadNotificationCount($conn, $user_id);
+
 
 
 /* =========================================================
@@ -3188,7 +3192,7 @@ if ($view_category) {
 
             <li>
 
-                <a href="InventoryOfficer_Notifications.php">
+                <a  href="InventoryOfficer_Notifications.php" class="notification-link">
 
                     <i class="bi bi-bell-fill"></i>
 
@@ -3196,7 +3200,11 @@ if ($view_category) {
                         Notifications
                     </span>
 
-                </a>
+                
+                        <?php if ($notification_count > 0): ?>
+                            <span class="notification-badge"><?php echo $notification_count; ?></span>
+                        <?php endif; ?>
+                    </a>
 
             </li>
 

@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/notification_helper.php';
 
 if (!isset($_SESSION['user_id'], $_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 5) {
     header('Location: login.php');
@@ -255,6 +256,8 @@ $listParams=$params;$listTypes=$types.'ii';$listParams[]=$perPage;$listParams[]=
 $stmt=$conn->prepare($listSql);$notifications=[];
 if($stmt){bindDynamic($stmt,$listTypes,$listParams);if($stmt->execute()){ $r=$stmt->get_result();while($row=$r->fetch_assoc()){$row['type']=notificationTypeClass((string)$row['notification_type']);$row['icon']=notifIcon((string)$row['notification_type']);$notifications[]=$row;}}$stmt->close();}
 $countStmt=$conn->prepare("SELECT COUNT(*) unread_count FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE n.user_id=? AND u.user_id=? AND u.branch_id=? AND u.status='Active' AND n.is_read=0");$unreadCount=0;if($countStmt){$countStmt->bind_param('iis',$user_id,$user_id,$branch_id);if($countStmt->execute())$unreadCount=(int)($countStmt->get_result()->fetch_assoc()['unread_count']??0);$countStmt->close();}
+$notification_count = $unreadCount;
+
 $flashMessage=$_SESSION['notifications_flash_message']??'';$flashType=$_SESSION['notifications_flash_type']??'success';unset($_SESSION['notifications_flash_message'],$_SESSION['notifications_flash_type']);
 ?>
 
@@ -317,6 +320,24 @@ min-height:100vh;
     font-weight:400;
     color:#6c757d;
     margin-left:10px;
+}
+
+.top-unread-badge{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-width:24px;
+    height:24px;
+    padding:0 7px;
+    margin-left:8px;
+    vertical-align:middle;
+    background:#dc3545;
+    color:#fff;
+    border-radius:999px;
+    font-size:13px;
+    font-weight:700;
+    line-height:1;
+    white-space:nowrap;
 }
 
 .profile{
@@ -620,7 +641,7 @@ margin-top:0;
 .icon-out{background:#ffedd5;color:#ea580c}.icon-adjustment{background:#ede9fe;color:#7c3aed}
 .border-stock_out{border-left:6px solid #f97316}.border-stock_adjustment{border-left:6px solid #8b5cf6}
 .badge-stock_out{background:#ffedd5;color:#ea580c}.badge-stock_adjustment{background:#ede9fe;color:#7c3aed}
-.notification-pagination{display:flex;justify-content:center;align-items:center;gap:6px;margin:28px 0 8px;flex-wrap:wrap}.page-link-custom{display:inline-flex;align-items:center;justify-content:center;min-width:38px;height:38px;padding:0 12px;border:1px solid #d7def0;border-radius:8px;background:#fff;color:#2B3A8C;text-decoration:none;font-size:13px;font-weight:600}.page-link-custom:hover{background:#eef3ff}.page-link-custom.active{background:#2B3A8C;color:#fff;border-color:#2B3A8C}.page-link-custom.disabled{opacity:.45;pointer-events:none}.pagination-summary{text-align:center;color:#94a3b8;font-size:12px;margin-bottom:20px}
+.notification-pagination{display:flex;justify-content:center;align-items:center;gap:6px;margin:28px 0 8px;flex-wrap:wrap}.page-link-custom{display:inline-flex;align-items:center;justify-content:center;min-width:38px;height:38px;padding:0 12px;border:1px solid #d7def0;border-radius:8px;background:#fff;color:#2B3A8C;text-decoration:none;font-size:13px;font-weight:600}.page-link-custom:hover{background:#eef3ff}.page-link-custom.active{background:#2B3A8C;color:#fff;border-color:#2B3A8C}.page-link-custom.disabled{opacity:.45;pointer-events:none}.pagination-ellipsis{border-color:transparent;background:transparent;cursor:default;pointer-events:none;padding:0 4px;min-width:20px}.pagination-summary{text-align:center;color:#94a3b8;font-size:12px;margin-bottom:20px}
 </style>
 
 </head>
@@ -648,15 +669,13 @@ margin-top:0;
 <li><a href="InventoryOfficer_StockTransactions.php"><i class="bi bi-arrow-left-right"></i><span>Stock Transactions</span></a></li>
 <li><a href="InventoryOfficer_ReturnManagement.php"><i class="bi bi-arrow-return-left"></i><span>Return Management</span></a></li>
 <li><a href="InventoryOfficer_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Inventory Reports</span></a></li>
-<li><a class="active" href="InventoryOfficer_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+<li><a  href="InventoryOfficer_Notifications.php" class="active notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
+                        <?php if ($notification_count > 0): ?>
+                            <span class="notification-badge"><?php echo $notification_count; ?></span>
+                        <?php endif; ?>
+                    </a></li>
 </ul>
 </nav>
-
-<div class="logout">
-<a href="logout.php"> <i class="bi bi-box-arrow-right"></i>
-<span>Logout</span>
-</a>
-</div>
 
 </div>
 
@@ -788,9 +807,35 @@ margin-top:0;
         $buildPageUrl=function(int $p) use ($search,$filter){$q=['page'=>$p];if($search!=='')$q['search']=$search;if($filter!=='all')$q['filter']=$filter;return basename($_SERVER['PHP_SELF']).'?'.http_build_query($q);};
         ?>
         <a class="page-link-custom <?php echo $page<=1?'disabled':''; ?>" href="<?php echo $page>1?h($buildPageUrl($page-1)):'#'; ?>" aria-label="Previous">&laquo; Previous</a>
-        <?php for($p=1;$p<=$totalPages;$p++): ?>
-            <a class="page-link-custom <?php echo $p===$page?'active':''; ?>" href="<?php echo h($buildPageUrl($p)); ?>" aria-current="<?php echo $p===$page?'page':'false'; ?>"><?php echo $p; ?></a>
-        <?php endfor; ?>
+
+        <?php
+        // Keep pagination compact instead of displaying every page number.
+        // Show all pages when there are only a few; otherwise show the first/last
+        // pages, the current page, nearby pages, and ellipses where pages are skipped.
+        $paginationPages = [];
+        if ($totalPages <= 7) {
+            $paginationPages = range(1, $totalPages);
+        } elseif ($page <= 4) {
+            $paginationPages = [1, 2, 3, 4, 5, 'ellipsis', $totalPages];
+        } elseif ($page >= $totalPages - 3) {
+            $paginationPages = [1, 'ellipsis', $totalPages - 4, $totalPages - 3, $totalPages - 2, $totalPages - 1, $totalPages];
+        } else {
+            $paginationPages = [1, 'ellipsis', $page - 1, $page, $page + 1, 'ellipsis', $totalPages];
+        }
+        ?>
+
+        <?php foreach ($paginationPages as $paginationPage): ?>
+            <?php if ($paginationPage === 'ellipsis'): ?>
+                <span class="page-link-custom pagination-ellipsis" aria-hidden="true">&hellip;</span>
+            <?php else: ?>
+                <a class="page-link-custom <?php echo $paginationPage===$page?'active':''; ?>"
+                   href="<?php echo h($buildPageUrl($paginationPage)); ?>"
+                   aria-current="<?php echo $paginationPage===$page?'page':'false'; ?>">
+                    <?php echo $paginationPage; ?>
+                </a>
+            <?php endif; ?>
+        <?php endforeach; ?>
+
         <a class="page-link-custom <?php echo $page>=$totalPages?'disabled':''; ?>" href="<?php echo $page<$totalPages?h($buildPageUrl($page+1)):'#'; ?>" aria-label="Next">Next &raquo;</a>
     </nav>
     <div class="pagination-summary">Showing <?php echo $offset+1; ?>–<?php echo min($offset+$perPage,$total); ?> of <?php echo $total; ?> notifications</div>
