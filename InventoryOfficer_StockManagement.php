@@ -2,6 +2,7 @@
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/inventory_officer_activity_helper.php';
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 5) {
     header('Location: login.php');
@@ -75,15 +76,6 @@ function ensureStockArchiveTable($conn) {
     }
 }
 
-function addStockAuditLog($conn, $user_id, $branch_id, $action) {
-    $module = 'Stock Management';
-    $stmt = $conn->prepare("INSERT INTO audit_logs (user_id, branch_id, action, module, created_at) VALUES (?, ?, ?, ?, NOW())");
-    if (!$stmt) return false;
-    $stmt->bind_param('isss', $user_id, $branch_id, $action, $module);
-    $ok = $stmt->execute();
-    $stmt->close();
-    return $ok;
-}
 
 try {
     ensureStockArchiveTable($conn);
@@ -177,9 +169,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirectWithMessage('error', 'Please enter a valid item, positive quantity, and transaction date.', 'stockIn');
         }
 
-        $itemStmt = $conn->prepare("SELECT i.item_id, i.category_id, i.unit_id, c.category_name
+        $itemStmt = $conn->prepare("SELECT i.item_id, i.item_name, i.category_id, i.unit_id,
+                                           c.category_name, u.unit_name
                                     FROM inventory_items i
                                     INNER JOIN inventory_categories c ON i.category_id = c.category_id
+                                    INNER JOIN units u ON i.unit_id = u.unit_id
                                     WHERE i.item_id = ?
                                     LIMIT 1");
         if (!$itemStmt) redirectWithMessage('error', 'Unable to verify the selected item.', 'stockIn');
@@ -322,7 +316,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $insertTrx->bind_param('iisiss', $item_id, $user_id, $branch_id, $quantity, $transactionRemarks, $transactionDateTime);
 
             if (!$insertTrx->execute()) throw new Exception('Unable to record the stock transaction: ' . $insertTrx->error);
+            $transactionId = (int)$conn->insert_id;
             $insertTrx->close();
+
+            if (!inventoryOfficerRecordStockActivity(
+                $conn,
+                $user_id,
+                $branch_id,
+                $branch_name,
+                $username,
+                $transactionId,
+                'IN',
+                (string)$itemData['item_name'],
+                (float)$quantity,
+                (string)$itemData['unit_name'],
+                $transactionRemarks
+            )) {
+                throw new Exception('Stock In was recorded, but its audit log or Branch Admin notification could not be saved.');
+            }
 
             $conn->commit();
             redirectWithMessage('success', 'Stock In recorded successfully.', 'stockIn');
@@ -345,9 +356,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         try {
             /* Get category so batch-tracked items can be issued using FEFO. */
-            $itemStmt = $conn->prepare("SELECT i.category_id, c.category_name
+            $itemStmt = $conn->prepare("SELECT i.item_name, i.category_id, c.category_name, u.unit_name
                                         FROM inventory_items i
                                         INNER JOIN inventory_categories c ON i.category_id = c.category_id
+                                        INNER JOIN units u ON i.unit_id = u.unit_id
                                         WHERE i.item_id = ? LIMIT 1");
             if (!$itemStmt) throw new Exception('Unable to verify item.');
             $itemStmt->bind_param('i', $item_id);
@@ -443,7 +455,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$insertTrx) throw new Exception('Unable to prepare stock transaction.');
             $insertTrx->bind_param('iisiss', $item_id, $user_id, $branch_id, $quantity, $combinedRemarks, $transactionDateTime);
             if (!$insertTrx->execute()) throw new Exception('Unable to record stock transaction: ' . $insertTrx->error);
+            $transactionId = (int)$conn->insert_id;
             $insertTrx->close();
+
+            if (!inventoryOfficerRecordStockActivity(
+                $conn,
+                $user_id,
+                $branch_id,
+                $branch_name,
+                $username,
+                $transactionId,
+                'OUT',
+                (string)$itemData['item_name'],
+                (float)$quantity,
+                (string)$itemData['unit_name'],
+                $combinedRemarks
+            )) {
+                throw new Exception('Stock Out was recorded, but its audit log or Branch Admin notification could not be saved.');
+            }
 
             $conn->commit();
             redirectWithMessage('success', 'Stock Out recorded successfully.', 'stockOut');
@@ -534,6 +563,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$insertTrx->execute()) {
                 throw new Exception('Unable to record expired stock disposal: ' . $insertTrx->error);
             }
+            $transactionId = (int)$conn->insert_id;
             $insertTrx->close();
 
             $deleteStmt = $conn->prepare("DELETE FROM inventory_stocks WHERE stock_id = ? AND branch_id = ?");
@@ -544,15 +574,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $deleteStmt->close();
 
-            addStockAuditLog(
+            $expiredDetails = 'Expired stock disposal and archive'
+                . ' | Batch/Lot: ' . $batchText
+                . ' | Expiration: ' . $expiredRow['expiration_date'];
+
+            if (!inventoryOfficerRecordStockActivity(
                 $conn,
                 $user_id,
                 $branch_id,
-                'Disposed and archived expired stock: ' . $expiredRow['item_name']
-                . ' | Batch/Lot: ' . $batchText
-                . ' | Quantity: ' . $disposeQty . ' ' . $expiredRow['unit_name']
-                . ' | Expiration: ' . $expiredRow['expiration_date']
-            );
+                $branch_name,
+                $username,
+                $transactionId,
+                'EXPIRED',
+                (string)$expiredRow['item_name'],
+                (float)$disposeQty,
+                (string)$expiredRow['unit_name'],
+                $expiredDetails
+            )) {
+                throw new Exception('Expired stock was archived, but its audit log or Branch Admin notification could not be saved.');
+            }
 
             $conn->commit();
             redirectWithMessage('success', 'Expired stock disposed and archived successfully.', 'expiration');
@@ -576,9 +616,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $conn->begin_transaction();
 
         try {
-            $itemStmt = $conn->prepare("SELECT i.category_id, c.category_name
+            $itemStmt = $conn->prepare("SELECT i.item_name, i.category_id, c.category_name, u.unit_name
                                         FROM inventory_items i
                                         INNER JOIN inventory_categories c ON i.category_id = c.category_id
+                                        INNER JOIN units u ON i.unit_id = u.unit_id
                                         WHERE i.item_id = ? LIMIT 1");
             if (!$itemStmt) throw new Exception('Unable to verify item.');
             $itemStmt->bind_param('i', $item_id);
@@ -640,7 +681,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$insertTrx) throw new Exception('Unable to prepare adjustment transaction.');
             $insertTrx->bind_param('iisiss', $item_id, $user_id, $branch_id, $delta, $combinedRemarks, $transactionDateTime);
             if (!$insertTrx->execute()) throw new Exception('Unable to record adjustment: ' . $insertTrx->error);
+            $transactionId = (int)$conn->insert_id;
             $insertTrx->close();
+
+            if (!inventoryOfficerRecordStockActivity(
+                $conn,
+                $user_id,
+                $branch_id,
+                $branch_name,
+                $username,
+                $transactionId,
+                'ADJUSTMENT',
+                (string)$itemData['item_name'],
+                (float)$delta,
+                (string)$itemData['unit_name'],
+                $combinedRemarks
+            )) {
+                throw new Exception('Stock Adjustment was recorded, but its audit log or Branch Admin notification could not be saved.');
+            }
 
             $conn->commit();
             redirectWithMessage('success', 'Stock Adjustment recorded successfully.', 'adjustment');

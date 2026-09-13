@@ -11,102 +11,149 @@ $userData = getUserData($conn, $_SESSION['user_id']);
 $branchId = $userData['branch_id'];
 $notification_count = getUnreadNotificationCount($conn, (int)$_SESSION['user_id']);
 
-// Handle AJAX request for patient details
-if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_patient') {
-    header('Content-Type: application/json');
-    
-    if (!isset($_GET['id']) || empty($_GET['id'])) {
-        echo json_encode(['success' => false, 'message' => 'Patient ID is required']);
-        exit();
+// Handle the patient-details request before rendering any HTML.
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'get_patient') {
+    header('Content-Type: application/json; charset=utf-8');
+
+    try {
+        $patientId = filter_input(INPUT_GET, 'id', FILTER_VALIDATE_INT);
+        if (!$patientId || $patientId < 1) {
+            throw new RuntimeException('A valid patient ID is required.');
+        }
+
+        // Patient access is restricted to the logged-in Branch Admin's branch.
+        $patientQuery = "SELECT
+                            p.patient_id,
+                            p.full_name,
+                            p.email,
+                            p.contact_number,
+                            p.gender,
+                            p.birthday,
+                            p.address,
+                            p.branch_id,
+                            p.created_at AS registration_date,
+                            b.branch_name,
+                            TIMESTAMPDIFF(YEAR, p.birthday, CURDATE()) AS age
+                         FROM patients p
+                         INNER JOIN branches b ON b.branch_id=p.branch_id
+                         WHERE p.patient_id=?
+                           AND p.branch_id=?
+                           AND p.is_archived=0
+                         LIMIT 1";
+        $stmt = $conn->prepare($patientQuery);
+        $stmt->bind_param('is', $patientId, $branchId);
+        $stmt->execute();
+        $patient = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+
+        if (!$patient) {
+            http_response_code(404);
+            throw new RuntimeException('Patient not found in your branch.');
+        }
+
+        // Retrieve the latest active case belonging to the same branch.
+        $caseQuery = "SELECT
+                         case_id,
+                         case_number,
+                         case_status,
+                         date_of_bite,
+                         animal_type,
+                         bite_location,
+                         bite_category,
+                         animal_status,
+                         remarks AS case_remarks,
+                         created_at AS case_created_at
+                      FROM animal_bite_cases
+                      WHERE patient_id=?
+                        AND branch_id=?
+                        AND is_archived=0
+                      ORDER BY created_at DESC,case_id DESC
+                      LIMIT 1";
+        $stmt = $conn->prepare($caseQuery);
+        $stmt->bind_param('is', $patientId, $branchId);
+        $stmt->execute();
+        $case = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+
+        $vaccinations = [];
+        if ($case) {
+            // The database column is administered_datetime, not administered_at.
+            // The alias preserves the property name already used by the UI.
+            $vaccQuery = "SELECT
+                             vr.vaccination_id,
+                             vr.dose_number,
+                             vr.date_administered,
+                             vr.scheduled_date,
+                             vr.administered_datetime AS administered_at,
+                             vr.vaccination_status,
+                             vr.is_final_dose,
+                             vr.remarks,
+                             COALESCE(vr.vaccine_name,i.item_name,'Unspecified Vaccine') AS vaccine_name,
+                             COALESCE(u.unit_name,'') AS unit_name
+                          FROM vaccination_records vr
+                          LEFT JOIN inventory_items i ON i.item_id=vr.item_id
+                          LEFT JOIN units u ON u.unit_id=vr.unit_id
+                          WHERE vr.patient_id=?
+                            AND vr.case_id=?
+                            AND vr.branch_id=?
+                            AND vr.is_archived=0
+                          ORDER BY
+                            COALESCE(vr.date_administered,vr.scheduled_date,DATE(vr.created_at)),
+                            vr.dose_number,
+                            vr.vaccination_id";
+            $stmt = $conn->prepare($vaccQuery);
+            $caseId = (int)$case['case_id'];
+            $stmt->bind_param('iis', $patientId, $caseId, $branchId);
+            $stmt->execute();
+            $vaccinations = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+            $stmt->close();
+        }
+
+        echo json_encode([
+            'success' => true,
+            'patient' => $patient,
+            'case' => $case ?: null,
+            'vaccinations' => $vaccinations
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    } catch (Throwable $e) {
+        error_log('BranchAdmin patient details error: ' . $e->getMessage());
+        if (http_response_code() < 400) {
+            http_response_code(500);
+        }
+        echo json_encode([
+            'success' => false,
+            'message' => ($e instanceof RuntimeException && !($e instanceof mysqli_sql_exception))
+                ? $e->getMessage()
+                : 'Unable to load patient details. Please check the server log and try again.'
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
-    
-    $patientId = (int)$_GET['id'];
-    
-    // Get patient details with branch validation
-    $patientQuery = "SELECT 
-                        p.*,
-                        b.branch_name,
-                        TIMESTAMPDIFF(YEAR, p.birthday, CURDATE()) as age
-                     FROM patients p
-                     LEFT JOIN branches b ON p.branch_id = b.branch_id
-                     WHERE p.patient_id = ? AND p.branch_id = ?";
-    $stmt = $conn->prepare($patientQuery);
-    $stmt->bind_param("is", $patientId, $branchId);
-    $stmt->execute();
-    $patientResult = $stmt->get_result();
-    
-    if ($patientResult->num_rows === 0) {
-        echo json_encode(['success' => false, 'message' => 'Patient not found or you don\'t have access']);
-        exit();
-    }
-    
-    $patient = $patientResult->fetch_assoc();
-    
-    // Get case information
-    $caseQuery = "SELECT 
-                     case_id,
-                     case_status,
-                     date_of_bite,
-                     animal_type,
-                     bite_location,
-                     bite_category,
-                     animal_status,
-                     remarks as case_remarks,
-                     created_at as case_created_at
-                  FROM animal_bite_cases
-                  WHERE patient_id = ? AND branch_id = ?
-                  ORDER BY created_at DESC
-                  LIMIT 1";
-    $stmt = $conn->prepare($caseQuery);
-    $stmt->bind_param("is", $patientId, $branchId);
-    $stmt->execute();
-    $caseResult = $stmt->get_result();
-    $case = $caseResult->fetch_assoc();
-    
-    // Get vaccination records
-    $vaccQuery = "SELECT 
-                     vaccination_id,
-                     dose_number,
-                     date_administered,
-                     scheduled_date,
-                     administered_at,
-                     vaccination_status,
-                     is_final_dose,
-                     remarks
-                  FROM vaccination_records
-                  WHERE patient_id = ? AND branch_id = ?
-                  ORDER BY dose_number ASC";
-    $stmt = $conn->prepare($vaccQuery);
-    $stmt->bind_param("is", $patientId, $branchId);
-    $stmt->execute();
-    $vaccResult = $stmt->get_result();
-    $vaccinations = [];
-    while ($row = $vaccResult->fetch_assoc()) {
-        $vaccinations[] = $row;
-    }
-    
-    // Return JSON response
-    echo json_encode([
-        'success' => true,
-        'patient' => $patient,
-        'case' => $case,
-        'vaccinations' => $vaccinations
-    ]);
-    exit();
+    exit;
 }
 
 // Handle filtering and searching
-$search = isset($_GET['search']) ? $_GET['search'] : '';
-$statusFilter = isset($_GET['status']) ? $_GET['status'] : '';
-$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+$search = trim((string)($_GET['search'] ?? ''));
+$statusFilter = trim((string)($_GET['status'] ?? ''));
+$page = max(1, (int)($_GET['page'] ?? 1));
 $limit = 10;
 $offset = ($page - 1) * $limit;
 
 // Build the query for patients with their cases
 // Always show all patients from the branch, regardless of case status
-$whereConditions = "p.branch_id = ?";
+$whereConditions = "p.branch_id = ? AND p.is_archived = 0";
 $params = [$branchId];
 $types = "s";
+
+// Join exactly one case: the patient's latest non-archived case in this branch.
+$latestCaseJoin = "LEFT JOIN animal_bite_cases ac
+                   ON ac.case_id = (
+                       SELECT ac2.case_id
+                       FROM animal_bite_cases ac2
+                       WHERE ac2.patient_id=p.patient_id
+                         AND ac2.branch_id=p.branch_id
+                         AND ac2.is_archived=0
+                       ORDER BY ac2.created_at DESC,ac2.case_id DESC
+                       LIMIT 1
+                   )";
 
 if (!empty($search)) {
     $whereConditions .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR p.email LIKE ? OR p.contact_number LIKE ?)";
@@ -128,14 +175,18 @@ if (!empty($statusFilter)) {
 // Get total count for pagination - Count ALL patients from the branch
 $countQuery = "SELECT COUNT(DISTINCT p.patient_id) as total 
                FROM patients p 
-               LEFT JOIN animal_bite_cases ac ON p.patient_id = ac.patient_id AND ac.branch_id = p.branch_id
+               $latestCaseJoin
                WHERE $whereConditions";
 $stmt = $conn->prepare($countQuery);
 $stmt->bind_param($types, ...$params);
 $stmt->execute();
 $countResult = $stmt->get_result();
 $totalRecords = $countResult->fetch_assoc()['total'];
-$totalPages = ceil($totalRecords / $limit);
+$totalPages = max(1, (int)ceil($totalRecords / $limit));
+if ($page > $totalPages) {
+    $page = $totalPages;
+    $offset = ($page - 1) * $limit;
+}
 
 // Get patients data with their latest case - Show ALL patients from branch
 $query = "SELECT 
@@ -160,10 +211,9 @@ $query = "SELECT
             ac.admin_staff_id
           FROM patients p
           LEFT JOIN branches b ON p.branch_id = b.branch_id
-          LEFT JOIN animal_bite_cases ac ON p.patient_id = ac.patient_id AND ac.branch_id = p.branch_id
+          $latestCaseJoin
           WHERE $whereConditions
-          GROUP BY p.patient_id
-          ORDER BY p.created_at DESC
+          ORDER BY p.created_at DESC,p.patient_id DESC
           LIMIT ? OFFSET ?";
 
 $params[] = $limit;
@@ -179,10 +229,14 @@ $patients = $stmt->get_result();
 $statusQuery = "SELECT DISTINCT ac.case_status 
                 FROM animal_bite_cases ac 
                 INNER JOIN patients p ON ac.patient_id = p.patient_id 
-                WHERE p.branch_id = ? AND ac.case_status IS NOT NULL
+                WHERE p.branch_id = ?
+                  AND ac.branch_id = ?
+                  AND p.is_archived = 0
+                  AND ac.is_archived = 0
+                  AND ac.case_status IS NOT NULL
                 ORDER BY ac.case_status";
 $stmt = $conn->prepare($statusQuery);
-$stmt->bind_param("s", $branchId);
+$stmt->bind_param("ss", $branchId, $branchId);
 $stmt->execute();
 $statusResult = $stmt->get_result();
 
@@ -1158,6 +1212,21 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function displayValue(value, fallback = 'Not provided') {
+            return value !== null && value !== undefined && String(value).trim() !== ''
+                ? escapeHtml(value)
+                : `<span class="no-data">${escapeHtml(fallback)}</span>`;
+        }
+
         // Auto-submit search when typing stops (optional)
         let searchTimeout;
         document.getElementById('searchInput')?.addEventListener('keyup', function(e) {
@@ -1187,8 +1256,26 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
                     `;
                     
                     // Fetch patient data from same file with ajax parameter
-                    fetch(`?ajax=get_patient&id=${patientId}`)
-                        .then(response => response.json())
+                    fetch(`BranchAdmin_PatientMonitoring.php?ajax=get_patient&id=${encodeURIComponent(patientId)}`, {
+                        headers: { 'Accept': 'application/json' },
+                        credentials: 'same-origin'
+                    })
+                        .then(async response => {
+                            const responseText = await response.text();
+                            let data;
+
+                            try {
+                                data = JSON.parse(responseText);
+                            } catch (error) {
+                                console.error('Non-JSON patient response:', responseText);
+                                throw new Error('The server returned an invalid response. Check the PHP error log.');
+                            }
+
+                            if (!response.ok && !data.message) {
+                                throw new Error('Patient details request failed.');
+                            }
+                            return data;
+                        })
                         .then(data => {
                             if (data.success) {
                                 renderPatientDetails(data);
@@ -1196,7 +1283,7 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
                                 modalBody.innerHTML = `
                                     <div class="alert alert-danger">
                                         <i class="bi bi-exclamation-triangle-fill me-2"></i>
-                                        ${data.message || 'Failed to load patient details.'}
+                                        ${escapeHtml(data.message || 'Failed to load patient details.')}
                                     </div>
                                 `;
                             }
@@ -1205,7 +1292,7 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
                             modalBody.innerHTML = `
                                 <div class="alert alert-danger">
                                     <i class="bi bi-exclamation-triangle-fill me-2"></i>
-                                    An error occurred while loading patient details.
+                                    ${escapeHtml(error.message || 'An error occurred while loading patient details.')}
                                 </div>
                             `;
                             console.error('Error:', error);
@@ -1215,159 +1302,84 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
         });
 
         function renderPatientDetails(data) {
-            const patient = data.patient;
-            const caseData = data.case;
-            const vaccinations = data.vaccinations || [];
-            
-            // Status badge class
+            const patient = data.patient || {};
+            const caseData = data.case || null;
+            const vaccinations = Array.isArray(data.vaccinations) ? data.vaccinations : [];
+
             let statusBadge = 'badge-no-case';
-            let statusText = caseData ? caseData.case_status : 'No Case';
+            const statusText = caseData?.case_status || 'No Case';
             if (statusText === 'Completed') statusBadge = 'badge-completed';
             else if (statusText === 'Ongoing') statusBadge = 'badge-ongoing';
             else if (statusText === 'Scheduled') statusBadge = 'badge-scheduled';
             else if (statusText === 'Missed') statusBadge = 'badge-missed';
-            
-            let html = '';
-            
-            // Patient Information Section
-            html += `
+
+            const birthday = patient.birthday
+                ? `${escapeHtml(patient.birthday)} (${escapeHtml(patient.age ?? 'N/A')} years old)`
+                : '<span class="no-data">Not provided</span>';
+
+            let html = `
                 <div class="detail-section">
                     <h6><i class="bi bi-person-fill me-2"></i>Patient Information</h6>
-                    <div class="detail-row">
-                        <span class="detail-label">Patient ID</span>
-                        <span class="detail-value"><strong>#${patient.patient_id}</strong></span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Full Name</span>
-                        <span class="detail-value"><strong>${patient.full_name}</strong></span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Email</span>
-                        <span class="detail-value">${patient.email || '<span class="no-data">Not provided</span>'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Contact Number</span>
-                        <span class="detail-value">${patient.contact_number || '<span class="no-data">Not provided</span>'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Gender</span>
-                        <span class="detail-value">${patient.gender || '<span class="no-data">Not provided</span>'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Birthday</span>
-                        <span class="detail-value">${patient.birthday ? patient.birthday + ' (' + patient.age + ' years old)' : '<span class="no-data">Not provided</span>'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Address</span>
-                        <span class="detail-value">${patient.address || '<span class="no-data">Not provided</span>'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Branch</span>
-                        <span class="detail-value">${patient.branch_name}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Registration Date</span>
-                        <span class="detail-value">${patient.registration_date}</span>
-                    </div>
+                    <div class="detail-row"><span class="detail-label">Patient ID</span><span class="detail-value"><strong>#${escapeHtml(patient.patient_id)}</strong></span></div>
+                    <div class="detail-row"><span class="detail-label">Full Name</span><span class="detail-value"><strong>${displayValue(patient.full_name)}</strong></span></div>
+                    <div class="detail-row"><span class="detail-label">Contact Number</span><span class="detail-value">${displayValue(patient.contact_number)}</span></div>
+                    <div class="detail-row"><span class="detail-label">Gender</span><span class="detail-value">${displayValue(patient.gender)}</span></div>
+                    <div class="detail-row"><span class="detail-label">Birthday</span><span class="detail-value">${birthday}</span></div>
+                    <div class="detail-row"><span class="detail-label">Address</span><span class="detail-value">${displayValue(patient.address)}</span></div>
+                    <div class="detail-row"><span class="detail-label">Branch</span><span class="detail-value">${displayValue(patient.branch_name)}</span></div>
+                    <div class="detail-row"><span class="detail-label">Registration Date</span><span class="detail-value">${displayValue(patient.registration_date, 'Not recorded')}</span></div>
                 </div>
-            `;
-            
-            // Case Information Section
-            html += `
                 <div class="detail-section">
-                    <h6><i class="bi bi-file-medical me-2"></i>Case Information</h6>
-            `;
-            
+                    <h6><i class="bi bi-file-medical me-2"></i>Latest Case Information</h6>`;
+
             if (caseData) {
                 html += `
-                    <div class="detail-row">
-                        <span class="detail-label">Case ID</span>
-                        <span class="detail-value"><strong>#${caseData.case_id}</strong></span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Status</span>
-                        <span class="detail-value"><span class="badge-status ${statusBadge}">${caseData.case_status || 'No Status'}</span></span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Date of Bite</span>
-                        <span class="detail-value">${caseData.date_of_bite || '<span class="no-data">Not recorded</span>'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Animal Type</span>
-                        <span class="detail-value">${caseData.animal_type || '<span class="no-data">Not recorded</span>'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Bite Location</span>
-                        <span class="detail-value">${caseData.bite_location || '<span class="no-data">Not recorded</span>'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Bite Category</span>
-                        <span class="detail-value">${caseData.bite_category || '<span class="no-data">Not recorded</span>'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Animal Status</span>
-                        <span class="detail-value">${caseData.animal_status || '<span class="no-data">Not recorded</span>'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Remarks</span>
-                        <span class="detail-value">${caseData.case_remarks || '<span class="no-data">No remarks</span>'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Date Created</span>
-                        <span class="detail-value">${caseData.case_created_at}</span>
-                    </div>
-                `;
+                    <div class="detail-row"><span class="detail-label">Case Number</span><span class="detail-value"><strong>${displayValue(caseData.case_number, '#' + caseData.case_id)}</strong></span></div>
+                    <div class="detail-row"><span class="detail-label">Status</span><span class="detail-value"><span class="badge-status ${statusBadge}">${escapeHtml(statusText)}</span></span></div>
+                    <div class="detail-row"><span class="detail-label">Date of Bite</span><span class="detail-value">${displayValue(caseData.date_of_bite, 'Not recorded')}</span></div>
+                    <div class="detail-row"><span class="detail-label">Animal Type</span><span class="detail-value">${displayValue(caseData.animal_type, 'Not recorded')}</span></div>
+                    <div class="detail-row"><span class="detail-label">Bite Location</span><span class="detail-value">${displayValue(caseData.bite_location, 'Not recorded')}</span></div>
+                    <div class="detail-row"><span class="detail-label">Bite Category</span><span class="detail-value">${displayValue(caseData.bite_category, 'Not recorded')}</span></div>
+                    <div class="detail-row"><span class="detail-label">Animal Status</span><span class="detail-value">${displayValue(caseData.animal_status, 'Not recorded')}</span></div>
+                    <div class="detail-row"><span class="detail-label">Remarks</span><span class="detail-value">${displayValue(caseData.case_remarks, 'No remarks')}</span></div>
+                    <div class="detail-row"><span class="detail-label">Date Created</span><span class="detail-value">${displayValue(caseData.case_created_at, 'Not recorded')}</span></div>`;
             } else {
-                html += `
-                    <div class="text-center py-3">
-                        <i class="bi bi-info-circle" style="font-size: 24px; color: #d9dee8;"></i>
-                        <p class="no-data mt-2">No case record found for this patient.</p>
-                    </div>
-                `;
+                html += '<div class="text-center py-3"><i class="bi bi-info-circle" style="font-size:24px;color:#d9dee8"></i><p class="no-data mt-2">No case record found for this patient.</p></div>';
             }
-            html += `</div>`;
-            
-            // Vaccination Records Section
-            html += `
-                <div class="detail-section">
-                    <h6><i class="bi bi-shield-check me-2"></i>Vaccination Records</h6>
-            `;
-            
-            if (vaccinations.length > 0) {
+
+            html += `</div><div class="detail-section"><h6><i class="bi bi-shield-check me-2"></i>Vaccination Records for Latest Case</h6>`;
+
+            if (vaccinations.length) {
                 vaccinations.forEach(vacc => {
                     let vaccStatusBadge = 'badge-no-case';
                     if (vacc.vaccination_status === 'Completed') vaccStatusBadge = 'badge-completed';
                     else if (vacc.vaccination_status === 'Scheduled') vaccStatusBadge = 'badge-scheduled';
                     else if (vacc.vaccination_status === 'Missed') vaccStatusBadge = 'badge-missed';
-                    
+
+                    const dateLine = vacc.date_administered
+                        ? `Administered: ${escapeHtml(vacc.date_administered)}`
+                        : `Scheduled: ${displayValue(vacc.scheduled_date, 'Not scheduled')}`;
+
                     html += `
                         <div class="vaccination-card">
-                            <div class="d-flex justify-content-between align-items-start">
+                            <div class="d-flex justify-content-between align-items-start gap-3">
                                 <div>
-                                    <span class="vaccine-dose">Dose ${vacc.dose_number}</span>
-                                    <div class="vaccine-date">
-                                        <i class="bi bi-calendar3 me-1"></i>
-                                        ${vacc.date_administered ? 'Administered: ' + vacc.date_administered : 'Scheduled: ' + vacc.scheduled_date}
-                                    </div>
-                                    ${vacc.administered_at ? `<div class="vaccine-date"><i class="bi bi-geo-alt me-1"></i>${vacc.administered_at}</div>` : ''}
-                                    ${vacc.remarks ? `<div class="vaccine-date"><i class="bi bi-chat me-1"></i>${vacc.remarks}</div>` : ''}
+                                    <div class="fw-semibold text-dark">${displayValue(vacc.vaccine_name, 'Unspecified Vaccine')}</div>
+                                    <span class="vaccine-dose">${escapeHtml('Dose ' + (vacc.dose_number ?? 'N/A'))}</span>
+                                    <div class="vaccine-date"><i class="bi bi-calendar3 me-1"></i>${dateLine}</div>
+                                    ${vacc.administered_at ? `<div class="vaccine-date"><i class="bi bi-clock me-1"></i>Recorded: ${escapeHtml(vacc.administered_at)}</div>` : ''}
+                                    ${vacc.remarks ? `<div class="vaccine-date"><i class="bi bi-chat me-1"></i>${escapeHtml(vacc.remarks)}</div>` : ''}
                                 </div>
-                                <span class="badge-status ${vaccStatusBadge}">${vacc.vaccination_status || 'Pending'}</span>
+                                <span class="badge-status ${vaccStatusBadge}">${escapeHtml(vacc.vaccination_status || 'Pending')}</span>
                             </div>
-                            ${vacc.is_final_dose ? '<span class="badge bg-primary ms-2" style="font-size: 10px;">Final Dose</span>' : ''}
-                        </div>
-                    `;
+                            ${Number(vacc.is_final_dose) === 1 ? '<span class="badge bg-primary mt-2" style="font-size:10px">Final Dose</span>' : ''}
+                        </div>`;
                 });
             } else {
-                html += `
-                    <div class="text-center py-3">
-                        <i class="bi bi-shield-slash" style="font-size: 24px; color: #d9dee8;"></i>
-                        <p class="no-data mt-2">No vaccination records found for this patient.</p>
-                    </div>
-                `;
+                html += '<div class="text-center py-3"><i class="bi bi-shield-slash" style="font-size:24px;color:#d9dee8"></i><p class="no-data mt-2">No vaccination records found for the latest case.</p></div>';
             }
-            html += `</div>`;
-            
+
+            html += '</div>';
             document.getElementById('patientModalBody').innerHTML = html;
         }
     </script>

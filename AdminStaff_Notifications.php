@@ -66,6 +66,12 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
     $today = date('Y-m-d');
     $now = date('Y-m-d H:i:s');
 
+    // IMPORTANT:
+    // $notification['date'] is the date the notification should appear in the
+    // notification feed. Future appointment/schedule dates must NOT be used
+    // as the feed date, otherwise a notification for Sep 21 appears under
+    // "September 21" even when today is Sep 14.
+
     // ------------------------------------------------------------------
     // 1. UPCOMING VACCINATION SCHEDULES (Next 7 days)
     // ------------------------------------------------------------------
@@ -110,21 +116,24 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
         $patientInfo = $row['patient_name'] . ' (' . $row['age'] . ' yrs, ' . ($row['gender'] ? substr($row['gender'], 0, 1) : 'N/A') . ')';
         
         if ($daysUntil == 0) {
-            $message = "⚠️ <strong>{$patientInfo}</strong> has a vaccination scheduled for TODAY - {$row['dose_label']} (Case: {$row['case_no']})";
+            $scheduleLabel = date('M d, Y', strtotime($row['next_schedule']));
+            $message = "⚠️ <strong>{$patientInfo}</strong> has a vaccination scheduled for TODAY ({$scheduleLabel}) - {$row['dose_label']} (Case: {$row['case_no']})";
             $type = 'urgent';
             $icon = 'bi-calendar-check';
             $iconClass = 'warning';
             $badge = 'Today';
             $badgeClass = 'danger';
         } elseif ($daysUntil == 1) {
-            $message = "📅 <strong>{$patientInfo}</strong> has a vaccination scheduled for TOMORROW - {$row['dose_label']} (Case: {$row['case_no']})";
+            $scheduleLabel = date('M d, Y', strtotime($row['next_schedule']));
+            $message = "📅 <strong>{$patientInfo}</strong> has a vaccination scheduled for TOMORROW ({$scheduleLabel}) - {$row['dose_label']} (Case: {$row['case_no']})";
             $type = 'upcoming';
             $icon = 'bi-calendar-event';
             $iconClass = 'warning';
             $badge = 'Tomorrow';
             $badgeClass = 'warning';
         } else {
-            $message = "📅 <strong>{$patientInfo}</strong> has an upcoming vaccination in {$daysUntil} days - {$row['dose_label']} (Case: {$row['case_no']})";
+            $scheduleLabel = date('M d, Y', strtotime($row['next_schedule']));
+            $message = "📅 <strong>{$patientInfo}</strong> has an upcoming vaccination in {$daysUntil} days ({$scheduleLabel}) - {$row['dose_label']} (Case: {$row['case_no']})";
             $type = 'upcoming';
             $icon = 'bi-calendar-event';
             $iconClass = 'warning';
@@ -139,9 +148,10 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             'icon_class' => $iconClass,
             'title' => 'Upcoming Vaccination',
             'message' => $message,
-            'date' => $row['next_schedule'],
+            'date' => $now, // Feed timestamp: show this alert under Today, not under the appointment date
+            'scheduled_date' => $row['next_schedule'],
             'time' => date('h:i A', strtotime($now)),
-            'link' => 'AdminStaff_PatientRecord.php?action=view&case_id=' . $row['case_id'],
+            'link' => 'AdminStaff_PatientRecord.php',
             'link_text' => 'View Patient',
             'read' => false,
             'badge' => $badge,
@@ -193,7 +203,8 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
         $patientInfo = $row['patient_name'] . ' (' . $row['age'] . ' yrs, ' . ($row['gender'] ? substr($row['gender'], 0, 1) : 'N/A') . ')';
         $daysOverdue = $row['days_overdue'];
         
-        $message = "🚨 <strong>{$patientInfo}</strong> is {$daysOverdue} day" . ($daysOverdue > 1 ? 's' : '') . " overdue for {$row['dose_label']} (Case: {$row['case_no']})";
+        $missedScheduleLabel = date('M d, Y', strtotime($row['next_schedule']));
+        $message = "🚨 <strong>{$patientInfo}</strong> is {$daysOverdue} day" . ($daysOverdue > 1 ? 's' : '') . " overdue for {$row['dose_label']} (scheduled {$missedScheduleLabel}) (Case: {$row['case_no']})";
         $type = 'overdue';
         $icon = 'bi-exclamation-triangle-fill';
         $iconClass = 'danger';
@@ -205,9 +216,10 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             'icon_class' => $iconClass,
             'title' => '⚠️ Overdue Vaccination',
             'message' => $message,
-            'date' => $row['next_schedule'],
+            'date' => $now, // Feed timestamp: show this alert under Today, not under the missed schedule date
+            'scheduled_date' => $row['next_schedule'],
             'time' => date('h:i A', strtotime($now)),
-            'link' => 'AdminStaff_PatientRecord.php?action=view&case_id=' . $row['case_id'],
+            'link' => 'AdminStaff_PatientRecord.php',
             'link_text' => 'View Patient',
             'read' => false,
             'badge' => 'Overdue',
@@ -343,7 +355,7 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             'message' => $message,
             'date' => $row['created_at'],
             'time' => date('h:i A', strtotime($row['created_at'])),
-            'link' => 'AdminStaff_PatientRecord.php?action=view&case_id=' . $row['case_id'],
+            'link' => 'AdminStaff_PatientRecord.php',
             'link_text' => 'View Patient',
             'read' => false,
             'badge' => $timeLabel,
@@ -1313,6 +1325,258 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             .notification-content p { font-size: 13px; }
             .notification-right { align-items: flex-start; margin: 8px 0 0; padding-left: 0; width: 100%; flex-direction: row; justify-content: space-between; flex-wrap: wrap; }
         }
+
+        /* ============================================================
+           NOTIFICATION DETAILS MODAL
+        ============================================================ */
+        .notification-details-modal .modal-dialog {
+            max-width: 720px;
+        }
+
+        .notification-details-modal .modal-content {
+            border: 0;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+        }
+
+        .notification-details-modal .modal-header {
+            border: 0;
+            padding: 22px 26px;
+            background: linear-gradient(135deg, #2B3A8C 0%, #1f2d6e 100%);
+            color: #fff;
+            align-items: center;
+        }
+
+        .notification-modal-heading {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            min-width: 0;
+        }
+
+        .notification-modal-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: 22px;
+            background: rgba(255,255,255,0.16);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.18);
+        }
+
+        .notification-modal-title-wrap {
+            min-width: 0;
+        }
+
+        .notification-modal-eyebrow {
+            margin: 0 0 3px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            opacity: .75;
+        }
+
+        .notification-details-modal .modal-title {
+            font-size: 19px;
+            font-weight: 700;
+            line-height: 1.25;
+            margin: 0;
+            overflow-wrap: anywhere;
+        }
+
+        .notification-details-modal .btn-close {
+            filter: brightness(0) invert(1);
+            opacity: .9;
+            box-shadow: none;
+        }
+
+        .notification-details-modal .modal-body {
+            padding: 26px;
+            background: #f8fafc;
+        }
+
+        .notification-modal-status-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 18px;
+            flex-wrap: wrap;
+        }
+
+        .notification-modal-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 7px 14px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            background: #eef2ff;
+            color: var(--primary);
+        }
+
+        .notification-modal-status::before {
+            content: '';
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .notification-modal-id {
+            color: #94a3b8;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .notification-message-card {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 14px;
+            padding: 18px;
+            margin-bottom: 18px;
+            box-shadow: 0 1px 2px rgba(15,23,42,.03);
+        }
+
+        .notification-message-card .detail-label,
+        .notification-info-card .detail-label {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            margin-bottom: 8px;
+            color: #64748b;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+        }
+
+        .notification-modal-message {
+            color: #334155;
+            font-size: 14px;
+            line-height: 1.7;
+            overflow-wrap: anywhere;
+        }
+
+        .notification-modal-message p:last-child {
+            margin-bottom: 0;
+        }
+
+        .notification-info-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .notification-info-card {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 14px 15px;
+            min-width: 0;
+        }
+
+        .notification-info-value {
+            color: #0f172a;
+            font-size: 13px;
+            font-weight: 700;
+            overflow-wrap: anywhere;
+        }
+
+        .notification-details-modal .modal-footer {
+            border-top: 1px solid #e9edf5;
+            padding: 16px 26px;
+            background: #fff;
+            gap: 10px;
+        }
+
+        .btn-modal-close {
+            border: 1px solid #d7dce5;
+            background: #fff;
+            color: #475569;
+            border-radius: 9px;
+            padding: 9px 18px;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .btn-modal-close:hover {
+            background: #f8fafc;
+            color: #334155;
+        }
+
+        .btn-modal-read {
+            border: 0;
+            background: #eaf7ee;
+            color: #198754;
+            border-radius: 9px;
+            padding: 9px 18px;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .btn-modal-read:hover {
+            background: #dff2e5;
+            color: #157347;
+        }
+
+        .btn-modal-open {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            border: 0;
+            background: var(--primary);
+            color: #fff;
+            border-radius: 9px;
+            padding: 9px 18px;
+            font-size: 13px;
+            font-weight: 700;
+            text-decoration: none;
+        }
+
+        .btn-modal-open:hover {
+            background: #1f2d6e;
+            color: #fff;
+        }
+
+        button.btn-view {
+            cursor: pointer;
+        }
+
+        @media (max-width: 576px) {
+            .notification-details-modal .modal-dialog {
+                margin: 12px;
+            }
+
+            .notification-details-modal .modal-header,
+            .notification-details-modal .modal-body,
+            .notification-details-modal .modal-footer {
+                padding-left: 18px;
+                padding-right: 18px;
+            }
+
+            .notification-info-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .notification-details-modal .modal-footer {
+                align-items: stretch;
+            }
+
+            .notification-details-modal .modal-footer > * {
+                width: 100%;
+                justify-content: center;
+                text-align: center;
+                margin: 0 !important;
+            }
+        }
     </style>
 </head>
 
@@ -1357,9 +1621,9 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         <div class="topbar">
             <h3>
                 Notifications
-                <?php if ($unreadCount > 0): ?>
-                <span class="badge-unread"><?php echo $unreadCount; ?> unread</span>
-                <?php endif; ?>
+                <span id="unreadBadge" class="badge-unread" <?php echo $unreadCount > 0 ? '' : 'style="display:none;"'; ?>>
+                    <?php echo $unreadCount; ?> unread
+                </span>
             </h3>
             <div class="dropdown">
                 <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
@@ -1451,7 +1715,10 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     }
                     $isRead = in_array($notification['id'], $readNotifications);
                 ?>
-                <div class="notification-card <?php echo $isRead ? 'read' : 'unread'; ?>" data-id="<?php echo $notification['id']; ?>">
+                <div class="notification-card <?php echo $isRead ? 'read' : 'unread'; ?>"
+                     data-id="<?php echo htmlspecialchars($notification['id'], ENT_QUOTES, 'UTF-8'); ?>"
+                     data-type="<?php echo htmlspecialchars($notification['type'], ENT_QUOTES, 'UTF-8'); ?>"
+                     data-action="<?php echo htmlspecialchars($notification['action'] ?? '', ENT_QUOTES, 'UTF-8'); ?>">
                     <div class="notification-icon <?php echo $notification['icon_class']; ?>">
                         <i class="bi <?php echo $notification['icon']; ?>"></i>
                     </div>
@@ -1467,9 +1734,12 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                             <?php echo $notification['badge']; ?>
                         </span>
                         <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                            <a href="<?php echo $notification['link']; ?>" class="btn-view" target="_blank">
-                                <?php echo $notification['link_text']; ?>
-                            </a>
+                            <button type="button"
+                                    class="btn-view btn-view-modal"
+                                    data-link="<?php echo htmlspecialchars($notification['link'], ENT_QUOTES, 'UTF-8'); ?>"
+                                    data-link-text="<?php echo htmlspecialchars($notification['link_text'], ENT_QUOTES, 'UTF-8'); ?>">
+                                <?php echo htmlspecialchars($notification['link_text'], ENT_QUOTES, 'UTF-8'); ?>
+                            </button>
                             <button class="btn-mark-read <?php echo $isRead ? 'marked' : ''; ?>" data-id="<?php echo $notification['id']; ?>">
                                 <i class="bi <?php echo $isRead ? 'bi-check-circle-fill' : 'bi-circle'; ?>"></i>
                                 <?php echo $isRead ? 'Read' : 'Mark Read'; ?>
@@ -1515,6 +1785,76 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         </div>
     </div>
 
+    <!-- Notification Details Modal -->
+    <div class="modal fade notification-details-modal" id="notificationDetailsModal" tabindex="-1" aria-labelledby="notificationDetailsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div class="notification-modal-heading">
+                        <div class="notification-modal-icon" id="notificationModalIcon">
+                            <i class="bi bi-bell-fill"></i>
+                        </div>
+                        <div class="notification-modal-title-wrap">
+                            <p class="notification-modal-eyebrow">Notification Details</p>
+                            <h5 class="modal-title" id="notificationDetailsModalLabel">Notification</h5>
+                        </div>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+
+                <div class="modal-body">
+                    <div class="notification-modal-status-row">
+                        <span class="notification-modal-status" id="notificationModalStatus">Notification</span>
+                        <span class="notification-modal-id" id="notificationModalId">ID: —</span>
+                    </div>
+
+                    <div class="notification-message-card">
+                        <div class="detail-label">
+                            <i class="bi bi-chat-left-text"></i> Message
+                        </div>
+                        <div class="notification-modal-message" id="notificationModalMessage"></div>
+                    </div>
+
+                    <div class="notification-info-grid">
+                        <div class="notification-info-card">
+                            <div class="detail-label">
+                                <i class="bi bi-calendar3"></i> Date & Time
+                            </div>
+                            <div class="notification-info-value" id="notificationModalDateTime">—</div>
+                        </div>
+
+                        <div class="notification-info-card">
+                            <div class="detail-label">
+                                <i class="bi bi-tag"></i> Type
+                            </div>
+                            <div class="notification-info-value" id="notificationModalType">—</div>
+                        </div>
+
+                        <div class="notification-info-card">
+                            <div class="detail-label">
+                                <i class="bi bi-geo-alt"></i> Branch
+                            </div>
+                            <div class="notification-info-value"><?php echo htmlspecialchars($branch_name, ENT_QUOTES, 'UTF-8'); ?></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn-modal-close" data-bs-dismiss="modal">
+                        <i class="bi bi-x-lg me-1"></i> Close
+                    </button>
+                    <button type="button" class="btn-modal-read" id="notificationModalMarkRead">
+                        <i class="bi bi-check2-circle me-1"></i> Mark as Read
+                    </button>
+                    <a href="#" class="btn-modal-open" id="notificationModalOpenAction">
+                        <i class="bi bi-box-arrow-up-right"></i>
+                        <span id="notificationModalOpenActionText">Open Record</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Container -->
     <div class="toast-container-custom" id="toastContainer"></div>
 
@@ -1542,6 +1882,160 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
     }
 
     // ----------------------------------------------------------------
+    // NOTIFICATION DETAILS MODAL
+    // ----------------------------------------------------------------
+    const notificationDetailsModalEl = document.getElementById('notificationDetailsModal');
+    const notificationDetailsModal = new bootstrap.Modal(notificationDetailsModalEl);
+    let activeNotificationCard = null;
+    let activeNotificationId = '';
+
+    function formatNotificationType(type) {
+        if (!type) return 'General Notification';
+        return type
+            .replace(/_/g, ' ')
+            .replace(/\b\w/g, char => char.toUpperCase());
+    }
+
+    function getModalActionLabel(action, fallbackLabel) {
+        const labels = {
+            view_patient: 'Open Patient Record',
+            edit_patient: fallbackLabel && fallbackLabel.toLowerCase().includes('schedule')
+                ? 'Continue to Add Schedule'
+                : 'Continue to Update Record',
+            view_philhealth: 'Open PhilHealth Workflow'
+        };
+        return labels[action] || (fallbackLabel ? 'Open ' + fallbackLabel.replace(/^View\s+/i, '') : 'Open Record');
+    }
+
+    function updateUnreadBadge(change = 0, absoluteValue = null) {
+        const badge = document.getElementById('unreadBadge');
+        if (!badge) return;
+
+        let currentCount = parseInt(badge.textContent, 10) || 0;
+        const nextCount = absoluteValue !== null
+            ? Math.max(0, Number(absoluteValue) || 0)
+            : Math.max(0, currentCount + change);
+
+        badge.textContent = `${nextCount} unread`;
+        badge.style.display = nextCount > 0 ? 'inline' : 'none';
+    }
+
+    function markCardAsRead(card) {
+        if (!card) return;
+        const wasUnread = card.classList.contains('unread');
+        card.classList.remove('unread');
+        card.classList.add('read');
+
+        const button = card.querySelector('.btn-mark-read');
+        if (button) {
+            button.classList.add('marked');
+            button.innerHTML = '<i class="bi bi-check-circle-fill"></i> Read';
+        }
+
+        if (wasUnread) {
+            updateUnreadBadge(-1);
+        }
+    }
+
+    function openNotificationDetails(trigger) {
+        const card = trigger.closest('.notification-card');
+        if (!card) return;
+
+        activeNotificationCard = card;
+        activeNotificationId = card.dataset.id || '';
+
+        const title = card.querySelector('.notification-content h6')?.textContent.trim() || 'Notification';
+        const message = card.querySelector('.notification-content p')?.innerHTML || 'No additional details available.';
+        const dateTime = card.querySelector('.notification-content small')?.textContent.trim() || 'Not available';
+        const status = card.querySelector('.badge-status')?.textContent.trim() || 'Notification';
+        const type = card.dataset.type || '';
+        const action = card.dataset.action || '';
+        const iconSource = card.querySelector('.notification-icon i');
+        const iconClass = iconSource ? iconSource.className : 'bi bi-bell-fill';
+        const link = trigger.dataset.link || '';
+        const linkText = trigger.dataset.linkText || 'Open Record';
+
+        document.getElementById('notificationDetailsModalLabel').textContent = title;
+        document.getElementById('notificationModalMessage').innerHTML = message;
+        document.getElementById('notificationModalDateTime').textContent = dateTime;
+        document.getElementById('notificationModalStatus').textContent = status;
+        document.getElementById('notificationModalType').textContent = formatNotificationType(type);
+        document.getElementById('notificationModalId').textContent = activeNotificationId ? `ID: ${activeNotificationId}` : 'ID: —';
+
+        const modalIcon = document.getElementById('notificationModalIcon');
+        modalIcon.innerHTML = `<i class="${iconClass}"></i>`;
+
+        const markReadButton = document.getElementById('notificationModalMarkRead');
+        const isRead = card.classList.contains('read');
+        markReadButton.style.display = isRead ? 'none' : 'inline-block';
+
+        const openAction = document.getElementById('notificationModalOpenAction');
+        const openActionText = document.getElementById('notificationModalOpenActionText');
+        if (link) {
+            // View Patient should always open the Admin Staff Patient Record page.
+            openAction.href = action === 'view_patient'
+                ? 'AdminStaff_PatientRecord.php'
+                : link;
+            openAction.style.display = 'inline-flex';
+            openActionText.textContent = getModalActionLabel(action, linkText);
+        } else {
+            openAction.href = '#';
+            openAction.style.display = 'none';
+        }
+
+        notificationDetailsModal.show();
+    }
+
+    // Event delegation keeps modal buttons working even after auto-refresh.
+    document.addEventListener('click', function(e) {
+        const viewButton = e.target.closest('.btn-view-modal');
+        if (!viewButton) return;
+        e.preventDefault();
+        e.stopPropagation();
+        openNotificationDetails(viewButton);
+    });
+
+    document.getElementById('notificationModalMarkRead').addEventListener('click', function() {
+        if (!activeNotificationId || !activeNotificationCard) return;
+
+        const button = this;
+        button.disabled = true;
+        button.innerHTML = '<span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span> Marking...';
+
+        fetch(window.location.pathname + '?ajax_action=mark_read&id=' + encodeURIComponent(activeNotificationId), {
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (!data.success) {
+                throw new Error(data.error || 'Unable to mark notification as read');
+            }
+
+            markCardAsRead(activeNotificationCard);
+            button.style.display = 'none';
+            showToast('Notification marked as read');
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showToast('Failed to mark as read', error.message, true);
+            button.innerHTML = '<i class="bi bi-check2-circle me-1"></i> Mark as Read';
+        })
+        .finally(() => {
+            button.disabled = false;
+        });
+    });
+
+    notificationDetailsModalEl.addEventListener('hidden.bs.modal', function() {
+        activeNotificationCard = null;
+        activeNotificationId = '';
+        const markReadButton = document.getElementById('notificationModalMarkRead');
+        markReadButton.disabled = false;
+        markReadButton.innerHTML = '<i class="bi bi-check2-circle me-1"></i> Mark as Read';
+    });
+
+    // ----------------------------------------------------------------
     // MARK SINGLE NOTIFICATION AS READ
     // ----------------------------------------------------------------
     document.querySelectorAll('.btn-mark-read').forEach(btn => {
@@ -1558,23 +2052,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    if (card) {
-                        card.classList.remove('unread');
-                        card.classList.add('read');
-                    }
-                    this.classList.add('marked');
-                    this.innerHTML = '<i class="bi bi-check-circle-fill"></i> Read';
-                    
-                    // Update badge count
-                    const badge = document.getElementById('unreadBadge');
-                    let currentCount = parseInt(badge.textContent) || 0;
-                    if (currentCount > 0) {
-                        currentCount--;
-                        badge.textContent = currentCount;
-                        if (currentCount === 0) {
-                            badge.style.display = 'none';
-                        }
-                    }
+                    markCardAsRead(card);
                     showToast('Notification marked as read');
                 }
             })
@@ -1608,8 +2086,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                         btn.innerHTML = '<i class="bi bi-check-circle-fill"></i> Read';
                     }
                 });
-                document.getElementById('unreadBadge').textContent = '0';
-                document.getElementById('unreadBadge').style.display = 'none';
+                updateUnreadBadge(0, 0);
             }
         })
         .catch(error => {
@@ -1689,12 +2166,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         .then(data => {
             if (data.success) {
                 // Update unread count
-                document.getElementById('unreadBadge').textContent = data.unread || 0;
-                if (data.unread > 0) {
-                    document.getElementById('unreadBadge').style.display = 'inline';
-                } else {
-                    document.getElementById('unreadBadge').style.display = 'none';
-                }
+                updateUnreadBadge(0, data.unread || 0);
 
                 // Update notification section
                 const section = document.getElementById('notificationSection');
@@ -1719,7 +2191,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                         const btnIcon = isRead ? 'bi-check-circle-fill' : 'bi-circle';
                         
                         html += `
-                            <div class="notification-card ${cardClass}" data-id="${notif.id}">
+                            <div class="notification-card ${cardClass}" data-id="${notif.id}" data-type="${notif.type || ''}" data-action="${notif.action || ''}">
                                 <div class="notification-icon ${notif.icon_class}">
                                     <i class="bi ${notif.icon}"></i>
                                 </div>
@@ -1731,7 +2203,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                                 <div class="notification-right">
                                     <span class="badge-status ${notif.badge_class}">${notif.badge}</span>
                                     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                                        <a href="${notif.link}" class="btn-view" target="_blank">${notif.link_text}</a>
+                                        <button type="button" class="btn-view btn-view-modal" data-link="${notif.link || ''}" data-link-text="${notif.link_text || 'Open Record'}">${notif.link_text || 'View Details'}</button>
                                         <button class="btn-mark-read ${btnClass}" data-id="${notif.id}">
                                             <i class="bi ${btnIcon}"></i>
                                             ${btnText}
@@ -1758,22 +2230,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                             .then(response => response.json())
                             .then(data => {
                                 if (data.success) {
-                                    if (card) {
-                                        card.classList.remove('unread');
-                                        card.classList.add('read');
-                                    }
-                                    this.classList.add('marked');
-                                    this.innerHTML = '<i class="bi bi-check-circle-fill"></i> Read';
-                                    
-                                    const badge = document.getElementById('unreadBadge');
-                                    let currentCount = parseInt(badge.textContent) || 0;
-                                    if (currentCount > 0) {
-                                        currentCount--;
-                                        badge.textContent = currentCount;
-                                        if (currentCount === 0) {
-                                            badge.style.display = 'none';
-                                        }
-                                    }
+                                    markCardAsRead(card);
                                     showToast('Notification marked as read');
                                 }
                             })

@@ -21,6 +21,9 @@ if (
 $user_id = (int)$_SESSION['user_id'];
 $branch_id = null;
 $branch_name = 'No Branch Assigned';
+$branch_address = '';
+$branch_contact = '';
+$branch_email = '';
 $username = 'Admin Staff';
 
 /*
@@ -32,7 +35,10 @@ $userQuery = "
     SELECT 
         u.branch_id,
         u.username,
-        b.branch_name
+        b.branch_name,
+        b.branch_address,
+        b.contact_number AS branch_contact,
+        b.email AS branch_email
     FROM users u
     LEFT JOIN branches b 
         ON u.branch_id = b.branch_id
@@ -56,6 +62,9 @@ if ($userResult && $userResult->num_rows > 0) {
 
     $branch_id = $userData['branch_id'];
     $branch_name = $userData['branch_name'] ?? 'Unknown Branch';
+    $branch_address = $userData['branch_address'] ?? '';
+    $branch_contact = $userData['branch_contact'] ?? '';
+    $branch_email = $userData['branch_email'] ?? '';
     $username = $userData['username'] ?? 'Admin Staff';
 }
 
@@ -65,6 +74,12 @@ if (!$branch_id) {
     $branch_name = 'No Branch Assigned';
 }
 $notification_count = getAdminStaffNotificationCount($conn, $branch_id);
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+$csrf_token = $_SESSION['csrf_token'];
 
 /*
 |--------------------------------------------------------------------------
@@ -281,6 +296,834 @@ function getDocumentById($conn, $documentId, $branchId)
     return $document;
 }
 
+/**
+ * Clinic schedule label used on vaccination certificates.
+ */
+function patientDoseLabel($doseNumber)
+{
+    $labels = [1 => 'D0', 2 => 'D3', 3 => 'D7', 4 => 'D14', 5 => 'D21', 6 => 'D28'];
+    $doseNumber = (int)$doseNumber;
+
+    return $labels[$doseNumber] ?? ('Dose ' . $doseNumber);
+}
+
+/**
+ * Load one patient and one case, both restricted to the current branch.
+ */
+function getPatientCaseForDocument($conn, $patientId, $caseId, $branchId)
+{
+    $query = "
+        SELECT
+            p.patient_id,
+            p.full_name,
+            p.email,
+            p.contact_number,
+            p.birthday,
+            p.gender,
+            p.address,
+            c.case_id,
+            c.case_number,
+            c.animal_type,
+            c.bite_location,
+            c.bite_category,
+            c.animal_status,
+            c.date_of_bite,
+            c.case_status,
+            c.remarks AS case_remarks
+        FROM patients p
+        INNER JOIN animal_bite_cases c
+            ON c.patient_id = p.patient_id
+           AND c.branch_id = p.branch_id
+        WHERE p.patient_id = ?
+          AND c.case_id = ?
+          AND p.branch_id = ?
+          AND c.branch_id = ?
+          AND p.is_archived = 0
+          AND c.is_archived = 0
+        LIMIT 1
+    ";
+
+    $stmt = $conn->prepare($query);
+    $stmt->bind_param('iiss', $patientId, $caseId, $branchId, $branchId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    if (!$row) {
+        throw new Exception('The selected patient or case was not found in your branch.');
+    }
+
+    return $row;
+}
+
+/**
+ * Escape text used inside a PDF text command.
+ */
+function pdfEscapeText($value)
+{
+    $value = (string)$value;
+    if (function_exists('iconv')) {
+        $converted = @iconv('UTF-8', 'Windows-1252//TRANSLIT//IGNORE', $value);
+        if ($converted !== false) {
+            $value = $converted;
+        }
+    }
+    return str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], $value);
+}
+
+/**
+ * Basic text-width estimate for Helvetica. It is intentionally conservative
+ * so values remain inside their cells when printed.
+ */
+function pdfTextWidth($text, $fontSize = 9)
+{
+    return strlen((string)$text) * ((float)$fontSize * 0.50);
+}
+
+function pdfWriteText(&$stream, $x, $y, $text, $size = 9, $bold = false, $rgb = [0, 0, 0])
+{
+    $font = $bold ? 'F2' : 'F1';
+    $safe = pdfEscapeText($text);
+    $stream .= sprintf("%.3F %.3F %.3F rg\n", $rgb[0], $rgb[1], $rgb[2]);
+    $stream .= sprintf("BT /%s %.2F Tf %.2F %.2F Td (%s) Tj ET\n", $font, $size, $x, $y, $safe);
+}
+
+function pdfCenteredText(&$stream, $x, $y, $width, $text, $size = 9, $bold = false, $rgb = [0, 0, 0])
+{
+    $textWidth = pdfTextWidth($text, $size);
+    $tx = $x + max(2, ($width - $textWidth) / 2);
+    pdfWriteText($stream, $tx, $y, $text, $size, $bold, $rgb);
+}
+
+function pdfLine(&$stream, $x1, $y1, $x2, $y2, $width = 0.6, $rgb = [0.55, 0.60, 0.70])
+{
+    $stream .= sprintf("%.3F %.3F %.3F RG %.2F w %.2F %.2F m %.2F %.2F l S\n", $rgb[0], $rgb[1], $rgb[2], $width, $x1, $y1, $x2, $y2);
+}
+
+function pdfRect(&$stream, $x, $y, $w, $h, $fill = null, $stroke = [0.58, 0.63, 0.72], $lineWidth = 0.6)
+{
+    if (is_array($fill)) {
+        $stream .= sprintf("%.3F %.3F %.3F rg %.2F %.2F %.2F %.2F re f\n", $fill[0], $fill[1], $fill[2], $x, $y, $w, $h);
+    }
+    if (is_array($stroke)) {
+        $stream .= sprintf("%.3F %.3F %.3F RG %.2F w %.2F %.2F %.2F %.2F re S\n", $stroke[0], $stroke[1], $stroke[2], $lineWidth, $x, $y, $w, $h);
+    }
+}
+
+function pdfWrapText($text, $fontSize, $maxWidth)
+{
+    $text = trim((string)$text);
+    if ($text === '') {
+        return [''];
+    }
+
+    $words = preg_split('/\s+/', $text);
+    $lines = [];
+    $line = '';
+    foreach ($words as $word) {
+        $candidate = $line === '' ? $word : $line . ' ' . $word;
+        if (pdfTextWidth($candidate, $fontSize) <= $maxWidth) {
+            $line = $candidate;
+        } else {
+            if ($line !== '') {
+                $lines[] = $line;
+            }
+            $line = $word;
+        }
+    }
+    if ($line !== '') {
+        $lines[] = $line;
+    }
+    return $lines ?: [''];
+}
+
+function pdfCellText(&$stream, $x, $y, $w, $h, $text, $size = 8.2, $bold = false, $align = 'left', $rgb = [0, 0, 0])
+{
+    $text = (string)$text;
+    $baseline = $y + ($h / 2) - ($size * 0.32);
+    if ($align === 'center') {
+        pdfCenteredText($stream, $x, $baseline, $w, $text, $size, $bold, $rgb);
+        return;
+    }
+    if ($align === 'right') {
+        $tx = $x + $w - pdfTextWidth($text, $size) - 5;
+        pdfWriteText($stream, max($x + 3, $tx), $baseline, $text, $size, $bold, $rgb);
+        return;
+    }
+    pdfWriteText($stream, $x + 5, $baseline, $text, $size, $bold, $rgb);
+}
+
+/**
+ * Build the structured information used by all generated PDFs.
+ */
+function buildPatientDocumentContent(
+    $conn,
+    $patientCase,
+    $documentType,
+    $branchId,
+    $branchName,
+    $preparedBy,
+    $branchAddress = '',
+    $branchContact = '',
+    $branchEmail = ''
+) {
+    $patientId = (int)$patientCase['patient_id'];
+    $caseId = (int)$patientCase['case_id'];
+    $birthdayRaw = $patientCase['birthday'] ?? null;
+    $age = '';
+    if (!empty($birthdayRaw)) {
+        try {
+            $birthDate = new DateTime($birthdayRaw);
+            $age = (string)$birthDate->diff(new DateTime('today'))->y;
+        } catch (Throwable $ignored) {
+            $age = '';
+        }
+    }
+
+    $data = [
+        'document_type' => $documentType,
+        'date_issued' => date('F d, Y'),
+        'certificate_no' => 'DOC-' . date('Y') . '-' . str_pad((string)$caseId, 5, '0', STR_PAD_LEFT),
+        'branch_name' => $branchName,
+        'branch_address' => $branchAddress,
+        'branch_contact' => $branchContact,
+        'branch_email' => $branchEmail,
+        'prepared_by' => $preparedBy,
+        'patient_name' => $patientCase['full_name'] ?? 'N/A',
+        'birthday' => !empty($birthdayRaw) ? date('F d, Y', strtotime($birthdayRaw)) : 'N/A',
+        'age' => $age !== '' ? $age : 'N/A',
+        'sex' => $patientCase['gender'] ?? 'N/A',
+        'address' => $patientCase['address'] ?? 'N/A',
+        'contact_number' => $patientCase['contact_number'] ?? 'N/A',
+        'email' => $patientCase['email'] ?? 'N/A',
+        'case_number' => $patientCase['case_number'] ?? ('C' . str_pad((string)$caseId, 4, '0', STR_PAD_LEFT)),
+        'animal_type' => $patientCase['animal_type'] ?? 'N/A',
+        'bite_location' => $patientCase['bite_location'] ?? 'N/A',
+        'bite_category' => $patientCase['bite_category'] ?? 'N/A',
+        'animal_status' => $patientCase['animal_status'] ?? 'N/A',
+        'bite_date' => !empty($patientCase['date_of_bite']) ? date('F d, Y', strtotime($patientCase['date_of_bite'])) : 'N/A',
+        'case_status' => $patientCase['case_status'] ?? 'N/A',
+        'case_remarks' => trim((string)($patientCase['case_remarks'] ?? '')),
+        'vaccinations' => [],
+        'next_schedule' => null,
+        'vaccine_name' => 'N/A'
+    ];
+
+    $vaccinationQuery = "
+        SELECT
+            vr.dose_number,
+            vr.vaccination_status,
+            vr.scheduled_date,
+            vr.date_administered,
+            COALESCE(vr.vaccine_name, i.item_name, 'Unknown Vaccine') AS vaccine_name
+        FROM vaccination_records vr
+        LEFT JOIN inventory_items i ON i.item_id = vr.item_id
+        WHERE vr.patient_id = ?
+          AND vr.case_id = ?
+          AND vr.branch_id = ?
+          AND vr.is_archived = 0
+        ORDER BY vr.dose_number ASC, vr.vaccination_id ASC
+    ";
+    $vaccinationStmt = $conn->prepare($vaccinationQuery);
+    if ($vaccinationStmt) {
+        $vaccinationStmt->bind_param('iis', $patientId, $caseId, $branchId);
+        $vaccinationStmt->execute();
+        $vaccinationResult = $vaccinationStmt->get_result();
+        while ($vaccination = $vaccinationResult->fetch_assoc()) {
+            $data['vaccinations'][] = $vaccination;
+            if ($data['vaccine_name'] === 'N/A' && !empty($vaccination['vaccine_name'])) {
+                $data['vaccine_name'] = $vaccination['vaccine_name'];
+            }
+            if (
+                $data['next_schedule'] === null &&
+                ($vaccination['vaccination_status'] ?? '') === 'Scheduled' &&
+                !empty($vaccination['scheduled_date']) &&
+                strtotime($vaccination['scheduled_date']) >= strtotime(date('Y-m-d'))
+            ) {
+                $data['next_schedule'] = $vaccination['scheduled_date'];
+            }
+        }
+        $vaccinationStmt->close();
+    }
+
+    if ($documentType === 'Vaccination Certificate') {
+        $hasCompleted = false;
+        foreach ($data['vaccinations'] as $vaccination) {
+            if (
+                ($vaccination['vaccination_status'] ?? '') === 'Completed' &&
+                !empty($vaccination['date_administered'])
+            ) {
+                $hasCompleted = true;
+                break;
+            }
+        }
+        if (!$hasCompleted) {
+            throw new Exception('A vaccination certificate requires at least one completed vaccination for this case.');
+        }
+    }
+
+    return $data;
+}
+
+function pdfDrawImage(&$stream, $resourceName, $x, $y, $w, $h)
+{
+    $stream .= sprintf(
+        "q %.2F 0 0 %.2F %.2F %.2F cm /%s Do Q\n",
+        $w,
+        $h,
+        $x,
+        $y,
+        $resourceName
+    );
+}
+
+/**
+ * Convert the real project logo (logo.png) to JPEG bytes so it can be
+ * embedded directly into the lightweight PDF writer.
+ *
+ * Expected location:
+ * C:\\xampp\\htdocs\\SBI-ABC-SMARTBITECARE\\logo.png
+ *
+ * Because this PHP file is also in the project root, __DIR__/logo.png is
+ * the portable path we should use instead of hard-coding C:\\xampp....
+ */
+function getSbiLogoForPdf()
+{
+    $logoPath = __DIR__ . DIRECTORY_SEPARATOR . 'logo.png';
+
+    if (!is_file($logoPath) || !is_readable($logoPath)) {
+        return null;
+    }
+
+    $imageInfo = @getimagesize($logoPath);
+    if (!$imageInfo || empty($imageInfo[0]) || empty($imageInfo[1])) {
+        return null;
+    }
+
+    // Preferred path for PNG: flatten transparency to white and re-encode
+    // as JPEG. PDF can then use the standard DCTDecode image filter.
+    if (
+        function_exists('imagecreatefrompng') &&
+        function_exists('imagecreatetruecolor') &&
+        function_exists('imagejpeg')
+    ) {
+        $source = @imagecreatefrompng($logoPath);
+
+        if ($source !== false) {
+            $width = imagesx($source);
+            $height = imagesy($source);
+            $canvas = imagecreatetruecolor($width, $height);
+
+            if ($canvas !== false) {
+                $white = imagecolorallocate($canvas, 255, 255, 255);
+                imagefill($canvas, 0, 0, $white);
+                imagealphablending($canvas, true);
+                imagecopy($canvas, $source, 0, 0, 0, 0, $width, $height);
+
+                ob_start();
+                imagejpeg($canvas, null, 92);
+                $jpegData = ob_get_clean();
+
+                imagedestroy($canvas);
+                imagedestroy($source);
+
+                if ($jpegData !== false && $jpegData !== '') {
+                    return [
+                        'data' => $jpegData,
+                        'width' => $width,
+                        'height' => $height
+                    ];
+                }
+            } else {
+                imagedestroy($source);
+            }
+        }
+    }
+
+    // If GD is unavailable, do not break document generation. The header
+    // renderer will show a small fallback SBI mark instead.
+    return null;
+}
+
+function drawSbiPdfHeader(&$stream, $data, $title, $hasLogo = false)
+{
+    $blue = [0.04, 0.18, 0.50];
+    $red = [0.90, 0.12, 0.16];
+    $muted = [0.18, 0.22, 0.30];
+
+    if ($hasLogo) {
+        // Real /logo.png embedded by writePatientPdf().
+        pdfDrawImage($stream, 'Logo', 38, 754, 67, 67);
+    } else {
+        // Fallback only if logo.png cannot be loaded.
+        $cx = 71;
+        $cy = 786;
+        $r = 27;
+        $k = 0.5522847498;
+        $stream .= sprintf("%.3F %.3F %.3F RG 1.25 w\n", $blue[0], $blue[1], $blue[2]);
+        $stream .= sprintf(
+            "%.2F %.2F m %.2F %.2F %.2F %.2F %.2F %.2F c %.2F %.2F %.2F %.2F %.2F %.2F c %.2F %.2F %.2F %.2F %.2F %.2F c %.2F %.2F %.2F %.2F %.2F %.2F c S\n",
+            $cx+$r,$cy,
+            $cx+$r,$cy+$k*$r,$cx+$k*$r,$cy+$r,$cx,$cy+$r,
+            $cx-$k*$r,$cy+$r,$cx-$r,$cy+$k*$r,$cx-$r,$cy,
+            $cx-$r,$cy-$k*$r,$cx-$k*$r,$cy-$r,$cx,$cy-$r,
+            $cx+$k*$r,$cy-$r,$cx+$r,$cy-$k*$r,$cx+$r,$cy
+        );
+        pdfCenteredText($stream, 45, 776, 52, 'SBI Medical', 7.3, true, $blue);
+    }
+
+    pdfCenteredText($stream, 128, 806, 390, 'SBI MEDICAL', 14.5, true, $blue);
+    pdfCenteredText($stream, 128, 794, 390, 'Animal Bite Center & Vaccination Clinic', 7.4, false, $muted);
+
+    $branch = trim((string)($data['branch_name'] ?? ''));
+    $address = trim((string)($data['branch_address'] ?? ''));
+    $contact = trim((string)($data['branch_contact'] ?? ''));
+    $email = trim((string)($data['branch_email'] ?? ''));
+
+    pdfWriteText($stream, 166, 778, 'Branch:', 6.6, false, $muted);
+    pdfWriteText($stream, 199, 778, $branch !== '' ? $branch : '________________________', 6.8);
+    pdfWriteText($stream, 166, 768, 'Address:', 6.6, false, $muted);
+    pdfWriteText($stream, 204, 768, $address !== '' ? $address : '______________________________', 6.6);
+    pdfWriteText($stream, 166, 758, 'Contact No.:', 6.6, false, $muted);
+    pdfWriteText($stream, 217, 758, $contact !== '' ? $contact : '_____________', 6.6);
+    pdfWriteText($stream, 342, 758, '| Email:', 6.6, false, $muted);
+    pdfWriteText($stream, 378, 758, $email !== '' ? $email : '________________', 6.6);
+
+    pdfLine($stream, 36, 742, 559, 742, 1.35, $blue);
+    pdfLine($stream, 36, 737, 559, 737, 1.0, $red);
+    pdfCenteredText($stream, 36, 718, 523, strtoupper($title), 13.5, true, $blue);
+}
+
+function drawPdfLabelValueRow(&$stream, $x, $y, $width, $height, $leftLabel, $leftValue, $rightLabel, $rightValue)
+{
+    $labelFill = [0.965, 0.975, 0.995];
+    $stroke = [0.62, 0.67, 0.76];
+    $labelW = 96;
+    $rightStart = $x + ($width * 0.59);
+    $rightLabelW = 82;
+
+    pdfRect($stream, $x, $y, $width, $height, null, $stroke, 0.55);
+    pdfRect($stream, $x, $y, $labelW, $height, $labelFill, $stroke, 0.55);
+    pdfRect($stream, $rightStart, $y, $rightLabelW, $height, $labelFill, $stroke, 0.55);
+    pdfLine($stream, $rightStart, $y, $rightStart, $y + $height, 0.55, $stroke);
+    pdfLine($stream, $rightStart + $rightLabelW, $y, $rightStart + $rightLabelW, $y + $height, 0.55, $stroke);
+    pdfCellText($stream, $x, $y, $labelW, $height, $leftLabel, 7.0, true);
+    pdfCellText($stream, $x + $labelW, $y, $rightStart - ($x + $labelW), $height, $leftValue, 7.2);
+    pdfCellText($stream, $rightStart, $y, $rightLabelW, $height, $rightLabel, 7.0, true);
+    pdfCellText($stream, $rightStart + $rightLabelW, $y, ($x + $width) - ($rightStart + $rightLabelW), $height, $rightValue, 7.2);
+}
+
+function drawSectionHeader(&$stream, $x, $y, $w, $text)
+{
+    $blue = [0.04, 0.18, 0.50];
+    pdfRect($stream, $x, $y, $w, 20, [0.94, 0.96, 0.99], [0.60, 0.65, 0.74], 0.55);
+    pdfCellText($stream, $x, $y, $w, 20, $text, 7.3, true, 'left', $blue);
+}
+
+function drawSignatureArea(&$stream, $leftTitle, $rightTitle, $baseY = 120)
+{
+    $blue = [0.04, 0.18, 0.50];
+    $dark = [0.28, 0.31, 0.38];
+
+    pdfWriteText($stream, 55, $baseY + 64, $leftTitle, 6.3, true, $blue);
+    pdfWriteText($stream, 326, $baseY + 64, $rightTitle, 6.3, true, $blue);
+
+    pdfLine($stream, 91, $baseY + 28, 245, $baseY + 28, 0.6, [0.35,0.35,0.35]);
+    pdfLine($stream, 350, $baseY + 28, 505, $baseY + 28, 0.6, [0.35,0.35,0.35]);
+    pdfCenteredText($stream, 88, $baseY + 17, 160, 'Printed Name & Signature', 5.8);
+    pdfCenteredText($stream, 347, $baseY + 17, 160, 'Printed Name & Signature', 5.8);
+    pdfWriteText($stream, 91, $baseY + 4, 'License/PRC No.: __________________', 5.7, false, $dark);
+    pdfWriteText($stream, 350, $baseY + 4, 'Date: __________________', 5.7, false, $dark);
+}
+
+function getVaccinationDoseMap($data)
+{
+    $map = [];
+    foreach (($data['vaccinations'] ?? []) as $vaccination) {
+        $map[(int)($vaccination['dose_number'] ?? 0)] = $vaccination;
+    }
+    return $map;
+}
+
+function getTreatmentSummary($data)
+{
+    $names = [];
+    foreach (($data['vaccinations'] ?? []) as $vaccination) {
+        $name = trim((string)($vaccination['vaccine_name'] ?? ''));
+        if ($name !== '' && strcasecmp($name, 'Unknown Vaccine') !== 0) {
+            $names[$name] = true;
+        }
+    }
+
+    if ($names) {
+        return implode(', ', array_keys($names));
+    }
+
+    return 'See clinic treatment record';
+}
+
+function drawVaccinationCertificate(&$stream, $data, $hasLogo = false)
+{
+    drawSbiPdfHeader($stream, $data, 'Vaccination Certificate', $hasLogo);
+
+    $x = 38;
+    $w = 519;
+    $h = 20;
+    $y = 682;
+
+    drawPdfLabelValueRow($stream, $x, $y, $w, $h, 'Certificate No.', $data['certificate_no'], 'Date Issued', $data['date_issued']);
+    $y -= $h;
+    drawPdfLabelValueRow($stream, $x, $y, $w, $h, 'Patient Name', $data['patient_name'], 'Case No.', $data['case_number']);
+    $y -= $h;
+    drawPdfLabelValueRow($stream, $x, $y, $w, $h, 'Date of Birth', $data['birthday'], 'Age', $data['age']);
+    $y -= $h;
+    drawPdfLabelValueRow($stream, $x, $y, $w, $h, 'Sex', $data['sex'], 'PhilHealth No.', '');
+    $y -= $h;
+    drawPdfLabelValueRow($stream, $x, $y, $w, $h, 'Address', $data['address'], '', '');
+
+    $y -= 18;
+    $intro = 'This is to certify that the above-named patient received vaccination at SBI Medical Animal Bite Center & Vaccination Clinic.';
+    foreach (pdfWrapText($intro, 6.9, 510) as $line) {
+        pdfWriteText($stream, $x, $y, $line, 6.9);
+        $y -= 9;
+    }
+    pdfWriteText($stream, $x, $y, 'The vaccination details below reflect the immunization administered or scheduled at the clinic.', 6.9);
+
+    $y -= 27;
+    drawSectionHeader($stream, $x, $y, $w, 'VACCINE INFORMATION');
+    $y -= 20;
+
+    $vaccineRows = [
+        ['Vaccine Name', $data['vaccine_name']],
+        ['Vaccine Brand / Manufacturer', 'As recorded by the clinic'],
+        ['Vaccination Category / Purpose', 'Animal-bite post-exposure vaccination'],
+        ['Route / Site', 'As documented by authorized clinic personnel']
+    ];
+
+    foreach ($vaccineRows as $row) {
+        pdfRect($stream, $x, $y, $w, 20, null, [0.60,0.65,0.74], 0.55);
+        pdfRect($stream, $x, $y, 158, 20, [0.965,0.975,0.995], [0.60,0.65,0.74], 0.55);
+        pdfCellText($stream, $x, $y, 158, 20, $row[0], 6.9, true);
+        pdfCellText($stream, $x + 158, $y, $w - 158, 20, $row[1], 7.0);
+        $y -= 20;
+    }
+
+    $y -= 6;
+    $cols = [118, 132, 145, 124];
+    $headers = ['DOSE / VACCINATION', 'SCHEDULED DATE', 'ADMINISTERED DATE', 'STATUS'];
+    $cx = $x;
+    foreach ($cols as $i => $cw) {
+        pdfRect($stream, $cx, $y, $cw, 20, [0.94,0.96,0.99], [0.60,0.65,0.74], 0.55);
+        pdfCellText($stream, $cx, $y, $cw, 20, $headers[$i], 6.4, true, 'center', [0.04,0.18,0.50]);
+        $cx += $cw;
+    }
+    $y -= 20;
+
+    $doseMap = getVaccinationDoseMap($data);
+    for ($dose = 1; $dose <= 5; $dose++) {
+        $v = $doseMap[$dose] ?? [];
+        $scheduled = !empty($v['scheduled_date']) ? date('M d, Y', strtotime($v['scheduled_date'])) : '';
+        $administered = !empty($v['date_administered']) ? date('M d, Y', strtotime($v['date_administered'])) : '';
+        $status = trim((string)($v['vaccination_status'] ?? ''));
+        if ($status === '') {
+            $status = 'Pending';
+        }
+
+        $suffix = 'th';
+        if ($dose === 1) $suffix = 'st';
+        elseif ($dose === 2) $suffix = 'nd';
+        elseif ($dose === 3) $suffix = 'rd';
+
+        $values = [$dose . $suffix . ' Dose', $scheduled, $administered, $status];
+        $cx = $x;
+        foreach ($cols as $i => $cw) {
+            pdfRect($stream, $cx, $y, $cw, 20, null, [0.60,0.65,0.74], 0.55);
+            pdfCellText($stream, $cx, $y, $cw, 20, $values[$i], 6.8, false, 'center');
+            $cx += $cw;
+        }
+        $y -= 20;
+    }
+
+    $y -= 14;
+    pdfWriteText($stream, $x, $y, 'Remarks / Additional Information', 6.8);
+    $remarksBoxY = $y - 47;
+    pdfRect($stream, $x, $remarksBoxY, $w, 39, null, [0.60,0.65,0.74], 0.55);
+    $remarks = $data['case_remarks'] !== '' ? $data['case_remarks'] : 'No additional remarks recorded.';
+    $ry = $remarksBoxY + 27;
+    foreach (array_slice(pdfWrapText($remarks, 6.8, $w - 12), 0, 3) as $line) {
+        pdfWriteText($stream, $x + 6, $ry, $line, 6.8);
+        $ry -= 9;
+    }
+
+    drawSignatureArea($stream, 'ATTENDING HEALTHCARE PROFESSIONAL', 'AUTHORIZED SIGNATORY', 70);
+    pdfLine($stream, 35, 58, 560, 58, 0.5, [0.65,0.68,0.74]);
+    pdfWriteText($stream, 35, 47, 'CONFIDENTIAL MEDICAL DOCUMENT - Vaccination entries must be completed and verified by authorized clinic personnel.', 5.5, false, [0.28,0.31,0.38]);
+}
+
+function drawMedicalCertificate(&$stream, $data, $hasLogo = false)
+{
+    drawSbiPdfHeader($stream, $data, 'Medical Certificate', $hasLogo);
+
+    $blue = [0.04, 0.18, 0.50];
+    $x = 42;
+    $w = 511;
+    $y = 682;
+    $h = 20;
+
+    drawPdfLabelValueRow($stream, $x, $y, $w, $h, 'Certificate No.', $data['certificate_no'], 'Date Issued', $data['date_issued']);
+    $y -= $h;
+    drawPdfLabelValueRow($stream, $x, $y, $w, $h, 'Patient Name', $data['patient_name'], 'Case No.', $data['case_number']);
+    $y -= $h;
+    drawPdfLabelValueRow($stream, $x, $y, $w, $h, 'Date of Birth', $data['birthday'], 'Age', $data['age']);
+    $y -= $h;
+    drawPdfLabelValueRow($stream, $x, $y, $w, $h, 'Sex', $data['sex'], 'Contact No.', $data['contact_number']);
+    $y -= $h;
+    drawPdfLabelValueRow($stream, $x, $y, $w, $h, 'Address', $data['address'], '', '');
+
+    $y -= 20;
+    $intro = 'This is to certify that the above-named patient was examined/treated at this clinic in connection with an animal bite or rabies exposure and was provided the appropriate medical management and follow-up instructions.';
+    foreach (pdfWrapText($intro, 6.9, $w) as $line) {
+        pdfWriteText($stream, $x, $y, $line, 6.9);
+        $y -= 9;
+    }
+
+    $y -= 10;
+    drawSectionHeader($stream, $x, $y, $w, 'ANIMAL BITE / EXPOSURE DETAILS');
+    $y -= 20;
+
+    $detailRows = [
+        ['Date of Bite/Exposure', $data['bite_date']],
+        ['Animal', $data['animal_type']],
+        ['Site of Bite/Exposure', $data['bite_location']],
+        ['Type / Category of Exposure', $data['bite_category']],
+        ['Treatment Given', getTreatmentSummary($data)]
+    ];
+
+    foreach ($detailRows as $row) {
+        pdfRect($stream, $x, $y, $w, 20, null, [0.60,0.65,0.74], 0.55);
+        pdfRect($stream, $x, $y, 155, 20, [0.965,0.975,0.995], [0.60,0.65,0.74], 0.55);
+        pdfCellText($stream, $x, $y, 155, 20, $row[0], 6.8, true);
+        pdfCellText($stream, $x + 155, $y, $w - 155, 20, $row[1], 6.9);
+        $y -= 20;
+    }
+
+    $y -= 15;
+    pdfWriteText($stream, $x, $y, 'Medical Findings / Remarks', 6.9, true);
+    $findingsY = $y - 50;
+    pdfRect($stream, $x, $findingsY, $w, 42, null, [0.60,0.65,0.74], 0.55);
+    $remarks = $data['case_remarks'] !== '' ? $data['case_remarks'] : 'No additional medical findings or remarks recorded.';
+    $fy = $findingsY + 29;
+    foreach (array_slice(pdfWrapText($remarks, 6.8, $w - 12), 0, 3) as $line) {
+        pdfWriteText($stream, $x + 6, $fy, $line, 6.8);
+        $fy -= 9;
+    }
+
+    $y = $findingsY - 14;
+    $cols = [165, 165, 181];
+    $headers = ['VACCINATION FOLLOW-UP', 'SCHEDULED DATE', 'STATUS / REMARKS'];
+    $cx = $x;
+    foreach ($cols as $i => $cw) {
+        pdfRect($stream, $cx, $y, $cw, 20, [0.94,0.96,0.99], [0.60,0.65,0.74], 0.55);
+        pdfCellText($stream, $cx, $y, $cw, 20, $headers[$i], 6.3, true, 'center', $blue);
+        $cx += $cw;
+    }
+    $y -= 20;
+
+    $doseMap = getVaccinationDoseMap($data);
+    $followups = [1 => 'D0', 2 => 'D3', 3 => 'D7', 4 => 'D14', 6 => 'D28'];
+    foreach ($followups as $doseNumber => $label) {
+        $v = $doseMap[$doseNumber] ?? [];
+        $scheduled = !empty($v['scheduled_date']) ? date('M d, Y', strtotime($v['scheduled_date'])) : '';
+        $status = $v['vaccination_status'] ?? '';
+        if (!empty($v['date_administered'])) {
+            $status .= ($status !== '' ? ' - ' : '') . 'Given ' . date('M d, Y', strtotime($v['date_administered']));
+        }
+        $values = [$label, $scheduled, $status];
+        $cx = $x;
+        foreach ($cols as $i => $cw) {
+            pdfRect($stream, $cx, $y, $cw, 19, null, [0.60,0.65,0.74], 0.55);
+            pdfCellText($stream, $cx, $y, $cw, 19, $values[$i], 6.6, false, 'center');
+            $cx += $cw;
+        }
+        $y -= 19;
+    }
+
+    $y -= 12;
+    $note = 'The patient is advised to follow the prescribed vaccination schedule and return for the next dose(s) as instructed by the attending healthcare professional.';
+    foreach (pdfWrapText($note, 5.9, $w) as $line) {
+        pdfWriteText($stream, $x, $y, $line, 5.9);
+        $y -= 8;
+    }
+
+    drawSignatureArea($stream, 'ATTENDING HEALTHCARE PROFESSIONAL', 'CLINIC / AUTHORIZED SIGNATORY', 60);
+    pdfLine($stream, 35, 49, 560, 49, 0.5, [0.65,0.68,0.74]);
+    pdfWriteText($stream, 35, 38, 'This certificate is issued upon request for documentation purposes. Contents should be verified by authorized clinic personnel.', 5.3, false, [0.28,0.31,0.38]);
+}
+
+function drawReferralLetter(&$stream, $data, $hasLogo = false)
+{
+    drawSbiPdfHeader($stream, $data, 'Referral Letter', $hasLogo);
+
+    $blue = [0.04, 0.18, 0.50];
+    $x = 42;
+    $w = 511;
+    $y = 685;
+
+    $referralLines = [
+        ['Date', $data['date_issued']],
+        ['To', 'THE MEDICAL OFFICER / EMERGENCY DEPARTMENT'],
+        ['Facility', 'Receiving Hospital / Referral Facility'],
+        ['Address', 'To be completed by referring clinic'],
+        ['Subject', 'Referral for Further Evaluation and Management of Animal Bite/Exposure']
+    ];
+
+    foreach ($referralLines as $row) {
+        pdfWriteText($stream, $x, $y, $row[0], 7.2, true);
+        pdfWriteText($stream, $x + 76, $y, $row[1], 7.3, $row[0] === 'To' || $row[0] === 'Facility', $row[0] === 'Facility' ? $blue : [0,0,0]);
+        $y -= 18;
+    }
+
+    $y -= 5;
+    pdfWriteText($stream, $x, $y, 'Dear Sir/Madam:', 7.3);
+    $y -= 18;
+
+    $intro = 'We respectfully refer the patient identified below for further evaluation and management following an animal bite/exposure. The patient was initially assessed and managed at our Animal Bite Center. Kindly evaluate and provide further treatment as clinically indicated.';
+    foreach (pdfWrapText($intro, 6.9, $w) as $line) {
+        pdfWriteText($stream, $x, $y, $line, 6.9);
+        $y -= 9;
+    }
+
+    $y -= 9;
+    drawSectionHeader($stream, $x, $y, $w, 'PATIENT INFORMATION');
+    $y -= 20;
+    drawPdfLabelValueRow($stream, $x, $y, $w, 20, 'Patient Name', $data['patient_name'], 'Case No.', $data['case_number']);
+    $y -= 20;
+    drawPdfLabelValueRow($stream, $x, $y, $w, 20, 'Date of Birth', $data['birthday'], 'Age', $data['age']);
+    $y -= 20;
+    drawPdfLabelValueRow($stream, $x, $y, $w, 20, 'Sex', $data['sex'], 'Contact No.', $data['contact_number']);
+    $y -= 20;
+    drawPdfLabelValueRow($stream, $x, $y, $w, 20, 'Address', $data['address'], '', '');
+
+    $y -= 26;
+    drawSectionHeader($stream, $x, $y, $w, 'ANIMAL BITE / EXPOSURE DETAILS');
+    $y -= 20;
+
+    $detailRows = [
+        ['Date of Bite/Exposure', $data['bite_date']],
+        ['Animal', $data['animal_type']],
+        ['Site of Exposure', $data['bite_location']],
+        ['Type / Category of Exposure', $data['bite_category']],
+        ['Initial Assessment / Case Status', $data['case_status']],
+        ['Treatment Given', getTreatmentSummary($data)]
+    ];
+
+    foreach ($detailRows as $row) {
+        pdfRect($stream, $x, $y, $w, 18, null, [0.60,0.65,0.74], 0.55);
+        pdfRect($stream, $x, $y, 170, 18, [0.965,0.975,0.995], [0.60,0.65,0.74], 0.55);
+        pdfCellText($stream, $x, $y, 170, 18, $row[0], 6.4, true);
+        pdfCellText($stream, $x + 170, $y, $w - 170, 18, $row[1], 6.5);
+        $y -= 18;
+    }
+
+    $y -= 12;
+    pdfWriteText($stream, $x, $y, 'REASON FOR REFERRAL', 6.8, true, $blue);
+    $reasonY = $y - 56;
+    pdfRect($stream, $x, $reasonY, $w, 47, null, [0.60,0.65,0.74], 0.55);
+    $reason = $data['case_remarks'] !== ''
+        ? $data['case_remarks']
+        : 'Further evaluation and appropriate management of the recorded animal-bite exposure.';
+    $ry = $reasonY + 33;
+    foreach (array_slice(pdfWrapText($reason, 6.8, $w - 12), 0, 4) as $line) {
+        pdfWriteText($stream, $x + 6, $ry, $line, 6.8);
+        $ry -= 9;
+    }
+
+    $closingY = $reasonY - 17;
+    pdfWriteText($stream, $x, $closingY, 'We respectfully request further evaluation and appropriate management as clinically indicated.', 6.5);
+    pdfWriteText($stream, $x + 8, $closingY - 26, 'Respectfully referred by:', 6.5, true, $blue);
+
+    pdfLine($stream, 88, 92, 242, 92, 0.6, [0.35,0.35,0.35]);
+    pdfLine($stream, 350, 92, 505, 92, 0.6, [0.35,0.35,0.35]);
+    pdfCenteredText($stream, 84, 80, 165, 'Attending Healthcare Professional', 5.8);
+    pdfCenteredText($stream, 346, 80, 165, 'Authorized Signatory', 5.8);
+    pdfWriteText($stream, 88, 67, 'License/PRC No.: __________________', 5.5);
+    pdfWriteText($stream, 350, 67, 'Date: __________________', 5.5);
+    pdfLine($stream, 35, 52, 560, 52, 0.5, [0.65,0.68,0.74]);
+    pdfWriteText($stream, 35, 41, 'CONFIDENTIAL MEDICAL DOCUMENT - All information must be completed and verified by authorized clinic personnel.', 5.3, false, [0.28,0.31,0.38]);
+}
+
+/**
+ * Create a styled printable PDF that visually matches the SBI templates.
+ * The real logo.png in the project root is embedded whenever PHP GD is
+ * available. If GD is missing, document generation still works with a
+ * fallback vector mark instead of failing.
+ */
+function writePatientPdf($filePath, $documentType, $data)
+{
+    $logo = getSbiLogoForPdf();
+    $hasLogo = is_array($logo) && !empty($logo['data']);
+
+    $stream = '';
+    if ($documentType === 'Vaccination Certificate') {
+        drawVaccinationCertificate($stream, $data, $hasLogo);
+    } elseif ($documentType === 'Medical Certificate') {
+        drawMedicalCertificate($stream, $data, $hasLogo);
+    } elseif ($documentType === 'Referral Letter') {
+        drawReferralLetter($stream, $data, $hasLogo);
+    } else {
+        throw new Exception('Unsupported patient document template.');
+    }
+
+    $objects = [];
+    $objects[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+    $objects[2] = '<< /Type /Pages /Kids [5 0 R] /Count 1 >>';
+    $objects[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+    $objects[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>';
+
+    $resources = '/Font << /F1 3 0 R /F2 4 0 R >>';
+
+    if ($hasLogo) {
+        $resources .= ' /XObject << /Logo 7 0 R >>';
+    }
+
+    $objects[5] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << ' . $resources . ' >> /Contents 6 0 R >>';
+    $objects[6] = '<< /Length ' . strlen($stream) . ">>\nstream\n{$stream}\nendstream";
+
+    if ($hasLogo) {
+        $objects[7] =
+            '<< /Type /XObject /Subtype /Image' .
+            ' /Width ' . (int)$logo['width'] .
+            ' /Height ' . (int)$logo['height'] .
+            ' /ColorSpace /DeviceRGB /BitsPerComponent 8' .
+            ' /Filter /DCTDecode' .
+            ' /Length ' . strlen($logo['data']) .
+            ">>\nstream\n" . $logo['data'] . "\nendstream";
+    }
+
+    ksort($objects);
+
+    $pdf = "%PDF-1.4\n%âãÏÓ\n";
+    $offsets = [0 => 0];
+
+    foreach ($objects as $id => $object) {
+        $offsets[$id] = strlen($pdf);
+        $pdf .= "{$id} 0 obj\n{$object}\nendobj\n";
+    }
+
+    $xref = strlen($pdf);
+    $maxId = max(array_keys($objects));
+    $pdf .= "xref\n0 " . ($maxId + 1) . "\n0000000000 65535 f \n";
+
+    for ($id = 1; $id <= $maxId; $id++) {
+        $pdf .= sprintf('%010d 00000 n ', $offsets[$id] ?? 0) . "\n";
+    }
+
+    $pdf .= "trailer\n<< /Size " . ($maxId + 1) . " /Root 1 0 R >>\n";
+    $pdf .= "startxref\n{$xref}\n%%EOF";
+
+    return file_put_contents($filePath, $pdf) !== false;
+}
+
 /*
 |--------------------------------------------------------------------------
 | AJAX REQUEST HANDLER
@@ -304,7 +1147,323 @@ if ($isAjax) {
         | FETCH DOCUMENTS
         |--------------------------------------------------------------------------
         */
-        if ($action === 'fetch_documents') {
+        if ($action === 'fetch_patients') {
+
+            if (!$branch_id) {
+                jsonResponse(false, 'No branch is assigned to this account.');
+            }
+
+            $search = trim($_GET['search'] ?? '');
+            $page = max(1, (int)($_GET['page'] ?? 1));
+            $limit = 10;
+            $offset = ($page - 1) * $limit;
+            $searchValue = '%' . $search . '%';
+
+            $countQuery = "
+                SELECT COUNT(*) AS total
+                FROM patients p
+                WHERE p.branch_id = ?
+                  AND p.is_archived = 0
+            ";
+
+            if ($search !== '') {
+                $countQuery .= "
+                    AND (
+                        p.full_name LIKE ?
+                        OR p.email LIKE ?
+                        OR p.contact_number LIKE ?
+                        OR EXISTS (
+                            SELECT 1
+                            FROM animal_bite_cases sc
+                            WHERE sc.patient_id = p.patient_id
+                              AND sc.branch_id = p.branch_id
+                              AND sc.is_archived = 0
+                              AND sc.case_number LIKE ?
+                        )
+                    )
+                ";
+            }
+
+            $countStmt = $conn->prepare($countQuery);
+            if ($search !== '') {
+                $countStmt->bind_param(
+                    'sssss',
+                    $branch_id,
+                    $searchValue,
+                    $searchValue,
+                    $searchValue,
+                    $searchValue
+                );
+            } else {
+                $countStmt->bind_param('s', $branch_id);
+            }
+            $countStmt->execute();
+            $total = (int)($countStmt->get_result()->fetch_assoc()['total'] ?? 0);
+            $countStmt->close();
+
+            $pages = max(1, (int)ceil($total / $limit));
+            if ($page > $pages) {
+                $page = $pages;
+                $offset = ($page - 1) * $limit;
+            }
+
+            $patientQuery = "
+                SELECT
+                    p.patient_id,
+                    p.full_name,
+                    p.email,
+                    p.contact_number,
+                    p.birthday,
+                    p.gender,
+                    p.address,
+                    TIMESTAMPDIFF(YEAR, p.birthday, CURDATE()) AS age,
+                    c.case_id,
+                    c.case_number,
+                    c.date_of_bite,
+                    c.case_status
+                FROM patients p
+                LEFT JOIN animal_bite_cases c
+                    ON c.case_id = (
+                        SELECT c2.case_id
+                        FROM animal_bite_cases c2
+                        WHERE c2.patient_id = p.patient_id
+                          AND c2.branch_id = p.branch_id
+                          AND c2.is_archived = 0
+                        ORDER BY c2.created_at DESC, c2.case_id DESC
+                        LIMIT 1
+                    )
+                WHERE p.branch_id = ?
+                  AND p.is_archived = 0
+            ";
+
+            if ($search !== '') {
+                $patientQuery .= "
+                    AND (
+                        p.full_name LIKE ?
+                        OR p.email LIKE ?
+                        OR p.contact_number LIKE ?
+                        OR EXISTS (
+                            SELECT 1
+                            FROM animal_bite_cases sc
+                            WHERE sc.patient_id = p.patient_id
+                              AND sc.branch_id = p.branch_id
+                              AND sc.is_archived = 0
+                              AND sc.case_number LIKE ?
+                        )
+                    )
+                ";
+            }
+
+            $patientQuery .= ' ORDER BY p.full_name ASC LIMIT ? OFFSET ?';
+            $patientStmt = $conn->prepare($patientQuery);
+
+            if ($search !== '') {
+                $patientStmt->bind_param(
+                    'sssssii',
+                    $branch_id,
+                    $searchValue,
+                    $searchValue,
+                    $searchValue,
+                    $searchValue,
+                    $limit,
+                    $offset
+                );
+            } else {
+                $patientStmt->bind_param('sii', $branch_id, $limit, $offset);
+            }
+
+            $patientStmt->execute();
+            $patients = $patientStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+            $patientStmt->close();
+
+            jsonResponse(true, '', [
+                'patients' => $patients,
+                'total' => $total,
+                'pages' => $pages,
+                'current_page' => $page
+            ]);
+        }
+
+        elseif ($action === 'fetch_patient_cases') {
+
+            if (!$branch_id) {
+                jsonResponse(false, 'No branch is assigned to this account.');
+            }
+
+            $patientId = (int)($_GET['patient_id'] ?? 0);
+            if ($patientId < 1) {
+                jsonResponse(false, 'Invalid patient selection.');
+            }
+
+            $query = "
+                SELECT
+                    c.case_id,
+                    c.case_number,
+                    c.date_of_bite,
+                    c.case_status,
+                    c.animal_type,
+                    c.bite_category
+                FROM animal_bite_cases c
+                INNER JOIN patients p
+                    ON p.patient_id = c.patient_id
+                   AND p.branch_id = c.branch_id
+                WHERE c.patient_id = ?
+                  AND c.branch_id = ?
+                  AND p.branch_id = ?
+                  AND c.is_archived = 0
+                  AND p.is_archived = 0
+                ORDER BY c.created_at DESC, c.case_id DESC
+            ";
+            $stmt = $conn->prepare($query);
+            $stmt->bind_param('iss', $patientId, $branch_id, $branch_id);
+            $stmt->execute();
+            $cases = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+            $stmt->close();
+
+            jsonResponse(true, '', ['cases' => $cases]);
+        }
+
+        elseif ($action === 'generate_patient_document') {
+
+            if (!$branch_id) {
+                jsonResponse(false, 'No branch is assigned to this account.');
+            }
+
+            $requestToken = (string)($_POST['csrf_token'] ?? '');
+            if ($requestToken === '' || !hash_equals($_SESSION['csrf_token'] ?? '', $requestToken)) {
+                jsonResponse(false, 'Invalid request token. Refresh the page and try again.');
+            }
+
+            $patientId = (int)($_POST['patient_id'] ?? 0);
+            $caseId = (int)($_POST['case_id'] ?? 0);
+            $documentType = trim((string)($_POST['document_type'] ?? ''));
+            $allowedTemplates = [
+                'Medical Certificate',
+                'Vaccination Certificate',
+                'Referral Letter'
+            ];
+
+            if ($patientId < 1 || $caseId < 1) {
+                jsonResponse(false, 'Select a patient with an existing animal-bite case.');
+            }
+            if (!in_array($documentType, $allowedTemplates, true)) {
+                jsonResponse(false, 'Select a valid patient document template.');
+            }
+
+            $patientCase = getPatientCaseForDocument(
+                $conn,
+                $patientId,
+                $caseId,
+                $branch_id
+            );
+            $documentData = buildPatientDocumentContent(
+                $conn,
+                $patientCase,
+                $documentType,
+                $branch_id,
+                $branch_name,
+                $username,
+                $branch_address,
+                $branch_contact,
+                $branch_email
+            );
+
+            $safePatient = trim((string)preg_replace('/[^A-Za-z0-9_-]+/', '_', $patientCase['full_name']), '_');
+            $safeType = trim((string)preg_replace('/[^A-Za-z0-9_-]+/', '_', $documentType), '_');
+            $storedFileName = $safeType . '_' . $safePatient . '_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '.pdf';
+            $originalFileName = $safeType . '_' . $safePatient . '.pdf';
+            $filePath = UPLOAD_DIR . $storedFileName;
+            $documentName = $documentType . ' - ' . $patientCase['full_name'] . ' - ' . $patientCase['case_number'];
+            $transactionStarted = false;
+
+            try {
+                if (!writePatientPdf($filePath, $documentType, $documentData) || !is_file($filePath)) {
+                    throw new Exception('Unable to create the PDF document.');
+                }
+
+                $fileSize = (int)filesize($filePath);
+                $fileType = 'application/pdf';
+                $status = 'Active';
+                $conn->begin_transaction();
+                $transactionStarted = true;
+
+                $insert = $conn->prepare(
+                    "INSERT INTO medical_documents
+                     (branch_id,document_type,document_name,file_name,file_path,file_type,file_size,uploaded_by,status)
+                     VALUES (?,?,?,?,?,?,?,?,?)"
+                );
+                $insert->bind_param(
+                    'ssssssiis',
+                    $branch_id,
+                    $documentType,
+                    $documentName,
+                    $originalFileName,
+                    $filePath,
+                    $fileType,
+                    $fileSize,
+                    $user_id,
+                    $status
+                );
+                $insert->execute();
+                $medicalDocumentId = (int)$insert->insert_id;
+                $insert->close();
+
+                $trackingType = in_array($documentType, ['Medical Certificate', 'Referral Letter'], true)
+                    ? $documentType
+                    : null;
+                $trackingStatus = 'Generated';
+                $trackingRemarks = $documentType . ' generated for ' . $patientCase['full_name'] .
+                    '. Medical Document ID: ' . $medicalDocumentId . '.';
+                $tracking = $conn->prepare(
+                    'INSERT INTO document_tracking
+                     (case_id,document_type,status,remarks,created_by)
+                     VALUES (?,?,?,?,?)'
+                );
+                $tracking->bind_param(
+                    'isssi',
+                    $caseId,
+                    $trackingType,
+                    $trackingStatus,
+                    $trackingRemarks,
+                    $user_id
+                );
+                $tracking->execute();
+                $tracking->close();
+
+                $auditAction = 'Generated ' . $documentType . ' for ' .
+                    $patientCase['full_name'] . ' (Case ' . $patientCase['case_number'] .
+                    ', Document ID ' . $medicalDocumentId . ')';
+                $auditModule = 'Medical Documents';
+                $audit = $conn->prepare(
+                    'INSERT INTO audit_logs (user_id,branch_id,action,module) VALUES (?,?,?,?)'
+                );
+                $audit->bind_param('isss', $user_id, $branch_id, $auditAction, $auditModule);
+                $audit->execute();
+                $audit->close();
+
+                $conn->commit();
+                $transactionStarted = false;
+
+                jsonResponse(true, 'Patient PDF generated successfully.', [
+                    'document_id' => $medicalDocumentId,
+                    'document_name' => $documentName,
+                    'file_path' => $filePath
+                ]);
+            } catch (Throwable $generationError) {
+                if ($transactionStarted) {
+                    try {
+                        $conn->rollback();
+                    } catch (Throwable $ignored) {
+                    }
+                }
+                if (is_file($filePath)) {
+                    @unlink($filePath);
+                }
+                throw $generationError;
+            }
+        }
+
+        elseif ($action === 'fetch_documents') {
 
             if (!$branch_id) {
                 jsonResponse(false, 'No branch is assigned to this account.');
@@ -320,7 +1479,14 @@ if ($isAjax) {
             $limit = 10;
             $offset = ($page - 1) * $limit;
 
-            $where = "WHERE md.branch_id = ?";
+            $where = "WHERE md.branch_id = ?
+                AND COALESCE(md.status, 'Active') <> 'Archived'
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM document_tracking dt
+                    WHERE dt.status = 'Generated'
+                      AND dt.remarks LIKE CONCAT('%Medical Document ID: ', md.document_id, '.%')
+                )";
             $params = [$branch_id];
             $types = "s";
 
@@ -481,6 +1647,118 @@ if ($isAjax) {
                     'current_page' => $page
                 ]
             );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | FETCH GENERATED PATIENT PDFS FOR DOWNLOAD TAB
+        |--------------------------------------------------------------------------
+        */
+        elseif ($action === 'fetch_downloads') {
+            if (!$branch_id) {
+                jsonResponse(false, 'No branch is assigned to this account.');
+            }
+
+            $search = trim($_GET['search'] ?? '');
+            $documentType = trim($_GET['document_type'] ?? '');
+            $page = max(1, (int)($_GET['page'] ?? 1));
+            $limit = 10;
+            $offset = ($page - 1) * $limit;
+
+            $where = "WHERE md.branch_id = ?
+                AND COALESCE(md.status, 'Active') <> 'Archived'
+                AND EXISTS (
+                    SELECT 1
+                    FROM document_tracking dt
+                    WHERE dt.status = 'Generated'
+                      AND dt.remarks LIKE CONCAT('%Medical Document ID: ', md.document_id, '.%')
+                )";
+            $params = [$branch_id];
+            $types = 's';
+
+            if ($search !== '') {
+                $where .= " AND (md.document_name LIKE ? OR md.document_type LIKE ? OR md.file_name LIKE ?)";
+                $searchParam = '%' . $search . '%';
+                $params[] = $searchParam;
+                $params[] = $searchParam;
+                $params[] = $searchParam;
+                $types .= 'sss';
+            }
+
+            if ($documentType !== '') {
+                $validTypes = ['Medical Certificate', 'Vaccination Certificate', 'Referral Letter'];
+                if (!in_array($documentType, $validTypes, true)) {
+                    jsonResponse(false, 'Invalid document type.');
+                }
+                $where .= ' AND md.document_type = ?';
+                $params[] = $documentType;
+                $types .= 's';
+            }
+
+            $countStmt = $conn->prepare("SELECT COUNT(*) AS total FROM medical_documents md $where");
+            if (!$countStmt) {
+                throw new Exception('Unable to prepare generated-document count query: ' . $conn->error);
+            }
+            $countStmt->bind_param($types, ...$params);
+            $countStmt->execute();
+            $totalRecords = (int)($countStmt->get_result()->fetch_assoc()['total'] ?? 0);
+            $countStmt->close();
+            $totalPages = max(1, (int)ceil($totalRecords / $limit));
+            if ($page > $totalPages) {
+                $page = $totalPages;
+                $offset = ($page - 1) * $limit;
+            }
+
+            $query = "
+                SELECT
+                    md.document_id,
+                    md.document_type,
+                    md.document_name,
+                    md.file_name,
+                    md.file_path,
+                    md.file_size,
+                    md.status,
+                    md.uploaded_at,
+                    u.username AS uploaded_by_name
+                FROM medical_documents md
+                LEFT JOIN users u ON md.uploaded_by = u.user_id
+                $where
+                ORDER BY md.uploaded_at DESC
+                LIMIT ? OFFSET ?
+            ";
+            $stmt = $conn->prepare($query);
+            if (!$stmt) {
+                throw new Exception('Unable to prepare generated-document query: ' . $conn->error);
+            }
+            $queryParams = $params;
+            $queryParams[] = $limit;
+            $queryParams[] = $offset;
+            $queryTypes = $types . 'ii';
+            $stmt->bind_param($queryTypes, ...$queryParams);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $documents = [];
+            while ($row = $result->fetch_assoc()) {
+                $documents[] = [
+                    'document_id' => (int)$row['document_id'],
+                    'document_type' => $row['document_type'],
+                    'document_name' => $row['document_name'],
+                    'file_name' => $row['file_name'],
+                    'file_path' => $row['file_path'],
+                    'file_size' => (int)$row['file_size'],
+                    'status' => $row['status'],
+                    'uploaded_by_name' => $row['uploaded_by_name'] ?? 'Unknown',
+                    'formatted_date' => date('M d, Y h:i A', strtotime($row['uploaded_at']))
+                ];
+            }
+            $stmt->close();
+
+            jsonResponse(true, '', [
+                'documents' => $documents,
+                'total' => $totalRecords,
+                'pages' => $totalPages,
+                'current_page' => $page
+            ]);
         }
 
         /*
@@ -1100,6 +2378,13 @@ if ($branch_id) {
         LEFT JOIN users u
             ON md.uploaded_by = u.user_id
         WHERE md.branch_id = ?
+          AND COALESCE(md.status, 'Active') <> 'Archived'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM document_tracking dt
+              WHERE dt.status = 'Generated'
+                AND dt.remarks LIKE CONCAT('%Medical Document ID: ', md.document_id, '.%')
+          )
         ORDER BY md.uploaded_at DESC
         LIMIT 10
     ";
@@ -1664,7 +2949,7 @@ if ($branch_id) {
         /* Loading */
 
         .loading-overlay {
-            display: none;
+            display: flex;
             position: fixed;
             top: 0;
             left: 0;
@@ -1674,10 +2959,17 @@ if ($branch_id) {
             z-index: 9999;
             justify-content: center;
             align-items: center;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transition: opacity .18s ease, visibility 0s linear .18s;
         }
 
         .loading-overlay.show {
-            display: flex;
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+            transition-delay: 0s;
         }
 
         .spinner {
@@ -1757,6 +3049,191 @@ if ($branch_id) {
             }
         }
 
+        .medical-module-tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 22px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #e1e6f0;
+        }
+
+        .medical-module-tab {
+            border: 0;
+            background: transparent;
+            color: #6c7590;
+            padding: 10px 18px;
+            border-radius: 9px;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: background-color .2s ease, color .2s ease,
+                        box-shadow .2s ease, transform .2s ease;
+        }
+
+        .medical-module-tab:hover {
+            background: #f0f3ff;
+            color: var(--primary);
+            transform: translateY(-1px);
+        }
+
+        .medical-module-tab.active {
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 5px 14px rgba(43, 58, 140, .2);
+        }
+
+        .medical-tab-panel {
+            display: none;
+            min-height: 320px;
+        }
+
+        .medical-tab-panel.active {
+            display: block;
+            animation: medicalTabEnter .22s ease-out both;
+        }
+
+        @keyframes medicalTabEnter {
+            from {
+                opacity: 0;
+                transform: translateY(6px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .medical-tab-panel.active {
+                animation: none;
+            }
+
+            .medical-module-tab {
+                transition: none;
+            }
+
+            .loading-overlay {
+                transition: none;
+            }
+        }
+
+        .patient-cell strong {
+            color: #12205d;
+            display: block;
+            margin-bottom: 3px;
+        }
+
+        .patient-cell small,
+        .case-cell small {
+            color: #727b91;
+            display: block;
+            line-height: 1.5;
+        }
+
+        .generate-pdf-btn {
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            background: #fff;
+            border-radius: 8px;
+            padding: 7px 12px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .generate-pdf-btn:hover {
+            background: var(--primary);
+            color: #fff;
+        }
+
+        .generate-pdf-btn:disabled {
+            border-color: #c9cfdd;
+            color: #9aa2b5;
+            background: #f5f6f9;
+            cursor: not-allowed;
+        }
+
+        .selected-patient-card {
+            background: #f4f6ff;
+            border: 1px solid #dce2f7;
+            border-radius: 12px;
+            padding: 14px 16px;
+            margin-bottom: 18px;
+        }
+
+        .selected-patient-card strong {
+            color: var(--primary);
+            font-size: 16px;
+        }
+
+        .template-choice {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 13px;
+            border: 1px solid #dce2ee;
+            border-radius: 10px;
+            cursor: pointer;
+            margin-bottom: 10px;
+            transition: .2s ease;
+        }
+
+        .template-choice:hover,
+        .template-choice.selected {
+            border-color: var(--primary);
+            background: #f3f5ff;
+        }
+
+        .template-choice input {
+            margin-top: 4px;
+        }
+
+        .template-choice i {
+            color: var(--primary);
+            font-size: 22px;
+        }
+
+        .template-choice span {
+            color: #747d91;
+            display: block;
+            font-size: 12px;
+            margin-top: 2px;
+        }
+
+        .download-tab-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 18px;
+            padding: 16px 18px;
+            border-radius: 12px;
+            border: 1px solid #dce2f7;
+            background: linear-gradient(135deg, #f6f8ff 0%, #ffffff 100%);
+        }
+
+        .download-tab-heading h5 {
+            margin: 0 0 4px;
+            color: var(--primary);
+            font-weight: 800;
+            font-size: 17px;
+        }
+
+        .download-tab-heading p {
+            margin: 0;
+            color: #737c91;
+            font-size: 13px;
+        }
+
+        @media (max-width: 767px) {
+            .medical-module-tabs {
+                overflow-x: auto;
+            }
+
+            .medical-module-tab {
+                white-space: nowrap;
+            }
+        }
     </style>
 
 </head>
@@ -1878,6 +3355,52 @@ if ($branch_id) {
 
         <div class="section-card">
 
+            <div class="medical-module-tabs" role="tablist" aria-label="Medical document sections">
+                <button
+                    type="button"
+                    class="medical-module-tab active"
+                    id="documentsTabButton"
+                    role="tab"
+                    aria-selected="true"
+                    aria-controls="documentsPanel"
+                    onclick="switchMedicalTab('documents')"
+                >
+                    <i class="bi bi-folder2-open"></i>
+                    Documents
+                </button>
+                <button
+                    type="button"
+                    class="medical-module-tab"
+                    id="patientsTabButton"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="patientsPanel"
+                    onclick="switchMedicalTab('patients')"
+                >
+                    <i class="bi bi-people"></i>
+                    Patients
+                </button>
+                <button
+                    type="button"
+                    class="medical-module-tab"
+                    id="downloadTabButton"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="downloadPanel"
+                    onclick="switchMedicalTab('download')"
+                >
+                    <i class="bi bi-download"></i>
+                    Download
+                </button>
+            </div>
+
+            <div
+                class="medical-tab-panel active"
+                id="documentsPanel"
+                role="tabpanel"
+                aria-labelledby="documentsTabButton"
+            >
+
             <!-- TOOLBAR -->
 
             <div class="toolbar">
@@ -1891,7 +3414,7 @@ if ($branch_id) {
                         <input
                             type="text"
                             id="searchInput"
-                            placeholder="Search documents..."
+                            placeholder="Search templates..."
                         >
 
                     </div>
@@ -1934,7 +3457,7 @@ if ($branch_id) {
 
                     <i class="bi bi-plus-circle"></i>
 
-                    Upload New
+                    Upload New Template
 
                 </button>
 
@@ -1992,7 +3515,7 @@ if ($branch_id) {
                                             ></i>
 
                                             <p>
-                                                No documents uploaded yet.
+                                                No document templates uploaded yet.
                                             </p>
 
                                         </div>
@@ -2185,6 +3708,130 @@ if ($branch_id) {
                     Loading...
                 </small>
 
+            </div>
+
+            </div>
+
+            <div
+                class="medical-tab-panel"
+                id="patientsPanel"
+                role="tabpanel"
+                aria-labelledby="patientsTabButton"
+            >
+
+                <div class="toolbar">
+                    <div class="left-tools">
+                        <div class="search-box">
+                            <i class="bi bi-search"></i>
+                            <input
+                                type="text"
+                                id="patientSearchInput"
+                                placeholder="Search patient, contact, email, or case..."
+                            >
+                        </div>
+                    </div>
+
+                    <div class="text-muted small">
+                        <i class="bi bi-database-check me-1"></i>
+                        Templates use current patient records
+                    </div>
+                </div>
+
+                <div class="table-wrapper">
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Patient</th>
+                                    <th>Contact</th>
+                                    <th>Latest Case</th>
+                                    <th>Case Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="patientsTableBody">
+                                <tr>
+                                    <td colspan="5">
+                                        <div class="no-records">
+                                            <i class="bi bi-people"></i>
+                                            <p>Open the Patients tab to load branch patients.</p>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="pagination-area" id="patientPaginationArea"></div>
+                <div class="text-center mt-2">
+                    <small class="text-muted" id="patientRecordCount">Loading...</small>
+                </div>
+
+            </div>
+
+            <div
+                class="medical-tab-panel"
+                id="downloadPanel"
+                role="tabpanel"
+                aria-labelledby="downloadTabButton"
+            >
+                <div class="download-tab-heading">
+                    <div>
+                        <h5><i class="bi bi-file-earmark-arrow-down me-2"></i>Generated Patient Documents</h5>
+                        <p>Only patient-specific PDFs generated from the Patients tab appear here.</p>
+                    </div>
+                </div>
+
+                <div class="toolbar">
+                    <div class="left-tools">
+                        <div class="search-box">
+                            <i class="bi bi-search"></i>
+                            <input type="text" id="downloadSearchInput" placeholder="Search patient document...">
+                        </div>
+                        <select class="form-select-sm-custom" id="downloadTypeFilter">
+                            <option value="">All Types</option>
+                            <option value="Medical Certificate">Medical Certificate</option>
+                            <option value="Vaccination Certificate">Vaccination Certificate</option>
+                            <option value="Referral Letter">Referral Letter</option>
+                        </select>
+                    </div>
+                    <div class="text-muted small">
+                        <i class="bi bi-shield-check me-1"></i>
+                        Generated PDFs use the uniform SBI form design
+                    </div>
+                </div>
+
+                <div class="table-wrapper">
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Document Type</th>
+                                    <th>Patient Document</th>
+                                    <th>Generated By</th>
+                                    <th>Date Generated</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="downloadsTableBody">
+                                <tr>
+                                    <td colspan="5">
+                                        <div class="no-records">
+                                            <i class="bi bi-file-earmark-arrow-down"></i>
+                                            <p>Open the Download tab to load generated patient PDFs.</p>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="pagination-area" id="downloadPaginationArea"></div>
+                <div class="text-center mt-2">
+                    <small class="text-muted" id="downloadRecordCount">Loading...</small>
+                </div>
             </div>
 
         </div>
@@ -2757,6 +4404,83 @@ if ($branch_id) {
 </div>
 
 
+<!-- PATIENT DOCUMENT GENERATION MODAL -->
+<div class="modal fade" id="patientDocumentModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-file-earmark-pdf me-2"></i>
+                    Generate Patient PDF
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+
+            <div class="modal-body">
+                <div class="selected-patient-card">
+                    <strong id="generatePatientName">Patient</strong>
+                    <div class="text-muted small mt-1" id="generatePatientCase">Case</div>
+                </div>
+
+                <p class="fw-bold mb-2">Choose a document template</p>
+
+                <form id="patientDocumentForm">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrf_token, ENT_QUOTES, 'UTF-8'); ?>">
+                    <input type="hidden" name="patient_id" id="generatePatientId">
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold" for="generateCaseId">Animal-bite case</label>
+                        <select class="form-select" name="case_id" id="generateCaseId" required>
+                            <option value="">Loading cases...</option>
+                        </select>
+                        <div class="form-text">Choose which patient case should supply the document information.</div>
+                    </div>
+
+                    <label class="template-choice">
+                        <input type="radio" name="document_type" value="Medical Certificate" required>
+                        <i class="bi bi-file-earmark-medical"></i>
+                        <div>
+                            <strong>Medical Certificate</strong>
+                            <span>Patient identity and the selected animal-bite case are filled automatically.</span>
+                        </div>
+                    </label>
+
+                    <label class="template-choice">
+                        <input type="radio" name="document_type" value="Vaccination Certificate" required>
+                        <i class="bi bi-shield-check"></i>
+                        <div>
+                            <strong>Vaccination Certificate</strong>
+                            <span>Includes completed vaccinations and the next recorded schedule.</span>
+                        </div>
+                    </label>
+
+                    <label class="template-choice">
+                        <input type="radio" name="document_type" value="Referral Letter" required>
+                        <i class="bi bi-file-earmark-arrow-up"></i>
+                        <div>
+                            <strong>Referral Letter</strong>
+                            <span>Uses the patient profile and current animal-bite case summary.</span>
+                        </div>
+                    </label>
+                </form>
+
+                <div class="alert alert-info py-2 mt-3 mb-0 small">
+                    <i class="bi bi-info-circle me-1"></i>
+                    Information is retrieved again from the database when Generate PDF is clicked.
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="generatePatientDocumentBtn">
+                    <i class="bi bi-file-earmark-pdf me-1"></i>
+                    Generate PDF
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- LOADING -->
 
 <div
@@ -2790,6 +4514,17 @@ if ($branch_id) {
 
 let currentPage = 1;
 let totalPages = 1;
+let currentPatientPage = 1;
+let totalPatientPages = 1;
+let currentDownloadPage = 1;
+let totalDownloadPages = 1;
+let activeMedicalTab = 'documents';
+let documentsLoaded = false;
+let patientsLoaded = false;
+let downloadsLoaded = false;
+let documentRequestSerial = 0;
+let patientRequestSerial = 0;
+let downloadRequestSerial = 0;
 
 let currentViewId = null;
 let deleteId = null;
@@ -2813,6 +4548,9 @@ const editModalElement =
 const deleteModalElement =
     document.getElementById('deleteModal');
 
+const patientDocumentModalElement =
+    document.getElementById('patientDocumentModal');
+
 const uploadModal =
     new bootstrap.Modal(uploadModalElement);
 
@@ -2824,6 +4562,9 @@ const editModal =
 
 const deleteModal =
     new bootstrap.Modal(deleteModalElement);
+
+const patientDocumentModal =
+    new bootstrap.Modal(patientDocumentModalElement);
 
 
 /*
@@ -3403,6 +5144,7 @@ document
 
                     currentPage = 1;
 
+                    documentsLoaded = false;
                     refreshDocuments();
 
                 } else {
@@ -3496,6 +5238,9 @@ function viewDocument(id) {
                 document.getElementById(
                     'viewModalBody'
                 );
+
+            document.getElementById('viewEditBtn').style.display =
+                activeMedicalTab === 'download' ? 'none' : '';
 
             const filePath =
                 escapeHtml(d.file_path);
@@ -4095,7 +5840,13 @@ document
 
                     deleteId = null;
 
-                    refreshDocuments();
+                    if (activeMedicalTab === 'download') {
+                        downloadsLoaded = false;
+                        refreshDownloads();
+                    } else {
+                        documentsLoaded = false;
+                        refreshDocuments();
+                    }
 
                 } else {
 
@@ -4145,10 +5896,8 @@ function refreshDocuments() {
             )
             .value;
 
-    showLoading();
-
     const url =
-        window.location.href +
+        window.location.pathname +
         '?action=fetch_documents' +
         '&search=' +
         encodeURIComponent(search) +
@@ -4156,6 +5905,8 @@ function refreshDocuments() {
         encodeURIComponent(type) +
         '&page=' +
         encodeURIComponent(currentPage);
+
+    const requestSerial = ++documentRequestSerial;
 
     fetch(
         url,
@@ -4179,9 +5930,13 @@ function refreshDocuments() {
     })
     .then(data => {
 
-        hideLoading();
+        if (requestSerial !== documentRequestSerial) {
+            return;
+        }
 
         if (data.success) {
+
+            documentsLoaded = true;
 
             renderDocuments(
                 data.documents || []
@@ -4203,7 +5958,7 @@ function refreshDocuments() {
                 ) +
                 ' of ' +
                 data.total +
-                ' documents';
+                ' templates';
 
         } else {
 
@@ -4218,7 +5973,9 @@ function refreshDocuments() {
     })
     .catch(error => {
 
-        hideLoading();
+        if (requestSerial !== documentRequestSerial) {
+            return;
+        }
 
         showToast(
             'Error',
@@ -4561,6 +6318,420 @@ document
 
 /*
 |--------------------------------------------------------------------------
+| DOCUMENTS / PATIENTS / DOWNLOAD TABS
+|--------------------------------------------------------------------------
+*/
+
+function switchMedicalTab(tabName) {
+    const validTabs = ['documents', 'patients', 'download'];
+    const requestedTab = validTabs.includes(tabName) ? tabName : 'documents';
+
+    if (requestedTab === activeMedicalTab) {
+        if (requestedTab === 'documents' && !documentsLoaded) refreshDocuments();
+        if (requestedTab === 'patients' && !patientsLoaded) refreshPatients();
+        if (requestedTab === 'download' && !downloadsLoaded) refreshDownloads();
+        return;
+    }
+
+    activeMedicalTab = requestedTab;
+
+    const tabConfig = [
+        ['documents', 'documentsPanel', 'documentsTabButton'],
+        ['patients', 'patientsPanel', 'patientsTabButton'],
+        ['download', 'downloadPanel', 'downloadTabButton']
+    ];
+
+    tabConfig.forEach(([name, panelId, buttonId]) => {
+        const isActive = activeMedicalTab === name;
+        document.getElementById(panelId).classList.toggle('active', isActive);
+        document.getElementById(buttonId).classList.toggle('active', isActive);
+        document.getElementById(buttonId).setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+
+    if (activeMedicalTab === 'patients' && !patientsLoaded) {
+        refreshPatients();
+    } else if (activeMedicalTab === 'documents' && !documentsLoaded) {
+        refreshDocuments();
+    } else if (activeMedicalTab === 'download' && !downloadsLoaded) {
+        refreshDownloads();
+    }
+}
+
+function refreshPatients() {
+    const search = document.getElementById('patientSearchInput').value.trim();
+    const url = window.location.pathname +
+        '?action=fetch_patients&search=' + encodeURIComponent(search) +
+        '&page=' + encodeURIComponent(currentPatientPage);
+
+    const requestSerial = ++patientRequestSerial;
+
+    fetch(url, {
+        headers: {'X-Requested-With': 'XMLHttpRequest'}
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Unable to load patients.');
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (requestSerial !== patientRequestSerial) {
+            return;
+        }
+
+        if (!data.success) {
+            throw new Error(data.message || 'Unable to load patients.');
+        }
+
+        patientsLoaded = true;
+        renderPatients(data.patients || []);
+        renderPatientPagination(data);
+        document.getElementById('patientRecordCount').textContent =
+            (data.patients ? data.patients.length : 0) +
+            ' of ' + data.total + ' patients';
+    })
+    .catch(error => {
+        if (requestSerial !== patientRequestSerial) {
+            return;
+        }
+        showToast('Patient list error', error.message, true);
+    });
+}
+
+function renderPatients(patients) {
+    const body = document.getElementById('patientsTableBody');
+
+    if (!patients.length) {
+        body.innerHTML = `
+            <tr>
+                <td colspan="5">
+                    <div class="no-records">
+                        <i class="bi bi-person-x"></i>
+                        <p>No patients found in this branch.</p>
+                    </div>
+                </td>
+            </tr>`;
+        return;
+    }
+
+    body.innerHTML = patients.map(patient => {
+        const hasCase = Number(patient.case_id) > 0;
+        const birthday = patient.birthday
+            ? new Date(patient.birthday + 'T00:00:00').toLocaleDateString()
+            : 'Birthday not recorded';
+        const biteDate = patient.date_of_bite
+            ? new Date(patient.date_of_bite + 'T00:00:00').toLocaleDateString()
+            : 'Date not recorded';
+
+        return `
+            <tr>
+                <td class="patient-cell">
+                    <strong>${escapeHtml(patient.full_name)}</strong>
+                    <small>${escapeHtml(patient.gender || 'N/A')} · ${escapeHtml(patient.age ?? 'N/A')} years old</small>
+                    <small>${escapeHtml(birthday)}</small>
+                </td>
+                <td class="patient-cell">
+                    <small><i class="bi bi-telephone me-1"></i>${escapeHtml(patient.contact_number || 'N/A')}</small>
+                    <small><i class="bi bi-envelope me-1"></i>${escapeHtml(patient.email || 'N/A')}</small>
+                </td>
+                <td class="case-cell">
+                    ${hasCase
+                        ? `<strong>${escapeHtml(patient.case_number || ('C' + patient.case_id))}</strong>
+                           <small>Bite date: ${escapeHtml(biteDate)}</small>`
+                        : '<span class="text-muted">No animal-bite case</span>'}
+                </td>
+                <td>
+                    ${hasCase
+                        ? `<span class="document-badge medical-certificate">${escapeHtml(patient.case_status || 'Not set')}</span>`
+                        : '<span class="text-muted">—</span>'}
+                </td>
+                <td>
+                    <button
+                        type="button"
+                        class="generate-pdf-btn"
+                        data-patient-id="${Number(patient.patient_id)}"
+                        data-case-id="${Number(patient.case_id || 0)}"
+                        data-patient-name="${escapeHtml(patient.full_name)}"
+                        data-case-number="${escapeHtml(patient.case_number || '')}"
+                        ${hasCase ? '' : 'disabled'}
+                    >
+                        <i class="bi bi-file-earmark-pdf me-1"></i>
+                        Generate
+                    </button>
+                </td>
+            </tr>`;
+    }).join('');
+}
+
+function renderPatientPagination(data) {
+    const area = document.getElementById('patientPaginationArea');
+    totalPatientPages = Number(data.pages) || 1;
+    currentPatientPage = Number(data.current_page) || 1;
+    let html = `
+        <a href="#" class="page-item ${currentPatientPage <= 1 ? 'disabled' : ''}"
+           onclick="event.preventDefault(); goToPatientPage(${currentPatientPage - 1});">
+            <i class="bi bi-chevron-left"></i>
+        </a>`;
+
+    const start = Math.max(1, currentPatientPage - 2);
+    const end = Math.min(totalPatientPages, currentPatientPage + 2);
+
+    for (let page = start; page <= end; page++) {
+        html += `
+            <a href="#" class="page-item ${page === currentPatientPage ? 'active' : ''}"
+               onclick="event.preventDefault(); goToPatientPage(${page});">
+                ${page}
+            </a>`;
+    }
+
+    html += `
+        <a href="#" class="page-item ${currentPatientPage >= totalPatientPages ? 'disabled' : ''}"
+           onclick="event.preventDefault(); goToPatientPage(${currentPatientPage + 1});">
+            <i class="bi bi-chevron-right"></i>
+        </a>`;
+    area.innerHTML = html;
+}
+
+function goToPatientPage(page) {
+    if (page < 1 || page > totalPatientPages) {
+        return;
+    }
+    currentPatientPage = page;
+    refreshPatients();
+}
+
+function refreshDownloads() {
+    const search = document.getElementById('downloadSearchInput').value.trim();
+    const type = document.getElementById('downloadTypeFilter').value;
+    const url = window.location.pathname +
+        '?action=fetch_downloads&search=' + encodeURIComponent(search) +
+        '&document_type=' + encodeURIComponent(type) +
+        '&page=' + encodeURIComponent(currentDownloadPage);
+
+    const requestSerial = ++downloadRequestSerial;
+    fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+        .then(response => {
+            if (!response.ok) throw new Error('Unable to load generated patient documents.');
+            return response.json();
+        })
+        .then(data => {
+            if (requestSerial !== downloadRequestSerial) return;
+            if (!data.success) throw new Error(data.message || 'Unable to load generated patient documents.');
+            downloadsLoaded = true;
+            renderDownloads(data.documents || []);
+            renderDownloadPagination(data);
+            document.getElementById('downloadRecordCount').textContent =
+                (data.documents ? data.documents.length : 0) + ' of ' + data.total + ' generated documents';
+        })
+        .catch(error => {
+            if (requestSerial !== downloadRequestSerial) return;
+            showToast('Download list error', error.message, true);
+        });
+}
+
+function renderDownloads(docs) {
+    const tbody = document.getElementById('downloadsTableBody');
+    if (!docs || docs.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="5">
+                    <div class="no-records">
+                        <i class="bi bi-file-earmark-arrow-down"></i>
+                        <p>No generated patient PDFs found.</p>
+                    </div>
+                </td>
+            </tr>`;
+        return;
+    }
+
+    tbody.innerHTML = docs.map(d => {
+        const badgeClass = String(d.document_type || 'Other').toLowerCase().replace(/\s+/g, '-');
+        return `
+            <tr>
+                <td><span class="document-badge ${escapeHtml(badgeClass)}">${escapeHtml(d.document_type)}</span></td>
+                <td>${escapeHtml(d.document_name)}</td>
+                <td>${escapeHtml(d.uploaded_by_name || 'Unknown')}</td>
+                <td>${escapeHtml(d.formatted_date || '')}</td>
+                <td>
+                    <div class="actions">
+                        <button type="button" class="action-btn view" onclick="viewDocument(${Number(d.document_id)})" title="View"><i class="bi bi-eye"></i></button>
+                        <button type="button" class="action-btn print" onclick="printDocument(${Number(d.document_id)})" title="Print"><i class="bi bi-printer"></i></button>
+                        <button type="button" class="action-btn download" onclick="downloadDocument(${Number(d.document_id)})" title="Download"><i class="bi bi-download"></i></button>
+                        <button type="button" class="action-btn delete" onclick="deleteGeneratedDocument(${Number(d.document_id)})" title="Archive"><i class="bi bi-trash"></i></button>
+                    </div>
+                </td>
+            </tr>`;
+    }).join('');
+}
+
+function renderDownloadPagination(data) {
+    const area = document.getElementById('downloadPaginationArea');
+    totalDownloadPages = Number(data.pages) || 1;
+    currentDownloadPage = Number(data.current_page) || 1;
+    let html = '';
+
+    html += `<a href="#" class="page-item ${currentDownloadPage <= 1 ? 'disabled' : ''}" onclick="event.preventDefault(); goToDownloadPage(${currentDownloadPage - 1});"><i class="bi bi-chevron-left"></i></a>`;
+    for (let i = 1; i <= totalDownloadPages; i++) {
+        html += `<a href="#" class="page-item ${i === currentDownloadPage ? 'active' : ''}" onclick="event.preventDefault(); goToDownloadPage(${i});">${i}</a>`;
+    }
+    html += `<a href="#" class="page-item ${currentDownloadPage >= totalDownloadPages ? 'disabled' : ''}" onclick="event.preventDefault(); goToDownloadPage(${currentDownloadPage + 1});"><i class="bi bi-chevron-right"></i></a>`;
+    area.innerHTML = html;
+}
+
+function goToDownloadPage(page) {
+    if (page < 1 || page > totalDownloadPages) return;
+    currentDownloadPage = page;
+    refreshDownloads();
+}
+
+let downloadSearchTimeout = null;
+document.getElementById('downloadSearchInput').addEventListener('input', function() {
+    clearTimeout(downloadSearchTimeout);
+    downloadSearchTimeout = setTimeout(() => {
+        currentDownloadPage = 1;
+        refreshDownloads();
+    }, 400);
+});
+
+document.getElementById('downloadTypeFilter').addEventListener('change', function() {
+    currentDownloadPage = 1;
+    refreshDownloads();
+});
+
+function deleteGeneratedDocument(id) {
+    deleteId = id;
+    document.getElementById('deleteDocName').textContent = 'Generated patient PDF';
+    deleteModal.show();
+}
+
+let patientSearchTimeout = null;
+document.getElementById('patientSearchInput').addEventListener('input', function() {
+    clearTimeout(patientSearchTimeout);
+    patientSearchTimeout = setTimeout(function() {
+        currentPatientPage = 1;
+        refreshPatients();
+    }, 400);
+});
+
+document.getElementById('patientsTableBody').addEventListener('click', function(event) {
+    const button = event.target.closest('.generate-pdf-btn');
+    if (!button || button.disabled) {
+        return;
+    }
+
+    document.getElementById('patientDocumentForm').reset();
+    document.getElementById('generatePatientId').value = button.dataset.patientId;
+    document.getElementById('generatePatientName').textContent = button.dataset.patientName;
+    document.getElementById('generatePatientCase').textContent = 'Loading patient cases...';
+    const caseSelect = document.getElementById('generateCaseId');
+    caseSelect.innerHTML = '<option value="">Loading cases...</option>';
+    caseSelect.disabled = true;
+    document.querySelectorAll('.template-choice').forEach(choice => {
+        choice.classList.remove('selected');
+    });
+
+    showLoading();
+    fetch(
+        window.location.pathname +
+        '?action=fetch_patient_cases&patient_id=' +
+        encodeURIComponent(button.dataset.patientId),
+        {headers: {'X-Requested-With': 'XMLHttpRequest'}}
+    )
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Unable to load the patient cases.');
+        }
+        return response.json();
+    })
+    .then(data => {
+        hideLoading();
+        if (!data.success || !data.cases || !data.cases.length) {
+            throw new Error(data.message || 'This patient has no available animal-bite case.');
+        }
+
+        caseSelect.innerHTML = data.cases.map(item => {
+            const details = [
+                item.case_number || ('C' + item.case_id),
+                item.date_of_bite || 'No bite date',
+                item.case_status || 'No status'
+            ].join(' · ');
+            return `<option value="${Number(item.case_id)}">${escapeHtml(details)}</option>`;
+        }).join('');
+        caseSelect.disabled = false;
+        caseSelect.value = String(button.dataset.caseId);
+        document.getElementById('generatePatientCase').textContent =
+            data.cases.length + (data.cases.length === 1 ? ' case available' : ' cases available');
+        patientDocumentModal.show();
+    })
+    .catch(error => {
+        hideLoading();
+        showToast('Unable to open templates', error.message, true);
+    });
+});
+
+document.querySelectorAll('.template-choice input').forEach(input => {
+    input.addEventListener('change', function() {
+        document.querySelectorAll('.template-choice').forEach(choice => {
+            choice.classList.remove('selected');
+        });
+        this.closest('.template-choice').classList.add('selected');
+    });
+});
+
+document.getElementById('generatePatientDocumentBtn').addEventListener('click', function() {
+    const form = document.getElementById('patientDocumentForm');
+
+    if (!form.checkValidity()) {
+        form.reportValidity();
+        return;
+    }
+
+    const button = this;
+    const originalContent = button.innerHTML;
+    const formData = new FormData(form);
+    formData.append('action', 'generate_patient_document');
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Generating...';
+    showLoading();
+
+    fetch(window.location.pathname, {
+        method: 'POST',
+        body: formData,
+        headers: {'X-Requested-With': 'XMLHttpRequest'}
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('The server could not generate the document.');
+        }
+        return response.json();
+    })
+    .then(data => {
+        hideLoading();
+
+        if (!data.success) {
+            throw new Error(data.message || 'Unable to generate the patient document.');
+        }
+
+        patientDocumentModal.hide();
+        showToast('PDF generated', data.document_name || 'The document was saved.');
+        currentDownloadPage = 1;
+        downloadsLoaded = false;
+        switchMedicalTab('download');
+        refreshDownloads();
+    })
+    .catch(error => {
+        hideLoading();
+        showToast('Generation failed', error.message, true);
+    })
+    .finally(() => {
+        button.disabled = false;
+        button.innerHTML = originalContent;
+    });
+});
+
+
+/*
+|--------------------------------------------------------------------------
 | RESET EDIT MODAL AFTER CLOSE
 |--------------------------------------------------------------------------
 */
@@ -4636,7 +6807,13 @@ setInterval(
     function() {
 
         if (!document.hidden) {
-            refreshDocuments();
+            if (activeMedicalTab === 'patients') {
+                refreshPatients();
+            } else if (activeMedicalTab === 'download') {
+                refreshDownloads();
+            } else {
+                refreshDocuments();
+            }
         }
 
     },
@@ -4655,7 +6832,13 @@ document.addEventListener(
     function() {
 
         if (!document.hidden) {
-            refreshDocuments();
+            if (activeMedicalTab === 'patients') {
+                refreshPatients();
+            } else if (activeMedicalTab === 'download') {
+                refreshDownloads();
+            } else {
+                refreshDocuments();
+            }
         }
     }
 );

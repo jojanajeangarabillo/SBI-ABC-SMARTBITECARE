@@ -949,6 +949,256 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             font-weight: 500;
         }
 
+
+        /* ==================== NOTIFICATION DETAILS MODAL ==================== */
+        .notification-details-modal .modal-dialog {
+            max-width: 650px;
+        }
+
+        .notification-details-modal .modal-content {
+            border: 0;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+        }
+
+        .notification-details-modal .modal-header {
+            position: relative;
+            padding: 0;
+            border: 0;
+            background: linear-gradient(135deg, var(--primary) 0%, #4154b3 100%);
+            color: #fff;
+        }
+
+        .notification-modal-header-content {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 24px 64px 24px 26px;
+        }
+
+        .notification-modal-icon {
+            width: 58px;
+            height: 58px;
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: 27px;
+            background: rgba(255, 255, 255, 0.16);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            color: #fff;
+        }
+
+        .notification-modal-heading {
+            min-width: 0;
+        }
+
+        .notification-modal-eyebrow {
+            margin: 0 0 3px;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            color: rgba(255, 255, 255, 0.76);
+        }
+
+        .notification-details-modal .modal-title {
+            margin: 0;
+            color: #fff;
+            font-size: 21px;
+            font-weight: 750;
+            line-height: 1.25;
+        }
+
+        .notification-details-modal .btn-close {
+            position: absolute;
+            top: 22px;
+            right: 22px;
+            z-index: 2;
+            filter: brightness(0) invert(1);
+            opacity: .9;
+            box-shadow: none;
+        }
+
+        .notification-details-modal .btn-close:hover {
+            opacity: 1;
+        }
+
+        .notification-details-modal .modal-body {
+            padding: 26px;
+            background: #f8fafc;
+        }
+
+        .notification-modal-meta {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
+        .notification-meta-card {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 14px;
+            padding: 14px 16px;
+        }
+
+        .notification-meta-label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .05em;
+            text-transform: uppercase;
+            color: #94a3b8;
+        }
+
+        .notification-meta-value {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 24px;
+            font-size: 14px;
+            font-weight: 650;
+            color: #334155;
+            word-break: break-word;
+        }
+
+        .notification-meta-value i {
+            color: var(--primary);
+        }
+
+        .notification-message-card {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+        }
+
+        .notification-message-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+            color: var(--primary);
+            font-size: 13px;
+            font-weight: 750;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+        }
+
+        .notification-message-text {
+            margin: 0;
+            color: #475569;
+            font-size: 14px;
+            line-height: 1.75;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .notification-id-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-top: 16px;
+            padding: 11px 14px;
+            border-radius: 12px;
+            background: #eef2ff;
+            color: #64748b;
+            font-size: 12px;
+        }
+
+        .notification-id-row strong {
+            color: var(--primary);
+        }
+
+        .notification-details-modal .modal-footer {
+            border: 0;
+            background: #fff;
+            padding: 18px 26px 22px;
+            gap: 10px;
+        }
+
+        .btn-modal-secondary,
+        .btn-modal-primary {
+            border-radius: 10px;
+            padding: 9px 18px;
+            font-size: 14px;
+            font-weight: 650;
+        }
+
+        .btn-modal-secondary {
+            background: #fff;
+            border: 1px solid #cbd5e1;
+            color: #475569;
+        }
+
+        .btn-modal-secondary:hover {
+            background: #f8fafc;
+            border-color: #94a3b8;
+            color: #334155;
+        }
+
+        .btn-modal-primary {
+            background: var(--primary);
+            border: 1px solid var(--primary);
+            color: #fff;
+        }
+
+        .btn-modal-primary:hover {
+            background: #1d2863;
+            border-color: #1d2863;
+            color: #fff;
+        }
+
+        .modal-status-pill {
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+            padding: 4px 11px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        @media (max-width: 576px) {
+            .notification-details-modal .modal-dialog {
+                margin: 12px;
+            }
+
+            .notification-modal-header-content {
+                padding: 20px 56px 20px 20px;
+            }
+
+            .notification-modal-icon {
+                width: 48px;
+                height: 48px;
+                border-radius: 14px;
+                font-size: 22px;
+            }
+
+            .notification-details-modal .modal-title {
+                font-size: 18px;
+            }
+
+            .notification-details-modal .modal-body {
+                padding: 20px;
+            }
+
+            .notification-modal-meta {
+                grid-template-columns: 1fr;
+            }
+
+            .notification-details-modal .modal-footer {
+                padding: 16px 20px 20px;
+            }
+        }
+
         /* Responsive */
         @media (max-width: 991px) {
             .main { margin-left: 90px; }
@@ -1253,6 +1503,69 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
 <!-- Toast Container -->
 <div class="toast-container-custom" id="toastContainer"></div>
 
+
+<!-- Notification Details Modal -->
+<div class="modal fade notification-details-modal" id="notificationDetailsModal" tabindex="-1" aria-labelledby="notificationDetailsModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="notification-modal-header-content">
+                    <div class="notification-modal-icon" id="modalNotificationIcon">
+                        <i class="bi bi-bell-fill"></i>
+                    </div>
+                    <div class="notification-modal-heading">
+                        <p class="notification-modal-eyebrow" id="modalNotificationType">Notification Details</p>
+                        <h5 class="modal-title" id="notificationDetailsModalLabel">Notification</h5>
+                    </div>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+
+            <div class="modal-body">
+                <div class="notification-modal-meta">
+                    <div class="notification-meta-card">
+                        <span class="notification-meta-label">Status</span>
+                        <div class="notification-meta-value">
+                            <i class="bi bi-info-circle-fill"></i>
+                            <span class="modal-status-pill badge-general" id="modalNotificationStatus">Notification</span>
+                        </div>
+                    </div>
+
+                    <div class="notification-meta-card">
+                        <span class="notification-meta-label">Date &amp; Time</span>
+                        <div class="notification-meta-value">
+                            <i class="bi bi-calendar3"></i>
+                            <span id="modalNotificationTime">—</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="notification-message-card">
+                    <div class="notification-message-label">
+                        <i class="bi bi-chat-left-text-fill"></i>
+                        Message
+                    </div>
+                    <p class="notification-message-text" id="modalNotificationMessage"></p>
+                </div>
+
+                <div class="notification-id-row">
+                    <span><i class="bi bi-hash me-1"></i> Notification ID</span>
+                    <strong id="modalNotificationId">—</strong>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" class="btn btn-modal-secondary" data-bs-dismiss="modal">
+                    <i class="bi bi-x-lg me-1"></i> Close
+                </button>
+                <button type="button" class="btn btn-modal-primary" id="modalMarkReadBtn">
+                    <i class="bi bi-check2-circle me-1"></i> Mark as Read
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 // ----------------------------------------------------------------
@@ -1417,20 +1730,122 @@ document.getElementById('markAllReadBtn').addEventListener('click', function() {
 });
 
 // ----------------------------------------------------------------
-// VIEW ACTION BUTTONS
+// VIEW ACTION BUTTONS - STYLED MODAL
 // ----------------------------------------------------------------
+const notificationModalElement = document.getElementById('notificationDetailsModal');
+const notificationModal = notificationModalElement
+    ? new bootstrap.Modal(notificationModalElement)
+    : null;
+
+const modalTitle = document.getElementById('notificationDetailsModalLabel');
+const modalMessage = document.getElementById('modalNotificationMessage');
+const modalTime = document.getElementById('modalNotificationTime');
+const modalStatus = document.getElementById('modalNotificationStatus');
+const modalType = document.getElementById('modalNotificationType');
+const modalId = document.getElementById('modalNotificationId');
+const modalIcon = document.getElementById('modalNotificationIcon');
+const modalMarkReadBtn = document.getElementById('modalMarkReadBtn');
+
+let activeNotificationId = null;
+
+function getNotificationVisual(category) {
+    const visuals = {
+        followup: {
+            label: 'Follow-Up',
+            icon: 'bi-clock-fill',
+            badge: 'badge-followup'
+        },
+        low: {
+            label: 'Low Stock Alert',
+            icon: 'bi-exclamation-triangle-fill',
+            badge: 'badge-low'
+        },
+        expiring: {
+            label: 'Expiring Item Alert',
+            icon: 'bi-clock-history',
+            badge: 'badge-expiring'
+        },
+        vaccination: {
+            label: 'Vaccination',
+            icon: 'bi-shield-check',
+            badge: 'badge-vaccination'
+        },
+        patient: {
+            label: 'Patient Update',
+            icon: 'bi-person-plus-fill',
+            badge: 'badge-patient'
+        },
+        general: {
+            label: 'General Notification',
+            icon: 'bi-bell-fill',
+            badge: 'badge-general'
+        }
+    };
+
+    return visuals[category] || visuals.general;
+}
+
 document.querySelectorAll('.view-action-btn').forEach(btn => {
     btn.addEventListener('click', function() {
-        const notifId = this.dataset.notifId;
-        // Find the notification item
         const parent = this.closest('.notif-item');
-        const title = parent?.querySelector('.notif-title')?.textContent || 'Notification';
-        const desc = parent?.querySelector('.notif-desc')?.textContent || '';
-        
-        // Show details in a simple alert or modal
-        alert('📋 ' + title + '\n\n' + desc + '\n\nNotification ID: ' + notifId);
+        if (!parent || !notificationModal) return;
+
+        activeNotificationId = this.dataset.notifId || '';
+
+        const title = parent.querySelector('.notif-title')?.textContent.trim() || 'Notification';
+        const desc = parent.querySelector('.notif-desc')?.textContent.trim() || 'No additional details available.';
+        const time = parent.querySelector('.notif-time')?.textContent.trim() || '—';
+        const statusElement = parent.querySelector('.badge-status-pill');
+        const statusText = statusElement?.textContent.trim() || 'Notification';
+        const isRead = parent.classList.contains('unread') === false;
+
+        let category = 'general';
+        ['followup', 'low', 'expiring', 'vaccination', 'patient', 'general'].some(type => {
+            if (parent.classList.contains('border-' + type)) {
+                category = type;
+                return true;
+            }
+            return false;
+        });
+
+        const visual = getNotificationVisual(category);
+
+        modalTitle.textContent = title;
+        modalMessage.textContent = desc;
+        modalTime.textContent = time;
+        modalType.textContent = visual.label;
+        modalId.textContent = activeNotificationId || '—';
+
+        modalIcon.innerHTML = `<i class="bi ${visual.icon}"></i>`;
+
+        modalStatus.className = 'modal-status-pill ' + (isRead ? 'badge-read' : visual.badge);
+        modalStatus.textContent = isRead ? 'Read' : statusText;
+
+        if (modalMarkReadBtn) {
+            modalMarkReadBtn.dataset.notifId = activeNotificationId;
+            modalMarkReadBtn.style.display = isRead ? 'none' : 'inline-flex';
+        }
+
+        notificationModal.show();
     });
 });
+
+// Mark the currently opened notification as read from inside the modal.
+if (modalMarkReadBtn) {
+    modalMarkReadBtn.addEventListener('click', function() {
+        const notifId = this.dataset.notifId;
+        if (!notifId) return;
+
+        const markReadControl = document.querySelector(`.mark-read-row[data-notif-id="${notifId}"]`);
+
+        if (markReadControl) {
+            markReadControl.click();
+            modalStatus.className = 'modal-status-pill badge-read';
+            modalStatus.textContent = 'Read';
+            this.style.display = 'none';
+        }
+    });
+}
 
 // ----------------------------------------------------------------
 // AUTO-REFRESH
