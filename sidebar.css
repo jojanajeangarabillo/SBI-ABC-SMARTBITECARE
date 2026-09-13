@@ -199,3 +199,33 @@
         display: none;
     }
 }
+/* Notification menu item */
+.notification-link {
+    display: flex !important;
+    align-items: center;
+    justify-content: flex-start !important;
+    width: 100%;
+}
+
+/* Notification badge */
+.notification-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+
+    margin-left: 6px;   /* keeps badge close to text */
+
+    background: #dc3545;
+    color: #ffffff;
+
+    border-radius: 999px;
+
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+}

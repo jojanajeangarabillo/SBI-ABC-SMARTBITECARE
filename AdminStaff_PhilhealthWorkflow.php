@@ -2,8 +2,9 @@
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
+require_once 'sources/notification_helper.php';
 
-$user=workflowRequireUser($conn,4);$userId=(int)$user['user_id'];$branchId=(string)$user['branch_id'];$csrf=workflowCsrfToken();
+$user=workflowRequireUser($conn,4);$userId=(int)$user['user_id'];$branchId=(string)$user['branch_id'];$notification_count = getAdminStaffNotificationCount($conn, $branchId);$csrf=workflowCsrfToken();
 $branchName=(string)($user['branch_name']??$branchId);$username=(string)($user['username']??'Administrative Staff');
 $caintaStatuses=['For Writing','For Screening','Ready for Main Branch','Sent to Main Branch','Returned for Correction'];
 
@@ -125,10 +126,20 @@ $flash=workflowTakeFlash();
                 <li><a href="AdminStaff_Registry.php"><i class="bi bi-journal-check"></i><span>Registry Queue</span></a></li>
                 <li><a class="active" href="AdminStaff_PhilhealthWorkflow.php"><i class="bi bi-check2-all"></i><span>PhilHealth Workflow</span></a></li>
                 <li><a href="AdminStaff_MedicalDocuments.php"><i class="bi bi-file-earmark-ruled"></i><span>Medical Documents</span></a></li>
-                <li><a href="AdminStaff_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+                <li>
+                    <a href="AdminStaff_Notifications.php" class="notification-link">
+                        <i class="bi bi-bell-fill"></i>
+                        <span>Notifications</span>
+
+                        <?php if ($notification_count > 0): ?>
+                            <span class="notification-badge">
+                                <?php echo $notification_count; ?>
+                            </span>
+                        <?php endif; ?>
+                    </a>
+                </li>
             </ul>
         </nav>
-        <div class="logout"><a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a></div>
     </div>
 
     <div class="main">

@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/notification_helper.php';
 
 // Check if user is logged in and is branch admin
 if (
@@ -14,6 +15,7 @@ if (
 
 // Get user branch information
 $user_id = $_SESSION['user_id'];
+$notification_count = getUnreadNotificationCount($conn, $user_id);
 $branch_id = null;
 $branch_name = '';
 
@@ -1039,17 +1041,15 @@ $username = $userInfo['username'] ?? 'Admin';
                 <li><a href="BranchAdmin_Forecasting.php"><i class="bi bi-graph-up-arrow"></i><span>Supply Forecasting</span></a></li>
                 <li><a href="BranchAdmin_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
                 <li><a href="BranchAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
-                <li><a href="BranchAdmin_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+                <li><a href="BranchAdmin_Notifications.php" class="notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
+                <?php if ($notification_count > 0): ?>
+                    <span class="notification-badge"><?php echo $notification_count; ?></span>
+                <?php endif; ?>
+            </a></li>
                 <li><a href="BranchAdmin_Settings.php"><i class="bi bi-gear-fill"></i><span>Settings</span></a></li>
             </ul>
         </nav>
-
-        <div class="logout">
-            <a href="logout.php"> <i class="bi bi-box-arrow-right"></i>
-                <span>Logout</span>
-            </a>
-        </div>
-    </div>
+</div>
 
     <!-- Main Content -->
     <div class="main">

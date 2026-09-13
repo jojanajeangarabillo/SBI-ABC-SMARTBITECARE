@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once __DIR__ . '/sources/db_connect.php';
+require_once 'sources/notification_helper.php';
 require_once __DIR__ . '/sources/app_config.php';
 require_once __DIR__ . '/sources/mailer.php';
 
@@ -14,6 +15,9 @@ if (
     exit();
 }
 
+
+$user_id = (int)$_SESSION['user_id'];
+$notification_count = getUnreadNotificationCount($conn, $user_id);
 // ========== AUDIT LOG FUNCTION ==========
 function addAuditLog($conn, $user_id, $action, $module = 'Branch & Admin Management') {
     try {
@@ -1249,7 +1253,33 @@ if (isset($_GET['archive_id'])) {
             .search-wrap { max-width: 100%; }
             .btn-add { justify-content: center; }
         }
-    </style>
+            /* Notification sidebar badge */
+        .notification-link {
+            display: flex !important;
+            align-items: center;
+            width: 100%;
+        }
+
+        .notification-badge {
+            display: inline-flex !important;
+            align-items: center;
+            justify-content: center;
+            min-width: 20px;
+            height: 20px;
+            padding: 0 6px;
+            margin-left: auto;
+            border-radius: 999px;
+            background: #F21D2F;
+            color: #fff !important;
+            font-size: 10px !important;
+            font-weight: 700 !important;
+            line-height: 1;
+            white-space: nowrap;
+            flex: 0 0 auto;
+        }
+
+</style>
+
 </head>
 <body>
 
@@ -1273,13 +1303,15 @@ if (isset($_GET['archive_id'])) {
             <li><a href="SuperAdmin_BranchPerformanceMonitoring.php"><i class="bi bi-graph-up-arrow"></i><span>Branch Performance Monitoring</span></a></li>
             <li><a href="SuperAdmin_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
             <li><a href="SuperAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
-            <li><a href="SuperAdmin_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+            <li><a href="SuperAdmin_Notifications.php" class="notification-link">
+                <i class="bi bi-bell-fill"></i><span>Notifications</span>
+                <?php if ($notification_count > 0): ?>
+                    <span class="notification-badge"><?php echo $notification_count; ?></span>
+                <?php endif; ?>
+            </a></li>
         </ul>
     </nav>
 
-    <div class="logout">
-        <a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
-    </div>
 </div>
 
 <!-- ========== MAIN CONTENT ========== -->
@@ -1288,14 +1320,14 @@ if (isset($_GET['archive_id'])) {
     <!-- TOP BAR -->
     <div class="topbar">
         <h3>Branch & Admin Management</h3>
-        <<div class="dropdown">
+        <div class="dropdown">
             <button
                 class="profile profile-button dropdown-toggle"
                 type="button"
                 id="superAdminProfileMenu"
                 data-bs-toggle="dropdown"
                 aria-expanded="false"
-            >
+
                 <i class="bi bi-person-circle"></i>
                 <span><?php echo htmlspecialchars($_SESSION['username'] ?? 'SUPER ADMIN', ENT_QUOTES, 'UTF-8'); ?></span>
                 <span class="profile-role">| Super Admin</span>

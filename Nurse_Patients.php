@@ -1,6 +1,12 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/notification_helper.php';
+
+// Get logged-in Nurse
+$user_id = (int)$_SESSION['user_id'];
+// Get unread notification count
+$notification_count = getUnreadNotificationCount($conn, $user_id);
 
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -1192,7 +1198,21 @@ function getStatusBadge($status)
             <li><a href="Nurse_DailyInventory.php"><i class="bi bi-clipboard-data-fill"></i><span>Daily Inventory</span></a></li>
             <li><a href="Nurse_MedicalSuppliesManagement.php"><i class="bi bi-calendar-check"></i><span>Medical Supplies Management</span></a></li>
             <li><a href="Nurse_Supplyforecasting.php"><i class="bi bi-box-seam"></i><span>Supply Forecasting</span></a></li>
-            <li><a href="Nurse_Notification.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+            <li>
+                <a href="Nurse_Notification.php">
+                    <i class="bi bi-bell-fill"></i>
+
+                    <span class="notification-label">
+                        Notifications
+
+                        <?php if ($notification_count > 0): ?>
+                            <span class="notification-badge">
+                                <?php echo $notification_count; ?>
+                            </span>
+                        <?php endif; ?>
+                    </span>
+                </a>
+            </li>
         </ul>
     </nav>
 

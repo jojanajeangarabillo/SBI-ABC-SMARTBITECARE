@@ -2,11 +2,13 @@
 session_start();
 require_once __DIR__ . '/sources/db_connect.php';
 require_once __DIR__ . '/sources/workflow_helpers.php';
+require_once 'sources/notification_helper.php';
 
 $user = workflowRequireUser($conn, 1);
 $userId = (int)$user['user_id'];
 $branchId = (string)$user['branch_id'];
 $username = (string)($user['username'] ?? 'Super Admin');
+$notification_count = getUnreadNotificationCount($conn, $userId);
 $csrf = workflowCsrfToken();
 
 function superAdminNotificationPageUrl(int $page): string
@@ -516,12 +518,14 @@ $flash = workflowTakeFlash();
             display: -webkit-box;
             -webkit-box-orient: vertical;
             -webkit-line-clamp: 2;
+            line-clamp: 2;
             overflow: hidden;
         }
         .notif-content .notif-desc.expanded {
             display: block;
             overflow: visible;
             -webkit-line-clamp: unset;
+            line-clamp: unset;
         }
         .notif-content .notif-time {
             color: #6a7a9a;
@@ -832,15 +836,14 @@ $flash = workflowTakeFlash();
             <li><a href="SuperAdmin_BranchPerformanceMonitoring.php"><i class="bi bi-graph-up-arrow"></i><span>Branch Performance Monitoring</span></a></li>
             <li><a href="SuperAdmin_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
             <li><a href="SuperAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
-            <li><a class="active" href="SuperAdmin_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+            <li><a class="active" href="SuperAdmin_Notifications.php" class="notification-link">
+                <i class="bi bi-bell-fill"></i><span>Notifications</span>
+                <?php if ($notification_count > 0): ?>
+                    <span class="notification-badge"><?php echo $notification_count; ?></span>
+                <?php endif; ?>
+            </a></li>
         </ul>
     </nav>
-
-    <div class="logout">
-        <a href="#" data-bs-toggle="modal" data-bs-target="#logoutConfirmModal">
-            <i class="bi bi-box-arrow-right"></i><span>Logout</span>
-        </a>
-    </div>
 </div>
 
 <!-- ========== MAIN CONTENT ========== -->
