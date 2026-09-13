@@ -230,7 +230,7 @@ $flash = workflowTakeFlash();
 
         <section class="notification-section" aria-label="Notification list">
             <div class="notification-toolbar">
-                <div><h4><i class="bi bi-bell-fill me-2"></i>Recent Notifications</h4><p><?= $unreadCount ?> unread notification<?= $unreadCount === 1 ? '' : 's' ?></p></div>
+                <div><p><?= $unreadCount ?> unread notification<?= $unreadCount === 1 ? '' : 's' ?></p></div>
                 <form method="post">
                     <input type="hidden" name="csrf_token" value="<?= workflowH($csrf) ?>">
                     <input type="hidden" name="action" value="mark_all">

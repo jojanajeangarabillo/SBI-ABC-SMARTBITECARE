@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Sep 11, 2026 at 04:23 PM
+-- Generation Time: Sep 13, 2026 at 07:22 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -20,104 +20,6 @@ SET time_zone = "+00:00";
 --
 -- Database: `smartbitecare`
 --
-
-DELIMITER $$
---
--- Procedures
---
-CREATE DEFINER=`root`@`localhost` PROCEDURE `migrate_inventory_item_to_base` (IN `p_migration_key` VARCHAR(150), IN `p_exact_item_name` VARCHAR(255), IN `p_base_unit` VARCHAR(30), IN `p_display_unit` VARCHAR(30), IN `p_conversion` DECIMAL(12,4))   migration_block:BEGIN
-    DECLARE v_item_id INT DEFAULT NULL;
-
-    IF p_conversion <= 0 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='conversion_to_base must be greater than zero';
-    END IF;
-
-    IF EXISTS (SELECT 1 FROM system_migrations WHERE migration_key=p_migration_key) THEN
-        LEAVE migration_block;
-    END IF;
-
-    SET v_item_id=(
-        SELECT item_id
-        FROM inventory_items
-        WHERE UPPER(TRIM(item_name))=UPPER(TRIM(p_exact_item_name))
-        ORDER BY item_id
-        LIMIT 1
-    );
-
-    IF v_item_id IS NULL THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Configured inventory item was not found';
-    END IF;
-
-    START TRANSACTION;
-
-    
-    
-    UPDATE inventory_stocks
-       SET quantity_available=quantity_available*p_conversion
-     WHERE item_id=v_item_id;
-
-    UPDATE inventory_stocks_archive
-       SET quantity_available=quantity_available*p_conversion
-     WHERE item_id=v_item_id;
-
-    UPDATE stock_transactions
-       SET quantity=quantity*p_conversion
-     WHERE item_id=v_item_id;
-
-    UPDATE inventory_usage_history
-       SET quantity_used=quantity_used*p_conversion
-     WHERE item_id=v_item_id;
-
-    UPDATE vaccination_records
-       SET quantity_used=quantity_used*p_conversion,
-           quantity_unit_label=p_base_unit,
-           display_unit_label_snapshot=p_display_unit,
-           conversion_to_base_snapshot=p_conversion
-     WHERE item_id=v_item_id;
-
-    UPDATE vaccination_records_archive
-       SET quantity_used=quantity_used*p_conversion,
-           quantity_unit_label=p_base_unit,
-           display_unit_label_snapshot=p_display_unit,
-           conversion_to_base_snapshot=p_conversion
-     WHERE item_id=v_item_id;
-
-    UPDATE daily_inventory_closings
-       SET beginning_stock=beginning_stock*p_conversion,
-           delivery=delivery*p_conversion,
-           consumed=consumed*p_conversion,
-           pull_out=pull_out*p_conversion,
-           computed_ending=computed_ending*p_conversion,
-           actual_count=actual_count*p_conversion,
-           variance=variance*p_conversion
-     WHERE item_id=v_item_id;
-
-    UPDATE training_dataset
-       SET beginning_stock=beginning_stock*p_conversion,
-           quantity_used=quantity_used*p_conversion,
-           stock_received=stock_received*p_conversion,
-           ending_stock=ending_stock*p_conversion,
-           minimum_stock_level=minimum_stock_level*p_conversion
-     WHERE item_id=v_item_id;
-
-    UPDATE inventory_items
-       SET minimum_stock=minimum_stock*p_conversion,
-           base_unit_label=p_base_unit,
-           display_unit_label=p_display_unit,
-           conversion_to_base=p_conversion
-     WHERE item_id=v_item_id;
-
-    INSERT INTO system_migrations(migration_key,description)
-    VALUES(
-        p_migration_key,
-        CONCAT(p_exact_item_name,': converted existing quantities by ',p_conversion,
-               '; base=',p_base_unit,'; display=',p_display_unit)
-    );
-
-    COMMIT;
-END$$
-
-DELIMITER ;
 
 -- --------------------------------------------------------
 
@@ -977,7 +879,40 @@ INSERT INTO `audit_logs` (`log_id`, `user_id`, `branch_id`, `action`, `module`, 
 (771, 9, 'SBI-002', 'Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: Julia Singko (ID: 86) | Case ID: 80 | Used: 0.5 Vial | Status: Completed | Batch(es): 26-0027: 0.5 Vial (exp 2028-06-12) | Date: 2026-09-11', 'Vaccination', '2026-09-11 13:57:07'),
 (772, 14, 'SBI-003', 'Logout: User \'Joepat Lacerna\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-09-11 14:18:19'),
 (773, 6, 'SBI-002', 'Login Failed: User \'Jojana Garabillo\' - Incorrect password', 'Login System', '2026-09-11 14:18:34'),
-(774, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-09-11 14:18:46');
+(774, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-09-11 14:18:46'),
+(775, 1, 'SBI-001', 'Login Success: User \'superadmin\' - Role: Super Admin, Branch: Antipolo Branch', 'Login System', '2026-09-13 12:58:02'),
+(776, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-09-13 12:58:52'),
+(777, 1, 'SBI-001', 'Generated branch_performance report (pdf) - Branch: All Branches, Date Range: 2026-08-14 to 2026-09-13', 'Reports', '2026-09-13 12:59:07'),
+(778, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-09-13 13:00:08'),
+(779, 6, 'SBI-002', 'Automatically generated 30-day forecasts for 33 items', 'Supply Forecasting', '2026-09-13 13:12:04'),
+(780, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-09-13 13:13:43'),
+(781, 9, 'SBI-002', 'Login Success: User \'Marc Beringuela\' - Role: Nurse, Branch: Cainta Branch', 'Login System', '2026-09-13 13:14:14'),
+(782, 16, 'SBI-002', 'Login Success: User \'Ella Franco\' - Role: Administrative Staff, Branch: Cainta Branch', 'Login System', '2026-09-13 13:29:34'),
+(783, 11, 'SBI-002', 'Login Success: User \'Jean Montero\' - Role: Inventory Officer, Branch: Cainta Branch', 'Login System', '2026-09-13 13:37:26'),
+(784, 1, 'SBI-001', 'Viewed Branch Performance Monitoring - Metric: Total Cases, Date: This Month', 'Performance Monitoring', '2026-09-13 14:05:09'),
+(785, 16, 'SBI-002', 'Generated Vaccination Certificate for Aira Flores (Case 26-0026, Document ID 7)', 'Medical Documents', '2026-09-13 14:06:59'),
+(786, 16, 'SBI-002', 'Generated Medical Certificate for Analyn Briones (Case 26-0025, Document ID 8)', 'Medical Documents', '2026-09-13 14:07:30'),
+(787, 16, 'SBI-002', 'Generated Vaccination Certificate for Aira Flores (Case 26-0026, Document ID 9)', 'Medical Documents', '2026-09-13 14:56:19'),
+(788, 16, 'SBI-002', 'Generated Medical Certificate for Aira Flores (Case 26-0026, Document ID 10)', 'Medical Documents', '2026-09-13 14:58:00'),
+(789, 9, 'SBI-002', 'Generated Medical Certificate for Julia Singko (Case 26-0032, Document ID 11)', 'Medical Documents', '2026-09-13 15:07:32'),
+(790, 9, 'SBI-002', 'Generated Vaccination Certificate for Aira Flores (Case 26-0026, Document ID 12)', 'Medical Documents', '2026-09-13 15:07:43'),
+(791, 6, 'SBI-002', 'Automatically generated 7-day forecasts for 33 items', 'Supply Forecasting', '2026-09-13 15:32:33'),
+(792, 6, 'SBI-002', 'Automatically generated 14-day forecasts for 33 items', 'Supply Forecasting', '2026-09-13 15:32:44'),
+(793, 11, 'SBI-002', 'Stock In transaction #93: BETADINE | Quantity: 60 mL | Batch/Lot No.: 26-00040', 'Stock Management', '2026-09-13 15:52:37'),
+(794, 11, 'SBI-002', 'Stock In transaction #94: 1CC/3CC | Quantity: 50 Box/s | Batch/Lot No.: 26-0041', 'Stock Management', '2026-09-13 16:00:15'),
+(795, 11, 'SBI-002', 'Stock In transaction #95: GLOVES | Quantity: 200 Box/s | Batch/Lot No.: 26-00042', 'Stock Management', '2026-09-13 16:02:10'),
+(796, 11, 'SBI-002', 'Stock In transaction #96: 5CC/10CC | Quantity: 50 Box/s | Batch/Lot No.: 26-00043', 'Stock Management', '2026-09-13 16:02:48'),
+(797, 11, 'SBI-002', 'Stock In transaction #97: CEFALEXIN 500 MG | Quantity: 120 Piece | Batch/Lot No.: 26-00044', 'Stock Management', '2026-09-13 16:04:01'),
+(798, 11, 'SBI-002', 'Stock In transaction #98: COTTON BALLS | Quantity: 264 Packs | Batch/Lot No.: 26-00045', 'Stock Management', '2026-09-13 16:05:24'),
+(799, 6, 'SBI-002', 'Automatically generated 30-day forecasts for 12 items', 'Supply Forecasting', '2026-09-13 16:20:25'),
+(800, 6, 'SBI-002', 'Automatically generated 30-day forecasts for 33 items', 'Supply Forecasting', '2026-09-13 16:47:25'),
+(801, 6, 'SBI-002', 'Logout: User \'Jojana Garabillo\' (Role: Branch Admin) (IP: ::1)', 'Login System', '2026-09-13 16:47:25'),
+(802, 6, 'SBI-002', 'Login Failed: User \'Jojana Garabillo\' - Incorrect password', 'Login System', '2026-09-13 16:47:37'),
+(803, 6, 'SBI-002', 'Login Success: User \'Jojana Garabillo\' - Role: Branch Admin, Branch: Cainta Branch', 'Login System', '2026-09-13 16:47:49'),
+(804, 6, 'SBI-002', 'Automatically generated 7-day forecasts for 33 items', 'Supply Forecasting', '2026-09-13 16:48:21'),
+(805, 6, 'SBI-002', 'Automatically generated 14-day forecasts for 33 items', 'Supply Forecasting', '2026-09-13 16:48:45'),
+(806, 9, 'SBI-002', 'Generated Referral Letter for Julia Singko (Case 26-0032, Document ID 13)', 'Medical Documents', '2026-09-13 17:06:16'),
+(807, 16, 'SBI-002', 'Checked in Julia Singko as Follow-up', 'Patient Visit', '2026-09-13 17:20:57');
 
 -- --------------------------------------------------------
 
@@ -1102,6 +1037,19 @@ CREATE TABLE `document_tracking` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+--
+-- Dumping data for table `document_tracking`
+--
+
+INSERT INTO `document_tracking` (`document_id`, `case_id`, `document_type`, `status`, `remarks`, `created_by`, `created_at`) VALUES
+(1, 75, NULL, 'Generated', 'Vaccination Certificate generated for Aira Flores. Medical Document ID: 7.', 16, '2026-09-13 14:06:59'),
+(2, 74, 'Medical Certificate', 'Generated', 'Medical Certificate generated for Analyn Briones. Medical Document ID: 8.', 16, '2026-09-13 14:07:30'),
+(3, 75, NULL, 'Generated', 'Vaccination Certificate generated for Aira Flores. Medical Document ID: 9.', 16, '2026-09-13 14:56:19'),
+(4, 75, 'Medical Certificate', 'Generated', 'Medical Certificate generated for Aira Flores. Medical Document ID: 10.', 16, '2026-09-13 14:58:00'),
+(5, 80, 'Medical Certificate', 'Generated', 'Medical Certificate generated by Nurse Marc Beringuela. Medical Document ID: 11.', 9, '2026-09-13 15:07:32'),
+(6, 75, NULL, 'Generated', 'Vaccination Certificate generated by Nurse Marc Beringuela. Medical Document ID: 12.', 9, '2026-09-13 15:07:43'),
+(7, 80, 'Referral Letter', 'Generated', 'Referral Letter generated by Nurse Marc Beringuela. Medical Document ID: 13.', 9, '2026-09-13 17:06:16');
+
 -- --------------------------------------------------------
 
 --
@@ -1113,52 +1061,126 @@ CREATE TABLE `forecast_results` (
   `item_id` int(11) NOT NULL,
   `branch_id` varchar(10) NOT NULL,
   `forecast_date` date NOT NULL,
+  `forecast_start_date` date DEFAULT NULL,
+  `forecast_end_date` date DEFAULT NULL,
+  `current_stock_snapshot` decimal(12,4) DEFAULT NULL,
+  `minimum_stock_snapshot` decimal(12,4) DEFAULT NULL,
+  `stock_status` varchar(30) DEFAULT NULL,
   `shortage_probability` decimal(5,4) DEFAULT NULL,
   `forecast_status` varchar(100) DEFAULT NULL,
   `recommended_reorder` decimal(12,2) DEFAULT NULL,
   `generated_by` int(11) DEFAULT NULL,
   `forecasted_consumption` decimal(12,2) DEFAULT NULL,
-  `forecast_days` int(11) DEFAULT NULL
+  `forecast_days` int(11) DEFAULT NULL,
+  `is_stale` tinyint(1) NOT NULL DEFAULT 1,
+  `stale_at` datetime DEFAULT NULL,
+  `stale_reason` varchar(255) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
 -- Dumping data for table `forecast_results`
 --
 
-INSERT INTO `forecast_results` (`forecast_id`, `item_id`, `branch_id`, `forecast_date`, `shortage_probability`, `forecast_status`, `recommended_reorder`, `generated_by`, `forecasted_consumption`, `forecast_days`) VALUES
-(67, 42, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 355.00, 6, 66.77, 30),
-(68, 34, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 242.00, 6, 66.28, 30),
-(69, 30, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 237.00, 6, 69.11, 30),
-(70, 32, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 198.00, 6, 58.93, 30),
-(71, 44, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 189.00, 6, 76.47, 30),
-(72, 45, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 187.00, 6, 75.37, 30),
-(73, 31, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 170.00, 6, 53.53, 30),
-(74, 33, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 169.00, 6, 53.05, 30),
-(75, 35, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 76.00, 6, 17.85, 30),
-(76, 36, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 75.00, 6, 17.84, 30),
-(77, 20, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 73.00, 6, 15.27, 30),
-(78, 43, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 72.00, 6, 14.09, 30),
-(79, 37, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 65.00, 6, 11.25, 30),
-(80, 38, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 65.00, 6, 11.30, 30),
-(81, 10, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 64.00, 6, 9.51, 30),
-(82, 12, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 64.00, 6, 9.46, 30),
-(83, 11, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 64.00, 6, 9.54, 30),
-(84, 51, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 63.00, 6, 8.37, 30),
-(85, 17, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 60.00, 6, 7.89, 30),
-(86, 18, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 60.00, 6, 7.89, 30),
-(87, 19, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 60.00, 6, 7.89, 30),
-(88, 41, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 58.00, 6, 4.60, 30),
-(89, 21, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 58.00, 6, 5.43, 30),
-(90, 26, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 57.00, 6, 4.94, 30),
-(91, 24, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 57.00, 6, 5.43, 30),
-(92, 25, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 57.00, 6, 4.94, 30),
-(93, 14, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 57.00, 6, 4.94, 30),
-(94, 15, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 56.00, 6, 4.47, 30),
-(95, 39, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 53.00, 6, 2.02, 30),
-(96, 40, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 53.00, 6, 2.02, 30),
-(97, 23, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 53.00, 6, 2.40, 30),
-(98, 2, 'SBI-002', '2026-09-11', 1.0000, 'Shortage Risk', 16.00, 6, 8.06, 30),
-(99, 5, 'SBI-002', '2026-09-11', 0.0000, 'Sufficient', 0.00, 6, 18.59, 30);
+INSERT INTO `forecast_results` (`forecast_id`, `item_id`, `branch_id`, `forecast_date`, `forecast_start_date`, `forecast_end_date`, `current_stock_snapshot`, `minimum_stock_snapshot`, `stock_status`, `shortage_probability`, `forecast_status`, `recommended_reorder`, `generated_by`, `forecasted_consumption`, `forecast_days`, `is_stale`, `stale_at`, `stale_reason`) VALUES
+(211, 44, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 60.0000, 100.0000, 'LOW STOCK', 0.9899, 'Shortage Risk', 117.00, 6, 76.28, 30, 0, NULL, NULL),
+(212, 2, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 9.4500, 5.0000, 'SUFFICIENT STOCK', 0.0076, 'Sufficient', 1.00, 6, 4.46, 30, 0, NULL, NULL),
+(213, 30, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 70.0000, 140.0000, 'LOW STOCK', 0.0002, 'Sufficient', 79.00, 6, 8.84, 30, 0, NULL, NULL),
+(214, 34, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 80.0000, 150.0000, 'LOW STOCK', 0.0000, 'Sufficient', 79.00, 6, 8.84, 30, 0, NULL, NULL),
+(215, 10, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 20.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 36.00, 6, 5.06, 30, 0, NULL, NULL),
+(216, 14, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 20.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 35.00, 6, 4.46, 30, 0, NULL, NULL),
+(217, 17, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 25.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 33.00, 6, 7.56, 30, 0, NULL, NULL),
+(218, 23, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 25.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 27.00, 6, 1.67, 30, 0, NULL, NULL),
+(219, 12, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 35.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 21.00, 6, 5.06, 30, 0, NULL, NULL),
+(220, 36, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 50.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 4.00, 6, 3.04, 30, 0, NULL, NULL),
+(221, 18, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 55.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 3.00, 6, 7.56, 30, 0, NULL, NULL),
+(222, 35, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 3.04, 30, 0, NULL, NULL),
+(223, 39, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 100.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.03, 30, 0, NULL, NULL),
+(224, 19, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 120.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 7.56, 30, 0, NULL, NULL),
+(225, 40, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.03, 30, 0, NULL, NULL),
+(226, 31, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 120.0000, 100.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 8.84, 30, 0, NULL, NULL),
+(227, 33, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 115.0000, 100.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 8.84, 30, 0, NULL, NULL),
+(228, 42, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 264.0000, 240.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.03, 30, 0, NULL, NULL),
+(229, 26, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 5.06, 30, 0, NULL, NULL),
+(230, 37, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 3.04, 30, 0, NULL, NULL),
+(231, 38, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 110.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 3.04, 30, 0, NULL, NULL),
+(232, 43, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 120.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.03, 30, 0, NULL, NULL),
+(233, 45, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 200.0000, 100.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 76.28, 30, 0, NULL, NULL),
+(234, 24, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 5.06, 30, 0, NULL, NULL),
+(235, 25, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 120.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 4.46, 30, 0, NULL, NULL),
+(236, 15, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 55.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 4.46, 30, 0, NULL, NULL),
+(237, 32, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 135.0000, 120.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 8.84, 30, 0, NULL, NULL),
+(238, 51, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 100.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.03, 30, 0, NULL, NULL),
+(239, 5, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 5178.0000, 180.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 5.06, 30, 0, NULL, NULL),
+(240, 41, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.03, 30, 0, NULL, NULL),
+(241, 21, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 110.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 5.06, 30, 0, NULL, NULL),
+(242, 20, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 5.06, 30, 0, NULL, NULL),
+(243, 11, 'SBI-002', '2026-09-14', '2026-09-15', '2026-10-14', 120.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 5.06, 30, 0, NULL, NULL),
+(244, 30, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 70.0000, 140.0000, 'LOW STOCK', 0.0000, 'Sufficient', 72.00, 6, 1.76, 7, 0, NULL, NULL),
+(245, 34, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 80.0000, 150.0000, 'LOW STOCK', 0.0000, 'Sufficient', 72.00, 6, 1.76, 7, 0, NULL, NULL),
+(246, 44, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 60.0000, 100.0000, 'LOW STOCK', 0.0000, 'Sufficient', 57.00, 6, 16.72, 7, 0, NULL, NULL),
+(247, 10, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 20.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 32.00, 6, 1.05, 7, 0, NULL, NULL),
+(248, 14, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 20.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 31.00, 6, 0.88, 7, 0, NULL, NULL),
+(249, 17, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 25.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 27.00, 6, 1.45, 7, 0, NULL, NULL),
+(250, 23, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 25.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 26.00, 6, 0.11, 7, 0, NULL, NULL),
+(251, 12, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 35.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 17.00, 6, 1.05, 7, 0, NULL, NULL),
+(252, 36, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 50.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 1.00, 6, 0.42, 7, 0, NULL, NULL),
+(253, 35, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.42, 7, 0, NULL, NULL),
+(254, 39, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 100.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.03, 7, 0, NULL, NULL),
+(255, 18, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 55.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.45, 7, 0, NULL, NULL),
+(256, 19, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 120.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.45, 7, 0, NULL, NULL),
+(257, 40, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.03, 7, 0, NULL, NULL),
+(258, 31, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 120.0000, 100.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.76, 7, 0, NULL, NULL),
+(259, 33, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 115.0000, 100.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.76, 7, 0, NULL, NULL),
+(260, 42, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 264.0000, 240.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.03, 7, 0, NULL, NULL),
+(261, 2, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 9.4500, 5.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.88, 7, 0, NULL, NULL),
+(262, 26, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.05, 7, 0, NULL, NULL),
+(263, 37, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.42, 7, 0, NULL, NULL),
+(264, 38, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 110.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.42, 7, 0, NULL, NULL),
+(265, 43, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 120.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.03, 7, 0, NULL, NULL),
+(266, 45, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 200.0000, 100.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 16.72, 7, 0, NULL, NULL),
+(267, 24, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.05, 7, 0, NULL, NULL),
+(268, 25, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 120.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.88, 7, 0, NULL, NULL),
+(269, 15, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 55.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.88, 7, 0, NULL, NULL),
+(270, 32, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 135.0000, 120.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.76, 7, 0, NULL, NULL),
+(271, 51, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 100.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.03, 7, 0, NULL, NULL),
+(272, 5, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 5178.0000, 180.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.05, 7, 0, NULL, NULL),
+(273, 41, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.03, 7, 0, NULL, NULL),
+(274, 21, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 110.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.05, 7, 0, NULL, NULL),
+(275, 20, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.05, 7, 0, NULL, NULL),
+(276, 11, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-21', 120.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.05, 7, 0, NULL, NULL),
+(277, 44, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 60.0000, 100.0000, 'LOW STOCK', 0.0000, 'Sufficient', 75.00, 6, 34.24, 14, 0, NULL, NULL),
+(278, 30, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 70.0000, 140.0000, 'LOW STOCK', 0.0000, 'Sufficient', 74.00, 6, 3.69, 14, 0, NULL, NULL),
+(279, 34, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 80.0000, 150.0000, 'LOW STOCK', 0.0000, 'Sufficient', 74.00, 6, 3.69, 14, 0, NULL, NULL),
+(280, 10, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 20.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 33.00, 6, 2.05, 14, 0, NULL, NULL),
+(281, 14, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 20.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 32.00, 6, 1.78, 14, 0, NULL, NULL),
+(282, 17, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 25.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 29.00, 6, 3.02, 14, 0, NULL, NULL),
+(283, 23, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 25.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 26.00, 6, 0.46, 14, 0, NULL, NULL),
+(284, 12, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 35.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 18.00, 6, 2.05, 14, 0, NULL, NULL),
+(285, 36, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 50.0000, 50.0000, 'LOW STOCK', 0.0000, 'Sufficient', 2.00, 6, 1.12, 14, 0, NULL, NULL),
+(286, 35, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.12, 14, 0, NULL, NULL),
+(287, 39, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 100.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.20, 14, 0, NULL, NULL),
+(288, 18, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 55.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 3.02, 14, 0, NULL, NULL),
+(289, 19, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 120.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 3.02, 14, 0, NULL, NULL),
+(290, 40, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.20, 14, 0, NULL, NULL),
+(291, 31, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 120.0000, 100.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 3.69, 14, 0, NULL, NULL),
+(292, 33, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 115.0000, 100.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 3.69, 14, 0, NULL, NULL),
+(293, 42, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 264.0000, 240.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.20, 14, 0, NULL, NULL),
+(294, 2, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 9.4500, 5.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.78, 14, 0, NULL, NULL),
+(295, 26, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 2.05, 14, 0, NULL, NULL),
+(296, 37, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.12, 14, 0, NULL, NULL),
+(297, 38, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 110.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.12, 14, 0, NULL, NULL),
+(298, 43, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 120.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.20, 14, 0, NULL, NULL),
+(299, 45, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 200.0000, 100.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 34.24, 14, 0, NULL, NULL),
+(300, 24, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 2.05, 14, 0, NULL, NULL),
+(301, 25, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 120.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.78, 14, 0, NULL, NULL),
+(302, 15, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 55.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 1.78, 14, 0, NULL, NULL),
+(303, 32, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 135.0000, 120.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 3.69, 14, 0, NULL, NULL),
+(304, 51, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 100.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.20, 14, 0, NULL, NULL),
+(305, 5, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 5178.0000, 180.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 2.05, 14, 0, NULL, NULL),
+(306, 41, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 0.20, 14, 0, NULL, NULL),
+(307, 21, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 110.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 2.05, 14, 0, NULL, NULL),
+(308, 20, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 60.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 2.05, 14, 0, NULL, NULL),
+(309, 11, 'SBI-002', '2026-09-14', '2026-09-15', '2026-09-28', 120.0000, 50.0000, 'SUFFICIENT STOCK', 0.0000, 'Sufficient', 0.00, 6, 2.05, 14, 0, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -1356,7 +1378,92 @@ INSERT INTO `inventory_stocks` (`stock_id`, `item_id`, `batch_lot_no`, `manufact
 (24, 9, NULL, NULL, 'SBI-002', 2.0000, NULL, '2026-09-01 11:58:41'),
 (25, 3, '26-65685', '2026-08-01', 'SBI-002', 0.0000, '2027-08-31', '2026-09-08 01:48:39'),
 (26, 23, '26-022489', '2025-03-10', 'SBI-002', 0.0000, '2027-02-01', '2026-09-11 13:47:57'),
-(27, 2, '26-0027', '2026-09-01', 'SBI-002', 9.4500, '2028-06-12', '2026-09-11 13:57:07');
+(27, 2, '26-0027', '2026-09-01', 'SBI-002', 9.4500, '2028-06-12', '2026-09-11 13:57:07'),
+(28, 10, '26-00034', '2026-09-13', 'SBI-002', 20.0000, '2026-11-30', '2026-09-13 15:15:43'),
+(29, 15, '26-00035', '2026-08-07', 'SBI-002', 55.0000, '2027-08-18', '2026-09-13 15:18:31'),
+(30, 35, '26-00279', '2026-09-01', 'SBI-002', 10.0000, '2029-05-08', '2026-09-13 15:34:05'),
+(31, 39, '26-0039', '2026-08-04', 'SBI-002', 100.0000, '2029-11-29', '2026-09-13 15:35:16'),
+(32, 40, '26-00040', '2026-06-18', 'SBI-002', 60.0000, '2026-12-17', '2026-09-13 15:52:37'),
+(33, 35, '26-0041', '2026-09-02', 'SBI-002', 50.0000, '2031-10-14', '2026-09-13 16:00:15'),
+(34, 45, '26-00042', '2026-09-04', 'SBI-002', 200.0000, '2038-02-25', '2026-09-13 16:02:10'),
+(35, 36, '26-00043', '2026-02-02', 'SBI-002', 50.0000, '2027-11-30', '2026-09-13 16:02:48'),
+(36, 31, '26-00044', '2026-08-20', 'SBI-002', 120.0000, '2030-02-25', '2026-09-13 16:04:01'),
+(37, 42, '26-00045', '2026-07-09', 'SBI-002', 264.0000, '2029-08-29', '2026-09-13 16:05:24'),
+(38, 30, 'DEMO-AMOX-001', '2026-09-14', 'SBI-002', 70.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(39, 3, 'DEMO-ATS-001', '2026-09-14', 'SBI-002', 10.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(40, 17, 'DEMO-ATS15-001', '2026-09-14', 'SBI-002', 25.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(41, 12, 'DEMO-CHIRO-001', '2026-09-14', 'SBI-002', 35.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(42, 44, 'DEMO-FACE-001', '2026-09-14', 'SBI-002', 60.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(43, 14, 'DEMO-HRIG-001', '2026-09-14', 'SBI-002', 20.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(44, 34, 'DEMO-INS-001', '2026-09-14', 'SBI-002', 80.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(45, 23, 'DEMO-PPD-001', '2026-09-14', 'SBI-002', 25.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(46, 18, 'DEMO-ATS3K-001', '2026-09-14', 'SBI-002', 55.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(47, 33, 'DEMO-CET-001', '2026-09-14', 'SBI-002', 115.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(48, 26, 'DEMO-FLU-001', '2026-09-14', 'SBI-002', 60.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(49, 37, 'DEMO-G23-001', '2026-09-14', 'SBI-002', 60.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(50, 24, 'DEMO-HEPAB-001', '2026-09-14', 'SBI-002', 60.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(51, 32, 'DEMO-MEFE-001', '2026-09-14', 'SBI-002', 135.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(52, 41, 'DEMO-WATER-001', '2026-09-14', 'SBI-002', 60.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(53, 20, 'DEMO-TBETT-001', '2026-09-14', 'SBI-002', 60.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(54, 19, 'DEMO-ATS5K-001', '2026-09-14', 'SBI-002', 120.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(55, 38, 'DEMO-G27-001', '2026-09-14', 'SBI-002', 110.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(56, 43, 'DEMO-GAUZE-001', '2026-09-14', 'SBI-002', 120.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(57, 25, 'DEMO-HEPABIG-001', '2026-09-14', 'SBI-002', 120.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(58, 51, 'DEMO-MICRO-001', '2026-09-14', 'SBI-002', 100.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(59, 21, 'DEMO-ABHAYTOX-001', '2026-09-14', 'SBI-002', 110.0000, '2028-09-14', '2026-09-13 16:45:59'),
+(60, 11, 'DEMO-VAXI-001', '2026-09-14', 'SBI-002', 120.0000, '2028-09-14', '2026-09-13 16:45:59');
+
+--
+-- Triggers `inventory_stocks`
+--
+DELIMITER $$
+CREATE TRIGGER `trg_inventory_stocks_forecast_stale_ad` AFTER DELETE ON `inventory_stocks` FOR EACH ROW BEGIN
+    UPDATE forecast_results
+       SET is_stale = 1,
+           stale_at = NOW(),
+           stale_reason = 'Inventory stock changed after forecast generation'
+     WHERE branch_id = OLD.branch_id
+       AND is_stale = 0;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_inventory_stocks_forecast_stale_ai` AFTER INSERT ON `inventory_stocks` FOR EACH ROW BEGIN
+    UPDATE forecast_results
+       SET is_stale = 1,
+           stale_at = NOW(),
+           stale_reason = 'Inventory stock changed after forecast generation'
+     WHERE branch_id = NEW.branch_id
+       AND is_stale = 0;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_inventory_stocks_forecast_stale_au` AFTER UPDATE ON `inventory_stocks` FOR EACH ROW BEGIN
+    IF NOT (OLD.quantity_available <=> NEW.quantity_available)
+       OR NOT (OLD.expiration_date <=> NEW.expiration_date)
+       OR NOT (OLD.branch_id <=> NEW.branch_id)
+       OR NOT (OLD.item_id <=> NEW.item_id) THEN
+
+        UPDATE forecast_results
+           SET is_stale = 1,
+               stale_at = NOW(),
+               stale_reason = 'Inventory stock changed after forecast generation'
+         WHERE branch_id = OLD.branch_id
+           AND is_stale = 0;
+
+        IF NOT (OLD.branch_id <=> NEW.branch_id) THEN
+            UPDATE forecast_results
+               SET is_stale = 1,
+                   stale_at = NOW(),
+                   stale_reason = 'Inventory stock changed after forecast generation'
+             WHERE branch_id = NEW.branch_id
+               AND is_stale = 0;
+        END IF;
+    END IF;
+END
+$$
+DELIMITER ;
 
 -- --------------------------------------------------------
 
@@ -1505,7 +1612,14 @@ CREATE TABLE `medical_documents` (
 INSERT INTO `medical_documents` (`document_id`, `branch_id`, `document_type`, `document_name`, `file_name`, `file_path`, `file_type`, `file_size`, `uploaded_by`, `uploaded_at`, `updated_at`, `status`) VALUES
 (4, 'SBI-002', 'Medical Certificate', 'Medical Certificate 2026', 'medcert.pdf', 'uploads/documents/1787888609_12b8d1e66c28a11f_medcert.pdf', 'application/pdf', 24783, 8, '2026-08-28 03:43:29', '2026-08-28 04:20:38', 'Active'),
 (5, 'SBI-002', 'Vaccination Certificate', 'Vaccination Certificate', 'vaccinon_cert.pdf', 'uploads/documents/vaccinon_cert_6a910c7654bd91.46268856.pdf', 'application/pdf', 1220061, 8, '2026-08-28 04:20:06', NULL, 'Active'),
-(6, 'SBI-002', 'Referral Letter', 'Referral Letter for San Lazaro Hospital', 'refferal_Letter.pdf', 'uploads/documents/refferal_Letter_6a910ce545ace6.24695694.pdf', 'application/pdf', 1220130, 8, '2026-08-28 04:21:17', '2026-08-28 04:21:57', 'Active');
+(6, 'SBI-002', 'Referral Letter', 'Referral Letter for San Lazaro Hospital', 'refferal_Letter.pdf', 'uploads/documents/refferal_Letter_6a910ce545ace6.24695694.pdf', 'application/pdf', 1220130, 8, '2026-08-28 04:21:17', '2026-08-28 04:21:57', 'Active'),
+(7, 'SBI-002', 'Vaccination Certificate', 'Vaccination Certificate - Aira Flores - 26-0026', 'Vaccination_Certificate_Aira_Flores.pdf', 'uploads/documents/Vaccination_Certificate_Aira_Flores_20260913_220659_f39294a8.pdf', 'application/pdf', 1445, 16, '2026-09-13 14:06:59', NULL, 'Active'),
+(8, 'SBI-002', 'Medical Certificate', 'Medical Certificate - Analyn Briones - 26-0025', 'Medical_Certificate_Analyn_Briones.pdf', 'uploads/documents/Medical_Certificate_Analyn_Briones_20260913_220730_86556995.pdf', 'application/pdf', 1403, 16, '2026-09-13 14:07:30', NULL, 'Active'),
+(9, 'SBI-002', 'Vaccination Certificate', 'Vaccination Certificate - Aira Flores - 26-0026', 'Vaccination_Certificate_Aira_Flores.pdf', 'uploads/documents/Vaccination_Certificate_Aira_Flores_20260913_225619_2b25a3f3.pdf', 'application/pdf', 72412, 16, '2026-09-13 14:56:19', NULL, 'Active'),
+(10, 'SBI-002', 'Medical Certificate', 'Medical Certificate - Aira Flores - 26-0026', 'Medical_Certificate_Aira_Flores.pdf', 'uploads/documents/Medical_Certificate_Aira_Flores_20260913_225800_8883d72f.pdf', 'application/pdf', 72227, 16, '2026-09-13 14:58:00', NULL, 'Active'),
+(11, 'SBI-002', 'Medical Certificate', 'Medical Certificate - Julia Singko - 26-0032', 'Medical_Certificate_Julia_Singko.pdf', 'uploads/documents/Medical_Certificate_Julia_Singko_20260913_230732_d67cc0fc.pdf', 'application/pdf', 72073, 9, '2026-09-13 15:07:32', NULL, 'Active'),
+(12, 'SBI-002', 'Vaccination Certificate', 'Vaccination Certificate - Aira Flores - 26-0026', 'Vaccination_Certificate_Aira_Flores.pdf', 'uploads/documents/Vaccination_Certificate_Aira_Flores_20260913_230743_1ac19fb7.pdf', 'application/pdf', 72412, 9, '2026-09-13 15:07:43', NULL, 'Active'),
+(13, 'SBI-002', 'Referral Letter', 'Referral Letter - Julia Singko - 26-0032', 'Referral_Letter_Julia_Singko.pdf', 'uploads/documents/Referral_Letter_Julia_Singko_20260914_010615_ea9b59c0.pdf', 'application/pdf', 70187, 9, '2026-09-13 17:06:15', NULL, 'Active');
 
 -- --------------------------------------------------------
 
@@ -1599,25 +1713,25 @@ INSERT INTO `notifications` (`notification_id`, `user_id`, `title`, `message`, `
 (292, 11, 'Stock Out Recorded', '1 Vial of ATS (Anti-Tetanus Serum) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:9', 1, '2026-08-29 11:58:17'),
 (293, 11, 'Stock Out Recorded', '1 Vial of ATS (Anti-Tetanus Serum) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:8', 1, '2026-08-29 11:58:17'),
 (294, 11, 'Stock Out Recorded', '1 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:7', 1, '2026-08-29 11:58:17'),
-(297, 11, 'Low Stock Alert', 'TT (Tetanus Toxoid) has 8 Ampule remaining. Minimum stock is 20 Ampule.', 'low_stock', 'condition:stock:4', 1, '2026-08-29 11:59:25'),
+(297, 11, 'Low Stock Alert', 'TT (Tetanus Toxoid) has 7 Ampule remaining. Minimum stock is 20 Ampule.', 'low_stock', 'condition:stock:4', 1, '2026-08-29 11:59:25'),
 (299, 11, 'Stock Out Recorded', '140 Ampule of TT (Tetanus Toxoid) were released from inventory by Jean Montero.', 'stock_out', 'transaction:41', 1, '2026-08-29 11:59:25'),
 (705, 11, 'Low Stock Alert', 'CSF Forms has 20 Ream remaining. Minimum stock is 20 Ream.', 'low_stock', 'condition:stock:7', 1, '2026-08-29 12:17:20'),
 (707, 11, 'Stock In Confirmed', '20 Ream of CSF Forms were added to inventory by Jean Montero.', 'stock_in', 'transaction:42', 1, '2026-08-29 12:17:20'),
 (812, 6, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Coco (ID: P0072)\nCase ID: C0066\nDate: September 01, 2026 14:19:47\n\nVaccination Entries:\n• ATS (Anti-Tetanus Serum) - D7 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 12:19:47'),
 (813, 11, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Coco (ID: P0072)\nCase ID: C0066\nDate: September 01, 2026 14:19:47\n\nVaccination Entries:\n• ATS (Anti-Tetanus Serum) - D7 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 12:19:47'),
-(814, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Coco was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 14:19:47', 'vaccination', NULL, 0, '2026-09-01 12:19:47'),
+(814, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Coco was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 14:19:47', 'vaccination', NULL, 1, '2026-09-01 12:19:47'),
 (815, 6, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Coco (ID: P0072)\nCase ID: C0066\nDate: September 01, 2026 14:20:08\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D14 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 12:20:08'),
 (816, 11, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Coco (ID: P0072)\nCase ID: C0066\nDate: September 01, 2026 14:20:08\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D14 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 12:20:08'),
-(817, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Coco was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 14:20:08', 'vaccination', NULL, 0, '2026-09-01 12:20:08'),
+(817, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Coco was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 14:20:08', 'vaccination', NULL, 1, '2026-09-01 12:20:08'),
 (818, 6, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Coco (ID: P0072)\nCase ID: C0066\nDate: September 01, 2026 14:20:47\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D21 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 12:20:47'),
 (819, 11, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Coco (ID: P0072)\nCase ID: C0066\nDate: September 01, 2026 14:20:47\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D21 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 12:20:47'),
-(820, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Coco was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 14:20:47', 'vaccination', NULL, 0, '2026-09-01 12:20:47'),
+(820, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Coco was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 14:20:47', 'vaccination', NULL, 1, '2026-09-01 12:20:47'),
 (821, 6, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ela Ketcho (ID: P0075)\nCase ID: C0069\nDate: September 01, 2026 15:11:53\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D14 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 13:11:53'),
 (822, 11, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ela Ketcho (ID: P0075)\nCase ID: C0069\nDate: September 01, 2026 15:11:53\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D14 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 13:11:53'),
-(823, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Ela Ketcho was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 15:11:53', 'vaccination', NULL, 0, '2026-09-01 13:11:53'),
+(823, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Ela Ketcho was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 15:11:53', 'vaccination', NULL, 1, '2026-09-01 13:11:53'),
 (824, 6, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ela Ketcho (ID: P0075)\nCase ID: C0069\nDate: September 01, 2026 15:12:14\n\nVaccination Entries:\n• Speeda  - D21 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D21 (Completed)\n\nTotal Entries: 2', 'vaccination', NULL, 1, '2026-09-01 13:12:14'),
 (825, 11, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ela Ketcho (ID: P0075)\nCase ID: C0069\nDate: September 01, 2026 15:12:14\n\nVaccination Entries:\n• Speeda  - D21 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D21 (Completed)\n\nTotal Entries: 2', 'vaccination', NULL, 1, '2026-09-01 13:12:14'),
-(826, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Ela Ketcho was saved successfully at Cainta Branch.\nTotal entries: 2\nDate: September 01, 2026 15:12:14', 'vaccination', NULL, 0, '2026-09-01 13:12:14'),
+(826, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Ela Ketcho was saved successfully at Cainta Branch.\nTotal entries: 2\nDate: September 01, 2026 15:12:14', 'vaccination', NULL, 1, '2026-09-01 13:12:14'),
 (828, 11, 'Low Stock Alert', 'Laptop has 1 Piece remaining. Minimum stock is 1 Piece.', 'low_stock', 'condition:stock:8', 1, '2026-09-01 13:34:29'),
 (830, 11, 'Low Stock Alert', 'Aircon has 2 Piece remaining. Minimum stock is 2 Piece.', 'low_stock', 'condition:stock:9', 1, '2026-09-01 13:34:29'),
 (834, 11, 'Stock Out Recorded', '1 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:50', 1, '2026-09-01 13:34:29'),
@@ -1628,52 +1742,52 @@ INSERT INTO `notifications` (`notification_id`, `user_id`, `title`, `message`, `
 (839, 11, 'Stock Out Recorded', '1 Vial of ATS (Anti-Tetanus Serum) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:45', 1, '2026-09-01 13:34:29'),
 (840, 11, 'Stock In Confirmed', '2 Piece of Aircon were added to inventory by Jean Montero.', 'stock_in', 'transaction:44', 1, '2026-09-01 13:34:29'),
 (841, 11, 'Stock In Confirmed', '1 Piece of Laptop were added to inventory by Jean Montero.', 'stock_in', 'transaction:43', 1, '2026-09-01 13:34:29'),
-(853, 9, 'New Patient Added', 'Administrative staff has added a new patient: Jen Baglan (Case: 26-0022). Please review the vaccination schedule.', 'new_patient', NULL, 0, '2026-09-01 14:28:52'),
+(853, 9, 'New Patient Added', 'Administrative staff has added a new patient: Jen Baglan (Case: 26-0022). Please review the vaccination schedule.', 'new_patient', NULL, 1, '2026-09-01 14:28:52'),
 (854, 6, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jen Baglan (ID: P0077)\nCase ID: C0071\nDate: September 01, 2026 16:29:45\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 14:29:45'),
 (855, 11, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jen Baglan (ID: P0077)\nCase ID: C0071\nDate: September 01, 2026 16:29:45\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 14:29:45'),
-(856, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Jen Baglan was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 16:29:45', 'vaccination', NULL, 0, '2026-09-01 14:29:45'),
-(857, 9, 'New Patient Added', 'Administrative staff has added a new patient: Jon Garcia (Case: 26-0023). Please review the vaccination schedule.', 'new_patient', NULL, 0, '2026-09-01 15:10:16'),
+(856, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Jen Baglan was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 16:29:45', 'vaccination', NULL, 1, '2026-09-01 14:29:45'),
+(857, 9, 'New Patient Added', 'Administrative staff has added a new patient: Jon Garcia (Case: 26-0023). Please review the vaccination schedule.', 'new_patient', NULL, 1, '2026-09-01 15:10:16'),
 (858, 6, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jon Garcia (ID: P0078)\nCase ID: C0072\nDate: September 01, 2026 17:10:42\n\nVaccination Entries:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 15:10:42'),
 (859, 11, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jon Garcia (ID: P0078)\nCase ID: C0072\nDate: September 01, 2026 17:10:42\n\nVaccination Entries:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 15:10:42'),
-(860, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Jon Garcia was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 17:10:42', 'vaccination', NULL, 0, '2026-09-01 15:10:42'),
-(861, 9, 'New Patient Added', 'Administrative staff has added a new patient: testing (Case: 26-0024). Please review the vaccination schedule.', 'new_patient', NULL, 0, '2026-09-01 15:13:44'),
+(860, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Jon Garcia was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 17:10:42', 'vaccination', NULL, 1, '2026-09-01 15:10:42'),
+(861, 9, 'New Patient Added', 'Administrative staff has added a new patient: testing (Case: 26-0024). Please review the vaccination schedule.', 'new_patient', NULL, 1, '2026-09-01 15:13:44'),
 (862, 6, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: testing (ID: P0079)\nCase ID: C0073\nDate: September 01, 2026 17:14:04\n\nVaccination Entries:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 15:14:04'),
 (863, 11, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: testing (ID: P0079)\nCase ID: C0073\nDate: September 01, 2026 17:14:04\n\nVaccination Entries:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 15:14:04'),
-(864, 9, 'Vaccination Submitted Successfully', 'Vaccination information for testing was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 17:14:04', 'vaccination', NULL, 0, '2026-09-01 15:14:04'),
-(865, 9, 'New Patient Added', 'Administrative staff has added a new patient: Analyn Briones (Case: 26-0025). Please review the vaccination schedule.', 'new_patient', NULL, 0, '2026-09-01 15:24:27'),
+(864, 9, 'Vaccination Submitted Successfully', 'Vaccination information for testing was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 17:14:04', 'vaccination', NULL, 1, '2026-09-01 15:14:04'),
+(865, 9, 'New Patient Added', 'Administrative staff has added a new patient: Analyn Briones (Case: 26-0025). Please review the vaccination schedule.', 'new_patient', NULL, 1, '2026-09-01 15:24:27'),
 (866, 6, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Analyn Briones (ID: P0080)\nCase ID: C0074\nDate: September 01, 2026 17:24:48\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 15:24:48'),
 (867, 11, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Analyn Briones (ID: P0080)\nCase ID: C0074\nDate: September 01, 2026 17:24:48\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 15:24:48'),
-(868, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Analyn Briones was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 17:24:48', 'vaccination', NULL, 0, '2026-09-01 15:24:48'),
-(869, 9, 'New Patient Added', 'Administrative staff has added a new patient: Aira Flores (Case: 26-0026). Please review the vaccination schedule.', 'new_patient', NULL, 0, '2026-09-01 15:29:52'),
+(868, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Analyn Briones was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 17:24:48', 'vaccination', NULL, 1, '2026-09-01 15:24:48'),
+(869, 9, 'New Patient Added', 'Administrative staff has added a new patient: Aira Flores (Case: 26-0026). Please review the vaccination schedule.', 'new_patient', NULL, 1, '2026-09-01 15:29:52'),
 (870, 6, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 01, 2026 17:30:08\n\nVaccination Entries:\n• Speeda  - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 15:30:08'),
 (871, 11, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 01, 2026 17:30:08\n\nVaccination Entries:\n• Speeda  - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-01 15:30:08'),
-(872, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Aira Flores was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 17:30:08', 'vaccination', NULL, 0, '2026-09-01 15:30:08'),
+(872, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Aira Flores was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 01, 2026 17:30:08', 'vaccination', NULL, 1, '2026-09-01 15:30:08'),
 (873, 6, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: ELLA MAE (ID: P0015)\nCase ID: C0012\nDate: September 03, 2026 08:31:35\n\nVaccination Entries:\n• Speeda  - D0 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Entries: 2', 'vaccination', NULL, 1, '2026-09-03 06:31:35'),
 (874, 11, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: ELLA MAE (ID: P0015)\nCase ID: C0012\nDate: September 03, 2026 08:31:35\n\nVaccination Entries:\n• Speeda  - D0 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Entries: 2', 'vaccination', NULL, 1, '2026-09-03 06:31:35'),
-(875, 9, 'Vaccination Submitted Successfully', 'Vaccination information for ELLA MAE was saved successfully at Cainta Branch.\nTotal entries: 2\nDate: September 03, 2026 08:31:35', 'vaccination', NULL, 0, '2026-09-03 06:31:35'),
+(875, 9, 'Vaccination Submitted Successfully', 'Vaccination information for ELLA MAE was saved successfully at Cainta Branch.\nTotal entries: 2\nDate: September 03, 2026 08:31:35', 'vaccination', NULL, 1, '2026-09-03 06:31:35'),
 (876, 6, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: ddd (ID: P0016)\nCase ID: C0013\nDate: September 03, 2026 08:40:13\n\nVaccination Entries:\n• Speeda  - D0 (Completed)\n• TT (Tetanus Toxoid) - D0 (Completed)\n\nTotal Entries: 2', 'vaccination', NULL, 1, '2026-09-03 06:40:13'),
 (877, 11, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: ddd (ID: P0016)\nCase ID: C0013\nDate: September 03, 2026 08:40:13\n\nVaccination Entries:\n• Speeda  - D0 (Completed)\n• TT (Tetanus Toxoid) - D0 (Completed)\n\nTotal Entries: 2', 'vaccination', NULL, 1, '2026-09-03 06:40:13'),
-(878, 9, 'Vaccination Submitted Successfully', 'Vaccination information for ddd was saved successfully at Cainta Branch.\nTotal entries: 2\nDate: September 03, 2026 08:40:13', 'vaccination', NULL, 0, '2026-09-03 06:40:13'),
+(878, 9, 'Vaccination Submitted Successfully', 'Vaccination information for ddd was saved successfully at Cainta Branch.\nTotal entries: 2\nDate: September 03, 2026 08:40:13', 'vaccination', NULL, 1, '2026-09-03 06:40:13'),
 (879, 6, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: SHANE CACHO (ID: P0014)\nCase ID: C0011\nDate: September 03, 2026 08:49:28\n\nVaccination Entries:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Entries: 2', 'vaccination', NULL, 1, '2026-09-03 06:49:28'),
 (880, 11, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: SHANE CACHO (ID: P0014)\nCase ID: C0011\nDate: September 03, 2026 08:49:28\n\nVaccination Entries:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Entries: 2', 'vaccination', NULL, 1, '2026-09-03 06:49:28'),
-(881, 9, 'Vaccination Submitted Successfully', 'Vaccination information for SHANE CACHO was saved successfully at Cainta Branch.\nTotal entries: 2\nDate: September 03, 2026 08:49:28', 'vaccination', NULL, 0, '2026-09-03 06:49:28'),
+(881, 9, 'Vaccination Submitted Successfully', 'Vaccination information for SHANE CACHO was saved successfully at Cainta Branch.\nTotal entries: 2\nDate: September 03, 2026 08:49:28', 'vaccination', NULL, 1, '2026-09-03 06:49:28'),
 (882, 6, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: SHANE CACHO (ID: P0014)\nCase ID: C0011\nDate: September 03, 2026 08:50:50\n\nVaccination Entries:\n• Speeda  - D3 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-03 06:50:50'),
 (883, 11, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: SHANE CACHO (ID: P0014)\nCase ID: C0011\nDate: September 03, 2026 08:50:50\n\nVaccination Entries:\n• Speeda  - D3 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-03 06:50:50'),
-(884, 9, 'Vaccination Submitted Successfully', 'Vaccination information for SHANE CACHO was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 03, 2026 08:50:50', 'vaccination', NULL, 0, '2026-09-03 06:50:50'),
+(884, 9, 'Vaccination Submitted Successfully', 'Vaccination information for SHANE CACHO was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 03, 2026 08:50:50', 'vaccination', NULL, 1, '2026-09-03 06:50:50'),
 (885, 6, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: SHANE CACHO (ID: P0014)\nCase ID: C0011\nDate: September 03, 2026 08:51:28\n\nVaccination Entries:\n• Speeda  - D7 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-03 06:51:28'),
 (886, 11, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: SHANE CACHO (ID: P0014)\nCase ID: C0011\nDate: September 03, 2026 08:51:28\n\nVaccination Entries:\n• Speeda  - D7 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 1, '2026-09-03 06:51:28'),
-(887, 9, 'Vaccination Submitted Successfully', 'Vaccination information for SHANE CACHO was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 03, 2026 08:51:28', 'vaccination', NULL, 0, '2026-09-03 06:51:28'),
-(888, 9, 'Patient Waiting for Nurse', 'Aira Flores (Case 26-0026) is waiting for assessment.', 'patient_queue', NULL, 0, '2026-09-05 08:11:39'),
+(887, 9, 'Vaccination Submitted Successfully', 'Vaccination information for SHANE CACHO was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 03, 2026 08:51:28', 'vaccination', NULL, 1, '2026-09-03 06:51:28'),
+(888, 9, 'Patient Waiting for Nurse', 'Aira Flores (Case 26-0026) is waiting for assessment.', 'patient_queue', NULL, 1, '2026-09-05 08:11:39'),
 (889, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 05, 2026 11:30:36\n\nVaccination Entries:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-05 09:30:36'),
 (890, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 05, 2026 11:30:36\n\nVaccination Entries:\n• ATS (Anti-Tetanus Serum) - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-05 09:30:36'),
-(891, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Aira Flores was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 05, 2026 11:30:36', 'vaccination', NULL, 0, '2026-09-05 09:30:36'),
+(891, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Aira Flores was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 05, 2026 11:30:36', 'vaccination', NULL, 1, '2026-09-05 09:30:36'),
 (892, 8, 'Chart Ready for Registry', 'Aira Flores (Case 26-0026) is ready for registry verification.', 'registry', NULL, 0, '2026-09-05 09:31:19'),
 (893, 16, 'Chart Ready for Registry', 'Aira Flores (Case 26-0026) is ready for registry verification.', 'registry', NULL, 0, '2026-09-05 09:31:19'),
-(894, 9, 'Registry Completed', 'Aira Flores was registered by Administrative Staff.', 'registry', NULL, 0, '2026-09-05 09:31:44'),
-(895, 9, 'Patient Waiting for Nurse', 'Joe Montero (Case 26-0027) is waiting for assessment.', 'patient_queue', NULL, 0, '2026-09-05 09:44:07'),
-(896, 11, 'Critical Stock Alert', '1CC/3CC has 0 Box/s remaining. Minimum stock is 50 Box/s.', 'critical_stock', 'condition:stock:35', 1, '2026-09-07 05:15:27'),
+(894, 9, 'Registry Completed', 'Aira Flores was registered by Administrative Staff.', 'registry', NULL, 1, '2026-09-05 09:31:44'),
+(895, 9, 'Patient Waiting for Nurse', 'Joe Montero (Case 26-0027) is waiting for assessment.', 'patient_queue', NULL, 1, '2026-09-05 09:44:07'),
+(896, 11, 'Low Stock Alert', '1CC/3CC has 10 Box/s remaining. Minimum stock is 50 Box/s.', 'low_stock', 'condition:stock:35', 1, '2026-09-07 05:15:27'),
 (897, 11, 'Critical Stock Alert', '5CC/10CC has 0 Box/s remaining. Minimum stock is 50 Box/s.', 'critical_stock', 'condition:stock:36', 1, '2026-09-07 05:15:27'),
-(898, 11, 'Critical Stock Alert', 'ABHAYRAB has 0 Vial remaining. Minimum stock is 50 Vial.', 'critical_stock', 'condition:stock:10', 1, '2026-09-07 05:15:27'),
+(898, 11, 'Low Stock Alert', 'ABHAYRAB has 20 Vial remaining. Minimum stock is 50 Vial.', 'low_stock', 'condition:stock:10', 1, '2026-09-07 05:15:27'),
 (899, 11, 'Critical Stock Alert', 'ACRYLIC CONTAINERS has 0 Piece remaining. Minimum stock is 50 Piece.', 'critical_stock', 'condition:stock:46', 1, '2026-09-07 05:15:27'),
 (900, 11, 'Critical Stock Alert', 'ALCOHOL has 0 mL remaining. Minimum stock is 50 mL.', 'critical_stock', 'condition:stock:39', 1, '2026-09-07 05:15:27'),
 (901, 11, 'Critical Stock Alert', 'ALCOHOL PUMP CONTAINER has 0 Piece remaining. Minimum stock is 50 Piece.', 'critical_stock', 'condition:stock:47', 1, '2026-09-07 05:15:27'),
@@ -1703,7 +1817,7 @@ INSERT INTO `notifications` (`notification_id`, `user_id`, `title`, `message`, `
 (925, 11, 'Critical Stock Alert', 'KIDNEY BASIN has 0 Piece remaining. Minimum stock is 50 Piece.', 'critical_stock', 'condition:stock:50', 1, '2026-09-07 05:15:28'),
 (926, 11, 'Critical Stock Alert', 'MEFENAMIC 500 MG has 0 Piece remaining. Minimum stock is 120 Piece.', 'critical_stock', 'condition:stock:32', 1, '2026-09-07 05:15:28'),
 (927, 11, 'Critical Stock Alert', 'MICROPRE has 0 Piece remaining. Minimum stock is 50 Piece.', 'critical_stock', 'condition:stock:51', 1, '2026-09-07 05:15:28'),
-(928, 11, 'Low Stock Alert', 'PPD has 1 Vial remaining. Minimum stock is 50 Vial.', 'low_stock', 'condition:stock:23', 1, '2026-09-07 05:15:28'),
+(928, 11, 'Critical Stock Alert', 'PPD has 0 Vial remaining. Minimum stock is 50 Vial.', 'critical_stock', 'condition:stock:23', 1, '2026-09-07 05:15:28'),
 (929, 11, 'Critical Stock Alert', 'REF THERMOMETER has 0 Piece remaining. Minimum stock is 50 Piece.', 'critical_stock', 'condition:stock:53', 1, '2026-09-07 05:15:28'),
 (930, 11, 'Critical Stock Alert', 'STERILE WATER has 0 mL remaining. Minimum stock is 50 mL.', 'critical_stock', 'condition:stock:41', 1, '2026-09-07 05:15:29'),
 (931, 11, 'Critical Stock Alert', 'TOXOID ABHAYTOX has 0 Ampule remaining. Minimum stock is 50 Ampule.', 'critical_stock', 'condition:stock:21', 1, '2026-09-07 05:15:29'),
@@ -1754,54 +1868,54 @@ INSERT INTO `notifications` (`notification_id`, `user_id`, `title`, `message`, `
 (1251, 11, 'Stock Out Recorded', '1 Vial of ATS (Anti-Tetanus Serum) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:54', 1, '2026-09-08 00:46:57'),
 (1252, 11, 'Stock Out Recorded', '1 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:53', 1, '2026-09-08 00:46:57'),
 (1253, 11, 'Stock Out Recorded', '10 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Jean Montero.', 'stock_out', 'transaction:51', 1, '2026-09-08 00:46:57'),
-(1354, 9, 'Patient Waiting for Nurse', 'SHANE CACHO (Case 26-0001) is waiting for assessment.', 'patient_queue', NULL, 0, '2026-09-08 01:22:25'),
+(1354, 9, 'Patient Waiting for Nurse', 'SHANE CACHO (Case 26-0001) is waiting for assessment.', 'patient_queue', NULL, 1, '2026-09-08 01:22:25'),
 (1355, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Joe Montero (ID: P0082)\nCase ID: C0076\nDate: September 08, 2026 03:41:44\n\nVaccination Entries:\n• Speeda  - D0 (Completed)\n• TT (Tetanus Toxoid) - D0 (Completed)\n\nTotal Entries: 2', 'vaccination', NULL, 0, '2026-09-08 01:41:44'),
 (1356, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Joe Montero (ID: P0082)\nCase ID: C0076\nDate: September 08, 2026 03:41:44\n\nVaccination Entries:\n• Speeda  - D0 (Completed)\n• TT (Tetanus Toxoid) - D0 (Completed)\n\nTotal Entries: 2', 'vaccination', NULL, 0, '2026-09-08 01:41:44'),
-(1357, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Joe Montero was saved successfully at Cainta Branch.\nTotal entries: 2\nDate: September 08, 2026 03:41:44', 'vaccination', NULL, 0, '2026-09-08 01:41:44'),
+(1357, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Joe Montero was saved successfully at Cainta Branch.\nTotal entries: 2\nDate: September 08, 2026 03:41:44', 'vaccination', NULL, 1, '2026-09-08 01:41:44'),
 (1358, 8, 'Chart Ready for Registry', 'Joe Montero (Case 26-0027) is ready for registry verification.', 'registry', NULL, 0, '2026-09-08 01:41:56'),
 (1359, 16, 'Chart Ready for Registry', 'Joe Montero (Case 26-0027) is ready for registry verification.', 'registry', NULL, 0, '2026-09-08 01:41:56'),
-(1360, 9, 'Registry Completed', 'Joe Montero was registered by Administrative Staff.', 'registry', NULL, 0, '2026-09-08 01:42:22'),
+(1360, 9, 'Registry Completed', 'Joe Montero was registered by Administrative Staff.', 'registry', NULL, 1, '2026-09-08 01:42:22'),
 (1361, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Reyes, Sharpay Evans (ID: P0083)\nCase ID: C0077\nDate: September 08, 2026 03:48:15\n\nVaccination Entries:\n• Speeda  - D0 (Completed)\n• TT (Tetanus Toxoid) - D0 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Entries: 3', 'vaccination', NULL, 0, '2026-09-08 01:48:15'),
 (1362, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Reyes, Sharpay Evans (ID: P0083)\nCase ID: C0077\nDate: September 08, 2026 03:48:15\n\nVaccination Entries:\n• Speeda  - D0 (Completed)\n• TT (Tetanus Toxoid) - D0 (Completed)\n• ERIG (Equine Rabies Immunoglobulin) - D0 (Completed)\n\nTotal Entries: 3', 'vaccination', NULL, 0, '2026-09-08 01:48:15'),
-(1363, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Reyes, Sharpay Evans was saved successfully at Cainta Branch.\nTotal entries: 3\nDate: September 08, 2026 03:48:15', 'vaccination', NULL, 0, '2026-09-08 01:48:15'),
+(1363, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Reyes, Sharpay Evans was saved successfully at Cainta Branch.\nTotal entries: 3\nDate: September 08, 2026 03:48:15', 'vaccination', NULL, 1, '2026-09-08 01:48:15'),
 (1364, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 08, 2026 03:48:40\n\nVaccination Entries:\n• ATS (Anti-Tetanus Serum) - D3 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-08 01:48:40'),
 (1365, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 08, 2026 03:48:40\n\nVaccination Entries:\n• ATS (Anti-Tetanus Serum) - D3 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-08 01:48:40'),
-(1366, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Aira Flores was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 08, 2026 03:48:40', 'vaccination', NULL, 0, '2026-09-08 01:48:40'),
+(1366, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Aira Flores was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 08, 2026 03:48:40', 'vaccination', NULL, 1, '2026-09-08 01:48:40'),
 (1367, 8, 'Chart Ready for Registry', 'SHANE CACHO (Case 26-0001) is ready for registry verification.', 'registry', NULL, 0, '2026-09-08 01:49:41'),
 (1368, 16, 'Chart Ready for Registry', 'SHANE CACHO (Case 26-0001) is ready for registry verification.', 'registry', NULL, 0, '2026-09-08 01:49:41'),
-(1369, 9, 'Registry Completed', 'SHANE CACHO was registered by Administrative Staff.', 'registry', NULL, 0, '2026-09-08 01:50:00'),
-(1370, 9, 'Patient Waiting for Nurse', 'Santiago, Leah (Case 26-0030) is waiting for assessment.', 'patient_queue', NULL, 0, '2026-09-08 02:14:34'),
-(1371, 9, 'Patient Waiting for Nurse', 'Joseph Marco (Case 26-0031) is waiting for assessment.', 'patient_queue', NULL, 0, '2026-09-08 02:25:05'),
-(1372, 9, 'Patient Waiting for Nurse', 'Reyes, Sharpay Evans (Case 26-0028) is waiting for assessment.', 'patient_queue', NULL, 0, '2026-09-08 02:34:00'),
-(1373, 9, 'Patient Waiting for Nurse', 'Jon Garcia (Case 26-0023) is waiting for assessment.', 'patient_queue', NULL, 0, '2026-09-08 02:35:41'),
+(1369, 9, 'Registry Completed', 'SHANE CACHO was registered by Administrative Staff.', 'registry', NULL, 1, '2026-09-08 01:50:00'),
+(1370, 9, 'Patient Waiting for Nurse', 'Santiago, Leah (Case 26-0030) is waiting for assessment.', 'patient_queue', NULL, 1, '2026-09-08 02:14:34'),
+(1371, 9, 'Patient Waiting for Nurse', 'Joseph Marco (Case 26-0031) is waiting for assessment.', 'patient_queue', NULL, 1, '2026-09-08 02:25:05'),
+(1372, 9, 'Patient Waiting for Nurse', 'Reyes, Sharpay Evans (Case 26-0028) is waiting for assessment.', 'patient_queue', NULL, 1, '2026-09-08 02:34:00'),
+(1373, 9, 'Patient Waiting for Nurse', 'Jon Garcia (Case 26-0023) is waiting for assessment.', 'patient_queue', NULL, 1, '2026-09-08 02:35:41'),
 (1374, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 08, 2026 04:59:16\n\nVaccination Entries:\n• Speeda  - D7 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-08 02:59:16'),
 (1375, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 08, 2026 04:59:16\n\nVaccination Entries:\n• Speeda  - D7 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-08 02:59:16'),
-(1376, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Aira Flores was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 08, 2026 04:59:16', 'vaccination', NULL, 0, '2026-09-08 02:59:16'),
-(1454, 11, 'Stock Out Recorded', '1 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:73', 1, '2026-09-08 03:07:01'),
+(1376, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Aira Flores was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 08, 2026 04:59:16', 'vaccination', NULL, 1, '2026-09-08 02:59:16'),
+(1454, 11, 'Stock Out Recorded', '36 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:73', 1, '2026-09-08 03:07:01'),
 (1455, 11, 'Stock Out Recorded', '1 Vial of ATS (Anti-Tetanus Serum) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:72', 1, '2026-09-08 03:07:01'),
 (1456, 11, 'Stock Out Recorded', '1 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:71', 1, '2026-09-08 03:07:01'),
 (1457, 11, 'Stock Out Recorded', '1 Ampule of TT (Tetanus Toxoid) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:70', 1, '2026-09-08 03:07:01'),
-(1458, 11, 'Stock Out Recorded', '1 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:69', 1, '2026-09-08 03:07:01'),
+(1458, 11, 'Stock Out Recorded', '36 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:69', 1, '2026-09-08 03:07:01'),
 (1459, 11, 'Stock Out Recorded', '1 Ampule of TT (Tetanus Toxoid) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:68', 1, '2026-09-08 03:07:01'),
-(1460, 11, 'Stock Out Recorded', '1 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:67', 1, '2026-09-08 03:07:01'),
+(1460, 11, 'Stock Out Recorded', '36 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:67', 1, '2026-09-08 03:07:01'),
 (1579, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 08, 2026 05:22:46\n\nVaccination Entries:\n• Speeda  - D14 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-08 03:22:46'),
 (1580, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 08, 2026 05:22:46\n\nVaccination Entries:\n• Speeda  - D14 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-08 03:22:46'),
-(1581, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Aira Flores was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 08, 2026 05:22:46', 'vaccination', NULL, 0, '2026-09-08 03:22:46'),
+(1581, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Aira Flores was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 08, 2026 05:22:46', 'vaccination', NULL, 1, '2026-09-08 03:22:46'),
 (1582, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ean Abilo (ID: P0076)\nCase ID: C0070\nDate: September 08, 2026 05:24:24\n\nVaccination Entries:\n• Speeda  - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-08 03:24:24'),
 (1583, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ean Abilo (ID: P0076)\nCase ID: C0070\nDate: September 08, 2026 05:24:24\n\nVaccination Entries:\n• Speeda  - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-08 03:24:24'),
-(1584, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Ean Abilo was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 08, 2026 05:24:24', 'vaccination', NULL, 0, '2026-09-08 03:24:24'),
-(1662, 11, 'Stock Out Recorded', '1 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:75', 1, '2026-09-08 03:35:25'),
-(1663, 11, 'Stock Out Recorded', '1 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:74', 1, '2026-09-08 03:35:25'),
+(1584, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Ean Abilo was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 08, 2026 05:24:24', 'vaccination', NULL, 1, '2026-09-08 03:24:24'),
+(1662, 11, 'Stock Out Recorded', '36 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:75', 1, '2026-09-08 03:35:25'),
+(1663, 11, 'Stock Out Recorded', '36 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:74', 1, '2026-09-08 03:35:25'),
 (1791, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Santiago, Leah (ID: P0084)\nCase ID: C0078\nDate: September 08, 2026 07:49:34\n\nVaccination Entries:\n• Speeda  - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-08 05:49:34'),
 (1792, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Santiago, Leah (ID: P0084)\nCase ID: C0078\nDate: September 08, 2026 07:49:34\n\nVaccination Entries:\n• Speeda  - D0 (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-08 05:49:34'),
-(1793, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Santiago, Leah was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 08, 2026 07:49:34', 'vaccination', NULL, 0, '2026-09-08 05:49:34'),
-(1871, 11, 'Stock Out Recorded', '1 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:76', 1, '2026-09-08 05:52:00'),
+(1793, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Santiago, Leah was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 08, 2026 07:49:34', 'vaccination', NULL, 1, '2026-09-08 05:49:34'),
+(1871, 11, 'Stock Out Recorded', '36 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:76', 1, '2026-09-08 05:52:00'),
 (1898, 8, 'Chart Ready for Registry', 'Santiago, Leah (Case 26-0030) is ready for registry verification.', 'registry', NULL, 0, '2026-09-08 05:54:43'),
 (1899, 16, 'Chart Ready for Registry', 'Santiago, Leah (Case 26-0030) is ready for registry verification.', 'registry', NULL, 0, '2026-09-08 05:54:43'),
-(1900, 9, 'Registry Completed', 'Santiago, Leah was registered by Administrative Staff.', 'registry', NULL, 0, '2026-09-08 05:55:32'),
+(1900, 9, 'Registry Completed', 'Santiago, Leah was registered by Administrative Staff.', 'registry', NULL, 1, '2026-09-08 05:55:32'),
 (1901, 8, 'Chart Ready for Registry', 'Joseph Marco (Case 26-0031) is ready for registry verification.', 'registry', NULL, 0, '2026-09-08 05:58:32'),
 (1902, 16, 'Chart Ready for Registry', 'Joseph Marco (Case 26-0031) is ready for registry verification.', 'registry', NULL, 0, '2026-09-08 05:58:32'),
-(1903, 9, 'Registry Completed', 'Joseph Marco was registered by Administrative Staff.', 'registry', NULL, 0, '2026-09-08 05:58:53'),
+(1903, 9, 'Registry Completed', 'Joseph Marco was registered by Administrative Staff.', 'registry', NULL, 1, '2026-09-08 05:58:53'),
 (1904, 27, 'Critical Stock Alert', '1CC/3CC has 0 Box/s remaining. Minimum stock is 50 Box/s.', 'critical_stock', 'condition:stock:35', 0, '2026-09-08 07:48:53'),
 (1905, 27, 'Critical Stock Alert', '5CC/10CC has 0 Box/s remaining. Minimum stock is 50 Box/s.', 'critical_stock', 'condition:stock:36', 0, '2026-09-08 07:48:53'),
 (1906, 27, 'Critical Stock Alert', 'ABHAYRAB has 0 Vial remaining. Minimum stock is 50 Vial.', 'critical_stock', 'condition:stock:10', 0, '2026-09-08 07:48:54'),
@@ -1919,15 +2033,15 @@ INSERT INTO `notifications` (`notification_id`, `user_id`, `title`, `message`, `
 (3908, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 11, 2026 20:57:48\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D28/30 - 0.5 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 12:57:48'),
 (3909, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 11, 2026 20:57:48\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D28/30 - 0.5 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 12:57:48'),
 (3910, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Aira Flores (ID: P0081)\nCase ID: C0075\nDate: September 11, 2026 20:57:48\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D28/30 - 0.5 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 12:57:48'),
-(3911, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Aira Flores was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 20:57:48', 'vaccination', NULL, 0, '2026-09-11 12:57:48'),
+(3911, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Aira Flores was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 20:57:48', 'vaccination', NULL, 1, '2026-09-11 12:57:48'),
 (3912, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ean Abilo (ID: P0076)\nCase ID: C0070\nDate: September 11, 2026 21:12:11\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D3 - 0.4998 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:12:11'),
 (3913, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ean Abilo (ID: P0076)\nCase ID: C0070\nDate: September 11, 2026 21:12:11\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D3 - 0.4998 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:12:11'),
 (3914, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Ean Abilo (ID: P0076)\nCase ID: C0070\nDate: September 11, 2026 21:12:11\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D3 - 0.4998 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:12:11'),
-(3915, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Ean Abilo was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:12:11', 'vaccination', NULL, 0, '2026-09-11 13:12:11'),
+(3915, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Ean Abilo was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:12:11', 'vaccination', NULL, 1, '2026-09-11 13:12:11'),
 (3916, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jon Garcia (ID: P0078)\nCase ID: C0072\nDate: September 11, 2026 21:14:08\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D3 - 0.0002 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:14:08'),
 (3917, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jon Garcia (ID: P0078)\nCase ID: C0072\nDate: September 11, 2026 21:14:08\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D3 - 0.0002 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:14:08'),
 (3918, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jon Garcia (ID: P0078)\nCase ID: C0072\nDate: September 11, 2026 21:14:08\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D3 - 0.0002 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:14:08'),
-(3919, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Jon Garcia was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:14:08', 'vaccination', NULL, 0, '2026-09-11 13:14:08'),
+(3919, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Jon Garcia was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:14:08', 'vaccination', NULL, 1, '2026-09-11 13:14:08'),
 (3920, 8, 'Chart Ready for Registry', 'Reyes, Sharpay Evans (Case 26-0028) is ready for registry verification.', 'registry', NULL, 0, '2026-09-11 13:16:54'),
 (3921, 16, 'Chart Ready for Registry', 'Reyes, Sharpay Evans (Case 26-0028) is ready for registry verification.', 'registry', NULL, 0, '2026-09-11 13:16:54'),
 (3922, 25, 'Chart Ready for Registry', 'Reyes, Sharpay Evans (Case 26-0028) is ready for registry verification.', 'registry', NULL, 0, '2026-09-11 13:16:54'),
@@ -1937,17 +2051,17 @@ INSERT INTO `notifications` (`notification_id`, `user_id`, `title`, `message`, `
 (3926, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jon Garcia (ID: P0078)\nCase ID: C0072\nDate: September 11, 2026 21:22:04\n\nVaccination Entries:\n• TT (Tetanus Toxoid) - D7 - 1 Ampule (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:22:04'),
 (3927, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jon Garcia (ID: P0078)\nCase ID: C0072\nDate: September 11, 2026 21:22:04\n\nVaccination Entries:\n• TT (Tetanus Toxoid) - D7 - 1 Ampule (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:22:04'),
 (3928, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jon Garcia (ID: P0078)\nCase ID: C0072\nDate: September 11, 2026 21:22:04\n\nVaccination Entries:\n• TT (Tetanus Toxoid) - D7 - 1 Ampule (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:22:04'),
-(3929, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Jon Garcia was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:22:04', 'vaccination', NULL, 0, '2026-09-11 13:22:04'),
+(3929, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Jon Garcia was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:22:04', 'vaccination', NULL, 1, '2026-09-11 13:22:04'),
 (3930, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jean Lacerna (ID: P0073)\nCase ID: C0067\nDate: September 11, 2026 21:23:18\n\nVaccination Entries:\n• Speeda  - D7 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:23:18'),
 (3931, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jean Lacerna (ID: P0073)\nCase ID: C0067\nDate: September 11, 2026 21:23:18\n\nVaccination Entries:\n• Speeda  - D7 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:23:18'),
 (3932, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Jean Lacerna (ID: P0073)\nCase ID: C0067\nDate: September 11, 2026 21:23:18\n\nVaccination Entries:\n• Speeda  - D7 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:23:18'),
-(3933, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Jean Lacerna was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:23:18', 'vaccination', NULL, 0, '2026-09-11 13:23:18'),
-(3934, 9, 'Registry Completed', 'Jon Garcia was registered by Administrative Staff.', 'registry', NULL, 0, '2026-09-11 13:27:54'),
-(3935, 9, 'Registry Completed', 'Reyes, Sharpay Evans was registered by Administrative Staff.', 'registry', NULL, 0, '2026-09-11 13:28:25'),
+(3933, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Jean Lacerna was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:23:18', 'vaccination', NULL, 1, '2026-09-11 13:23:18'),
+(3934, 9, 'Registry Completed', 'Jon Garcia was registered by Administrative Staff.', 'registry', NULL, 1, '2026-09-11 13:27:54'),
+(3935, 9, 'Registry Completed', 'Reyes, Sharpay Evans was registered by Administrative Staff.', 'registry', NULL, 1, '2026-09-11 13:28:25'),
 (3936, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Joseph Marco (ID: P0085)\nCase ID: C0079\nDate: September 11, 2026 21:30:49\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 - 0.05 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:30:49'),
 (3937, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Joseph Marco (ID: P0085)\nCase ID: C0079\nDate: September 11, 2026 21:30:49\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 - 0.05 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:30:49'),
 (3938, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Joseph Marco (ID: P0085)\nCase ID: C0079\nDate: September 11, 2026 21:30:49\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 - 0.05 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:30:49'),
-(3939, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Joseph Marco was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:30:49', 'vaccination', NULL, 0, '2026-09-11 13:30:49'),
+(3939, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Joseph Marco was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:30:49', 'vaccination', NULL, 1, '2026-09-11 13:30:49'),
 (3940, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: Joseph Marco (ID: 85) | Case ID: 79 | Used: 0.05 Vial | Status: Completed | Batch(es): 26-0027: 0.05 Vial (exp 2028-06-12) | Date: 2026-09-08', 'user_management', 'superadmin_audit_763', 0, '2026-09-11 13:30:49'),
 (3941, 1, 'Registry Activity', 'Cainta Branch: Verified registry for Reyes, Sharpay Evans (26-0028)', 'registry', 'superadmin_audit_762', 0, '2026-09-11 13:28:25'),
 (3942, 1, 'Registry Activity', 'Cainta Branch: Verified registry for Jon Garcia (26-0023)', 'registry', 'superadmin_audit_761', 0, '2026-09-11 13:27:54'),
@@ -2271,23 +2385,94 @@ INSERT INTO `notifications` (`notification_id`, `user_id`, `title`, `message`, `
 (4452, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Joseph Marco (ID: P0085)\nCase ID: C0079\nDate: September 11, 2026 21:46:01\n\nVaccination Entries:\n• Speeda  - D3 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:46:01'),
 (4453, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Joseph Marco (ID: P0085)\nCase ID: C0079\nDate: September 11, 2026 21:46:01\n\nVaccination Entries:\n• Speeda  - D3 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:46:01'),
 (4454, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Joseph Marco (ID: P0085)\nCase ID: C0079\nDate: September 11, 2026 21:46:01\n\nVaccination Entries:\n• Speeda  - D3 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:46:01'),
-(4455, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Joseph Marco was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:46:01', 'vaccination', NULL, 0, '2026-09-11 13:46:01'),
+(4455, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Joseph Marco was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:46:01', 'vaccination', NULL, 1, '2026-09-11 13:46:01'),
 (4456, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Reyes, Sharpay Evans (ID: P0083)\nCase ID: C0077\nDate: September 11, 2026 21:47:57\n\nVaccination Entries:\n• PPD - D7 - 1 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:47:57'),
 (4457, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Reyes, Sharpay Evans (ID: P0083)\nCase ID: C0077\nDate: September 11, 2026 21:47:57\n\nVaccination Entries:\n• PPD - D7 - 1 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:47:57'),
 (4458, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Reyes, Sharpay Evans (ID: P0083)\nCase ID: C0077\nDate: September 11, 2026 21:47:57\n\nVaccination Entries:\n• PPD - D7 - 1 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:47:57'),
-(4459, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Reyes, Sharpay Evans was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:47:57', 'vaccination', NULL, 0, '2026-09-11 13:47:57'),
+(4459, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Reyes, Sharpay Evans was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:47:57', 'vaccination', NULL, 1, '2026-09-11 13:47:57'),
 (4460, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Reyes, Sharpay Evans (ID: P0083)\nCase ID: C0077\nDate: September 11, 2026 21:49:05\n\nVaccination Entries:\n• Speeda  - D14 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:49:05'),
 (4461, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Reyes, Sharpay Evans (ID: P0083)\nCase ID: C0077\nDate: September 11, 2026 21:49:05\n\nVaccination Entries:\n• Speeda  - D14 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:49:05'),
 (4462, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Reyes, Sharpay Evans (ID: P0083)\nCase ID: C0077\nDate: September 11, 2026 21:49:05\n\nVaccination Entries:\n• Speeda  - D14 - 2 site (2 site total) (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:49:05'),
-(4463, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Reyes, Sharpay Evans was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:49:05', 'vaccination', NULL, 0, '2026-09-11 13:49:05'),
-(4464, 9, 'Patient Waiting for Nurse', 'Julia Singko (Case 26-0032) is waiting for assessment.', 'patient_queue', NULL, 0, '2026-09-11 13:55:23'),
+(4463, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Reyes, Sharpay Evans was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:49:05', 'vaccination', NULL, 1, '2026-09-11 13:49:05'),
+(4464, 9, 'Patient Waiting for Nurse', 'Julia Singko (Case 26-0032) is waiting for assessment.', 'patient_queue', NULL, 1, '2026-09-11 13:55:23'),
 (4465, 8, 'Chart Ready for Registry', 'Julia Singko (Case 26-0032) is ready for registry verification.', 'registry', NULL, 0, '2026-09-11 13:56:09'),
 (4466, 16, 'Chart Ready for Registry', 'Julia Singko (Case 26-0032) is ready for registry verification.', 'registry', NULL, 0, '2026-09-11 13:56:09'),
 (4467, 25, 'Chart Ready for Registry', 'Julia Singko (Case 26-0032) is ready for registry verification.', 'registry', NULL, 0, '2026-09-11 13:56:09'),
 (4468, 8, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Julia Singko (ID: P0086)\nCase ID: C0080\nDate: September 11, 2026 21:57:07\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 - 0.5 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:57:07'),
 (4469, 16, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Julia Singko (ID: P0086)\nCase ID: C0080\nDate: September 11, 2026 21:57:07\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 - 0.5 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:57:07'),
 (4470, 25, 'Vaccination Record Updated', 'Vaccination information was recorded by Nurse Marc Beringuela at Cainta Branch.\n\nPatient: Julia Singko (ID: P0086)\nCase ID: C0080\nDate: September 11, 2026 21:57:07\n\nVaccination Entries:\n• ERIG (Equine Rabies Immunoglobulin) - D0 - 0.5 Vial (Completed)\n\nTotal Entries: 1', 'vaccination', NULL, 0, '2026-09-11 13:57:07'),
-(4471, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Julia Singko was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:57:07', 'vaccination', NULL, 0, '2026-09-11 13:57:07');
+(4471, 9, 'Vaccination Submitted Successfully', 'Vaccination information for Julia Singko was saved successfully at Cainta Branch.\nTotal entries: 1\nDate: September 11, 2026 21:57:07', 'vaccination', NULL, 1, '2026-09-11 13:57:07'),
+(4472, 1, 'Forecasting Activity', 'Cainta Branch: Automatically generated 30-day forecasts for 33 items', 'forecasting', 'superadmin_audit_779', 0, '2026-09-13 13:12:04'),
+(4473, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - ERIG (Equine Rabies Immunoglobulin) Dose #1 (D0) | Patient: Julia Singko (ID: 86) | Case ID: 80 | Used: 0.5 Vial | Status: Completed | Batch(es): 26-0027: 0.5 Vial (exp 2028-06-12) | Date: 2026-09-11', 'user_management', 'superadmin_audit_771', 0, '2026-09-11 13:57:07'),
+(4474, 1, 'Clinical Assessment Update', 'Cainta Branch: Signed chart and sent visit 8 for registry', 'system', 'superadmin_audit_770', 0, '2026-09-11 13:56:09'),
+(4475, 1, 'Clinical Assessment Update', 'Cainta Branch: Saved nurse assessment and schedule for visit 8', 'system', 'superadmin_audit_769', 0, '2026-09-11 13:56:06'),
+(4476, 1, 'Patient Visit Update', 'Cainta Branch: Checked in Julia Singko as New Patient', 'system', 'superadmin_audit_768', 0, '2026-09-11 13:55:23'),
+(4477, 1, 'Patient Record Update', 'Cainta Branch: Created patient intake record: Julia Singko (Case: 26-0032)', 'system', 'superadmin_audit_767', 0, '2026-09-11 13:55:09'),
+(4478, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Speeda  Dose #4 (D14) | Patient: Reyes, Sharpay Evans (ID: 83) | Case ID: 77 | Used: 2 site (2 site total) | Status: Completed | Batch(es): 26-022489: 2 site (exp 2026-11-30) | Date: 2026-09-11', 'user_management', 'superadmin_audit_766', 0, '2026-09-11 13:49:05'),
+(4479, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - PPD Dose #3 (D7) | Patient: Reyes, Sharpay Evans (ID: 83) | Case ID: 77 | Used: 1 Vial | Status: Completed | Batch(es): 26-022489: 1 Vial (exp 2027-02-01) | Date: 2026-09-11', 'user_management', 'superadmin_audit_765', 0, '2026-09-11 13:47:57'),
+(4480, 1, 'Vaccination Update', 'Cainta Branch: Vaccination Administered - Speeda  Dose #2 (D3) | Patient: Joseph Marco (ID: 85) | Case ID: 79 | Used: 2 site (2 site total) | Status: Completed | Batch(es): 26-022489: 2 site (exp 2026-11-30) | Date: 2026-09-11', 'user_management', 'superadmin_audit_764', 0, '2026-09-11 13:46:01'),
+(4535, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for 1CC/3CC. Status: Shortage Risk. Risk: 100.0%. Forecast period: 14 days. Forecasted consumption: 1.12. Recommended reorder: 57.', 'forecast', 'forecast:35:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4536, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for 5CC/10CC. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 15.33. Recommended reorder: 73.', 'forecast', 'forecast:36:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4537, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for ABHAYRAB. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 8.73. Recommended reorder: 63.', 'forecast', 'forecast:10:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4538, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for ALCOHOL. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 0.82. Recommended reorder: 52.', 'forecast', 'forecast:39:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4539, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for AMOXICILLIN 500MG. Status: Shortage Risk. Risk: 100.0%. Forecast period: 7 days. Forecasted consumption: 1.79. Recommended reorder: 156.', 'forecast', 'forecast:30:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4540, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for ATS 1,500 \"IU\". Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 7.85. Recommended reorder: 60.', 'forecast', 'forecast:17:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4541, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for ATS 3000 \"IU\". Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 7.85. Recommended reorder: 60.', 'forecast', 'forecast:18:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4542, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for ATS 5,000 \"IU\". Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 7.85. Recommended reorder: 60.', 'forecast', 'forecast:19:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4543, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for BETADINE. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 0.82. Recommended reorder: 52.', 'forecast', 'forecast:40:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4544, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for CEFALEXIN 500 MG. Status: Shortage Risk. Risk: 100.0%. Forecast period: 14 days. Forecasted consumption: 3.72. Recommended reorder: 117.', 'forecast', 'forecast:31:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4545, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for CETIRIZINE. Status: Shortage Risk. Risk: 100.0%. Forecast period: 14 days. Forecasted consumption: 3.72. Recommended reorder: 116.', 'forecast', 'forecast:33:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4546, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for CHIRORAB. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 8.72. Recommended reorder: 63.', 'forecast', 'forecast:12:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4547, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for COTTON BALLS. Status: Shortage Risk. Risk: 100.0%. Forecast period: 7 days. Forecasted consumption: 0.01. Recommended reorder: 264.', 'forecast', 'forecast:42:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4548, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for FACEMASK. Status: Shortage Risk. Risk: 100.0%. Forecast period: 7 days. Forecasted consumption: 16.85. Recommended reorder: 123.', 'forecast', 'forecast:44:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4549, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for FLU. Status: Shortage Risk. Risk: 100.0%. Forecast period: 7 days. Forecasted consumption: 1.10. Recommended reorder: 52.', 'forecast', 'forecast:26:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4550, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for G23. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 8.71. Recommended reorder: 63.', 'forecast', 'forecast:37:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4551, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for G27. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 8.78. Recommended reorder: 63.', 'forecast', 'forecast:38:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4552, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for GAUZE PAD. Status: Shortage Risk. Risk: 100.0%. Forecast period: 7 days. Forecasted consumption: 0.01. Recommended reorder: 54.', 'forecast', 'forecast:43:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4553, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for GLOVES. Status: Shortage Risk. Risk: 100.0%. Forecast period: 7 days. Forecasted consumption: 16.85. Recommended reorder: 123.', 'forecast', 'forecast:45:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4554, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for HEPA B. Status: Shortage Risk. Risk: 100.0%. Forecast period: 7 days. Forecasted consumption: 1.10. Recommended reorder: 52.', 'forecast', 'forecast:24:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4555, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for HEPA BIG. Status: Shortage Risk. Risk: 100.0%. Forecast period: 7 days. Forecasted consumption: 0.94. Recommended reorder: 52.', 'forecast', 'forecast:25:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4556, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for HRIG. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 4.97. Recommended reorder: 57.', 'forecast', 'forecast:14:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4557, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for HTIG. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 4.38. Recommended reorder: 56.', 'forecast', 'forecast:15:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4558, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for INSULIN. Status: Shortage Risk. Risk: 100.0%. Forecast period: 14 days. Forecasted consumption: 3.72. Recommended reorder: 172.', 'forecast', 'forecast:34:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4559, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for MEFENAMIC 500 MG. Status: Shortage Risk. Risk: 100.0%. Forecast period: 14 days. Forecasted consumption: 3.72. Recommended reorder: 137.', 'forecast', 'forecast:32:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4560, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for MICROPRE. Status: Shortage Risk. Risk: 100.0%. Forecast period: 7 days. Forecasted consumption: 0.01. Recommended reorder: 53.', 'forecast', 'forecast:51:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4561, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for PPD. Status: Shortage Risk. Risk: 100.0%. Forecast period: 7 days. Forecasted consumption: 0.09. Recommended reorder: 51.', 'forecast', 'forecast:23:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4562, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for STERILE WATER. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 3.14. Recommended reorder: 57.', 'forecast', 'forecast:41:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4563, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for TOXOID ABHAYTOX. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 5.61. Recommended reorder: 58.', 'forecast', 'forecast:21:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4564, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for TOXOID BETT. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 14.33. Recommended reorder: 73.', 'forecast', 'forecast:20:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4565, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for VAXIRAB. Status: Shortage Risk. Risk: 100.0%. Forecast period: 30 days. Forecasted consumption: 8.79. Recommended reorder: 63.', 'forecast', 'forecast:11:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4566, 11, 'Supply Forecast Alert', 'Forecasted shortage risk for ERIG (Equine Rabies Immunoglobulin). Status: Shortage Risk. Risk: 90.1%. Forecast period: 30 days. Forecasted consumption: 7.10. Recommended reorder: 7.', 'forecast', 'forecast:2:2026-09-13', 0, '2026-09-13 13:37:28'),
+(4567, 11, 'Stock Out Recorded', '0 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:88', 0, '2026-09-13 13:37:28'),
+(4568, 11, 'Stock Out Recorded', '2 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:87', 0, '2026-09-13 13:37:28'),
+(4569, 11, 'Stock Out Recorded', '1 Vial of PPD were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:86', 0, '2026-09-13 13:37:28'),
+(4570, 11, 'Stock Out Recorded', '2 Vial of Speeda  were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:85', 0, '2026-09-13 13:37:28'),
+(4571, 11, 'Stock Out Recorded', '1 Ampule of TT (Tetanus Toxoid) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:81', 0, '2026-09-13 13:37:28'),
+(4572, 11, 'Stock Out Recorded', '0 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:80', 0, '2026-09-13 13:37:28'),
+(4573, 11, 'Stock Out Recorded', '0 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:79', 0, '2026-09-13 13:37:28'),
+(4574, 11, 'Stock Out Recorded', '0 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:78', 0, '2026-09-13 13:37:28'),
+(4575, 11, 'Stock In Confirmed', '10 Vial of ERIG (Equine Rabies Immunoglobulin) were added to inventory by Jean Montero.', 'stock_in', 'transaction:83', 0, '2026-09-13 13:37:28'),
+(4577, 11, 'Stock Out Recorded', '0 Vial of ERIG (Equine Rabies Immunoglobulin) were released from inventory by Marc Beringuela.', 'stock_out', 'transaction:84', 0, '2026-09-13 13:37:28'),
+(4791, 8, 'New Generated Medical Document', 'Medical Certificate for Julia Singko (Case 26-0032) is ready in Medical Documents.', 'medical_document', NULL, 0, '2026-09-13 15:07:32'),
+(4792, 16, 'New Generated Medical Document', 'Medical Certificate for Julia Singko (Case 26-0032) is ready in Medical Documents.', 'medical_document', NULL, 0, '2026-09-13 15:07:32'),
+(4793, 25, 'New Generated Medical Document', 'Medical Certificate for Julia Singko (Case 26-0032) is ready in Medical Documents.', 'medical_document', NULL, 0, '2026-09-13 15:07:32'),
+(4794, 8, 'New Generated Medical Document', 'Vaccination Certificate for Aira Flores (Case 26-0026) is ready in Medical Documents.', 'medical_document', NULL, 0, '2026-09-13 15:07:43'),
+(4795, 16, 'New Generated Medical Document', 'Vaccination Certificate for Aira Flores (Case 26-0026) is ready in Medical Documents.', 'medical_document', NULL, 0, '2026-09-13 15:07:43'),
+(4796, 25, 'New Generated Medical Document', 'Vaccination Certificate for Aira Flores (Case 26-0026) is ready in Medical Documents.', 'medical_document', NULL, 0, '2026-09-13 15:07:43'),
+(4935, 11, 'Stock In Confirmed', '100 mL of ALCOHOL were added to inventory by Jean Montero.', 'stock_in', 'transaction:92', 0, '2026-09-13 15:36:06'),
+(4936, 11, 'Stock In Confirmed', '10 Box/s of 1CC/3CC were added to inventory by Jean Montero.', 'stock_in', 'transaction:91', 0, '2026-09-13 15:36:06'),
+(4937, 11, 'Stock In Confirmed', '55 Vial of HTIG were added to inventory by Jean Montero.', 'stock_in', 'transaction:90', 0, '2026-09-13 15:36:06'),
+(4938, 11, 'Stock In Confirmed', '20 Vial of ABHAYRAB were added to inventory by Jean Montero.', 'stock_in', 'transaction:89', 0, '2026-09-13 15:36:06'),
+(5123, 6, 'Inventory Stock In', 'Jean Montero recorded Stock In at Cainta Branch. Item: BETADINE. Quantity: 60 mL. Transaction ID: 93. Details: Batch/Lot No.: 26-00040.', 'inventory_stock_transaction', 'inventory_tx:93', 0, '2026-09-13 15:52:37'),
+(5124, 6, 'Inventory Stock In', 'Jean Montero recorded Stock In at Cainta Branch. Item: 1CC/3CC. Quantity: 50 Box/s. Transaction ID: 94. Details: Batch/Lot No.: 26-0041.', 'inventory_stock_transaction', 'inventory_tx:94', 0, '2026-09-13 16:00:15'),
+(5125, 6, 'Inventory Stock In', 'Jean Montero recorded Stock In at Cainta Branch. Item: GLOVES. Quantity: 200 Box/s. Transaction ID: 95. Details: Batch/Lot No.: 26-00042.', 'inventory_stock_transaction', 'inventory_tx:95', 0, '2026-09-13 16:02:10'),
+(5126, 6, 'Inventory Stock In', 'Jean Montero recorded Stock In at Cainta Branch. Item: 5CC/10CC. Quantity: 50 Box/s. Transaction ID: 96. Details: Batch/Lot No.: 26-00043.', 'inventory_stock_transaction', 'inventory_tx:96', 0, '2026-09-13 16:02:48'),
+(5127, 6, 'Inventory Stock In', 'Jean Montero recorded Stock In at Cainta Branch. Item: CEFALEXIN 500 MG. Quantity: 120 Piece. Transaction ID: 97. Details: Batch/Lot No.: 26-00044.', 'inventory_stock_transaction', 'inventory_tx:97', 0, '2026-09-13 16:04:01'),
+(5128, 6, 'Inventory Stock In', 'Jean Montero recorded Stock In at Cainta Branch. Item: COTTON BALLS. Quantity: 264 Packs. Transaction ID: 98. Details: Batch/Lot No.: 26-00045.', 'inventory_stock_transaction', 'inventory_tx:98', 0, '2026-09-13 16:05:24'),
+(5129, 8, 'New Generated Medical Document', 'Referral Letter for Julia Singko (Case 26-0032) is ready in Medical Documents.', 'medical_document', NULL, 0, '2026-09-13 17:06:16'),
+(5130, 16, 'New Generated Medical Document', 'Referral Letter for Julia Singko (Case 26-0032) is ready in Medical Documents.', 'medical_document', NULL, 0, '2026-09-13 17:06:16'),
+(5131, 25, 'New Generated Medical Document', 'Referral Letter for Julia Singko (Case 26-0032) is ready in Medical Documents.', 'medical_document', NULL, 0, '2026-09-13 17:06:16'),
+(5132, 9, 'Patient Waiting for Nurse', 'Julia Singko (Case 26-0032) is waiting for assessment.', 'patient_queue', NULL, 0, '2026-09-13 17:20:57');
 
 -- --------------------------------------------------------
 
@@ -2403,7 +2588,8 @@ INSERT INTO `patient_visits` (`visit_id`, `patient_id`, `case_id`, `branch_id`, 
 (5, 85, 79, 'SBI-002', 'Repeating Patient', '2026-09-08', '2026-09-08 10:25:05', 'Registered', 8, 9, '2026-09-08 13:58:27', '2026-09-08 13:58:32', '2026-09-08 13:58:32', '2026-09-08 13:58:53', NULL, '', '2026-09-08 02:25:05', '2026-09-08 05:58:53'),
 (6, 83, 77, 'SBI-002', 'Follow-up', '2026-09-08', '2026-09-08 10:34:00', 'Registered', 8, 9, '2026-09-11 21:16:01', '2026-09-11 21:16:54', '2026-09-11 21:16:54', '2026-09-11 21:28:25', NULL, '', '2026-09-08 02:34:00', '2026-09-11 13:28:25'),
 (7, 78, 72, 'SBI-002', 'New Patient', '2026-09-08', '2026-09-08 10:35:40', 'Registered', 8, 9, '2026-09-11 21:20:54', '2026-09-11 21:21:00', '2026-09-11 21:21:00', '2026-09-11 21:27:54', NULL, '', '2026-09-08 02:35:40', '2026-09-11 13:27:54'),
-(8, 86, 80, 'SBI-002', 'New Patient', '2026-09-11', '2026-09-11 21:55:23', 'For Registry', 16, 9, '2026-09-11 21:56:06', '2026-09-11 21:56:09', '2026-09-11 21:56:09', NULL, NULL, '', '2026-09-11 13:55:23', '2026-09-11 13:56:09');
+(8, 86, 80, 'SBI-002', 'New Patient', '2026-09-11', '2026-09-11 21:55:23', 'For Registry', 16, 9, '2026-09-11 21:56:06', '2026-09-11 21:56:09', '2026-09-11 21:56:09', NULL, NULL, '', '2026-09-11 13:55:23', '2026-09-11 13:56:09'),
+(9, 86, 80, 'SBI-002', 'Follow-up', '2026-09-14', '2026-09-14 01:20:57', 'Waiting for Nurse', 16, NULL, NULL, NULL, NULL, NULL, NULL, '', '2026-09-13 17:20:57', '2026-09-13 17:20:57');
 
 -- --------------------------------------------------------
 
@@ -2839,7 +3025,17 @@ INSERT INTO `stock_transactions` (`transaction_id`, `item_id`, `user_id`, `vacci
 (85, 5, 9, 227, 'SBI-002', 'OUT', 2.0000, 'Vaccination | Patient ID: 85 | Case ID: 79 | Vaccine: Speeda  | Dose #: 2 | Used: 2 site (2 site total) | Batch(es): 26-022489: 2 site (exp 2026-11-30) | Date: 2026-09-11', '2026-09-11 13:46:01'),
 (86, 23, 9, 235, 'SBI-002', 'OUT', 1.0000, 'Vaccination | Patient ID: 83 | Case ID: 77 | Vaccine: PPD | Dose #: 3 | Used: 1 Vial | Batch(es): 26-022489: 1 Vial (exp 2027-02-01) | Date: 2026-09-11', '2026-09-11 13:47:57'),
 (87, 5, 9, 242, 'SBI-002', 'OUT', 2.0000, 'Vaccination | Patient ID: 83 | Case ID: 77 | Vaccine: Speeda  | Dose #: 4 | Used: 2 site (2 site total) | Batch(es): 26-022489: 2 site (exp 2026-11-30) | Date: 2026-09-11', '2026-09-11 13:49:05'),
-(88, 2, 9, 243, 'SBI-002', 'OUT', 0.5000, 'Vaccination | Patient ID: 86 | Case ID: 80 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Used: 0.5 Vial | Batch(es): 26-0027: 0.5 Vial (exp 2028-06-12) | Date: 2026-09-11', '2026-09-11 13:57:07');
+(88, 2, 9, 243, 'SBI-002', 'OUT', 0.5000, 'Vaccination | Patient ID: 86 | Case ID: 80 | Vaccine: ERIG (Equine Rabies Immunoglobulin) | Dose #: 1 | Used: 0.5 Vial | Batch(es): 26-0027: 0.5 Vial (exp 2028-06-12) | Date: 2026-09-11', '2026-09-11 13:57:07'),
+(89, 10, 11, NULL, 'SBI-002', 'IN', 20.0000, 'Batch/Lot No.: 26-00034 | Stock IN', '2026-09-12 16:00:00'),
+(90, 15, 11, NULL, 'SBI-002', 'IN', 55.0000, 'Batch/Lot No.: 26-00035 | Stock in', '2026-09-12 16:00:00'),
+(91, 35, 11, NULL, 'SBI-002', 'IN', 10.0000, 'Batch/Lot No.: 26-00279', '2026-09-12 16:00:00'),
+(92, 39, 11, NULL, 'SBI-002', 'IN', 100.0000, 'Batch/Lot No.: 26-0039', '2026-09-12 16:00:00'),
+(93, 40, 11, NULL, 'SBI-002', 'IN', 60.0000, 'Batch/Lot No.: 26-00040', '2026-09-12 16:00:00'),
+(94, 35, 11, NULL, 'SBI-002', 'IN', 50.0000, 'Batch/Lot No.: 26-0041', '2026-09-12 16:00:00'),
+(95, 45, 11, NULL, 'SBI-002', 'IN', 200.0000, 'Batch/Lot No.: 26-00042', '2026-09-13 16:00:00'),
+(96, 36, 11, NULL, 'SBI-002', 'IN', 50.0000, 'Batch/Lot No.: 26-00043', '2026-09-13 16:00:00'),
+(97, 31, 11, NULL, 'SBI-002', 'IN', 120.0000, 'Batch/Lot No.: 26-00044', '2026-09-13 16:00:00'),
+(98, 42, 11, NULL, 'SBI-002', 'IN', 264.0000, 'Batch/Lot No.: 26-00045', '2026-09-13 16:00:00');
 
 -- --------------------------------------------------------
 
@@ -12757,14 +12953,14 @@ CREATE TABLE `users` (
 --
 
 INSERT INTO `users` (`user_id`, `branch_id`, `role_id`, `username`, `email`, `password`, `status`, `created_at`, `last_login`) VALUES
-(1, 'SBI-001', 1, 'superadmin', 'superadmin8472@example.com', '$2y$10$Mi5HOtkfjlBSSce5uH9Q/.WKJtV0KkkmkW0Oukc5bKo.ioncyUBA2', 'Active', '2026-07-04 07:53:47', '2026-09-11 17:00:28'),
-(6, 'SBI-002', 2, 'Jojana Garabillo', 'jojanagarabillo5631@example.com', '$2y$10$Gundsv.vdvdqOT1M3VIcP.r/8y/MqzNxDPnxfh2qypFd44fL6xZta', 'Active', '2026-07-04 09:59:45', '2026-09-11 22:18:46'),
+(1, 'SBI-001', 1, 'superadmin', 'superadmin8472@example.com', '$2y$10$Mi5HOtkfjlBSSce5uH9Q/.WKJtV0KkkmkW0Oukc5bKo.ioncyUBA2', 'Active', '2026-07-04 07:53:47', '2026-09-13 20:58:02'),
+(6, 'SBI-002', 2, 'Jojana Garabillo', 'jojanagarabillo5631@example.com', '$2y$10$Gundsv.vdvdqOT1M3VIcP.r/8y/MqzNxDPnxfh2qypFd44fL6xZta', 'Active', '2026-07-04 09:59:45', '2026-09-14 00:47:49'),
 (8, 'SBI-002', 4, 'Shane Cacho', 'shanecacho2917@example.com', '$2a$12$rfw67uNcLetmfn6M2Dv5e.ff49vAitKIHni3Q7iKV.zgMruHVfkIa', 'Active', '2026-07-04 14:41:02', '2026-09-08 13:55:06'),
-(9, 'SBI-002', 3, 'Marc Beringuela', 'marcberinguela6843@example.com', '$2y$10$mRG5TnwyVCEkohLgsXiCe.INa226POltPF/0M4fYuXX8mq925V7kO', 'Active', '2026-07-04 14:55:07', '2026-09-11 18:40:34'),
-(11, 'SBI-002', 5, 'Jean Montero', 'jeanmontero3159@example.com', '$2y$10$ga5HM6WcD0wQSSvnpCAvue4UdqknCryN93mJVLatoI4GAiEDHctNO', 'Active', '2026-07-04 15:09:39', '2026-09-11 17:08:01'),
+(9, 'SBI-002', 3, 'Marc Beringuela', 'marcberinguela6843@example.com', '$2y$10$mRG5TnwyVCEkohLgsXiCe.INa226POltPF/0M4fYuXX8mq925V7kO', 'Active', '2026-07-04 14:55:07', '2026-09-13 21:14:14'),
+(11, 'SBI-002', 5, 'Jean Montero', 'jeanmontero3159@example.com', '$2y$10$ga5HM6WcD0wQSSvnpCAvue4UdqknCryN93mJVLatoI4GAiEDHctNO', 'Active', '2026-07-04 15:09:39', '2026-09-13 21:37:26'),
 (14, 'SBI-003', 2, 'Joepat Lacerna', 'joepatlacerna7284@example.com', '$2y$10$JB4.S8HI8Zu.IbvLHuMhH.3mnmqmyWMdV4ID/nRxcotOs.tmdCasm', 'Active', '2026-07-05 11:56:22', '2026-09-11 16:18:09'),
 (15, 'SBI-003', 2, 'Mae Ben', 'sheyn.cacho@gmail.com', '$2y$10$knOsicB5IV6qD4SqIaF3WOBBnyrFDJYTknP8yqBSXlo35gIp8mLim', 'Active', '2026-07-05 16:19:46', '2026-07-09 19:33:48'),
-(16, 'SBI-002', 4, 'Ella Franco', 'cachosheyn@gmail.com', '$2y$10$lLv3F5B3Yu1QGQU1GkAbq./clNj/7RMlMH1noMMwNAqv/45mymWfm', 'Active', '2026-07-07 06:24:22', '2026-09-11 21:17:19'),
+(16, 'SBI-002', 4, 'Ella Franco', 'cachosheyn@gmail.com', '$2y$10$lLv3F5B3Yu1QGQU1GkAbq./clNj/7RMlMH1noMMwNAqv/45mymWfm', 'Active', '2026-07-07 06:24:22', '2026-09-13 21:29:34'),
 (24, 'SBI-008', 2, 'Sharpay Evans', 'SharpayEvans@gmail.com', '$2y$10$AW8hhqA1/TAtM5RZdtWTk.AMVvcWUfw9Fh5Y1oBGRIiJULmmxnTUC', 'Active', '2026-09-08 06:04:57', NULL),
 (25, 'SBI-002', 4, 'Sarah Princess', 'princess_sarah@gmail.com', '$2y$10$eCltMnFYRsAfCZT8f0H7.O/u.jJPa6yH9KmVqegZTApLY0bAEZCHu', 'Active', '2026-09-08 06:07:41', NULL),
 (26, 'SBI-001', 2, 'Micha Almo', 'ewyouseff123@gmail.com', '$2y$10$vSG7sV7GzKaDHRE4QTAwX.KCAvboTe6GmKvOIhn6yxbTwhZM8WPV6', 'Active', '2026-09-08 07:32:10', '2026-09-08 15:45:48'),
@@ -13155,7 +13351,8 @@ ALTER TABLE `forecast_results`
   ADD PRIMARY KEY (`forecast_id`),
   ADD KEY `item_id` (`item_id`),
   ADD KEY `generated_by` (`generated_by`),
-  ADD KEY `fk_prediction_branch` (`branch_id`);
+  ADD KEY `fk_prediction_branch` (`branch_id`),
+  ADD KEY `idx_forecast_branch_horizon_date` (`branch_id`,`forecast_days`,`forecast_date`);
 
 --
 -- Indexes for table `inventory_categories`
@@ -13463,7 +13660,7 @@ ALTER TABLE `animal_bite_cases_archive`
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `log_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=775;
+  MODIFY `log_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=808;
 
 --
 -- AUTO_INCREMENT for table `clinical_assessments`
@@ -13481,13 +13678,13 @@ ALTER TABLE `daily_inventory_closings`
 -- AUTO_INCREMENT for table `document_tracking`
 --
 ALTER TABLE `document_tracking`
-  MODIFY `document_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `document_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
 
 --
 -- AUTO_INCREMENT for table `forecast_results`
 --
 ALTER TABLE `forecast_results`
-  MODIFY `forecast_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=100;
+  MODIFY `forecast_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=310;
 
 --
 -- AUTO_INCREMENT for table `inventory_categories`
@@ -13511,7 +13708,7 @@ ALTER TABLE `inventory_returns`
 -- AUTO_INCREMENT for table `inventory_stocks`
 --
 ALTER TABLE `inventory_stocks`
-  MODIFY `stock_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=28;
+  MODIFY `stock_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=61;
 
 --
 -- AUTO_INCREMENT for table `inventory_stocks_archive`
@@ -13529,13 +13726,13 @@ ALTER TABLE `inventory_usage_history`
 -- AUTO_INCREMENT for table `medical_documents`
 --
 ALTER TABLE `medical_documents`
-  MODIFY `document_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `document_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
 
 --
 -- AUTO_INCREMENT for table `notifications`
 --
 ALTER TABLE `notifications`
-  MODIFY `notification_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4472;
+  MODIFY `notification_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5133;
 
 --
 -- AUTO_INCREMENT for table `patients`
@@ -13553,7 +13750,7 @@ ALTER TABLE `patients_archive`
 -- AUTO_INCREMENT for table `patient_visits`
 --
 ALTER TABLE `patient_visits`
-  MODIFY `visit_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
+  MODIFY `visit_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
 
 --
 -- AUTO_INCREMENT for table `philhealth_records`
@@ -13613,7 +13810,7 @@ ALTER TABLE `registry_vaccination_doses_archive`
 -- AUTO_INCREMENT for table `stock_transactions`
 --
 ALTER TABLE `stock_transactions`
-  MODIFY `transaction_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=89;
+  MODIFY `transaction_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=99;
 
 --
 -- AUTO_INCREMENT for table `users`

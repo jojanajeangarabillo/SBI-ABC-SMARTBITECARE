@@ -254,7 +254,7 @@ while ($row = $philhealthResult->fetch_assoc()) {
 $stmt->close();
 
 // 13. LOW STOCK MEDICAL SUPPLIES
-// Compare minimum stock against the TOTAL quantity across all batches in this branch.
+// Only non-expired stock is usable. Expired batches are not counted.
 $lowStockQuery = "SELECT
                       ii.item_id,
                       ii.item_name,
@@ -267,6 +267,7 @@ $lowStockQuery = "SELECT
                   LEFT JOIN inventory_stocks is_
                     ON is_.item_id = ii.item_id
                    AND is_.branch_id = ?
+                   AND (is_.expiration_date IS NULL OR is_.expiration_date >= CURDATE())
                   WHERE c.category_name = 'Medical Supplies'
                   GROUP BY ii.item_id, ii.item_name, ii.minimum_stock, u.unit_name
                   HAVING COALESCE(SUM(is_.quantity_available), 0) <= ii.minimum_stock
@@ -438,424 +439,681 @@ while ($row = $caseStatusResult->fetch_assoc()) {
     $caseStatusStats[$row['case_status']] = $row['count'];
 }
 $stmt->close();
+
+// 20. TOTAL LOW / OUT-OF-STOCK MEDICAL SUPPLIES
+$lowStockCountQuery = "SELECT COUNT(*) AS total
+                       FROM (
+                           SELECT ii.item_id
+                           FROM inventory_items ii
+                           INNER JOIN inventory_categories c ON ii.category_id = c.category_id
+                           LEFT JOIN inventory_stocks s
+                             ON s.item_id = ii.item_id
+                            AND s.branch_id = ?
+                            AND (s.expiration_date IS NULL OR s.expiration_date >= CURDATE())
+                           WHERE c.category_name = 'Medical Supplies'
+                           GROUP BY ii.item_id, ii.minimum_stock
+                           HAVING COALESCE(SUM(s.quantity_available), 0) <= ii.minimum_stock
+                       ) AS low_items";
+$stmt = $conn->prepare($lowStockCountQuery);
+$stmt->bind_param("s", $branch_id);
+$stmt->execute();
+$stats['low_stock_items'] = (int)($stmt->get_result()->fetch_assoc()['total'] ?? 0);
+$stmt->close();
+
+// 21. LATEST 7-DAY NON-STALE SUPPLY FORECAST SUMMARY
+$forecastPreview = [];
+$forecastHighRiskCount = 0;
+$forecastLatestDate = null;
+$forecastStartDate = null;
+$forecastEndDate = null;
+
+$forecastDateStmt = $conn->prepare(
+    "SELECT MAX(forecast_date) AS latest_date
+     FROM forecast_results
+     WHERE branch_id = ?
+       AND forecast_days = 7
+       AND is_stale = 0"
+);
+
+if ($forecastDateStmt) {
+    $forecastDateStmt->bind_param("s", $branch_id);
+    $forecastDateStmt->execute();
+    $forecastLatestDate = $forecastDateStmt->get_result()->fetch_assoc()['latest_date'] ?? null;
+    $forecastDateStmt->close();
+}
+
+if ($forecastLatestDate) {
+    $forecastSummaryStmt = $conn->prepare(
+        "SELECT
+            COUNT(*) AS total_items,
+            SUM(CASE WHEN shortage_probability >= 0.80 THEN 1 ELSE 0 END) AS high_risk_count,
+            MIN(forecast_start_date) AS forecast_start_date,
+            MAX(forecast_end_date) AS forecast_end_date
+         FROM forecast_results
+         WHERE branch_id = ?
+           AND forecast_days = 7
+           AND forecast_date = ?
+           AND is_stale = 0"
+    );
+
+    if ($forecastSummaryStmt) {
+        $forecastSummaryStmt->bind_param("ss", $branch_id, $forecastLatestDate);
+        $forecastSummaryStmt->execute();
+        $forecastSummary = $forecastSummaryStmt->get_result()->fetch_assoc() ?: [];
+        $forecastSummaryStmt->close();
+
+        $forecastHighRiskCount = (int)($forecastSummary['high_risk_count'] ?? 0);
+        $forecastStartDate = $forecastSummary['forecast_start_date'] ?? null;
+        $forecastEndDate = $forecastSummary['forecast_end_date'] ?? null;
+    }
+
+    $forecastPreviewStmt = $conn->prepare(
+        "SELECT
+            fr.item_id,
+            i.item_name,
+            u.unit_name,
+            fr.current_stock_snapshot,
+            fr.minimum_stock_snapshot,
+            fr.stock_status,
+            fr.shortage_probability,
+            fr.recommended_reorder
+         FROM forecast_results fr
+         INNER JOIN inventory_items i ON i.item_id = fr.item_id
+         LEFT JOIN units u ON u.unit_id = i.unit_id
+         WHERE fr.branch_id = ?
+           AND fr.forecast_days = 7
+           AND fr.forecast_date = ?
+           AND fr.is_stale = 0
+         ORDER BY fr.shortage_probability DESC, fr.recommended_reorder DESC, i.item_name ASC
+         LIMIT 5"
+    );
+
+    if ($forecastPreviewStmt) {
+        $forecastPreviewStmt->bind_param("ss", $branch_id, $forecastLatestDate);
+        $forecastPreviewStmt->execute();
+        $forecastPreview = $forecastPreviewStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $forecastPreviewStmt->close();
+    }
+}
+
+$todayDisplay = date('l, F j, Y');
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Nurse Dashboard - <?php echo htmlspecialchars($branch_name); ?></title>
-    <!-- Bootstrap 5 & Icons -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
-    <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- Reusable Sidebar CSS -->
-    <link rel="stylesheet" href="sidebar.css" />
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <link rel="stylesheet" href="sidebar.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+
     <style>
         :root {
             --primary: #2B3A8C;
+            --primary-dark: #1f2d6e;
+            --primary-soft: #eef1ff;
             --accent: #F21D2F;
-            --bg: #F2F2F2;
-            --card-bg: #ECEEF7;
             --success: #28a745;
-            --warning: #ffc107;
+            --success-soft: #e8f7ef;
+            --warning: #e4a300;
+            --warning-soft: #fff4d6;
             --danger: #dc3545;
+            --danger-soft: #feeceb;
             --info: #17a2b8;
+            --text: #1f2a44;
+            --muted: #6f7b91;
+            --border: #e6eaf2;
+            --surface: #ffffff;
+            --page: #f7f9fd;
         }
 
-        * {
-            box-sizing: border-box;
-        }
+        * { box-sizing: border-box; }
 
         body {
-            background:#f0f2f5;
-            font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
             margin: 0;
-            padding: 0;
+            background: var(--page);
+            color: var(--text);
+            font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
         }
 
         .main {
-            margin-left: 260px;
             min-height: 100vh;
-            background: #f9faff;
+            margin-left: 260px;
         }
 
         .topbar {
-            background: white;
             height: 80px;
+            padding: 0 35px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 35px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            background: #fff;
             border-bottom: 1px solid #e9edf5;
+            box-shadow: 0 2px 8px rgba(0,0,0,.05);
         }
+
         .topbar h3 {
+            margin: 0;
+            color: var(--primary);
             font-size: 28px;
             font-weight: 700;
-            color: var(--primary);
-            margin: 0;
-            letter-spacing: -0.3px;
+            letter-spacing: -.3px;
         }
+
         .topbar h3 small {
-            font-size: 16px;
-            font-weight: 400;
-            color: #666;
             margin-left: 10px;
+            color: #6c757d;
+            font-size: 15px;
+            font-weight: 400;
         }
+
         .profile {
-            font-weight: 600;
-            color: var(--primary);
-            cursor: default;
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 7px;
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .profile-role {
+            margin-left: 3px;
+            color: #adb5bd;
+            font-size: 12px;
+            font-weight: 400;
         }
 
         .content {
-            padding: 35px 35px 40px;
+            padding: 30px 35px 42px;
         }
 
-        /* CLICKABLE STAT CARDS */
-        .stat-card-link {
-            display: block;
-            height: 100%;
-            text-decoration: none;
-            color: inherit;
-            border-radius: 16px;
-        }
-
-        .stat-card-link:hover,
-        .stat-card-link:focus {
-            color: inherit;
-            text-decoration: none;
-        }
-
-        .stat-card-link:focus-visible {
-            outline: 3px solid rgba(43, 58, 140, 0.28);
-            outline-offset: 3px;
-        }
-
-        .stat-card-link .stat-card {
-            cursor: pointer;
-        }
-
-        /* ALL STAT CARDS - UNIFORM SIZE */
-   .stat-card {
-    background: #ffffff;
-    border-radius: 16px;
-    padding: 18px 22px;
-    height: 120px;
-
-    display: grid;
-    grid-template-columns: 42px 1fr;
-    grid-template-rows: auto auto;
-    column-gap: 12px;
-    align-items: center;
-
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-
-    position: relative;
-    overflow: hidden;
-
-    transition: transform 0.2s, box-shadow 0.2s;
-}
-
-/* Colored left border */
-.stat-card {
-    border-left: 5px solid var(--primary);
-}
-
-.stat-card:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.10);
-}
-
-/* ICON */
-.stat-card .stat-icon {
-    position: static;
-    grid-column: 1;
-    grid-row: 1 / 3;
-
-    transform: none;
-
-    font-size: 30px;
-    opacity: 1;
-    color: var(--primary);
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-/* TITLE */
-.stat-card .stat-title {
-    grid-column: 2;
-    grid-row: 1;
-
-    font-weight: 500;
-    color: #2f3b4d;
-    font-size: 14px;
-    letter-spacing: 0;
-    margin: 0;
-}
-
-/* NUMBER */
-.stat-card .stat-number {
-    grid-column: 2;
-    grid-row: 2;
-
-    font-size: 28px;
-    font-weight: 700;
-    color: #111827;
-    line-height: 1.1;
-}
-
-.stat-danger {
-    border-left-color: #F21D2F;
-}
-
-.stat-warning {
-    border-left-color: #ffc107;
-}
-
-.stat-success {
-    border-left-color: #28a745;
-}
-
-.stat-info {
-    border-left-color: #17a2b8;
-}
-
-.stat-primary {
-    border-left-color: #2B3A8C;
-}
-
-/* Match icon color with card border */
-.stat-danger .stat-icon {
-    color: #F21D2F;
-}
-
-.stat-warning .stat-icon {
-    color: #ffc107;
-}
-
-.stat-success .stat-icon {
-    color: #28a745;
-}
-
-.stat-info .stat-icon {
-    color: #17a2b8;
-}
-
-.stat-primary .stat-icon {
-    color: #2B3A8C;
-}
-
-
-        /* Large Cards */
-        .large-card {
-            background: white;
-            border-radius: 18px;
-            padding: 22px 24px;
-            box-shadow: 0 3px 8px rgba(0, 0, 0, 0.06);
-            height: 100%;
-            min-height: 340px;
-            display: flex;
-            flex-direction: column;
-            transition: transform 0.2s;
-        }
-        .large-card:hover {
-            transform: translateY(-2px);
-        }
-        .section-title {
-            font-size: 20px;
-            font-weight: 700;
-            color: var(--primary);
-            margin-bottom: 16px;
+        /* Welcome / priority header */
+        .welcome-card {
             display: flex;
             align-items: center;
+            justify-content: space-between;
+            gap: 24px;
+            flex-wrap: wrap;
+            margin-bottom: 22px;
+            padding: 20px 24px;
+            background: linear-gradient(135deg, #ffffff 0%, #f2f4ff 100%);
+            border: 1px solid #e3e7f5;
+            border-radius: 18px;
+            box-shadow: 0 4px 14px rgba(43,58,140,.06);
+        }
+
+        .welcome-card h1 {
+            margin: 0 0 4px;
+            color: #18233f;
+            font-size: 22px;
+            font-weight: 700;
+        }
+
+        .welcome-card p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .today-date {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 8px 12px;
+            color: var(--primary);
+            background: #fff;
+            border: 1px solid #dfe4f4;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .quick-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+        }
+
+        .quick-action {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 12px;
+            color: var(--primary);
+            background: #fff;
+            border: 1px solid #dfe4f4;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: 700;
+            text-decoration: none;
+            transition: .18s ease;
+        }
+
+        .quick-action:hover {
+            color: #fff;
+            background: var(--primary);
+            border-color: var(--primary);
+            transform: translateY(-1px);
+        }
+
+        /* Section heading */
+        .dashboard-section {
+            margin-bottom: 24px;
+        }
+
+        .section-heading {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 13px;
+        }
+
+        .section-heading h2 {
+            margin: 0;
+            color: #25345d;
+            font-size: 16px;
+            font-weight: 800;
+        }
+
+        .section-heading p {
+            margin: 2px 0 0;
+            color: var(--muted);
+            font-size: 11.5px;
+        }
+
+        .section-heading a {
+            color: var(--primary);
+            font-size: 11.5px;
+            font-weight: 700;
+            text-decoration: none;
+        }
+
+        /* Stats */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4,minmax(0,1fr));
+            gap: 16px;
+        }
+
+        .stat-card-link {
+            display: block;
+            color: inherit;
+            text-decoration: none;
+        }
+
+        .stat-card {
+            min-height: 112px;
+            padding: 18px 19px;
+            display: grid;
+            grid-template-columns: 42px 1fr;
+            grid-template-rows: auto auto auto;
+            column-gap: 12px;
+            align-items: center;
+            background: #fff;
+            border-left: 5px solid var(--primary);
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0,0,0,.07);
+            transition: transform .18s ease, box-shadow .18s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(0,0,0,.09);
+        }
+
+        .stat-icon {
+            grid-row: 1 / 4;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--primary);
+            font-size: 28px;
+        }
+
+        .stat-title {
+            color: #526078;
+            font-size: 12.5px;
+            font-weight: 650;
+        }
+
+        .stat-number {
+            color: #111827;
+            font-size: 27px;
+            font-weight: 750;
+            line-height: 1;
+        }
+
+        .stat-note {
+            color: #8892a5;
+            font-size: 10.5px;
+        }
+
+        .stat-danger { border-left-color: var(--danger); }
+        .stat-danger .stat-icon { color: var(--danger); }
+        .stat-warning { border-left-color: var(--warning); }
+        .stat-warning .stat-icon { color: var(--warning); }
+        .stat-success { border-left-color: var(--success); }
+        .stat-success .stat-icon { color: var(--success); }
+        .stat-info { border-left-color: var(--info); }
+        .stat-info .stat-icon { color: var(--info); }
+
+        /* Cards */
+        .panel-card {
+            height: 100%;
+            overflow: hidden;
+            background: #fff;
+            border: 0;
+            border-radius: 18px;
+            box-shadow: 0 3px 10px rgba(0,0,0,.07);
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 18px 20px;
+            border-bottom: 1px solid #edf0f5;
+        }
+
+        .panel-title {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            margin: 0;
+            color: var(--primary);
+            font-size: 16px;
+            font-weight: 750;
+        }
+
+        .panel-title .icon-box {
+            width: 34px;
+            height: 34px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            background: var(--primary);
+            border-radius: 9px;
+            font-size: 16px;
+        }
+
+        .panel-subtitle {
+            margin: 4px 0 0 43px;
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .panel-badge {
+            padding: 5px 9px;
+            border-radius: 999px;
+            font-size: 10.5px;
+            font-weight: 750;
+            white-space: nowrap;
+        }
+
+        .panel-badge.danger {
+            color: #b42318;
+            background: var(--danger-soft);
+        }
+
+        .panel-badge.warning {
+            color: #8a6200;
+            background: var(--warning-soft);
+        }
+
+        .panel-badge.success {
+            color: #18794e;
+            background: var(--success-soft);
+        }
+
+        .panel-body {
+            padding: 18px 20px;
+        }
+
+        .panel-footer {
+            padding: 13px 20px;
+            border-top: 1px solid #edf0f5;
+            text-align: right;
+        }
+
+        .panel-link {
+            color: var(--primary);
+            font-size: 11.5px;
+            font-weight: 750;
+            text-decoration: none;
+        }
+
+        .panel-link:hover { text-decoration: underline; }
+
+        /* Priority lists */
+        .schedule-item,
+        .followup-item,
+        .stock-item,
+        .forecast-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 11px;
+            padding: 11px 0;
+            border-bottom: 1px solid #edf0f5;
+        }
+
+        .schedule-item:last-child,
+        .followup-item:last-child,
+        .stock-item:last-child,
+        .forecast-item:last-child {
+            border-bottom: 0;
+        }
+
+        .list-marker {
+            width: 36px;
+            min-width: 36px;
+            height: 36px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--primary);
+            background: var(--primary-soft);
+            border-radius: 9px;
+            font-size: 11px;
+            font-weight: 800;
+        }
+
+        .list-marker.warning {
+            color: #8a6200;
+            background: var(--warning-soft);
+        }
+
+        .list-marker.danger {
+            color: #b42318;
+            background: var(--danger-soft);
+        }
+
+        .list-main {
+            min-width: 0;
+            flex: 1;
+        }
+
+        .list-title {
+            display: block;
+            color: #26334f;
+            font-size: 12.5px;
+            font-weight: 700;
+        }
+
+        .list-meta {
+            margin-top: 2px;
+            color: var(--muted);
+            font-size: 10.5px;
+            line-height: 1.4;
+        }
+
+        .list-side {
+            margin-left: auto;
+            text-align: right;
+            white-space: nowrap;
+        }
+
+        .mini-badge {
+            display: inline-block;
+            padding: 4px 7px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 750;
+        }
+
+        .mini-badge.danger {
+            color: #b42318;
+            background: var(--danger-soft);
+        }
+
+        .mini-badge.warning {
+            color: #8a6200;
+            background: var(--warning-soft);
+        }
+
+        .mini-badge.success {
+            color: #18794e;
+            background: var(--success-soft);
+        }
+
+        /* Charts */
+        .chart-wrap {
+            position: relative;
+            height: 250px;
+        }
+
+        /* Coverage */
+        .coverage-grid {
+            display: grid;
+            grid-template-columns: 190px 1fr;
+            gap: 22px;
+            align-items: center;
+        }
+
+        .coverage-summary {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
             gap: 10px;
         }
 
-        /* Schedule Table */
-        .schedule-table {
-            width: 100%;
-            border-collapse: collapse;
-            flex: 1;
-        }
-        .schedule-table td {
-            padding: 10px 4px;
-            border-bottom: 1px solid #d7def0;
-            vertical-align: top;
-        }
-        .schedule-table tr:last-child td {
-            border-bottom: none;
-        }
-        .schedule-table .time-col {
-            font-weight: 600;
-            color: var(--primary);
-            white-space: nowrap;
-            width: 90px;
-        }
-        .schedule-table .activity-col {
-            font-weight: 500;
-            color: #1f2a4a;
-        }
-        .schedule-table .activity-col .sub-activity {
-            font-weight: 400;
-            color: #5a6a8a;
-            font-size: 14px;
-            display: block;
-            margin-top: 1px;
-        }
-
-        /* Follow-up Items */
-        .followup-item {
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-            padding: 8px 0;
-            border-bottom: 1px solid #d7def0;
-        }
-        .followup-item:last-child {
-            border-bottom: none;
-        }
-        .followup-item .followup-date {
-            font-weight: 600;
-            color: var(--primary);
-            white-space: nowrap;
-            min-width: 100px;
-            font-size: 15px;
-        }
-        .followup-item .followup-name {
-            font-weight: 500;
-            color: #1f2a4a;
-            font-size: 15px;
-            flex: 1;
-        }
-        .followup-item .followup-days {
-            font-size: 13px;
-            color: #6c757d;
-            margin-left: auto;
-        }
-
-        /* Stock Items */
-        .stock-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 8px 0;
-            border-bottom: 1px solid #d7def0;
-        }
-        .stock-item:last-child {
-            border-bottom: none;
-        }
-        .stock-item .stock-name {
-            font-weight: 500;
-            color: #1f2a4a;
-        }
-        .stock-item .stock-qty {
-            font-weight: 600;
-            color: var(--danger);
-            white-space: nowrap;
-        }
-
-        /* Buttons */
-        .btn-view {
-            background: var(--primary);
-            color: white;
-            border: none;
-            border-radius: 40px;
-            padding: 8px 28px;
-            font-weight: 600;
-            transition: 0.15s;
-            font-size: 14px;
-        }
-        .btn-view:hover {
-            background: #1d2863;
-            color: #fff;
-        }
-        .text-end.mt-auto {
-            margin-top: auto;
-            padding-top: 14px;
-        }
-
-        /* Empty State */
-        .empty-state {
+        .coverage-box {
+            padding: 14px 10px;
             text-align: center;
-            padding: 20px 10px;
-            color: #999;
-            flex: 1;
+            background: #fafbff;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+        }
+
+        .coverage-box span {
+            display: block;
+            color: var(--muted);
+            font-size: 10.5px;
+        }
+
+        .coverage-box strong {
+            display: block;
+            margin-top: 3px;
+            font-size: 22px;
+        }
+
+        .dose-row {
+            display: grid;
+            grid-template-columns: 58px 1fr 44px;
+            gap: 9px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .dose-row:last-child { margin-bottom: 0; }
+
+        .dose-label {
+            color: #536078;
+            font-size: 10.5px;
+            font-weight: 700;
+        }
+
+        .dose-value {
+            color: #273451;
+            font-size: 10.5px;
+            font-weight: 750;
+            text-align: right;
+        }
+
+        .dose-track {
+            height: 7px;
+            overflow: hidden;
+            background: #edf0f5;
+            border-radius: 999px;
+        }
+
+        .dose-fill {
+            height: 100%;
+            background: var(--primary);
+            border-radius: inherit;
+        }
+
+        .empty-state {
+            min-height: 190px;
+            padding: 25px;
             display: flex;
             flex-direction: column;
+            align-items: center;
             justify-content: center;
+            color: #8c96a8;
+            text-align: center;
         }
+
         .empty-state i {
-            font-size: 32px;
-            margin-bottom: 10px;
-            display: block;
+            margin-bottom: 8px;
+            color: #b2bac8;
+            font-size: 34px;
         }
 
-        /* Chart Container */
-        .chart-container {
-            height: 200px;
-            position: relative;
-            flex: 1;
+        .empty-state p {
+            margin: 0;
+            font-size: 12px;
         }
 
-        /* Responsive */
+        @media (max-width: 1199px) {
+            .stats-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+            .coverage-grid { grid-template-columns: 1fr; }
+        }
+
         @media (max-width: 991px) {
-            .main {
-                margin-left: 90px;
-            }
-}
-        @media (max-width: 576px) {
-            .topbar {
-                padding: 0 16px;
-                height: 70px;
-            }
-            .content {
-                padding: 20px 16px;
-            }
-            .stat-card .stat-number {
-                font-size: 32px;
-            }
-            .stat-card {
-                height: 100px;
-                padding: 16px;
-            }
-            .stat-card .stat-icon {
-                font-size: 36px;
-                right: 14px;
-            }
-            .schedule-table .time-col {
-                width: 60px;
-                font-size: 13px;
-            }
-            .followup-item {
-                flex-wrap: wrap;
-                gap: 4px;
-            }
-            .followup-item .followup-date {
-                min-width: auto;
-                font-size: 14px;
-            }
-            .large-card {
-                padding: 16px;
-                min-height: 280px;
-            }
+            .main { margin-left: 90px; }
+            .topbar { padding: 0 22px; }
+            .content { padding: 25px 22px 35px; }
+            .topbar h3 small, .profile-role { display: none; }
+        }
+
+        @media (max-width: 767px) {
+            .topbar { height: 70px; padding: 0 16px; }
+            .topbar h3 { font-size: 20px; }
+            .content { padding: 18px 14px 28px; }
+            .stats-grid { grid-template-columns: 1fr; }
+            .welcome-card { padding: 18px; }
+            .coverage-summary { grid-template-columns: 1fr 1fr; }
+        }
+
+        @media (max-width: 520px) {
+            .profile span { display: none; }
+            .coverage-summary { grid-template-columns: 1fr; }
         }
     </style>
 </head>
+
 <body>
 
-<!-- ========== SIDEBAR (Nurse) ========== -->
 <div class="sidebar">
     <div class="logo-area">
         <div class="logo-frame">
-            <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
+            <img src="logo.png" alt="Smart Bite Care Logo" class="logo">
         </div>
         <div class="system-name">Smart Bite Care</div>
     </div>
@@ -865,47 +1123,47 @@ $stmt->close();
             <li><a class="active" href="Nurse_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
             <li><a href="Nurse_Patients.php"><i class="bi bi-heart-pulse-fill"></i><span>Patients</span></a></li>
             <li><a href="Nurse_Assessment.php"><i class="bi bi-clipboard2-pulse-fill"></i><span>Assessment Queue</span></a></li>
-            <li><a href="Nurse_Vaccination.php"><i class="bi-shield-plus"></i><span>Vaccination</span></a></li>
+            <li><a href="Nurse_Vaccination.php"><i class="bi bi-shield-plus"></i><span>Vaccination</span></a></li>
             <li><a href="Nurse_DailyInventory.php"><i class="bi bi-clipboard-data-fill"></i><span>Daily Inventory</span></a></li>
             <li><a href="Nurse_MedicalSuppliesManagement.php"><i class="bi bi-calendar-check"></i><span>Medical Supplies Management</span></a></li>
-            <li><a href="Nurse_Supplyforecasting.php"><i class="bi bi-box-seam"></i><span>Supply Forecasting</span></a></li>
+            <li><a href="Nurse_Supplyforecasting.php"><i class="bi bi-graph-up-arrow"></i><span>Supply Forecasting</span></a></li>
             <li>
                 <a href="Nurse_Notification.php">
                     <i class="bi bi-bell-fill"></i>
-
                     <span class="notification-label">
                         Notifications
-
                         <?php if ($notification_count > 0): ?>
-                            <span class="notification-badge">
-                                <?php echo $notification_count; ?>
-                            </span>
+                            <span class="notification-badge"><?php echo $notification_count; ?></span>
                         <?php endif; ?>
                     </span>
                 </a>
             </li>
         </ul>
     </nav>
-
-    
 </div>
 
-<!-- ========== MAIN CONTENT ========== -->
 <div class="main">
 
-    <!-- TOP BAR -->
     <div class="topbar">
-        <h3>Dashboard <small><?php echo htmlspecialchars($branch_name); ?></small></h3>
+        <h3>
+            Dashboard
+            <small><?php echo htmlspecialchars($branch_name); ?></small>
+        </h3>
+
         <div class="dropdown">
-            <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
-                    type="button" id="nurseProfileMenu"
-                    data-bs-toggle="dropdown" aria-expanded="false">
+            <button
+                class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
+                type="button"
+                id="nurseProfileMenu"
+                data-bs-toggle="dropdown"
+                aria-expanded="false"
+            >
                 <i class="bi bi-person-circle"></i>
                 <span><?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?></span>
-                <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Nurse</span>
+                <span class="profile-role">| Nurse</span>
             </button>
-            <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2"
-                aria-labelledby="nurseProfileMenu">
+
+            <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2" aria-labelledby="nurseProfileMenu">
                 <li><h6 class="dropdown-header">Account options</h6></li>
                 <li>
                     <a class="dropdown-item rounded-2 py-2" href="Account_ChangePassword.php">
@@ -914,8 +1172,11 @@ $stmt->close();
                 </li>
                 <li><hr class="dropdown-divider"></li>
                 <li>
-                    <a class="dropdown-item rounded-2 py-2 text-danger" href="logout.php"
-                       onclick="return window.confirm('Are you sure you want to log out?');">
+                    <a
+                        class="dropdown-item rounded-2 py-2 text-danger"
+                        href="logout.php"
+                        onclick="return window.confirm('Are you sure you want to log out?');"
+                    >
                         <i class="bi bi-box-arrow-right me-2"></i>Logout
                     </a>
                 </li>
@@ -923,7 +1184,6 @@ $stmt->close();
         </div>
     </div>
 
-    <!-- PAGE CONTENT -->
     <div class="content">
 
         <?php if (isset($_GET['password_changed']) && $_GET['password_changed'] === '1'): ?>
@@ -935,438 +1195,609 @@ $stmt->close();
             </div>
         <?php endif; ?>
 
-        <!-- ============================================ -->
-        <!-- STATS ROW - ALL 8 CARDS UNIFORM -->
-        <!-- ============================================ -->
-        <div class="row g-4">
-            <!-- Patient Waiting -->
-            <div class="col-xl-3 col-lg-6 col-md-6">
-                <a class="stat-card-link" href="Nurse_Vaccination.php?tab=patients" aria-label="View patients waiting for vaccination" title="View patients waiting for vaccination">
+    
+
+        <!-- TODAY / ATTENTION -->
+        <section class="dashboard-section">
+            <div class="section-heading">
+                <div>
+                    <h2>Today's Workload</h2>
+                    <p>Items that may need the nurse's attention first.</p>
+                </div>
+            </div>
+
+            <div class="stats-grid">
+                <a class="stat-card-link" href="Nurse_Vaccination.php?tab=patients">
                     <div class="stat-card stat-danger">
-                        <span class="stat-icon"><i class="bi bi-person"></i></span>
-                        <div class="stat-title">Patient Waiting</div>
-                        <div class="stat-number"><?php echo number_format($stats['patient_waiting']); ?></div>
+                        <span class="stat-icon"><i class="bi bi-person-exclamation"></i></span>
+                        <span class="stat-title">Patients Waiting</span>
+                        <span class="stat-number"><?php echo number_format($stats['patient_waiting']); ?></span>
+                        <span class="stat-note">Ongoing patient cases</span>
+                    </div>
+                </a>
+
+                <a class="stat-card-link" href="Nurse_Vaccination.php">
+                    <div class="stat-card stat-info">
+                        <span class="stat-icon"><i class="bi bi-shield-check"></i></span>
+                        <span class="stat-title">Vaccination Stages Today</span>
+                        <span class="stat-number"><?php echo number_format($stats['today_vaccinations']); ?></span>
+                        <span class="stat-note">Completed today</span>
+                    </div>
+                </a>
+
+                <a class="stat-card-link" href="Nurse_Vaccination.php?tab=patients">
+                    <div class="stat-card stat-warning">
+                        <span class="stat-icon"><i class="bi bi-calendar-event"></i></span>
+                        <span class="stat-title">Upcoming Vaccinations</span>
+                        <span class="stat-number"><?php echo number_format($stats['upcoming_vaccinations']); ?></span>
+                        <span class="stat-note">Next 7 days</span>
+                    </div>
+                </a>
+
+                <a class="stat-card-link" href="Nurse_Vaccination.php?tab=patients">
+                    <div class="stat-card stat-danger">
+                        <span class="stat-icon"><i class="bi bi-calendar-x"></i></span>
+                        <span class="stat-title">Missed Vaccinations</span>
+                        <span class="stat-number"><?php echo number_format($stats['missed_vaccinations']); ?></span>
+                        <span class="stat-note">Needs follow-up</span>
                     </div>
                 </a>
             </div>
-            <!-- Ongoing Cases -->
-            <div class="col-xl-3 col-lg-6 col-md-6">
-                <a class="stat-card-link" href="Nurse_Patients.php" aria-label="View ongoing patient cases" title="View ongoing patient cases">
+        </section>
+
+        <!-- BRANCH OVERVIEW -->
+        <section class="dashboard-section">
+            <div class="section-heading">
+                <div>
+                    <h2>Branch Overview</h2>
+                    <p>Current patient/case volume and inventory attention items.</p>
+                </div>
+            </div>
+
+            <div class="stats-grid">
+                <a class="stat-card-link" href="Nurse_Patients.php">
                     <div class="stat-card stat-warning">
                         <span class="stat-icon"><i class="bi bi-activity"></i></span>
-                        <div class="stat-title">Ongoing Cases</div>
-                        <div class="stat-number"><?php echo number_format($stats['ongoing_cases']); ?></div>
+                        <span class="stat-title">Ongoing Cases</span>
+                        <span class="stat-number"><?php echo number_format($stats['ongoing_cases']); ?></span>
+                        <span class="stat-note">Active animal-bite cases</span>
                     </div>
                 </a>
-            </div>
-            <!-- Completed Cases -->
-            <div class="col-xl-3 col-lg-6 col-md-6">
-                <a class="stat-card-link" href="Nurse_Patients.php" aria-label="View completed patient cases" title="View completed patient cases">
+
+                <a class="stat-card-link" href="Nurse_Patients.php">
                     <div class="stat-card stat-success">
                         <span class="stat-icon"><i class="bi bi-check-circle"></i></span>
-                        <div class="stat-title">Completed Cases</div>
-                        <div class="stat-number"><?php echo number_format($stats['completed_cases']); ?></div>
+                        <span class="stat-title">Completed Cases</span>
+                        <span class="stat-number"><?php echo number_format($stats['completed_cases']); ?></span>
+                        <span class="stat-note">Completed case records</span>
                     </div>
                 </a>
-            </div>
-            <!-- Vaccinations Today -->
-            <div class="col-xl-3 col-lg-6 col-md-6">
-                <a class="stat-card-link" href="Nurse_Vaccination.php" aria-label="Open vaccination management" title="Open vaccination management">
-                    <div class="stat-card stat-info">
-                        <span class="stat-icon"><i class="bi bi-shield-plus"></i></span>
-                        <div class="stat-title">Vaccination Stages Today</div>
-                        <div class="stat-number"><?php echo number_format($stats['today_vaccinations']); ?></div>
-                    </div>
-                </a>
-            </div>
-        </div>
 
-        <!-- ============================================ -->
-        <!-- SECOND STATS ROW - ALL 4 CARDS UNIFORM -->
-        <!-- ============================================ -->
-        <div class="row g-4 mt-3">
-            <!-- Total Patients -->
-            <div class="col-xl-3 col-lg-6 col-md-6">
-                <a class="stat-card-link" href="Nurse_Patients.php" aria-label="View all patients" title="View all patients">
+                <a class="stat-card-link" href="Nurse_Patients.php">
                     <div class="stat-card">
                         <span class="stat-icon"><i class="bi bi-people"></i></span>
-                        <div class="stat-title">Total Patients</div>
-                        <div class="stat-number"><?php echo number_format($stats['total_patients']); ?></div>
+                        <span class="stat-title">Total Patients</span>
+                        <span class="stat-number"><?php echo number_format($stats['total_patients']); ?></span>
+                        <span class="stat-note"><?php echo number_format($stats['total_cases']); ?> total cases</span>
                     </div>
                 </a>
-            </div>
-            <!-- Total Cases -->
-            <div class="col-xl-3 col-lg-6 col-md-6">
-                <a class="stat-card-link" href="Nurse_Patients.php" aria-label="View all patient cases" title="View all patient cases">
-                    <div class="stat-card">
-                        <span class="stat-icon"><i class="bi bi-file-medical"></i></span>
-                        <div class="stat-title">Total Cases</div>
-                        <div class="stat-number"><?php echo number_format($stats['total_cases']); ?></div>
-                    </div>
-                </a>
-            </div>
-            <!-- Upcoming (7 days) -->
-            <div class="col-xl-3 col-lg-6 col-md-6">
-                <a class="stat-card-link" href="Nurse_Vaccination.php?tab=patients" aria-label="View upcoming vaccinations" title="View upcoming vaccinations">
-                    <div class="stat-card">
-                        <span class="stat-icon"><i class="bi bi-calendar-check"></i></span>
-                        <div class="stat-title">Upcoming (7 days)</div>
-                        <div class="stat-number"><?php echo number_format($stats['upcoming_vaccinations']); ?></div>
-                    </div>
-                </a>
-            </div>
-            <!-- Missed Vaccinations -->
-            <div class="col-xl-3 col-lg-6 col-md-6">
-                <a class="stat-card-link" href="Nurse_Vaccination.php?tab=patients" aria-label="View missed vaccinations" title="View missed vaccinations">
-                    <div class="stat-card">
-                        <span class="stat-icon"><i class="bi bi-exclamation-triangle"></i></span>
-                        <div class="stat-title">Missed Vaccinations</div>
-                        <div class="stat-number"><?php echo number_format($stats['missed_vaccinations']); ?></div>
-                    </div>
-                </a>
-            </div>
-        </div>
 
-        <!-- ============================================ -->
-        <!-- CHART & STATISTICS ROW -->
-        <!-- ============================================ -->
-        <div class="row g-4 mt-2">
-            
-            <!-- Weekly Vaccination Trend Chart -->
-            <div class="col-lg-6">
-                <div class="large-card">
-                    <div class="section-title">
-                        <i class="bi bi-graph-up"></i> Weekly Vaccination Trend
+                <a class="stat-card-link" href="Nurse_MedicalSuppliesManagement.php">
+                    <div class="stat-card stat-danger">
+                        <span class="stat-icon"><i class="bi bi-box-seam"></i></span>
+                        <span class="stat-title">Low / Out of Stock</span>
+                        <span class="stat-number"><?php echo number_format($stats['low_stock_items']); ?></span>
+                        <span class="stat-note">Usable medical supplies</span>
                     </div>
-                    <div class="chart-container">
-                        <canvas id="weeklyChart"></canvas>
-                    </div>
+                </a>
+            </div>
+        </section>
+
+        <!-- PRIORITY WORK -->
+        <section class="dashboard-section">
+            <div class="section-heading">
+                <div>
+                    <h2>Priority Work</h2>
+                    <p>Today's vaccination schedule and older ongoing cases that may need follow-up.</p>
                 </div>
             </div>
 
-            <!-- Bite Category Distribution -->
-            <div class="col-lg-6">
-                <div class="large-card">
-                    <div class="section-title">
-                        <i class="bi bi-pie-chart"></i> Bite Category Distribution
-                    </div>
-                    <?php if (empty($biteCategories)): ?>
-                        <div class="empty-state">
-                            <i class="bi bi-inbox"></i>
-                            <p>No data available</p>
+            <div class="row g-4">
+                <div class="col-xl-7">
+                    <div class="panel-card">
+                        <div class="panel-header">
+                            <div>
+                                <h3 class="panel-title">
+                                    <span class="icon-box"><i class="bi bi-calendar-day"></i></span>
+                                    Today's Vaccination Schedule
+                                </h3>
+                                <p class="panel-subtitle">Scheduled dose stages for today.</p>
+                            </div>
+                            <span class="panel-badge success"><?php echo count($schedules); ?> scheduled</span>
                         </div>
-                    <?php else: ?>
-                        <div class="chart-container">
-                            <canvas id="categoryChart"></canvas>
-                        </div>
-                    <?php endif; ?>
-                </div>
-            </div>
-        </div>
 
-        <!-- ============================================ -->
-        <!-- 2 COLUMN LAYOUT: Schedule & Follow-ups -->
-        <!-- ============================================ -->
-        <div class="row g-4 mt-2">
-
-            <!-- Today's Schedule -->
-            <div class="col-lg-6">
-                <div class="large-card">
-                    <div class="section-title">
-                        <i class="bi bi-calendar-day"></i> Today's Schedule
-                        <span class="badge bg-primary rounded-pill ms-auto"><?php echo count($schedules); ?></span>
-                    </div>
-
-                    <?php if (empty($schedules)): ?>
-                        <div class="empty-state">
-                            <i class="bi bi-calendar-check"></i>
-                            <p>No scheduled vaccinations for today.</p>
-                        </div>
-                    <?php else: ?>
-                        <table class="schedule-table">
-                            <?php foreach ($schedules as $schedule): ?>
-                                <tr>
-                                    <td class="time-col">
-                                        <?php echo htmlspecialchars(dashboardDoseLabel($schedule['dose_number'])); ?>
-                                    </td>
-                                    <td class="activity-col">
-                                        <?php echo htmlspecialchars($schedule['full_name']); ?>
-                                        <span class="sub-activity">
-                                            Dose <?php echo (int)$schedule['dose_number']; ?>
-                                            (<?php echo htmlspecialchars(dashboardDoseLabel($schedule['dose_number'])); ?>)
-                                            <?php if ((int)$schedule['dose_number'] === 6): ?>
-                                                <span class="badge bg-success">Final Stage</span>
-                                            <?php endif; ?>
-                                            <br>
-                                            <small class="text-muted">
-                                                Products: <?php echo htmlspecialchars($schedule['vaccine_names'] ?? 'N/A'); ?>
-                                            </small>
-                                            <br>
-                                            <small class="text-muted">Contact: <?php echo htmlspecialchars($schedule['contact_number'] ?? 'N/A'); ?></small>
+                        <div class="panel-body">
+                            <?php if (empty($schedules)): ?>
+                                <div class="empty-state">
+                                    <i class="bi bi-calendar-check"></i>
+                                    <p>No scheduled vaccinations for today.</p>
+                                </div>
+                            <?php else: ?>
+                                <?php foreach ($schedules as $schedule): ?>
+                                    <div class="schedule-item">
+                                        <span class="list-marker">
+                                            <?php echo htmlspecialchars(dashboardDoseLabel($schedule['dose_number'])); ?>
                                         </span>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </table>
-                    <?php endif; ?>
 
-                    <div class="text-end mt-auto">
-                        <button class="btn-view" onclick="window.location.href='Nurse_Vaccination.php?tab=patients'">View All Schedule</button>
+                                        <div class="list-main">
+                                            <span class="list-title"><?php echo htmlspecialchars($schedule['full_name']); ?></span>
+                                            <div class="list-meta">
+                                                <?php echo htmlspecialchars($schedule['vaccine_names'] ?? 'N/A'); ?>
+                                                · Contact: <?php echo htmlspecialchars($schedule['contact_number'] ?? 'N/A'); ?>
+                                            </div>
+                                        </div>
+
+                                        <div class="list-side">
+                                            <?php if ((int)$schedule['dose_number'] === 6): ?>
+                                                <span class="mini-badge success">Final Stage</span>
+                                            <?php else: ?>
+                                                <span class="mini-badge success">Scheduled</span>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
+
+                        <div class="panel-footer">
+                            <a class="panel-link" href="Nurse_Vaccination.php?tab=patients">
+                                View vaccination schedule <i class="bi bi-arrow-right ms-1"></i>
+                            </a>
+                        </div>
                     </div>
                 </div>
-            </div>
 
-            <!-- Follow-up Due -->
-            <div class="col-lg-6">
-                <div class="large-card">
-                    <div class="section-title">
-                        <i class="bi bi-clock-history"></i> Follow-up Due
-                        <span class="badge bg-warning rounded-pill ms-auto"><?php echo count($followups); ?></span>
-                    </div>
-
-                    <?php if (empty($followups)): ?>
-                        <div class="empty-state">
-                            <i class="bi bi-check-circle"></i>
-                            <p>No follow-ups due at this time.</p>
-                        </div>
-                    <?php else: ?>
-                        <?php foreach ($followups as $followup): ?>
-                            <div class="followup-item">
-                                <span class="followup-date">
-                                    <?php echo date('M d, Y', strtotime($followup['date_of_bite'])); ?>
-                                </span>
-                                <span class="followup-name">
-                                    <?php echo htmlspecialchars($followup['full_name']); ?>
-                                    <?php if (!empty($followup['remarks'])): ?>
-                                        <br><small class="text-muted"><?php echo htmlspecialchars(substr($followup['remarks'], 0, 50)); ?></small>
-                                    <?php endif; ?>
-                                </span>
-                                <span class="followup-days">
-                                    <span class="badge bg-danger"><?php echo $followup['days_since_bite']; ?> days</span>
-                                </span>
+                <div class="col-xl-5">
+                    <div class="panel-card">
+                        <div class="panel-header">
+                            <div>
+                                <h3 class="panel-title">
+                                    <span class="icon-box"><i class="bi bi-clock-history"></i></span>
+                                    Follow-up Due
+                                </h3>
+                                <p class="panel-subtitle">Ongoing cases seven or more days from the bite date.</p>
                             </div>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
+                            <span class="panel-badge warning"><?php echo count($followups); ?> shown</span>
+                        </div>
 
-                    <div class="text-end mt-auto">
-                        <button class="btn-view" onclick="window.location.href='Nurse_Patients.php'">View All</button>
+                        <div class="panel-body">
+                            <?php if (empty($followups)): ?>
+                                <div class="empty-state">
+                                    <i class="bi bi-check-circle"></i>
+                                    <p>No follow-ups due at this time.</p>
+                                </div>
+                            <?php else: ?>
+                                <?php foreach ($followups as $followup): ?>
+                                    <div class="followup-item">
+                                        <span class="list-marker warning">
+                                            <?php echo (int)$followup['days_since_bite']; ?>d
+                                        </span>
+
+                                        <div class="list-main">
+                                            <span class="list-title"><?php echo htmlspecialchars($followup['full_name']); ?></span>
+                                            <div class="list-meta">
+                                                Bite date: <?php echo date('M d, Y', strtotime($followup['date_of_bite'])); ?>
+                                                <?php if (!empty($followup['remarks'])): ?>
+                                                    · <?php echo htmlspecialchars(mb_strimwidth($followup['remarks'], 0, 55, '…')); ?>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+
+                                        <div class="list-side">
+                                            <span class="mini-badge danger">Follow-up</span>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
+
+                        <div class="panel-footer">
+                            <a class="panel-link" href="Nurse_Patients.php">
+                                View patient records <i class="bi bi-arrow-right ms-1"></i>
+                            </a>
+                        </div>
                     </div>
                 </div>
             </div>
+        </section>
 
-        </div>
+        <!-- ACTIVITY -->
+        <section class="dashboard-section">
+            <div class="section-heading">
+                <div>
+                    <h2>Clinical Activity</h2>
+                    <p>Recent vaccination volume and animal-bite category distribution.</p>
+                </div>
+            </div>
 
-        <!-- ============================================ -->
-        <!-- BOTTOM ROW: Low Stock & PhilHealth -->
-        <!-- ============================================ -->
-        <div class="row g-4 mt-2">
-
-            <!-- Low Stock Items -->
-            <div class="col-lg-6">
-                <div class="large-card">
-                    <div class="section-title">
-                        <i class="bi bi-exclamation-triangle-fill" style="color:var(--danger);"></i> Low Stock Items
-                        <span class="badge bg-danger rounded-pill ms-auto"><?php echo count($lowStockItems); ?></span>
-                    </div>
-
-                    <?php if (empty($lowStockItems)): ?>
-                        <div class="empty-state">
-                            <i class="bi bi-check-circle-fill" style="color:var(--success);"></i>
-                            <p>All items are adequately stocked.</p>
+            <div class="row g-4">
+                <div class="col-lg-7">
+                    <div class="panel-card">
+                        <div class="panel-header">
+                            <div>
+                                <h3 class="panel-title">
+                                    <span class="icon-box"><i class="bi bi-graph-up"></i></span>
+                                    Weekly Vaccination Trend
+                                </h3>
+                                <p class="panel-subtitle">Completed dose stages over the previous seven days.</p>
+                            </div>
                         </div>
-                    <?php else: ?>
-                        <?php foreach ($lowStockItems as $item): ?>
-                            <div class="stock-item">
-                                <div>
-                                    <span class="stock-name"><?php echo htmlspecialchars($item['item_name']); ?></span>
-                                    <br>
-                                    <small class="text-muted">Min: <?php echo $item['minimum_stock']; ?> <?php echo $item['unit_name']; ?></small>
+                        <div class="panel-body">
+                            <?php if (empty($weeklyTrend)): ?>
+                                <div class="empty-state">
+                                    <i class="bi bi-graph-up"></i>
+                                    <p>No completed vaccination stages in the last seven days.</p>
                                 </div>
-                                <span class="stock-qty">
-                                    <?php echo $item['quantity_available']; ?> <?php echo $item['unit_name']; ?>
-                                    <?php if ($item['quantity_available'] == 0): ?>
-                                        <span class="badge bg-danger">Out of Stock</span>
-                                    <?php elseif ($item['quantity_available'] <= $item['minimum_stock'] / 2): ?>
-                                        <span class="badge bg-danger">Critical</span>
+                            <?php else: ?>
+                                <div class="chart-wrap">
+                                    <canvas id="weeklyChart"></canvas>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-lg-5">
+                    <div class="panel-card">
+                        <div class="panel-header">
+                            <div>
+                                <h3 class="panel-title">
+                                    <span class="icon-box"><i class="bi bi-pie-chart"></i></span>
+                                    Bite Category Distribution
+                                </h3>
+                                <p class="panel-subtitle">Current non-archived animal-bite cases.</p>
+                            </div>
+                        </div>
+                        <div class="panel-body">
+                            <?php if (empty($biteCategories)): ?>
+                                <div class="empty-state">
+                                    <i class="bi bi-pie-chart"></i>
+                                    <p>No bite-category data available.</p>
+                                </div>
+                            <?php else: ?>
+                                <div class="chart-wrap">
+                                    <canvas id="categoryChart"></canvas>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- SUPPLY INTELLIGENCE -->
+        <section class="dashboard-section">
+            <div class="section-heading">
+                <div>
+                    <h2>Supply Intelligence</h2>
+                    <p>Immediate stock conditions and the latest seven-day forecasting risks.</p>
+                </div>
+                <a href="Nurse_Supplyforecasting.php?days=7">Open full forecast <i class="bi bi-arrow-right"></i></a>
+            </div>
+
+            <div class="row g-4">
+                <div class="col-lg-6">
+                    <div class="panel-card">
+                        <div class="panel-header">
+                            <div>
+                                <h3 class="panel-title">
+                                    <span class="icon-box"><i class="bi bi-exclamation-triangle"></i></span>
+                                    Low Stock Medical Supplies
+                                </h3>
+                                <p class="panel-subtitle">Only non-expired usable stock is counted.</p>
+                            </div>
+                            <span class="panel-badge danger"><?php echo number_format($stats['low_stock_items']); ?> total</span>
+                        </div>
+
+                        <div class="panel-body">
+                            <?php if (empty($lowStockItems)): ?>
+                                <div class="empty-state">
+                                    <i class="bi bi-check-circle"></i>
+                                    <p>All medical supplies are above their minimum stock level.</p>
+                                </div>
+                            <?php else: ?>
+                                <?php foreach ($lowStockItems as $item): ?>
+                                    <?php
+                                        $qty = (float)$item['quantity_available'];
+                                        $min = (float)$item['minimum_stock'];
+                                        $unit = (string)$item['unit_name'];
+                                        $isOut = $qty <= 0;
+                                        $isCritical = !$isOut && $min > 0 && $qty <= ($min * 0.5);
+                                    ?>
+                                    <div class="stock-item">
+                                        <span class="list-marker <?php echo ($isOut || $isCritical) ? 'danger' : 'warning'; ?>">
+                                            <i class="bi bi-box-seam"></i>
+                                        </span>
+
+                                        <div class="list-main">
+                                            <span class="list-title"><?php echo htmlspecialchars($item['item_name']); ?></span>
+                                            <div class="list-meta">
+                                                <?php echo number_format($qty, 2); ?> <?php echo htmlspecialchars($unit); ?>
+                                                available · Minimum <?php echo number_format($min, 2); ?>
+                                            </div>
+                                        </div>
+
+                                        <div class="list-side">
+                                            <?php if ($isOut): ?>
+                                                <span class="mini-badge danger">Out of Stock</span>
+                                            <?php elseif ($isCritical): ?>
+                                                <span class="mini-badge danger">Critical</span>
+                                            <?php else: ?>
+                                                <span class="mini-badge warning">Low</span>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
+
+                        <div class="panel-footer">
+                            <a class="panel-link" href="Nurse_MedicalSuppliesManagement.php">
+                                View medical supplies <i class="bi bi-arrow-right ms-1"></i>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-lg-6">
+                    <div class="panel-card">
+                        <div class="panel-header">
+                            <div>
+                                <h3 class="panel-title">
+                                    <span class="icon-box"><i class="bi bi-graph-up-arrow"></i></span>
+                                    7-Day Forecast Risk
+                                </h3>
+                                <p class="panel-subtitle">
+                                    <?php if ($forecastLatestDate && $forecastStartDate && $forecastEndDate): ?>
+                                        <?php echo date('M d', strtotime($forecastStartDate)); ?>
+                                        – <?php echo date('M d, Y', strtotime($forecastEndDate)); ?>
                                     <?php else: ?>
-                                        <span class="badge bg-warning">Low</span>
+                                        Latest non-stale Branch Admin forecast
                                     <?php endif; ?>
-                                </span>
+                                </p>
                             </div>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
+                            <span class="panel-badge <?php echo $forecastHighRiskCount > 0 ? 'danger' : 'success'; ?>">
+                                <?php echo number_format($forecastHighRiskCount); ?> high risk
+                            </span>
+                        </div>
 
-                    <div class="text-end mt-auto">
-                        <button class="btn-view" onclick="window.location.href='Nurse_MedicalSuppliesManagement.php'">Manage Inventory</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- PhilHealth Coverage & Dose Completion -->
-            <div class="col-lg-6">
-                <div class="large-card">
-                    <div class="section-title">
-                        <i class="bi bi-hospital"></i> PhilHealth Coverage & Dose Completion
-                    </div>
-
-                    <div class="row g-3">
-                        <div class="col-6">
-                            <div class="p-3 bg-white rounded-3 text-center">
-                                <div class="text-muted small">With PhilHealth</div>
-                                <div class="h3 fw-bold text-success">
-                                    <?php echo number_format($philhealthStats['Yes'] ?? 0); ?>
+                        <div class="panel-body">
+                            <?php if (empty($forecastPreview)): ?>
+                                <div class="empty-state">
+                                    <i class="bi bi-graph-up"></i>
+                                    <p>No current seven-day forecast is available yet.</p>
                                 </div>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="p-3 bg-white rounded-3 text-center">
-                                <div class="text-muted small">Without PhilHealth</div>
-                                <div class="h3 fw-bold text-danger">
-                                    <?php echo number_format($philhealthStats['No'] ?? 0); ?>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                            <?php else: ?>
+                                <?php foreach ($forecastPreview as $forecast): ?>
+                                    <?php
+                                        $risk = max(0.0, min(1.0, (float)$forecast['shortage_probability']));
+                                        $riskPercent = $risk * 100;
+                                        $riskClass = $risk >= .80 ? 'danger' : ($risk >= .60 ? 'warning' : 'success');
+                                        $riskLabel = $risk >= .80 ? 'High Risk' : ($risk >= .60 ? 'Moderate' : 'Low Risk');
+                                        $reorder = max(0, (int)$forecast['recommended_reorder']);
+                                        $unit = trim((string)($forecast['unit_name'] ?? '')) ?: 'unit(s)';
+                                    ?>
+                                    <div class="forecast-item">
+                                        <span class="list-marker <?php echo $riskClass === 'danger' ? 'danger' : ($riskClass === 'warning' ? 'warning' : ''); ?>">
+                                            <?php echo number_format($riskPercent, 0); ?>%
+                                        </span>
 
-                    <hr>
+                                        <div class="list-main">
+                                            <span class="list-title"><?php echo htmlspecialchars($forecast['item_name']); ?></span>
+                                            <div class="list-meta">
+                                                Stock <?php echo number_format((float)$forecast['current_stock_snapshot'], 2); ?>
+                                                · Min <?php echo number_format((float)$forecast['minimum_stock_snapshot'], 2); ?>
+                                                <?php if ($reorder > 0): ?>
+                                                    · Reorder <?php echo number_format($reorder); ?> <?php echo htmlspecialchars($unit); ?>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
 
-                    <div class="small text-muted">Dose Completion Rates</div>
-                    <div class="row g-2 mt-1">
-                        <div class="col-4">
-                            <div class="p-2 bg-white rounded-3 text-center">
-                                <div class="text-muted small">Dose 0</div>
-                                <div class="fw-bold"><?php echo round($doseCompletion['dose0_rate'] ?? 0); ?>%</div>
-                            </div>
+                                        <div class="list-side">
+                                            <span class="mini-badge <?php echo $riskClass; ?>"><?php echo $riskLabel; ?></span>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
                         </div>
-                        <div class="col-4">
-                            <div class="p-2 bg-white rounded-3 text-center">
-                                <div class="text-muted small">Dose 3</div>
-                                <div class="fw-bold"><?php echo round($doseCompletion['dose3_rate'] ?? 0); ?>%</div>
-                            </div>
-                        </div>
-                        <div class="col-4">
-                            <div class="p-2 bg-white rounded-3 text-center">
-                                <div class="text-muted small">Dose 7</div>
-                                <div class="fw-bold"><?php echo round($doseCompletion['dose7_rate'] ?? 0); ?>%</div>
-                            </div>
-                        </div>
-                        <div class="col-4">
-                            <div class="p-2 bg-white rounded-3 text-center">
-                                <div class="text-muted small">Dose 14</div>
-                                <div class="fw-bold"><?php echo round($doseCompletion['dose14_rate'] ?? 0); ?>%</div>
-                            </div>
-                        </div>
-                        <div class="col-4">
-                            <div class="p-2 bg-white rounded-3 text-center">
-                                <div class="text-muted small">Dose 21</div>
-                                <div class="fw-bold"><?php echo round($doseCompletion['dose21_rate'] ?? 0); ?>%</div>
-                            </div>
-                        </div>
-                        <div class="col-4">
-                            <div class="p-2 bg-white rounded-3 text-center">
-                                <div class="text-muted small">Dose 28</div>
-                                <div class="fw-bold"><?php echo round($doseCompletion['dose28_rate'] ?? 0); ?>%</div>
-                            </div>
+
+                        <div class="panel-footer">
+                            <a class="panel-link" href="Nurse_Supplyforecasting.php?days=7">
+                                Review supply forecast <i class="bi bi-arrow-right ms-1"></i>
+                            </a>
                         </div>
                     </div>
                 </div>
             </div>
+        </section>
 
-        </div>
+        <!-- COVERAGE + DOSE COMPLETION -->
+        <section class="dashboard-section mb-0">
+            <div class="section-heading">
+                <div>
+                    <h2>Coverage & Treatment Progress</h2>
+                    <p>PhilHealth coverage and dose-stage completion among registry records.</p>
+                </div>
+            </div>
 
-    </div> <!-- /content -->
-</div> <!-- /main -->
+            <div class="panel-card">
+                <div class="panel-body">
+                    <div class="coverage-grid">
+                        <div class="coverage-summary">
+                            <div class="coverage-box">
+                                <span>With PhilHealth</span>
+                                <strong class="text-success"><?php echo number_format($philhealthStats['Yes'] ?? 0); ?></strong>
+                            </div>
+                            <div class="coverage-box">
+                                <span>Without PhilHealth</span>
+                                <strong class="text-danger"><?php echo number_format($philhealthStats['No'] ?? 0); ?></strong>
+                            </div>
+                        </div>
 
-<!-- ============================================ -->
-<!-- CHARTS INITIALIZATION -->
-<!-- ============================================ -->
+                        <div>
+                            <?php
+                                $doseRows = [
+                                    'D0' => (float)($doseCompletion['dose0_rate'] ?? 0),
+                                    'D3' => (float)($doseCompletion['dose3_rate'] ?? 0),
+                                    'D7' => (float)($doseCompletion['dose7_rate'] ?? 0),
+                                    'D14' => (float)($doseCompletion['dose14_rate'] ?? 0),
+                                    'D21' => (float)($doseCompletion['dose21_rate'] ?? 0),
+                                    'D28/30' => (float)($doseCompletion['dose28_rate'] ?? 0),
+                                ];
+                            ?>
+
+                            <?php foreach ($doseRows as $label => $value): ?>
+                                <?php $safeValue = max(0, min(100, $value)); ?>
+                                <div class="dose-row">
+                                    <span class="dose-label"><?php echo htmlspecialchars($label); ?></span>
+                                    <div class="dose-track">
+                                        <div class="dose-fill" style="width: <?php echo $safeValue; ?>%;"></div>
+                                    </div>
+                                    <span class="dose-value"><?php echo round($safeValue); ?>%</span>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    // Weekly Vaccination Trend Chart
+document.addEventListener('DOMContentLoaded', function () {
+
     const weeklyData = <?php echo json_encode($weeklyTrend); ?>;
+
     if (weeklyData.length > 0) {
-        const ctx = document.getElementById('weeklyChart').getContext('2d');
-        const labels = weeklyData.map(item => {
-            const date = new Date(item.date);
-            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-        });
-        const values = weeklyData.map(item => item.count);
-        
-        new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: 'Completed Dose Stages',
-                    data: values,
-                    backgroundColor: 'rgba(43, 58, 140, 0.2)',
-                    borderColor: '#2B3A8C',
-                    borderWidth: 2,
-                    tension: 0.3,
-                    fill: true,
-                    pointBackgroundColor: '#2B3A8C',
-                    pointRadius: 4
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: {
-                        display: false
-                    }
+        const canvas = document.getElementById('weeklyChart');
+
+        if (canvas) {
+            const labels = weeklyData.map(function (item) {
+                const date = new Date(item.date + 'T00:00:00');
+                return date.toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric'
+                });
+            });
+
+            const values = weeklyData.map(function (item) {
+                return Number(item.count);
+            });
+
+            new Chart(canvas, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Completed Dose Stages',
+                        data: values,
+                        borderColor: '#2B3A8C',
+                        backgroundColor: 'rgba(43,58,140,.10)',
+                        fill: true,
+                        tension: .35,
+                        pointRadius: 4,
+                        pointHoverRadius: 5,
+                        pointBackgroundColor: '#2B3A8C',
+                        borderWidth: 2
+                    }]
                 },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        ticks: {
-                            stepSize: 1
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            displayColors: false,
+                            callbacks: {
+                                label: function (context) {
+                                    return context.raw + ' completed stage(s)';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                stepSize: 1,
+                                precision: 0
+                            },
+                            grid: {
+                                color: '#eef1f6'
+                            }
+                        },
+                        x: {
+                            grid: { display: false }
                         }
                     }
                 }
-            }
-        });
+            });
+        }
     }
 
-    // Bite Category Distribution Chart
     const categoryData = <?php echo json_encode($biteCategories); ?>;
+
     if (categoryData.length > 0) {
-        const ctx2 = document.getElementById('categoryChart').getContext('2d');
-        const labels = categoryData.map(item => item.bite_category || 'Unknown');
-        const values = categoryData.map(item => item.count);
-        const colors = ['#2B3A8C', '#F21D2F', '#28a745', '#ffc107', '#17a2b8', '#6f42c1'];
-        
-        new Chart(ctx2, {
-            type: 'doughnut',
-            data: {
-                labels: labels,
-                datasets: [{
-                    data: values,
-                    backgroundColor: colors.slice(0, values.length),
-                    borderWidth: 2,
-                    borderColor: '#fff'
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: {
-                        position: 'bottom',
-                        labels: {
-                            font: {
-                                size: 11
+        const canvas = document.getElementById('categoryChart');
+
+        if (canvas) {
+            new Chart(canvas, {
+                type: 'doughnut',
+                data: {
+                    labels: categoryData.map(function (item) {
+                        return item.bite_category || 'Unknown';
+                    }),
+                    datasets: [{
+                        data: categoryData.map(function (item) {
+                            return Number(item.count);
+                        }),
+                        backgroundColor: [
+                            '#2B3A8C',
+                            '#F21D2F',
+                            '#28a745',
+                            '#e4a300',
+                            '#17a2b8',
+                            '#6f42c1'
+                        ],
+                        borderWidth: 0,
+                        hoverOffset: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '66%',
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                usePointStyle: true,
+                                boxWidth: 8,
+                                padding: 14,
+                                font: { size: 10 }
                             }
                         }
                     }
-                },
-                cutout: '60%'
-            }
-        });
+                }
+            });
+        }
     }
 });
 </script>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

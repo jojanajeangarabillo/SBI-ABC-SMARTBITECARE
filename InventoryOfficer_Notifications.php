@@ -2,6 +2,7 @@
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/inventory_officer_activity_helper.php';
 
 if (!isset($_SESSION['user_id'], $_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 5) {
     header('Location: login.php');
@@ -90,27 +91,68 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     if ($action==='mark_read') {
         $notification_id=filter_var($_POST['notification_id']??null,FILTER_VALIDATE_INT);
         if ($notification_id===false || $notification_id===null || $notification_id<=0) jsonResponse(false,'Invalid notification ID.',[],400);
-        $sql="UPDATE notifications n INNER JOIN users u ON u.user_id=n.user_id SET n.is_read=1 WHERE n.notification_id=? AND n.user_id=? AND u.user_id=? AND u.branch_id=? AND u.status='Active'";
-        $stmt=$conn->prepare($sql);
-        if (!$stmt) jsonResponse(false,'Unable to prepare notification update.',[],500);
-        $stmt->bind_param('iiis',$notification_id,$user_id,$user_id,$branch_id);
-        if (!$stmt->execute()) { $stmt->close(); jsonResponse(false,'Unable to update notification.',[],500); }
-        $stmt->close();
-        $verify=$conn->prepare("SELECT n.is_read FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE n.notification_id=? AND n.user_id=? AND u.branch_id=? LIMIT 1");
-        $isRead=false; $exists=false;
-        if ($verify) { $verify->bind_param('iis',$notification_id,$user_id,$branch_id); if($verify->execute()){ $r=$verify->get_result(); if($r->num_rows===1){$exists=true;$isRead=(int)$r->fetch_assoc()['is_read']===1;}} $verify->close(); }
-        if (!$exists) jsonResponse(false,'Notification not found.',[],404);
+
+        $conn->begin_transaction();
+        try {
+            $sql="UPDATE notifications n INNER JOIN users u ON u.user_id=n.user_id SET n.is_read=1 WHERE n.notification_id=? AND n.user_id=? AND u.user_id=? AND u.branch_id=? AND u.status='Active'";
+            $stmt=$conn->prepare($sql);
+            if (!$stmt) throw new RuntimeException('Unable to prepare notification update.');
+            $stmt->bind_param('iiis',$notification_id,$user_id,$user_id,$branch_id);
+            if (!$stmt->execute()) { $error=$stmt->error; $stmt->close(); throw new RuntimeException('Unable to update notification: '.$error); }
+            $stmt->close();
+
+            $verify=$conn->prepare("SELECT n.is_read FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE n.notification_id=? AND n.user_id=? AND u.branch_id=? LIMIT 1");
+            $isRead=false; $exists=false;
+            if ($verify) { $verify->bind_param('iis',$notification_id,$user_id,$branch_id); if($verify->execute()){ $r=$verify->get_result(); if($r->num_rows===1){$exists=true;$isRead=(int)$r->fetch_assoc()['is_read']===1;}} $verify->close(); }
+            if (!$exists) throw new RuntimeException('Notification not found.');
+
+            if (!inventoryOfficerAudit(
+                $conn,
+                $user_id,
+                $branch_id,
+                'Inventory Notifications',
+                'Marked notification #' . $notification_id . ' as read'
+            )) {
+                throw new RuntimeException('Unable to save the notification audit log.');
+            }
+
+            $conn->commit();
+        } catch (Throwable $e) {
+            $conn->rollback();
+            jsonResponse(false,$e->getMessage(),[],500);
+        }
+
         $c=$conn->prepare("SELECT COUNT(*) unread_count FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE n.user_id=? AND u.branch_id=? AND n.is_read=0");
         $unread=0;
         if($c){$c->bind_param('is',$user_id,$branch_id);if($c->execute())$unread=(int)($c->get_result()->fetch_assoc()['unread_count']??0);$c->close();}
         jsonResponse(true,'Notification marked as read.',['notification_id'=>$notification_id,'is_read'=>$isRead,'unread_count'=>$unread]);
     }
     if ($action==='mark_all_read') {
-        $stmt=$conn->prepare("UPDATE notifications n INNER JOIN users u ON u.user_id=n.user_id SET n.is_read=1 WHERE n.user_id=? AND u.branch_id=? AND u.status='Active'");
-        if(!$stmt)jsonResponse(false,'Unable to prepare mark-all action.',[],500);
-        $stmt->bind_param('is',$user_id,$branch_id);
-        if(!$stmt->execute()){ $stmt->close(); jsonResponse(false,'Unable to mark notifications as read.',[],500); }
-        $stmt->close();
+        $conn->begin_transaction();
+        try {
+            $stmt=$conn->prepare("UPDATE notifications n INNER JOIN users u ON u.user_id=n.user_id SET n.is_read=1 WHERE n.user_id=? AND u.branch_id=? AND u.status='Active'");
+            if(!$stmt) throw new RuntimeException('Unable to prepare mark-all action.');
+            $stmt->bind_param('is',$user_id,$branch_id);
+            if(!$stmt->execute()){ $error=$stmt->error; $stmt->close(); throw new RuntimeException('Unable to mark notifications as read: '.$error); }
+            $affected=(int)$stmt->affected_rows;
+            $stmt->close();
+
+            if (!inventoryOfficerAudit(
+                $conn,
+                $user_id,
+                $branch_id,
+                'Inventory Notifications',
+                'Marked all Inventory Officer notifications as read (' . $affected . ' updated)'
+            )) {
+                throw new RuntimeException('Unable to save the notification audit log.');
+            }
+
+            $conn->commit();
+        } catch (Throwable $e) {
+            $conn->rollback();
+            jsonResponse(false,$e->getMessage(),[],500);
+        }
+
         jsonResponse(true,'All notifications have been marked as read.',['unread_count'=>0]);
     }
     jsonResponse(false,'Unsupported notification action.',[],400);

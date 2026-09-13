@@ -2,6 +2,7 @@
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/inventory_officer_activity_helper.php';
 
 /* -------------------------------------------------------------
  * Inventory Officer access
@@ -231,19 +232,6 @@ function ensureReturnManagementTable($conn)
     }
 }
 
-function addReturnAuditLog($conn, $userId, $branchId, $action)
-{
-    $module = 'Return Management';
-    $stmt = $conn->prepare("INSERT INTO audit_logs (user_id, branch_id, action, module, created_at) VALUES (?, ?, ?, ?, NOW())");
-    if (!$stmt) {
-        return false;
-    }
-
-    $stmt->bind_param('isss', $userId, $branchId, $action, $module);
-    $ok = $stmt->execute();
-    $stmt->close();
-    return $ok;
-}
 
 $allowedReturnReasons = [
     'Wrong Item',
@@ -441,12 +429,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $numberUpdate->close();
 
-            addReturnAuditLog(
+            $returnAction = 'Recorded and automatically transferred return '
+                . $returnNumber . ' for ' . $itemName . ' (' . $quantity . ') to branch '
+                . $destinationBranchId;
+
+            $returnMessage = 'Return ' . $returnNumber . ' was sent to '
+                . ($destination['branch_name'] ?? $destinationBranchId)
+                . '. Item: ' . $itemName
+                . '. Quantity: ' . $quantity
+                . '. Reason: ' . $returnReason . '.';
+
+            if (!inventoryOfficerRecordReturnActivity(
                 $conn,
                 $user_id,
                 $branch_id,
-                'Recorded and automatically transferred return ' . $returnNumber . ' for ' . $itemName . ' (' . $quantity . ') to branch ' . $destinationBranchId
-            );
+                $branch_name,
+                $username,
+                $newReturnId,
+                $returnNumber,
+                $returnAction,
+                $returnMessage,
+                'sent'
+            )) {
+                throw new Exception('The return was recorded, but its audit log or Branch Admin notification could not be saved.');
+            }
 
             $conn->commit();
             returnFlash('success', 'Return ' . $returnNumber . ' was recorded and is now In Transit.');
@@ -513,12 +519,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $update->close();
 
-            addReturnAuditLog(
+            $receivedReturnNumber = $returnData['return_number'] ?? ('RET-' . $returnId);
+            $returnAction = 'Confirmed receipt of return ' . $receivedReturnNumber;
+            $returnMessage = 'Return ' . $receivedReturnNumber
+                . ' from ' . ($returnData['source_name'] ?? $returnData['branch_id'])
+                . ' was confirmed as received. Item: ' . $returnData['item_name']
+                . '. Quantity: ' . $returnData['quantity'] . '.';
+
+            if (!inventoryOfficerRecordReturnActivity(
                 $conn,
                 $user_id,
                 $branch_id,
-                'Confirmed receipt of return ' . ($returnData['return_number'] ?? ('RET-' . $returnId))
-            );
+                $branch_name,
+                $username,
+                $returnId,
+                $receivedReturnNumber,
+                $returnAction,
+                $returnMessage,
+                'received'
+            )) {
+                throw new Exception('The return receipt was confirmed, but its audit log or Branch Admin notification could not be saved.');
+            }
 
             $conn->commit();
             returnFlash('success', 'Return ' . ($returnData['return_number'] ?? ('RET-' . $returnId)) . ' was received and marked Received.');

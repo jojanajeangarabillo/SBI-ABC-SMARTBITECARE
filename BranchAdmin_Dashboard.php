@@ -169,6 +169,7 @@ $alertQuery = "SELECT fr.*, i.item_name
                FROM forecast_results fr
                JOIN inventory_items i ON fr.item_id = i.item_id
                WHERE fr.branch_id = ?
+               AND fr.is_stale = 0
                AND (
                     fr.forecast_status = 'Shortage Risk'
                     OR fr.forecast_status = 'Critical'

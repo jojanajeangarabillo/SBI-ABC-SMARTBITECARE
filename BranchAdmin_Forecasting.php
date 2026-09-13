@@ -76,7 +76,12 @@ function addAuditLog($conn, $user_id, $action, $module = 'Supply Forecasting') {
 // AUTOMATIC DAILY FORECAST GENERATION
 // ============================================
 
-$forecast_days = 30;
+$allowed_forecast_days = [7, 14, 30];
+$forecast_days = isset($_GET['days']) ? (int)$_GET['days'] : 30;
+if (!in_array($forecast_days, $allowed_forecast_days, true)) {
+    $forecast_days = 30;
+}
+
 $minimum_records_per_item = 15;
 $forecast_message = '';
 $forecast_message_type = 'info';
@@ -100,23 +105,31 @@ $eligible_item_count = (int)($eligible_data['eligible_count'] ?? 0);
 $eligible_stmt->close();
 
 // Results are refreshed automatically on the first page visit of each day.
-$latest_forecast_sql = "SELECT MAX(forecast_date) AS latest_forecast_date,
+$latest_forecast_sql = "SELECT MAX(CASE WHEN is_stale = 0 THEN forecast_date END) AS latest_forecast_date,
                                CURDATE() AS database_today,
                                COALESCE(SUM(
                                    CASE
-                                       WHEN forecast_date = CURDATE() AND forecast_days = ? THEN 1
+                                       WHEN forecast_date = CURDATE() AND is_stale = 0 THEN 1
                                        ELSE 0
                                    END
-                               ), 0) AS today_forecast_count
+                               ), 0) AS today_forecast_count,
+                               COALESCE(SUM(
+                                   CASE
+                                       WHEN is_stale = 1 THEN 1
+                                       ELSE 0
+                                   END
+                               ), 0) AS stale_forecast_count
                         FROM forecast_results
-                        WHERE branch_id = ?";
+                        WHERE branch_id = ?
+                          AND forecast_days = ?";
 $latest_forecast_stmt = $conn->prepare($latest_forecast_sql);
-$latest_forecast_stmt->bind_param("is", $forecast_days, $branch_id);
+$latest_forecast_stmt->bind_param("si", $branch_id, $forecast_days);
 $latest_forecast_stmt->execute();
 $latest_forecast_data = $latest_forecast_stmt->get_result()->fetch_assoc();
 $latest_forecast_date = $latest_forecast_data['latest_forecast_date'] ?? null;
 $today = $latest_forecast_data['database_today'] ?? date('Y-m-d');
 $today_forecast_count = (int)($latest_forecast_data['today_forecast_count'] ?? 0);
+$stale_forecast_count = (int)($latest_forecast_data['stale_forecast_count'] ?? 0);
 $latest_forecast_stmt->close();
 
 $forecast_is_due = $eligible_item_count > 0 && $today_forecast_count === 0;
@@ -146,18 +159,21 @@ if ($forecast_is_due) {
             try {
                 $conn->begin_transaction();
 
-                // Keep the old results until the Python process has returned valid new forecasts.
-                $delete_forecasts_stmt = $conn->prepare("DELETE FROM forecast_results WHERE branch_id = ?");
-                $delete_forecasts_stmt->bind_param("s", $branch_id);
+                // Keep other forecast horizons. Replace only the currently selected horizon.
+                $delete_forecasts_stmt = $conn->prepare(
+                    "DELETE FROM forecast_results WHERE branch_id = ? AND forecast_days = ?"
+                );
+                $delete_forecasts_stmt->bind_param("si", $branch_id, $forecast_days);
                 $delete_forecasts_stmt->execute();
                 $delete_forecasts_stmt->close();
 
                 $insert_forecast_stmt = $conn->prepare("
                     INSERT INTO forecast_results
-                    (item_id, branch_id, forecast_date, shortage_probability,
-                     forecast_status, recommended_reorder, generated_by,
-                     forecasted_consumption, forecast_days)
-                    VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?, ?)
+                    (item_id, branch_id, forecast_date, forecast_start_date, forecast_end_date,
+                     current_stock_snapshot, minimum_stock_snapshot, stock_status,
+                     shortage_probability, forecast_status, recommended_reorder, generated_by,
+                     forecasted_consumption, forecast_days, is_stale, stale_at, stale_reason)
+                    VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL)
                 ");
 
                 $forecast_count = 0;
@@ -181,6 +197,26 @@ if ($forecast_is_due) {
                         continue;
                     }
 
+                    $forecast_start_date = !empty($forecast_row['forecast_start'])
+                        ? (string)$forecast_row['forecast_start']
+                        : null;
+                    $forecast_end_date = !empty($forecast_row['forecast_end'])
+                        ? (string)$forecast_row['forecast_end']
+                        : null;
+
+                    if (!$forecast_start_date || !$forecast_end_date) {
+                        continue;
+                    }
+
+                    $current_stock_snapshot = max(
+                        0.0,
+                        (float)($forecast_row['current_stock'] ?? 0)
+                    );
+                    $minimum_stock_snapshot = max(
+                        0.0,
+                        (float)($forecast_row['minimum_stock'] ?? 0)
+                    );
+                    $stock_status = (string)($forecast_row['stock_status'] ?? 'SUFFICIENT STOCK');
                     $shortage_probability = max(
                         0.0,
                         min(1.0, (float)($forecast_row['shortage_probability'] ?? 0))
@@ -193,13 +229,20 @@ if ($forecast_is_due) {
                         (float)($forecast_row['forecasted_consumption'] ?? 0)
                     );
 
+                    $recommended_reorder_value = (float)$recommended_reorder;
+
                     $insert_forecast_stmt->bind_param(
-                        "isdsiidi",
+                        "isssddsdsdidi",
                         $item_id,
                         $branch_id,
+                        $forecast_start_date,
+                        $forecast_end_date,
+                        $current_stock_snapshot,
+                        $minimum_stock_snapshot,
+                        $stock_status,
                         $shortage_probability,
                         $forecast_status,
-                        $recommended_reorder,
+                        $recommended_reorder_value,
                         $generated_by,
                         $forecasted_consumption,
                         $forecast_days
@@ -215,12 +258,14 @@ if ($forecast_is_due) {
 
                 $conn->commit();
                 $latest_forecast_date = $today;
-                $forecast_message = "Today's 30-day forecasts were updated automatically for $forecast_count items.";
+                $forecast_message = $stale_forecast_count > 0
+                    ? "Inventory changed after the previous forecast. A fresh {$forecast_days}-day forecast was generated for {$forecast_count} items."
+                    : "Today's {$forecast_days}-day forecasts were updated automatically for {$forecast_count} items.";
                 $forecast_message_type = 'success';
                 addAuditLog(
                     $conn,
                     $user_id,
-                    "Automatically generated 30-day forecasts for $forecast_count items",
+                    "Automatically generated {$forecast_days}-day forecasts for {$forecast_count} items",
                     'Supply Forecasting'
                 );
             } catch (Throwable $exception) {
@@ -247,16 +292,24 @@ $forecasts = [];
 $forecast_sql = "SELECT 
                 p.*,
                 i.item_name,
-                i.minimum_stock,
                 u.unit_name
              FROM forecast_results p
              JOIN inventory_items i ON p.item_id = i.item_id
              LEFT JOIN units u ON i.unit_id = u.unit_id
              WHERE p.branch_id = ?
-             ORDER BY p.shortage_probability DESC";
+               AND p.forecast_days = ?
+               AND p.is_stale = 0
+               AND p.forecast_date = (
+                   SELECT MAX(fr2.forecast_date)
+                   FROM forecast_results fr2
+                   WHERE fr2.branch_id = ?
+                     AND fr2.forecast_days = ?
+                     AND fr2.is_stale = 0
+               )
+             ORDER BY p.shortage_probability DESC, p.recommended_reorder DESC";
 
 $forecast_stmt = $conn->prepare($forecast_sql);
-$forecast_stmt->bind_param("s", $branch_id);
+$forecast_stmt->bind_param("sisi", $branch_id, $forecast_days, $branch_id, $forecast_days);
 $forecast_stmt->execute();
 $forecast_result = $forecast_stmt->get_result();
 
@@ -277,10 +330,18 @@ while ($row = $forecast_result->fetch_assoc()) {
         'forecast_status' => $row['forecast_status'],
         'status_color' => $status_color,
         'recommended_reorder' => (int)$row['recommended_reorder'],
-        'forecasted_consumption' => (int)$row['forecasted_consumption'],
+        'forecasted_consumption' => (float)$row['forecasted_consumption'],
         'forecast_days' => (int)$row['forecast_days'],
-        'minimum_stock' => (int)$row['minimum_stock'],
-        'forecast_date' => date('m/d/Y', strtotime($row['forecast_date']))
+        'current_stock' => (float)($row['current_stock_snapshot'] ?? 0),
+        'minimum_stock' => (float)($row['minimum_stock_snapshot'] ?? 0),
+        'stock_status' => (string)($row['stock_status'] ?? 'SUFFICIENT STOCK'),
+        'forecast_date' => date('m/d/Y', strtotime($row['forecast_date'])),
+        'forecast_start_date' => !empty($row['forecast_start_date'])
+            ? date('M d, Y', strtotime($row['forecast_start_date']))
+            : null,
+        'forecast_end_date' => !empty($row['forecast_end_date'])
+            ? date('M d, Y', strtotime($row['forecast_end_date']))
+            : null
     ];
 }
 $forecast_stmt->close();
@@ -666,6 +727,46 @@ while ($row = $items_result->fetch_assoc()) {
         .stat-info .stat-icon { color: var(--info); }
         .stat-warning .stat-icon { color: #d99b00; }
 
+        .forecast-horizon-card {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 18px;
+            flex-wrap: wrap;
+            background: #fff;
+            border: 1px solid #e8ebf3;
+            border-radius: 14px;
+            padding: 18px 20px;
+            margin-bottom: 22px;
+            box-shadow: 0 3px 10px rgba(43, 58, 140, 0.06);
+        }
+
+        .forecast-horizon-card h6 {
+            margin: 0 0 4px;
+            color: var(--primary);
+            font-size: 15px;
+            font-weight: 700;
+        }
+
+        .forecast-horizon-card p {
+            margin: 0;
+            color: #6c757d;
+            font-size: 13px;
+        }
+
+        .forecast-horizon-options {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .forecast-horizon-options .btn {
+            min-width: 88px;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
         .forecast-status-card {
             display: flex;
             align-items: center;
@@ -805,6 +906,131 @@ while ($row = $items_result->fetch_assoc()) {
             background: #28a745;
         }
 
+        /* =========================================================
+           FORECAST VISUALIZATION + TABLE CONTROLS
+           ========================================================= */
+
+        .forecast-visual-card {
+            height: 100%;
+            background: #fff;
+            border: 1px solid #e8ebf3;
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0,0,0,.06);
+            padding: 20px;
+        }
+
+        .forecast-visual-card .visual-title {
+            color: var(--primary);
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .forecast-visual-card .visual-subtitle {
+            color: #71809d;
+            font-size: 12px;
+            margin-bottom: 14px;
+        }
+
+        .chart-box {
+            position: relative;
+            min-height: 290px;
+        }
+
+        .table-tools {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+            padding: 14px 18px;
+            border-bottom: 1px solid #edf0f5;
+            background: #fbfcff;
+        }
+
+        .table-tools-left,
+        .table-tools-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .forecast-search {
+            min-width: 250px;
+        }
+
+        .table-tools .form-control,
+        .table-tools .form-select {
+            border-radius: 10px;
+            border-color: #dfe4ee;
+            font-size: 13px;
+            min-height: 38px;
+        }
+
+        .table-responsive-forecast {
+            overflow-x: auto;
+        }
+
+        .data-table thead th {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+        }
+
+        .pagination-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+            padding: 14px 18px;
+            border-top: 1px solid #edf0f5;
+            background: #fff;
+        }
+
+        .pagination-summary {
+            color: #71809d;
+            font-size: 13px;
+        }
+
+        .forecast-pagination {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+
+        .forecast-pagination button {
+            min-width: 36px;
+            height: 36px;
+            padding: 0 10px;
+            border: 1px solid #dfe4ee;
+            border-radius: 9px;
+            background: #fff;
+            color: var(--primary);
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .forecast-pagination button:hover:not(:disabled),
+        .forecast-pagination button.active {
+            color: #fff;
+            background: var(--primary);
+            border-color: var(--primary);
+        }
+
+        .forecast-pagination button:disabled {
+            opacity: .45;
+            cursor: not-allowed;
+        }
+
+        .filtered-empty-row td {
+            padding: 28px !important;
+            text-align: center;
+            color: #71809d !important;
+        }
+
         @media (max-width: 991px) {
             .main {
                 margin-left: 90px;
@@ -829,7 +1055,29 @@ while ($row = $items_result->fetch_assoc()) {
                 align-items: flex-start;
             }
             .table-wrap {
-                overflow-x: auto;
+                overflow: hidden;
+            }
+
+            .forecast-search {
+                min-width: 100%;
+                width: 100%;
+            }
+
+            .table-tools-left,
+            .table-tools-right {
+                width: 100%;
+            }
+
+            .table-tools .form-select {
+                flex: 1 1 140px;
+            }
+
+            .pagination-footer {
+                align-items: flex-start;
+            }
+
+            .chart-box {
+                min-height: 250px;
             }
         }
     </style>
@@ -900,6 +1148,22 @@ while ($row = $items_result->fetch_assoc()) {
     <!-- ========== TOAST CONTAINER ========== -->
     <div class="toast-container" id="toastContainer"></div>
 
+        <!-- Forecast Horizon Selector -->
+        <div class="forecast-horizon-card">
+            <div>
+                <h6><i class="bi bi-calendar-range me-2"></i>Forecast Horizon</h6>
+                <p>Select how far ahead the system should forecast. Each horizon is saved separately.</p>
+            </div>
+            <div class="forecast-horizon-options" role="group" aria-label="Forecast horizon">
+                <?php foreach ($allowed_forecast_days as $days_option): ?>
+                    <a href="BranchAdmin_Forecasting.php?days=<?php echo $days_option; ?>"
+                       class="btn <?php echo $forecast_days === $days_option ? 'btn-primary' : 'btn-outline-primary'; ?>">
+                        <?php echo $days_option; ?> Days
+                    </a>
+                <?php endforeach; ?>
+            </div>
+        </div>
+
         <!-- Statistics Cards -->
         <div class="row g-4 mb-4">
             <div class="col-lg-3 col-md-6">
@@ -928,7 +1192,7 @@ while ($row = $items_result->fetch_assoc()) {
                     <div class="stat-content">
                         <div class="stat-label">Current Forecasts</div>
                         <div class="stat-number"><?php echo count($forecasts); ?></div>
-                        <div class="stat-description">Automatic 30-day results</div>
+                        <div class="stat-description">Automatic <?php echo $forecast_days; ?>-day results</div>
                     </div>
                 </div>
             </div>
@@ -952,10 +1216,41 @@ while ($row = $items_result->fetch_assoc()) {
             <div>
                 <h5>Automatic XGBoost Forecasting</h5>
                 <p>
-                    The system automatically refreshes the 30-day supply forecast on the first page visit each day.
+                    The system automatically refreshes the selected <?php echo $forecast_days; ?>-day supply forecast on the first page visit for that horizon each day.
                     SMAPE is used for model evaluation, and only items with at least
                     <?php echo $minimum_records_per_item; ?> historical records are included.
                 </p>
+            </div>
+        </div>
+
+        <!-- Forecast Visualizations -->
+        <div class="row g-4 mb-4">
+            <div class="col-xl-4 col-lg-5">
+                <div class="forecast-visual-card">
+                    <div class="visual-title">
+                        <i class="bi bi-pie-chart-fill me-2"></i>Risk Distribution
+                    </div>
+                    <div class="visual-subtitle">
+                        Number of forecasted items by stockout-risk level.
+                    </div>
+                    <div class="chart-box">
+                        <canvas id="riskDistributionChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-xl-8 col-lg-7">
+                <div class="forecast-visual-card">
+                    <div class="visual-title">
+                        <i class="bi bi-bar-chart-fill me-2"></i>Highest Stockout Risks
+                    </div>
+                    <div class="visual-subtitle">
+                        Top forecasted supplies that need the most attention for the selected horizon.
+                    </div>
+                    <div class="chart-box">
+                        <canvas id="topRiskChart"></canvas>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -964,71 +1259,172 @@ while ($row = $items_result->fetch_assoc()) {
             <div class="table-header">
                 <h5><i class="bi bi-clipboard-data me-2"></i>Forecast Results</h5>
                 <span class="text-muted" style="font-size:13px;">
-                    <?php echo count($forecasts); ?> forecasts found
+                    <?php echo count($forecasts); ?> forecasts found · Next <?php echo $forecast_days; ?> days
                 </span>
             </div>
-            <table class="table data-table">
-                <thead>
-                    <tr>
-                        <th>Item</th>
-                        <th>Unit</th>
-                        <th>Min Stock</th>
-                        <th>Forecasted Consumption</th>
-                        <th>Shortage Probability</th>
-                        <th>Status</th>
-                        <th>Recommendation</th>
-                        <th>Date</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php if (count($forecasts) > 0): ?>
-                        <?php foreach ($forecasts as $forecast): ?>
-                            <tr>
-                                <td><strong><?php echo htmlspecialchars($forecast['item_name']); ?></strong></td>
-                                <td><?php echo htmlspecialchars($forecast['unit_name'] ?? 'N/A'); ?></td>
-                                <td><?php echo htmlspecialchars($forecast['minimum_stock']); ?></td>
-                                <td><?php echo htmlspecialchars($forecast['forecasted_consumption'] ?? 'N/A'); ?></td>
-                                <td>
-                                    <?php echo number_format($forecast['shortage_probability'] * 100, 1); ?>%
-                                    <div class="probability-bar">
-                                        <div class="fill <?php 
-                                            echo $forecast['shortage_probability'] >= 0.8 ? 'fill-high' : 
-                                                ($forecast['shortage_probability'] >= 0.6 ? 'fill-medium' : 'fill-low'); 
-                                        ?>" 
-                                             style="width: <?php echo $forecast['shortage_probability'] * 100; ?>%;">
-                                        </div>
-                                    </div>
-                                </td>
-                                <td>
-                                    <span class="badge-status <?php 
-                                        echo $forecast['status_color'] == 'danger' ? 'badge-danger' : 
-                                            ($forecast['status_color'] == 'warning' ? 'badge-warning' : 'badge-success'); 
-                                    ?>">
-                                        <?php echo htmlspecialchars($forecast['forecast_status']); ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <?php if ($forecast['recommended_reorder'] > 0): ?>
-                                        <span class="badge bg-warning text-dark">
-                                            Reorder <?php echo htmlspecialchars($forecast['recommended_reorder']); ?> units
-                                        </span>
-                                    <?php else: ?>
-                                        <span class="text-muted">No action needed</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td><?php echo htmlspecialchars($forecast['forecast_date']); ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    <?php else: ?>
+
+            <?php if (count($forecasts) > 0): ?>
+                <div class="table-tools">
+                    <div class="table-tools-left">
+                        <div class="input-group forecast-search">
+                            <span class="input-group-text bg-white border-end-0">
+                                <i class="bi bi-search"></i>
+                            </span>
+                            <input
+                                type="search"
+                                class="form-control border-start-0"
+                                id="forecastSearch"
+                                placeholder="Search item..."
+                                autocomplete="off"
+                            >
+                        </div>
+
+                        <select class="form-select" id="riskFilter" aria-label="Filter by risk">
+                            <option value="all">All risk levels</option>
+                            <option value="high">High Risk</option>
+                            <option value="moderate">Moderate Risk</option>
+                            <option value="low">Low Risk</option>
+                        </select>
+
+                        <select class="form-select" id="stockFilter" aria-label="Filter by stock status">
+                            <option value="all">All stock statuses</option>
+                            <option value="OUT OF STOCK">Out of Stock</option>
+                            <option value="LOW STOCK">Low Stock</option>
+                            <option value="SUFFICIENT STOCK">Sufficient Stock</option>
+                        </select>
+                    </div>
+
+                    <div class="table-tools-right">
+                        <label for="pageSize" class="text-muted" style="font-size:13px;">Rows:</label>
+                        <select class="form-select" id="pageSize" style="width:auto;">
+                            <option value="10" selected>10</option>
+                            <option value="25">25</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <div class="table-responsive-forecast">
+                <table class="table data-table" id="forecastTable">
+                    <thead>
                         <tr>
-                            <td colspan="8" class="text-center py-4 text-muted">
-                                <i class="bi bi-inbox fs-2 d-block mb-2"></i>
-                                No automatic forecast is available yet.
-                            </td>
+                            <th>Item</th>
+                            <th>Unit</th>
+                            <th>Stock at Forecast</th>
+                            <th>Min Stock</th>
+                            <th>Stock Status</th>
+                            <th>Forecasted Consumption</th>
+                            <th>Stockout Risk</th>
+                            <th>Status</th>
+                            <th>Recommendation</th>
+                            <th>Forecast Period</th>
                         </tr>
-                    <?php endif; ?>
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody id="forecastTableBody">
+                        <?php if (count($forecasts) > 0): ?>
+                            <?php foreach ($forecasts as $forecast): ?>
+                                <?php
+                                    $risk_level = $forecast['shortage_probability'] >= 0.8
+                                        ? 'high'
+                                        : ($forecast['shortage_probability'] >= 0.6 ? 'moderate' : 'low');
+                                ?>
+                                <tr
+                                    class="forecast-row"
+                                    data-item="<?php echo htmlspecialchars(strtolower($forecast['item_name']), ENT_QUOTES, 'UTF-8'); ?>"
+                                    data-risk="<?php echo $risk_level; ?>"
+                                    data-stock-status="<?php echo htmlspecialchars($forecast['stock_status'], ENT_QUOTES, 'UTF-8'); ?>"
+                                >
+                                    <td><strong><?php echo htmlspecialchars($forecast['item_name']); ?></strong></td>
+                                    <td><?php echo htmlspecialchars($forecast['unit_name'] ?? 'N/A'); ?></td>
+                                    <td><?php echo number_format((float)$forecast['current_stock'], 2); ?></td>
+                                    <td><?php echo number_format((float)$forecast['minimum_stock'], 2); ?></td>
+                                    <td>
+                                        <?php
+                                            $stock_status_class = $forecast['stock_status'] === 'OUT OF STOCK'
+                                                ? 'bg-danger'
+                                                : ($forecast['stock_status'] === 'LOW STOCK' ? 'bg-warning text-dark' : 'bg-success');
+                                        ?>
+                                        <span class="badge <?php echo $stock_status_class; ?>">
+                                            <?php echo htmlspecialchars($forecast['stock_status']); ?>
+                                        </span>
+                                    </td>
+                                    <td><?php echo number_format((float)($forecast['forecasted_consumption'] ?? 0), 2); ?></td>
+                                    <td>
+                                        <?php echo number_format($forecast['shortage_probability'] * 100, 1); ?>%
+                                        <div class="probability-bar">
+                                            <div class="fill <?php
+                                                echo $forecast['shortage_probability'] >= 0.8 ? 'fill-high' :
+                                                    ($forecast['shortage_probability'] >= 0.6 ? 'fill-medium' : 'fill-low');
+                                            ?>"
+                                                 style="width: <?php echo $forecast['shortage_probability'] * 100; ?>%;">
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="badge-status <?php
+                                            echo $forecast['status_color'] == 'danger' ? 'badge-danger' :
+                                                ($forecast['status_color'] == 'warning' ? 'badge-warning' : 'badge-success');
+                                        ?>">
+                                            <?php echo htmlspecialchars($forecast['forecast_status']); ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <?php if ($forecast['recommended_reorder'] > 0): ?>
+                                            <span class="badge bg-warning text-dark">
+                                                Reorder
+                                                <?php echo htmlspecialchars($forecast['recommended_reorder']); ?>
+                                                <?php echo htmlspecialchars($forecast['unit_name'] ?? 'units'); ?>
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="text-success fw-semibold">
+                                                <i class="bi bi-check-circle-fill me-1"></i>No reorder
+                                            </span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($forecast['forecast_start_date'] && $forecast['forecast_end_date']): ?>
+                                            <strong><?php echo htmlspecialchars($forecast['forecast_start_date']); ?></strong>
+                                            <div class="text-muted" style="font-size:12px;">
+                                                to <?php echo htmlspecialchars($forecast['forecast_end_date']); ?>
+                                            </div>
+                                            <div class="text-muted" style="font-size:11px;">
+                                                Generated <?php echo htmlspecialchars($forecast['forecast_date']); ?>
+                                            </div>
+                                        <?php else: ?>
+                                            <?php echo htmlspecialchars($forecast['forecast_date']); ?>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+
+                            <tr id="filteredEmptyRow" class="filtered-empty-row" style="display:none;">
+                                <td colspan="10">
+                                    <i class="bi bi-search fs-4 d-block mb-2"></i>
+                                    No forecasts match the selected filters.
+                                </td>
+                            </tr>
+                        <?php else: ?>
+                            <tr>
+                                <td colspan="10" class="text-center py-4 text-muted">
+                                    <i class="bi bi-inbox fs-2 d-block mb-2"></i>
+                                    No automatic forecast is available yet.
+                                </td>
+                            </tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+
+            <?php if (count($forecasts) > 0): ?>
+                <div class="pagination-footer">
+                    <div class="pagination-summary" id="paginationSummary">
+                        Showing forecasts
+                    </div>
+                    <div class="forecast-pagination" id="forecastPagination"></div>
+                </div>
+            <?php endif; ?>
         </div>
 
         <!-- Forecastable Items List -->
@@ -1054,7 +1450,299 @@ while ($row = $items_result->fetch_assoc()) {
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script>
+// ============================================
+// FORECAST VISUALIZATION + FILTER + PAGINATION
+// ============================================
+
+const forecastData = <?php echo json_encode(
+    $forecasts,
+    JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE
+); ?>;
+
+function getRiskLevel(probability) {
+    const p = Number(probability) || 0;
+
+    if (p >= 0.8) {
+        return 'high';
+    }
+
+    if (p >= 0.6) {
+        return 'moderate';
+    }
+
+    return 'low';
+}
+
+function initializeForecastCharts() {
+    if (typeof Chart === 'undefined' || !Array.isArray(forecastData) || forecastData.length === 0) {
+        return;
+    }
+
+    const highCount = forecastData.filter(item => getRiskLevel(item.shortage_probability) === 'high').length;
+    const moderateCount = forecastData.filter(item => getRiskLevel(item.shortage_probability) === 'moderate').length;
+    const lowCount = forecastData.filter(item => getRiskLevel(item.shortage_probability) === 'low').length;
+
+    const riskCanvas = document.getElementById('riskDistributionChart');
+
+    if (riskCanvas) {
+        new Chart(riskCanvas, {
+            type: 'doughnut',
+            data: {
+                labels: ['High Risk', 'Moderate Risk', 'Low Risk'],
+                datasets: [{
+                    data: [highCount, moderateCount, lowCount],
+                    backgroundColor: ['#dc3545', '#ffc107', '#28a745'],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                cutout: '68%',
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            usePointStyle: true,
+                            padding: 18
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return context.label + ': ' + context.raw + ' item(s)';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    const topRiskCanvas = document.getElementById('topRiskChart');
+
+    if (topRiskCanvas) {
+        const topRiskItems = [...forecastData]
+            .sort((a, b) => Number(b.shortage_probability) - Number(a.shortage_probability))
+            .slice(0, 10);
+
+        new Chart(topRiskCanvas, {
+            type: 'bar',
+            data: {
+                labels: topRiskItems.map(item => item.item_name),
+                datasets: [{
+                    label: 'Stockout Risk (%)',
+                    data: topRiskItems.map(item => Math.round((Number(item.shortage_probability) || 0) * 1000) / 10),
+                    backgroundColor: topRiskItems.map(item => {
+                        const risk = getRiskLevel(item.shortage_probability);
+                        return risk === 'high'
+                            ? '#dc3545'
+                            : (risk === 'moderate' ? '#ffc107' : '#28a745');
+                    }),
+                    borderRadius: 7,
+                    borderSkipped: false
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {
+                            callback: value => value + '%'
+                        },
+                        grid: {
+                            color: '#edf0f5'
+                        }
+                    },
+                    y: {
+                        grid: {
+                            display: false
+                        },
+                        ticks: {
+                            autoSkip: false
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return 'Risk: ' + context.raw.toFixed(1) + '%';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
+function initializeForecastTable() {
+    const rows = Array.from(document.querySelectorAll('#forecastTableBody .forecast-row'));
+    const searchInput = document.getElementById('forecastSearch');
+    const riskFilter = document.getElementById('riskFilter');
+    const stockFilter = document.getElementById('stockFilter');
+    const pageSizeSelect = document.getElementById('pageSize');
+    const pagination = document.getElementById('forecastPagination');
+    const summary = document.getElementById('paginationSummary');
+    const emptyRow = document.getElementById('filteredEmptyRow');
+
+    if (
+        rows.length === 0 ||
+        !searchInput ||
+        !riskFilter ||
+        !stockFilter ||
+        !pageSizeSelect ||
+        !pagination ||
+        !summary
+    ) {
+        return;
+    }
+
+    let currentPage = 1;
+
+    function filteredRows() {
+        const searchTerm = searchInput.value.trim().toLowerCase();
+        const selectedRisk = riskFilter.value;
+        const selectedStock = stockFilter.value;
+
+        return rows.filter(row => {
+            const matchesSearch =
+                searchTerm === '' ||
+                (row.dataset.item || '').includes(searchTerm);
+
+            const matchesRisk =
+                selectedRisk === 'all' ||
+                row.dataset.risk === selectedRisk;
+
+            const matchesStock =
+                selectedStock === 'all' ||
+                row.dataset.stockStatus === selectedStock;
+
+            return matchesSearch && matchesRisk && matchesStock;
+        });
+    }
+
+    function createPageButton(label, page, disabled = false, active = false) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = label;
+        button.disabled = disabled;
+
+        if (active) {
+            button.classList.add('active');
+        }
+
+        button.addEventListener('click', function() {
+            if (disabled || currentPage === page) {
+                return;
+            }
+
+            currentPage = page;
+            render();
+        });
+
+        return button;
+    }
+
+    function renderPagination(totalPages) {
+        pagination.innerHTML = '';
+
+        pagination.appendChild(
+            createPageButton(
+                '‹',
+                Math.max(1, currentPage - 1),
+                currentPage === 1
+            )
+        );
+
+        let startPage = Math.max(1, currentPage - 2);
+        let endPage = Math.min(totalPages, startPage + 4);
+
+        if (endPage - startPage < 4) {
+            startPage = Math.max(1, endPage - 4);
+        }
+
+        for (let page = startPage; page <= endPage; page++) {
+            pagination.appendChild(
+                createPageButton(
+                    String(page),
+                    page,
+                    false,
+                    page === currentPage
+                )
+            );
+        }
+
+        pagination.appendChild(
+            createPageButton(
+                '›',
+                Math.min(totalPages, currentPage + 1),
+                currentPage === totalPages
+            )
+        );
+    }
+
+    function render() {
+        const matches = filteredRows();
+        const pageSize = Math.max(1, Number(pageSizeSelect.value) || 10);
+        const totalPages = Math.max(1, Math.ceil(matches.length / pageSize));
+
+        if (currentPage > totalPages) {
+            currentPage = totalPages;
+        }
+
+        const startIndex = (currentPage - 1) * pageSize;
+        const endIndex = Math.min(startIndex + pageSize, matches.length);
+        const visibleRows = new Set(matches.slice(startIndex, endIndex));
+
+        rows.forEach(row => {
+            row.style.display = visibleRows.has(row) ? '' : 'none';
+        });
+
+        if (emptyRow) {
+            emptyRow.style.display = matches.length === 0 ? '' : 'none';
+        }
+
+        if (matches.length === 0) {
+            summary.textContent = '0 forecasts match the selected filters';
+            pagination.innerHTML = '';
+            return;
+        }
+
+        summary.textContent =
+            `Showing ${startIndex + 1}-${endIndex} of ${matches.length} forecast${matches.length === 1 ? '' : 's'}`;
+
+        renderPagination(totalPages);
+    }
+
+    function resetToFirstPageAndRender() {
+        currentPage = 1;
+        render();
+    }
+
+    searchInput.addEventListener('input', resetToFirstPageAndRender);
+    riskFilter.addEventListener('change', resetToFirstPageAndRender);
+    stockFilter.addEventListener('change', resetToFirstPageAndRender);
+    pageSizeSelect.addEventListener('change', resetToFirstPageAndRender);
+
+    render();
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    initializeForecastCharts();
+    initializeForecastTable();
+});
+
 // ============================================
 // TOAST NOTIFICATIONS
 // ============================================

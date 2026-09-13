@@ -60,6 +60,7 @@ DB_CONFIG = {
 # ============================================================
 
 DEFAULT_FORECAST_DAYS = 30
+ALLOWED_FORECAST_DAYS = {7, 14, 30}
 MINIMUM_HISTORY_RECORDS = 15
 
 RESTOCKING_LEAD_DAYS = int(
@@ -236,16 +237,15 @@ def get_supply_type(item_name):
 
 def determine_risk_status(
     days_of_supply,
-    estimated_ending_stock,
-    minimum_stock
+    estimated_ending_stock
 ):
     """
-    Apply the shortage-risk decision rule.
+    Classify actual shortage/stockout risk separately from low-stock status.
 
-    A shortage risk exists when:
-    1. Days of supply is less than the restocking lead time
-       plus the safety buffer; or
-    2. Forecasted ending stock is below minimum stock.
+    Minimum stock is a replenishment target, not proof that the item will
+    actually run out. A shortage risk exists when the expected stock reaches
+    zero during the selected horizon or the estimated days of supply is below
+    the configured lead-time + safety-buffer window.
     """
     required_supply_days = (
         RESTOCKING_LEAD_DAYS
@@ -257,11 +257,9 @@ def determine_risk_status(
         and days_of_supply < required_supply_days
     )
 
-    below_minimum_stock = (
-        estimated_ending_stock < minimum_stock
-    )
+    expected_stockout = estimated_ending_stock <= 0
 
-    if insufficient_supply_days or below_minimum_stock:
+    if insufficient_supply_days or expected_stockout:
         return "Shortage Risk"
 
     return "Sufficient"
@@ -270,6 +268,25 @@ def determine_risk_status(
 # ============================================================
 # DATABASE QUERIES
 # ============================================================
+
+def load_database_today():
+    """Return the database server's current date for consistent forecasting dates."""
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    try:
+        cursor.execute("SELECT CURDATE() AS database_today")
+        row = cursor.fetchone()
+
+        if not row or row.get("database_today") is None:
+            raise ValueError("Could not determine the database current date.")
+
+        return pd.Timestamp(row["database_today"]).normalize()
+
+    finally:
+        cursor.close()
+        connection.close()
+
 
 def load_forecastable_items():
     """Load all items enabled for forecasting."""
@@ -784,7 +801,8 @@ def generate_item_forecast(
     minimum_stock,
     item_validation_mae,
     overall_validation_mae,
-    forecast_days
+    forecast_days,
+    database_today
 ):
     """Generate a recursive forecast for one item."""
     history = item_history.copy()
@@ -800,6 +818,14 @@ def generate_item_forecast(
 
     history = history[
         history["quantity_used"] >= 0
+    ]
+
+    # Only use records up to the database's current date. This prevents
+    # accidental future-dated training records from leaking into a forecast.
+    database_today = pd.Timestamp(database_today).normalize()
+    history = history[
+        pd.to_datetime(history["record_date"]).dt.normalize()
+        <= database_today
     ]
 
     if len(history) < MINIMUM_HISTORY_RECORDS:
@@ -840,26 +866,45 @@ def generate_item_forecast(
 
     last_record_date = pd.Timestamp(
         history["record_date"].max()
-    )
+    ).normalize()
 
+    # The user-facing forecast always starts tomorrow and covers exactly
+    # the selected 7, 14, or 30 day horizon.
     forecast_start = (
-        last_record_date
+        database_today
         + timedelta(days=1)
     )
 
     forecast_end = (
-        last_record_date
-        + timedelta(days=forecast_days)
+        forecast_start
+        + timedelta(days=forecast_days - 1)
     )
+
+    # If historical data is older than today, recursively simulate the gap
+    # first so lag_1, lag_7, and rolling_7 are updated before the requested
+    # forecast period begins. Gap predictions are NOT counted in the visible
+    # forecast totals.
+    simulation_start = (
+        last_record_date
+        + timedelta(days=1)
+    )
+
+    simulation_days = (
+        forecast_end - simulation_start
+    ).days + 1
+
+    if simulation_days < forecast_days:
+        simulation_days = forecast_days
+        simulation_start = forecast_start
 
     daily_forecasts = []
     total_forecasted_consumption = 0.0
     expected_reorder_date = None
     expected_stockout_date = None
 
-    for day_offset in range(forecast_days):
+    for day_offset in range(simulation_days):
         forecast_date = (
-            forecast_start
+            simulation_start
             + timedelta(days=day_offset)
         )
 
@@ -920,6 +965,11 @@ def generate_item_forecast(
         usage_history.append(
             daily_consumption
         )
+
+        # Predictions before forecast_start only bridge stale historical data.
+        # They update lag features but are not included in the selected horizon.
+        if forecast_date < forecast_start:
+            continue
 
         total_forecasted_consumption += (
             daily_consumption
@@ -1007,32 +1057,42 @@ def generate_item_forecast(
         + (1.645 * total_uncertainty)
     )
 
+    # Reorder quantity is intentionally based on an explainable replenishment
+    # target: enough stock to cover the selected forecast horizon and finish at
+    # the configured minimum-stock level. Being below minimum no longer forces
+    # an artificial 100% shortage probability.
     recommended_reorder = max(
         0,
         math.ceil(
-            conservative_consumption
+            total_forecasted_consumption
             + minimum_stock
             - current_stock
         )
     )
 
+    if current_stock <= 0:
+        stock_status = "OUT OF STOCK"
+    elif current_stock <= minimum_stock:
+        stock_status = "LOW STOCK"
+    else:
+        stock_status = "SUFFICIENT STOCK"
+
     forecast_status = determine_risk_status(
         days_of_supply=days_of_supply,
-        estimated_ending_stock=estimated_ending_stock,
-        minimum_stock=minimum_stock
+        estimated_ending_stock=estimated_ending_stock
     )
 
-    shortage_threshold = max(
-        0.0,
-        current_stock - minimum_stock
-    )
-
-    if current_stock <= minimum_stock:
-        shortage_probability = 1.0
+    # Approximate probability that demand over the selected horizon exceeds
+    # current usable stock (stockout), rather than probability of merely going
+    # below the minimum-stock target.
+    if current_stock <= 0:
+        shortage_probability = (
+            1.0 if total_forecasted_consumption > 0 else 0.0
+        )
     else:
         z_score = (
             total_forecasted_consumption
-            - shortage_threshold
+            - current_stock
         ) / total_uncertainty
 
         shortage_probability = 0.5 * (
@@ -1062,6 +1122,7 @@ def generate_item_forecast(
             minimum_stock,
             2
         ),
+        "stock_status": stock_status,
         "forecasted_daily_consumption": round(
             average_daily_consumption,
             2
@@ -1130,6 +1191,7 @@ def forecast_inventory(branch_id, forecast_days):
     forecastable_items = load_forecastable_items()
     raw_training_data = load_training_data(branch_id)
     current_stocks = load_current_stocks(branch_id)
+    database_today = load_database_today()
 
     if not forecastable_items:
         raise ValueError(
@@ -1195,10 +1257,20 @@ def forecast_inventory(branch_id, forecast_days):
             clean_history["item_id"] == item_id
         ].copy()
 
-        current_stock = current_stocks.get(
-            item_id,
-            0.0
-        )
+        # A missing inventory_stocks row is not the same thing as confirmed
+        # zero stock. Skip it instead of manufacturing a false 100% risk.
+        if item_id not in current_stocks:
+            skipped_items.append({
+                "item_id": item_id,
+                "item_name": item_name,
+                "reason": (
+                    "No inventory stock record exists for this branch. "
+                    "Initialize the item in Inventory Stock Management first."
+                )
+            })
+            continue
+
+        current_stock = current_stocks[item_id]
 
         minimum_stock = max(
             0.0,
@@ -1222,7 +1294,8 @@ def forecast_inventory(branch_id, forecast_days):
                 overall_validation_mae=(
                     model_metrics["mae"]
                 ),
-                forecast_days=forecast_days
+                forecast_days=forecast_days,
+                database_today=database_today
             )
         )
 
@@ -1329,12 +1402,11 @@ def main():
 
         return 1
 
-    if forecast_days < 1 or forecast_days > 365:
+    if forecast_days not in ALLOWED_FORECAST_DAYS:
         print_json({
             "success": False,
             "error": (
-                "forecast_days must be between "
-                "1 and 365."
+                "forecast_days must be one of: 7, 14, or 30."
             )
         })
 
