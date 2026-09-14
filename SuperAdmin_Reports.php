@@ -77,7 +77,7 @@ class PDF extends FPDF
         $this->subtitle = $subtitle;
         $this->branchName = $branchName;
         $this->dateRange = $dateRange;
-        $this->logoPath = 'C:/xampp/htdocs/SBI-ABC-SMARTBITECARE/logo.png';
+        $this->logoPath = __DIR__ . '/logo.png';
         $this->SetMargins(15, 15, 15);
         $this->SetAutoPageBreak(true, 25);
         $this->AddPage();

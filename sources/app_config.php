@@ -1,18 +1,20 @@
 <?php
-
 /**
- * SmartBiteCare application URL.
+ * SmartBiteCare public application URL.
  *
- * Local development:
- *     http://localhost/SBI-ABC-SMARTBITECARE
- *
- * Production example:
- *     https://smartbitecare.example.com
- *
- * On a production server, set the SMARTBITECARE_APP_URL environment variable
- * or replace the local fallback below with the final HTTPS domain.
+ * Priority:
+ * 1. SMARTBITECARE_APP_URL (recommended for custom domains)
+ * 2. Railway-provided RAILWAY_PUBLIC_DOMAIN
+ * 3. Local XAMPP fallback
  */
 $configuredAppUrl = trim((string)getenv('SMARTBITECARE_APP_URL'));
+
+if ($configuredAppUrl === '') {
+    $railwayDomain = trim((string)getenv('RAILWAY_PUBLIC_DOMAIN'));
+    if ($railwayDomain !== '') {
+        $configuredAppUrl = 'https://' . $railwayDomain;
+    }
+}
 
 if ($configuredAppUrl === '') {
     $configuredAppUrl = 'http://localhost/SBI-ABC-SMARTBITECARE';
@@ -21,4 +23,4 @@ if ($configuredAppUrl === '') {
 if (!defined('APP_URL')) {
     define('APP_URL', rtrim($configuredAppUrl, '/'));
 }
-
+?>
