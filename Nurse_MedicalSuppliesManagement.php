@@ -3164,6 +3164,96 @@ body {
     }
 }
 
+
+        /* =========================================================
+           CLIENT-SIDE TABLE PAGINATION
+           ========================================================= */
+        .table-pagination-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            flex-wrap: wrap;
+            padding: 14px 20px;
+            background: #fff;
+            border-top: 1px solid #edf0f5;
+        }
+
+        .table-pagination-summary {
+            color: #6f7b91;
+            font-size: 12px;
+        }
+
+        .table-pagination-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .rows-per-page-control {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            color: #6f7b91;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .rows-per-page-control select {
+            width: 78px;
+            min-height: 34px;
+            padding: 4px 28px 4px 10px;
+            border: 1px solid #dde3ee;
+            border-radius: 8px;
+            background-color: #fff;
+            color: #34405d;
+            font-size: 12px;
+        }
+
+        .table-page-buttons {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+
+        .table-page-btn {
+            min-width: 34px;
+            height: 34px;
+            padding: 0 9px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #dde3ee;
+            border-radius: 8px;
+            background: #fff;
+            color: #2B3A8C;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: .15s ease;
+        }
+
+        .table-page-btn:hover:not(:disabled),
+        .table-page-btn.active {
+            color: #fff;
+            background: #2B3A8C;
+            border-color: #2B3A8C;
+        }
+
+        .table-page-btn:disabled {
+            opacity: .45;
+            cursor: not-allowed;
+        }
+
+        @media (max-width: 576px) {
+            .table-pagination-bar {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+        }
+
 </style>
 
 </head>
@@ -3697,7 +3787,7 @@ body {
                 </thead>
 
 
-                <tbody>
+                <tbody id="suppliesTableBody">
 
 
                 <?php if (count($items) > 0): ?>
@@ -3820,7 +3910,7 @@ body {
                         ?>
 
 
-                        <tr>
+                        <tr class="supply-data-row">
 
 
                             <td>
@@ -4004,6 +4094,32 @@ body {
 
 
         </div>
+
+        <?php if (count($items) > 0): ?>
+            <div class="table-pagination-bar">
+                <div class="table-pagination-summary" id="suppliesPaginationSummary">
+                    Showing medical supplies
+                </div>
+
+                <div class="table-pagination-actions">
+                    <label class="rows-per-page-control" for="suppliesRowsPerPage">
+                        Rows
+                        <select id="suppliesRowsPerPage">
+                            <option value="10" selected>10</option>
+                            <option value="25">25</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </label>
+
+                    <div
+                        class="table-page-buttons"
+                        id="suppliesPageButtons"
+                        aria-label="Medical supplies pages"
+                    ></div>
+                </div>
+            </div>
+        <?php endif; ?>
 
 
     </div>
@@ -5211,85 +5327,391 @@ echo json_encode(
 // SEARCH TABLE
 // ============================================================
 
-function filterTable() {
+let suppliesCurrentPage = 1;
 
+function getFilteredSupplyRows() {
 
     const input =
         document.getElementById(
             'searchInput'
         );
 
-
     const filter =
-        input.value
-        .toLowerCase();
+        input
+        ? input.value
+            .trim()
+            .toLowerCase()
+        : '';
+
+    return Array.from(
+        document.querySelectorAll(
+            '#suppliesTableBody .supply-data-row'
+        )
+    )
+    .filter(function (row) {
+
+        if (filter === '') {
+            return true;
+        }
+
+        const cells =
+            Array.from(
+                row.querySelectorAll(
+                    'td'
+                )
+            )
+            .slice(
+                0,
+                -1
+            );
+
+        return cells.some(
+            function (cell) {
+
+                return cell
+                    .textContent
+                    .toLowerCase()
+                    .includes(
+                        filter
+                    );
+            }
+        );
+    });
+}
 
 
-    const table =
+function renderSupplyPageButtons(
+    totalPages
+) {
+
+    const container =
         document.getElementById(
-            'suppliesTable'
+            'suppliesPageButtons'
         );
 
+    if (!container) {
+        return;
+    }
 
-    const rows =
-        table
-        .getElementsByTagName(
-            'tr'
+    container.innerHTML =
+        '';
+
+    if (totalPages <= 1) {
+        return;
+    }
+
+
+    const addButton =
+        function (
+            label,
+            page,
+            disabled = false,
+            active = false
+        ) {
+
+            const button =
+                document.createElement(
+                    'button'
+                );
+
+            button.type =
+                'button';
+
+            button.className =
+                'table-page-btn'
+                +
+                (
+                    active
+                    ? ' active'
+                    : ''
+                );
+
+            button.innerHTML =
+                label;
+
+            button.disabled =
+                disabled;
+
+
+            if (
+                !disabled
+                &&
+                !active
+            ) {
+
+                button.addEventListener(
+                    'click',
+                    function () {
+
+                        suppliesCurrentPage =
+                            page;
+
+                        renderSupplyTable(
+                            false
+                        );
+                    }
+                );
+            }
+
+
+            container.appendChild(
+                button
+            );
+        };
+
+
+    addButton(
+        '<i class="bi bi-chevron-left"></i>',
+        suppliesCurrentPage - 1,
+        suppliesCurrentPage === 1
+    );
+
+
+    let startPage =
+        Math.max(
+            1,
+            suppliesCurrentPage - 2
+        );
+
+    let endPage =
+        Math.min(
+            totalPages,
+            startPage + 4
+        );
+
+    startPage =
+        Math.max(
+            1,
+            endPage - 4
         );
 
 
     for (
-        let i = 1;
-        i < rows.length;
-        i++
+        let page = startPage;
+        page <= endPage;
+        page++
     ) {
 
+        addButton(
+            String(page),
+            page,
+            false,
+            page === suppliesCurrentPage
+        );
+    }
 
-        const cells =
-            rows[i]
-            .getElementsByTagName(
-                'td'
+
+    addButton(
+        '<i class="bi bi-chevron-right"></i>',
+        suppliesCurrentPage + 1,
+        suppliesCurrentPage === totalPages
+    );
+}
+
+
+function renderSupplyTable(
+    resetPage = true
+) {
+
+    if (resetPage) {
+        suppliesCurrentPage =
+            1;
+    }
+
+
+    const allRows =
+        Array.from(
+            document.querySelectorAll(
+                '#suppliesTableBody .supply-data-row'
+            )
+        );
+
+
+    const matchingRows =
+        getFilteredSupplyRows();
+
+
+    const rowsPerPageSelect =
+        document.getElementById(
+            'suppliesRowsPerPage'
+        );
+
+
+    const summary =
+        document.getElementById(
+            'suppliesPaginationSummary'
+        );
+
+
+    if (
+        !rowsPerPageSelect
+        ||
+        !summary
+    ) {
+
+        allRows.forEach(
+            function (row) {
+
+                row.style.display =
+                    matchingRows.includes(
+                        row
+                    )
+                    ? ''
+                    : 'none';
+            }
+        );
+
+        return;
+    }
+
+
+    const rowsPerPage =
+        Math.max(
+            1,
+            parseInt(
+                rowsPerPageSelect.value,
+                10
+            )
+            ||
+            10
+        );
+
+
+    const totalPages =
+        Math.max(
+            1,
+            Math.ceil(
+                matchingRows.length
+                /
+                rowsPerPage
+            )
+        );
+
+
+    if (
+        suppliesCurrentPage
+        >
+        totalPages
+    ) {
+
+        suppliesCurrentPage =
+            totalPages;
+    }
+
+
+    allRows.forEach(
+        function (row) {
+
+            row.style.display =
+                'none';
+        }
+    );
+
+
+    const startIndex =
+        (
+            suppliesCurrentPage
+            -
+            1
+        )
+        *
+        rowsPerPage;
+
+
+    const endIndex =
+        Math.min(
+            startIndex
+            +
+            rowsPerPage,
+            matchingRows.length
+        );
+
+
+    matchingRows
+        .slice(
+            startIndex,
+            endIndex
+        )
+        .forEach(
+            function (row) {
+
+                row.style.display =
+                    '';
+            }
+        );
+
+
+    if (
+        matchingRows.length
+        ===
+        0
+    ) {
+
+        summary.textContent =
+            'No medical supplies match your search.';
+
+        const buttons =
+            document.getElementById(
+                'suppliesPageButtons'
+            );
+
+        if (buttons) {
+            buttons.innerHTML =
+                '';
+        }
+
+    } else {
+
+        summary.textContent =
+            `Showing ${startIndex + 1}–${endIndex} of ${matchingRows.length} ${matchingRows.length === 1 ? 'supply' : 'supplies'}`;
+
+        renderSupplyPageButtons(
+            totalPages
+        );
+    }
+}
+
+
+function filterTable() {
+
+    renderSupplyTable(
+        true
+    );
+}
+
+
+document.addEventListener(
+    'DOMContentLoaded',
+    function () {
+
+        const rowsPerPageSelect =
+            document.getElementById(
+                'suppliesRowsPerPage'
             );
 
 
-        let found =
-            false;
-
-
-        for (
-            let j = 0;
-            j < cells.length - 1;
-            j++
+        if (
+            rowsPerPageSelect
         ) {
 
+            rowsPerPageSelect
+                .addEventListener(
+                    'change',
+                    function () {
 
-            const text =
-                cells[j]
-                .textContent
-                .toLowerCase();
-
-
-            if (
-                text.indexOf(
-                    filter
-                )
-                >
-                -1
-            ) {
-
-                found = true;
-
-                break;
-            }
+                        renderSupplyTable(
+                            true
+                        );
+                    }
+                );
         }
 
 
-        rows[i].style.display =
-            found
-            ? ''
-            : 'none';
+        renderSupplyTable(
+            true
+        );
     }
-}
+);
 
 
 // ============================================================
