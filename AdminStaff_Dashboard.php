@@ -1,13 +1,12 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
-require_once 'sources/notification_helper.php';
 
 // Check if user is logged in and is an admin staff
 if (
     !isset($_SESSION['user_id']) ||
     !isset($_SESSION['role_id']) ||
-    $_SESSION['role_id'] != 4 
+    $_SESSION['role_id'] != 4 // role_id 4 is for Admin Staff
 ) {
     header("Location: login.php");
     exit();
@@ -40,9 +39,6 @@ if (!$branch_id) {
     $branch_name = 'No Branch Assigned';
 }
 
-// Get Admin Staff notification count
-$notification_count = getAdminStaffNotificationCount($conn, $branch_id);
-
 // ----------------------------------------------------------------------
 // FETCH DASHBOARD STATISTICS
 // ----------------------------------------------------------------------
@@ -51,7 +47,7 @@ $notification_count = getAdminStaffNotificationCount($conn, $branch_id);
 $followUpQuery = "
     SELECT COUNT(DISTINCT c.case_id) as count
     FROM animal_bite_cases c
-    LEFT JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
+    LEFT JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id AND v.is_archived = 0
     WHERE c.branch_id = ?
     AND c.case_status != 'Completed'
     AND (
@@ -65,6 +61,59 @@ $stmt->bind_param("s", $branch_id);
 $stmt->execute();
 $followUpResult = $stmt->get_result();
 $followUpCount = $followUpResult->fetch_assoc()['count'] ?? 0;
+
+// Patients who checked in today and are still waiting for the Nurse
+$visitQueueQuery = "
+    SELECT COUNT(*) AS count
+    FROM patient_visits
+    WHERE branch_id = ?
+      AND visit_date = CURDATE()
+      AND workflow_status IN ('Checked In', 'Waiting for Nurse')
+";
+$stmt = $conn->prepare($visitQueueQuery);
+$stmt->bind_param("s", $branch_id);
+$stmt->execute();
+$visitQueueCount = (int)($stmt->get_result()->fetch_assoc()['count'] ?? 0);
+
+// Nurse-signed charts waiting for Administrative Staff registry verification
+$registryQueueQuery = "
+    SELECT COUNT(*) AS count
+    FROM patient_visits
+    WHERE branch_id = ?
+      AND workflow_status = 'For Registry'
+";
+$stmt = $conn->prepare($registryQueueQuery);
+$stmt->bind_param("s", $branch_id);
+$stmt->execute();
+$registryQueueCount = (int)($stmt->get_result()->fetch_assoc()['count'] ?? 0);
+
+// Today's scheduled vaccinations
+$todayScheduleQuery = "
+    SELECT COUNT(DISTINCT case_id) AS count
+    FROM vaccination_records
+    WHERE branch_id = ?
+      AND scheduled_date = CURDATE()
+      AND vaccination_status = 'Scheduled'
+      AND is_archived = 0
+";
+$stmt = $conn->prepare($todayScheduleQuery);
+$stmt->bind_param("s", $branch_id);
+$stmt->execute();
+$todayScheduleCount = (int)($stmt->get_result()->fetch_assoc()['count'] ?? 0);
+
+// Overdue or explicitly missed vaccination schedules
+$overdueScheduleQuery = "
+    SELECT COUNT(DISTINCT case_id) AS count
+    FROM vaccination_records
+    WHERE branch_id = ?
+      AND scheduled_date < CURDATE()
+      AND vaccination_status IN ('Scheduled', 'Missed')
+      AND is_archived = 0
+";
+$stmt = $conn->prepare($overdueScheduleQuery);
+$stmt->bind_param("s", $branch_id);
+$stmt->execute();
+$overdueScheduleCount = (int)($stmt->get_result()->fetch_assoc()['count'] ?? 0);
 
 // 2. Get New Patients (patients admitted this month)
 $newPatientsQuery = "
@@ -87,12 +136,28 @@ $philhealthQuery = "
     INNER JOIN philhealth_records ph ON c.case_id = ph.case_id
     WHERE c.branch_id = ?
     AND ph.has_philhealth = 'Yes'
+    AND ph.is_archived = 0
 ";
 $stmt = $conn->prepare($philhealthQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
 $philhealthResult = $stmt->get_result();
 $philhealthCount = $philhealthResult->fetch_assoc()['count'] ?? 0;
+
+// PhilHealth records returned by the main branch and needing correction
+$returnedPhilhealthQuery = "
+    SELECT COUNT(*) AS count
+    FROM animal_bite_cases c
+    INNER JOIN philhealth_records ph ON c.case_id = ph.case_id
+    WHERE c.branch_id = ?
+      AND ph.has_philhealth = 'Yes'
+      AND ph.is_archived = 0
+      AND ph.status = 'Returned for Correction'
+";
+$stmt = $conn->prepare($returnedPhilhealthQuery);
+$stmt->bind_param("s", $branch_id);
+$stmt->execute();
+$returnedPhilhealthCount = (int)($stmt->get_result()->fetch_assoc()['count'] ?? 0);
 
 // 4. Get Follow-up Calendar Data (next 30 days)
 $calendarData = [];
@@ -106,6 +171,7 @@ $followUpCalendarQuery = "
     AND v.scheduled_date IS NOT NULL
     AND v.scheduled_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
     AND v.vaccination_status = 'Scheduled'
+    AND v.is_archived = 0
     GROUP BY DATE(v.scheduled_date)
     ORDER BY schedule_date
 ";
@@ -125,6 +191,8 @@ $philhealthStatusQuery = "
     FROM animal_bite_cases c
     INNER JOIN philhealth_records ph ON c.case_id = ph.case_id
     WHERE c.branch_id = ?
+    AND ph.has_philhealth = 'Yes'
+    AND ph.is_archived = 0
     GROUP BY ph.status
 ";
 $stmt = $conn->prepare($philhealthStatusQuery);
@@ -135,17 +203,18 @@ $statusResult = $stmt->get_result();
 $philhealthStatus = [
     'For Writing' => 0,
     'For Screening' => 0,
-    'For Signing' => 0,
-    'For Transmittal' => 0,
-    'Completed' => 0
+    'Ready for Main Branch' => 0,
+    'Sent to Main Branch' => 0,
+    'Returned for Correction' => 0,
+    'Main Branch / Resolved' => 0
 ];
 
 while ($row = $statusResult->fetch_assoc()) {
     $status = $row['status'] ?? 'For Writing';
-    if ($status == 'For Signing' || $status == 'For Transmittal') {
-        $philhealthStatus['For Signing'] += (int)$row['count'];
+    if (array_key_exists($status, $philhealthStatus)) {
+        $philhealthStatus[$status] += (int)$row['count'];
     } else {
-        $philhealthStatus[$status] = (int)$row['count'];
+        $philhealthStatus['Main Branch / Resolved'] += (int)$row['count'];
     }
 }
 
@@ -157,13 +226,18 @@ $recentPatientsQuery = "
         c.case_id,
         p.full_name as patient_name,
         DATE(COALESCE(c.date_of_bite, c.created_at)) as admission_date,
-        r.registry_number as case_no,
+        c.case_number as case_no,
         c.case_status,
-        ph.status as philhealth_status
+        (
+            SELECT ph.status
+            FROM philhealth_records ph
+            WHERE ph.case_id = c.case_id
+              AND ph.is_archived = 0
+            ORDER BY ph.updated_at DESC
+            LIMIT 1
+        ) as philhealth_status
     FROM animal_bite_cases c
     JOIN patients p ON c.patient_id = p.patient_id
-    LEFT JOIN registry_records r ON c.case_id = r.case_id
-    LEFT JOIN philhealth_records ph ON c.case_id = ph.case_id
     WHERE c.branch_id = ?
     ORDER BY c.created_at DESC
     LIMIT 10
@@ -178,16 +252,20 @@ while ($row = $recentResult->fetch_assoc()) {
 }
 
 // 7. Get Monthly Patient Trend (last 6 months - for chart)
+// MySQL 8/9 with ONLY_FULL_GROUP_BY requires every non-aggregated
+// selected expression to also appear in the GROUP BY clause.
 $monthlyTrendQuery = "
     SELECT 
-        DATE_FORMAT(COALESCE(c.date_of_bite, c.created_at), '%b') as month_name,
-        DATE_FORMAT(COALESCE(c.date_of_bite, c.created_at), '%m') as month_num,
-        COUNT(*) as count
+        DATE_FORMAT(COALESCE(c.date_of_bite, c.created_at), '%b') AS month_name,
+        DATE_FORMAT(COALESCE(c.date_of_bite, c.created_at), '%Y-%m') AS month_sort_key,
+        COUNT(*) AS count
     FROM animal_bite_cases c
     WHERE c.branch_id = ?
-    AND COALESCE(c.date_of_bite, c.created_at) >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
-    GROUP BY DATE_FORMAT(COALESCE(c.date_of_bite, c.created_at), '%Y-%m')
-    ORDER BY month_num ASC
+      AND COALESCE(c.date_of_bite, c.created_at) >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+    GROUP BY
+        DATE_FORMAT(COALESCE(c.date_of_bite, c.created_at), '%Y-%m'),
+        DATE_FORMAT(COALESCE(c.date_of_bite, c.created_at), '%b')
+    ORDER BY month_sort_key ASC
 ";
 $stmt = $conn->prepare($monthlyTrendQuery);
 $stmt->bind_param("s", $branch_id);
@@ -257,6 +335,29 @@ while ($row = $trendResult->fetch_assoc()) {
             gap: 6px;
         }
 
+        .topbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .refresh-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 8px 13px;
+            color: var(--primary);
+            background: #eef1ff;
+            border: 0;
+            border-radius: 9px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .refresh-btn:hover {
+            background: #dfe5ff;
+        }
+
         @media (max-width: 991px) {
             .main {
                 margin-left: 90px;
@@ -285,6 +386,9 @@ while ($row = $trendResult->fetch_assoc()) {
         }
 
         .stat-card {
+            position: relative;
+            display: block;
+            overflow: hidden;
             background: #fff;
             border-radius: 16px;
             padding: 22px 24px;
@@ -292,11 +396,19 @@ while ($row = $trendResult->fetch_assoc()) {
             box-shadow: 0 2px 8px rgba(0,0,0,.08);
             transition: all .25s ease;
             text-align: left;
+            color: inherit;
+            text-decoration: none;
         }
 
         .stat-card:hover {
             transform: translateY(-3px);
             box-shadow: 0 8px 20px rgba(0,0,0,.12);
+            color: inherit;
+        }
+
+        .stat-card:focus-visible {
+            outline: 3px solid rgba(43,58,140,.25);
+            outline-offset: 3px;
         }
 
         .stat-card.follow-up {
@@ -308,6 +420,30 @@ while ($row = $trendResult->fetch_assoc()) {
         .stat-card.philhealth-patients {
             border-left-color: var(--info);
         }
+        .stat-card.visit-queue {
+            border-left-color: #6f42c1;
+        }
+        .stat-card.registry-queue {
+            border-left-color: #fd7e14;
+        }
+        .stat-card.returned-records {
+            border-left-color: var(--danger);
+        }
+
+        .stat-icon {
+            position: absolute;
+            top: 18px;
+            right: 22px;
+            color: rgba(43,58,140,.13);
+            font-size: 35px;
+        }
+
+        .stat-card.follow-up .stat-icon { color: rgba(242,29,47,.16); }
+        .stat-card.new-patients .stat-icon { color: rgba(40,167,69,.16); }
+        .stat-card.philhealth-patients .stat-icon { color: rgba(23,162,184,.18); }
+        .stat-card.visit-queue .stat-icon { color: rgba(111,66,193,.17); }
+        .stat-card.registry-queue .stat-icon { color: rgba(253,126,20,.17); }
+        .stat-card.returned-records .stat-icon { color: rgba(220,53,69,.16); }
 
         .stat-card h6 {
             margin: 0;
@@ -333,6 +469,24 @@ while ($row = $trendResult->fetch_assoc()) {
             margin-top: 8px;
         }
 
+        .card-link-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            margin-top: 13px;
+            color: var(--primary);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .stat-card:hover .card-link-label i {
+            transform: translateX(3px);
+        }
+
+        .card-link-label i {
+            transition: transform .2s ease;
+        }
+
         .stat-card .stat-trend .up {
             color: var(--success);
         }
@@ -353,6 +507,95 @@ while ($row = $trendResult->fetch_assoc()) {
             grid-template-columns: 1fr 1fr;
             gap: 25px;
             align-items: stretch;
+        }
+
+        .today-overview {
+            display: grid;
+            grid-template-columns: auto repeat(4, minmax(0, 1fr));
+            align-items: stretch;
+            margin-bottom: 25px;
+            overflow: hidden;
+            background: #fff;
+            border: 1px solid #e9ecef;
+            border-radius: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,.06);
+        }
+
+        .today-heading {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-width: 180px;
+            padding: 18px 22px;
+            color: #fff;
+            background: var(--primary);
+        }
+
+        .today-heading strong {
+            font-size: 15px;
+        }
+
+        .today-heading span {
+            margin-top: 3px;
+            color: rgba(255,255,255,.75);
+            font-size: 11px;
+        }
+
+        .priority-item {
+            display: flex;
+            align-items: center;
+            gap: 11px;
+            padding: 16px 18px;
+            color: #4f5a6d;
+            border-right: 1px solid #edf0f4;
+            text-decoration: none;
+            transition: background .2s ease;
+        }
+
+        .priority-item:last-child {
+            border-right: 0;
+        }
+
+        .priority-item:hover {
+            color: #25324b;
+            background: #f8f9fc;
+        }
+
+        .priority-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 38px;
+            height: 38px;
+            color: var(--primary);
+            background: #eef1ff;
+            border-radius: 10px;
+            font-size: 17px;
+            flex-shrink: 0;
+        }
+
+        .priority-item.warning .priority-icon {
+            color: #946200;
+            background: #fff3cd;
+        }
+
+        .priority-item.danger .priority-icon {
+            color: #a22632;
+            background: #fde2e5;
+        }
+
+        .priority-copy strong {
+            display: block;
+            color: #25324b;
+            font-size: 18px;
+            line-height: 1;
+        }
+
+        .priority-copy span {
+            display: block;
+            margin-top: 4px;
+            color: #7d8798;
+            font-size: 11px;
         }
 
         .calendar-panel,
@@ -425,6 +668,15 @@ while ($row = $trendResult->fetch_assoc()) {
             padding: 6px;
             position: relative;
             text-align: center;
+        }
+
+        .calendar-table td.has-followups {
+            cursor: pointer;
+            background: #f7f9ff;
+        }
+
+        .calendar-table td.has-followups:hover {
+            background: #edf1ff;
         }
 
         .day-number {
@@ -566,12 +818,10 @@ while ($row = $trendResult->fetch_assoc()) {
         .legend-box.screening {
             background: #F28E2B;
         }
-        .legend-box.signing {
-            background: #E15759;
-        }
-        .legend-box.completed {
-            background: #76B7B2;
-        }
+        .legend-box.ready { background: #59A14F; }
+        .legend-box.sent { background: #76B7B2; }
+        .legend-box.returned { background: #E15759; }
+        .legend-box.resolved { background: #B07AA1; }
 
         .legend-item strong {
             font-size: 18px;
@@ -589,6 +839,7 @@ while ($row = $trendResult->fetch_assoc()) {
         }
 
         .dashboard-btn {
+            display: inline-block;
             background: var(--primary);
             color: white;
             border: none;
@@ -598,6 +849,8 @@ while ($row = $trendResult->fetch_assoc()) {
             padding: 10px;
             transition: .3s;
             cursor: pointer;
+            text-align: center;
+            text-decoration: none;
         }
 
         .dashboard-btn:hover {
@@ -712,6 +965,12 @@ while ($row = $trendResult->fetch_assoc()) {
             .stats-container {
                 grid-template-columns: 1fr;
             }
+            .today-overview {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .today-heading {
+                grid-column: 1 / -1;
+            }
         }
 
         @media (max-width: 768px) {
@@ -724,6 +983,13 @@ while ($row = $trendResult->fetch_assoc()) {
             }
             .topbar h3 {
                 font-size: 20px;
+            }
+            .refresh-btn span,
+            .profile span {
+                display: none;
+            }
+            .topbar-actions {
+                gap: 8px;
             }
             .button-row {
                 flex-direction: column;
@@ -739,6 +1005,16 @@ while ($row = $trendResult->fetch_assoc()) {
                 height: 60px;
                 padding: 4px;
                 font-size: 12px;
+            }
+            .today-overview {
+                grid-template-columns: 1fr;
+            }
+            .today-heading {
+                grid-column: auto;
+            }
+            .priority-item {
+                border-right: 0;
+                border-bottom: 1px solid #edf0f4;
             }
             .day-number {
                 width: 26px;
@@ -808,21 +1084,13 @@ while ($row = $trendResult->fetch_assoc()) {
                 <li><a href="AdminStaff_Registry.php"><i class="bi bi-journal-check"></i><span>Registry Queue</span></a></li>
                 <li><a href="AdminStaff_PhilhealthWorkflow.php"><i class="bi bi-check2-all"></i><span>PhilHealth Workflow</span></a></li>
                 <li><a href="AdminStaff_MedicalDocuments.php"><i class="bi bi-file-earmark-ruled"></i><span>Medical Documents</span></a></li>
-                <li>
-                    <a href="AdminStaff_Notifications.php" style="position: relative;">
-                        <i class="bi bi-bell-fill"></i>
-                        <span>Notifications</span>
-
-                        <?php if ($notification_count > 0): ?>
-                            <span class="notification-badge">
-                                <?php echo $notification_count; ?>
-                            </span>
-                        <?php endif; ?>
-                    </a>
-                </li>
+                <li><a href="AdminStaff_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
             </ul>
         </nav>
 
+        <div class="logout">
+            <a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
+        </div>
     </div>
 
     <!-- MAIN CONTENT -->
@@ -830,61 +1098,91 @@ while ($row = $trendResult->fetch_assoc()) {
         <!-- Top Header -->
         <div class="topbar">
             <h3>Dashboard <span style="font-size:16px; color:#6c757d; font-weight:400; margin-left:8px;"> <?php echo htmlspecialchars($branch_name); ?> </span> </h3>
-            <div class="dropdown">
-                <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
-                        type="button" id="adminStaffProfileMenu"
-                        data-bs-toggle="dropdown" aria-expanded="false">
-                    <i class="bi bi-person-circle"></i>
-                    <span><?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?></span>
-                    <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Admin Staff</span>
+            <div class="topbar-actions">
+                <button type="button" class="refresh-btn" onclick="window.location.reload();" title="Refresh dashboard">
+                    <i class="bi bi-arrow-clockwise"></i><span>Refresh</span>
                 </button>
-                <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2"
-                    aria-labelledby="adminStaffProfileMenu">
-                    <li><h6 class="dropdown-header">Account options</h6></li>
-                    <li>
-                        <a class="dropdown-item rounded-2 py-2" href="Account_ChangePassword.php">
-                            <i class="bi bi-key-fill me-2"></i>Change Password
-                        </a>
-                    </li>
-                    <li><hr class="dropdown-divider"></li>
-                    <li>
-                        <a class="dropdown-item rounded-2 py-2 text-danger" href="logout.php">
-                            <i class="bi bi-box-arrow-right me-2"></i>Logout
-                        </a>
-                    </li>
-                </ul>
+                <div class="profile">
+                    <i class="bi bi-person-circle"></i>
+                    <?php echo htmlspecialchars($username); ?>
+                    <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Administrative Staff</span>
+                </div>
             </div>
         </div>
 
         <div class="dashboard-content">
-            <?php if (isset($_GET['password_changed']) && $_GET['password_changed'] === '1'): ?>
-                <div class="alert alert-success alert-dismissible fade show shadow-sm border-0 mb-4" role="alert">
-                    <i class="bi bi-check-circle-fill me-2"></i>
-                    <strong>Password changed successfully.</strong>
-                    Use your new password the next time you log in.
-                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                </div>
-            <?php endif; ?>
-
             <!-- Statistics -->
             <div class="stats-container">
-                <div class="stat-card follow-up">
+                <a href="AdminStaff_Calendar.php" class="stat-card follow-up" aria-label="Open follow-up calendar">
+                    <i class="bi bi-calendar2-check-fill stat-icon"></i>
                     <h6>Follow Up Patients</h6>
                     <h1><?php echo $followUpCount; ?></h1>
                     <div class="stat-trend">Pending vaccinations &amp; follow-ups</div>
-                </div>
+                    <span class="card-link-label">Open Calendar <i class="bi bi-arrow-right"></i></span>
+                </a>
 
-                <div class="stat-card new-patients">
+                <a href="AdminStaff_PatientRecord.php" class="stat-card new-patients" aria-label="Open patient records">
+                    <i class="bi bi-person-plus-fill stat-icon"></i>
                     <h6>New Patients</h6>
                     <h1><?php echo $newPatientsCount; ?></h1>
                     <div class="stat-trend">Admitted this month</div>
-                </div>
+                    <span class="card-link-label">View Patient Records <i class="bi bi-arrow-right"></i></span>
+                </a>
 
-                <div class="stat-card philhealth-patients">
+                <a href="AdminStaff_PhilhealthWorkflow.php" class="stat-card philhealth-patients" aria-label="Open PhilHealth workflow">
+                    <i class="bi bi-file-medical-fill stat-icon"></i>
                     <h6>PhilHealth Patients</h6>
                     <h1><?php echo $philhealthCount; ?></h1>
                     <div class="stat-trend">With PhilHealth coverage</div>
+                    <span class="card-link-label">Open PhilHealth <i class="bi bi-arrow-right"></i></span>
+                </a>
+
+                <a href="AdminStaff_VisitQueue.php" class="stat-card visit-queue" aria-label="Open today's visit check-in queue">
+                    <i class="bi bi-person-check-fill stat-icon"></i>
+                    <h6>Waiting for Nurse</h6>
+                    <h1><?php echo $visitQueueCount; ?></h1>
+                    <div class="stat-trend">Checked-in patients waiting today</div>
+                    <span class="card-link-label">Open Visit Queue <i class="bi bi-arrow-right"></i></span>
+                </a>
+
+                <a href="AdminStaff_Registry.php" class="stat-card registry-queue" aria-label="Open registry verification queue">
+                    <i class="bi bi-journal-check stat-icon"></i>
+                    <h6>For Registry</h6>
+                    <h1><?php echo $registryQueueCount; ?></h1>
+                    <div class="stat-trend">Nurse-signed charts for verification</div>
+                    <span class="card-link-label">Open Registry Queue <i class="bi bi-arrow-right"></i></span>
+                </a>
+
+                <a href="AdminStaff_PhilhealthWorkflow.php" class="stat-card returned-records" aria-label="Open returned PhilHealth records">
+                    <i class="bi bi-arrow-counterclockwise stat-icon"></i>
+                    <h6>Returned for Correction</h6>
+                    <h1><?php echo $returnedPhilhealthCount; ?></h1>
+                    <div class="stat-trend">PhilHealth records needing attention</div>
+                    <span class="card-link-label">Review Corrections <i class="bi bi-arrow-right"></i></span>
+                </a>
+            </div>
+
+            <div class="today-overview">
+                <div class="today-heading">
+                    <strong>Today's Priorities</strong>
+                    <span><?php echo date('F d, Y'); ?></span>
                 </div>
+                <a href="AdminStaff_Calendar.php" class="priority-item">
+                    <span class="priority-icon"><i class="bi bi-calendar-event-fill"></i></span>
+                    <span class="priority-copy"><strong><?php echo $todayScheduleCount; ?></strong><span>Vaccinations due today</span></span>
+                </a>
+                <a href="AdminStaff_Calendar.php" class="priority-item <?php echo $overdueScheduleCount > 0 ? 'danger' : ''; ?>">
+                    <span class="priority-icon"><i class="bi bi-calendar-x-fill"></i></span>
+                    <span class="priority-copy"><strong><?php echo $overdueScheduleCount; ?></strong><span>Overdue or missed schedules</span></span>
+                </a>
+                <a href="AdminStaff_VisitQueue.php" class="priority-item">
+                    <span class="priority-icon"><i class="bi bi-person-lines-fill"></i></span>
+                    <span class="priority-copy"><strong><?php echo $visitQueueCount; ?></strong><span>Waiting for Nurse today</span></span>
+                </a>
+                <a href="AdminStaff_Registry.php" class="priority-item <?php echo $registryQueueCount > 0 ? 'warning' : ''; ?>">
+                    <span class="priority-icon"><i class="bi bi-journal-medical"></i></span>
+                    <span class="priority-copy"><strong><?php echo $registryQueueCount; ?></strong><span>Registry verifications</span></span>
+                </a>
             </div>
 
             <div class="dashboard-grid">
@@ -960,18 +1258,34 @@ while ($row = $trendResult->fetch_assoc()) {
 
                             <div class="legend-item">
                                 <div class="legend-left">
-                                    <span class="legend-box signing"></span>
-                                    For Signing/Transmittal
+                                    <span class="legend-box ready"></span>
+                                    Ready for Main Branch
                                 </div>
-                                <strong><?php echo $philhealthStatus['For Signing']; ?></strong>
+                                <strong><?php echo $philhealthStatus['Ready for Main Branch']; ?></strong>
                             </div>
 
                             <div class="legend-item">
                                 <div class="legend-left">
-                                    <span class="legend-box completed"></span>
-                                    Completed
+                                    <span class="legend-box sent"></span>
+                                    Sent to Main Branch
                                 </div>
-                                <strong><?php echo $philhealthStatus['Completed']; ?></strong>
+                                <strong><?php echo $philhealthStatus['Sent to Main Branch']; ?></strong>
+                            </div>
+
+                            <div class="legend-item">
+                                <div class="legend-left">
+                                    <span class="legend-box returned"></span>
+                                    Returned for Correction
+                                </div>
+                                <strong><?php echo $philhealthStatus['Returned for Correction']; ?></strong>
+                            </div>
+
+                            <div class="legend-item">
+                                <div class="legend-left">
+                                    <span class="legend-box resolved"></span>
+                                    Main Branch / Resolved
+                                </div>
+                                <strong><?php echo $philhealthStatus['Main Branch / Resolved']; ?></strong>
                             </div>
                         </div>
                     </div>
@@ -981,9 +1295,7 @@ while ($row = $trendResult->fetch_assoc()) {
                     </div>
 
                     <div class="text-center mt-3">
-                        <a href="AdminStaff_PhilhealthStatus.php">
-                            <button class="dashboard-btn">View All PhilHealth Records</button>
-                        </a>
+                        <a href="AdminStaff_PhilhealthWorkflow.php" class="dashboard-btn">View All PhilHealth Records</a>
                     </div>
                 </div>
             </div>
@@ -1070,12 +1382,21 @@ while ($row = $trendResult->fetch_assoc()) {
         const statusData = [
             <?php echo $philhealthStatus['For Writing']; ?>,
             <?php echo $philhealthStatus['For Screening']; ?>,
-            <?php echo $philhealthStatus['For Signing']; ?>,
-            <?php echo $philhealthStatus['Completed']; ?>
+            <?php echo $philhealthStatus['Ready for Main Branch']; ?>,
+            <?php echo $philhealthStatus['Sent to Main Branch']; ?>,
+            <?php echo $philhealthStatus['Returned for Correction']; ?>,
+            <?php echo $philhealthStatus['Main Branch / Resolved']; ?>
         ];
 
-        const labels = ['For Writing', 'For Screening', 'For Signing', 'Completed'];
-        const colors = ['#4E79A7', '#F28E2B', '#E15759', '#76B7B2'];
+        const labels = [
+            'For Writing',
+            'For Screening',
+            'Ready for Main Branch',
+            'Sent to Main Branch',
+            'Returned for Correction',
+            'Main Branch / Resolved'
+        ];
+        const colors = ['#4E79A7', '#F28E2B', '#59A14F', '#76B7B2', '#E15759', '#B07AA1'];
 
         new Chart(ctx, {
             type: 'doughnut',
@@ -1229,6 +1550,11 @@ while ($row = $trendResult->fetch_assoc()) {
                     String(date).padStart(2, "0");
 
                 if (followUps[key]) {
+                    cell.classList.add("has-followups");
+                    cell.title = "Open follow-ups for " + key;
+                    cell.onclick = function() {
+                        window.location.href = "AdminStaff_Calendar.php?date=" + encodeURIComponent(key);
+                    };
                     const badge = document.createElement("div");
                     badge.className = "followup-badge";
                     badge.innerHTML = followUps[key] + " due";
@@ -1255,90 +1581,6 @@ while ($row = $trendResult->fetch_assoc()) {
 
     renderCalendar();
 
-    // ----------------------------------------------------------------
-    // AUTO-REFRESH DASHBOARD DATA (every 30 seconds)
-    // Uses simple AJAX to reload the page data without full refresh
-    // ----------------------------------------------------------------
-    function refreshStats() {
-        // Only refresh if the page is visible
-        if (document.hidden) return;
-
-        fetch(window.location.href, {
-            method: 'GET',
-            headers: {
-                'X-Requested-With': 'XMLHttpRequest'
-            }
-        })
-        .then(response => response.text())
-        .then(html => {
-            // Parse the HTML to extract updated stats
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-
-            // Update follow-up count
-            const newFollowUp = doc.querySelector('.stat-card.follow-up h1');
-            if (newFollowUp) {
-                document.querySelector('.stat-card.follow-up h1').textContent = newFollowUp.textContent;
-            }
-
-            // Update new patients count
-            const newPatients = doc.querySelector('.stat-card.new-patients h1');
-            if (newPatients) {
-                document.querySelector('.stat-card.new-patients h1').textContent = newPatients.textContent;
-            }
-
-            // Update PhilHealth count
-            const newPhilhealth = doc.querySelector('.stat-card.philhealth-patients h1');
-            if (newPhilhealth) {
-                document.querySelector('.stat-card.philhealth-patients h1').textContent = newPhilhealth.textContent;
-            }
-
-            // Update PhilHealth status counts
-            const statusCounts = doc.querySelectorAll('.legend-item strong');
-            if (statusCounts.length === 4) {
-                document.querySelectorAll('.legend-item strong').forEach((el, index) => {
-                    if (statusCounts[index]) {
-                        el.textContent = statusCounts[index].textContent;
-                    }
-                });
-            }
-
-            // Update total
-            const totalEl = doc.querySelector('.total-count');
-            if (totalEl) {
-                document.querySelector('.total-count').textContent = totalEl.textContent;
-            }
-
-            // Update recent patients table
-            const newTableBody = doc.querySelector('.recent-table tbody');
-            if (newTableBody) {
-                document.querySelector('.recent-table tbody').innerHTML = newTableBody.innerHTML;
-            }
-
-            // Update follow-up calendar data
-            const scriptContent = html.match(/const followUps = ({[^;]+});/);
-            if (scriptContent) {
-                try {
-                    const newFollowUps = JSON.parse(scriptContent[1].replace(/'/g, '"'));
-                    Object.assign(followUps, newFollowUps);
-                    renderCalendar();
-                } catch (e) {
-                    console.error('Error parsing follow-up data:', e);
-                }
-            }
-        })
-        .catch(error => console.error('Error refreshing stats:', error));
-    }
-
-    // Refresh every 30 seconds
-    setInterval(refreshStats, 30000);
-
-    // Also refresh when the page becomes visible again
-    document.addEventListener('visibilitychange', function() {
-        if (!document.hidden) {
-            refreshStats();
-        }
-    });
     </script>
 </body>
 </html>
