@@ -1,0 +1,11 @@
+.git
+.gitignore
+.vscode
+.idea
+__pycache__
+*.pyc
+*.pyo
+.env
+.env.*
+.DS_Store
+Thumbs.db

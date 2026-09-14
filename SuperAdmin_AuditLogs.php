@@ -28,7 +28,7 @@ class PDF_AuditReport extends FPDF
     {
         parent::__construct('L', 'mm', 'A4');
         $this->filters = $filters;
-        $this->logoPath = 'C:/xampp/htdocs/SBI-ABC-SMARTBITECARE/logo.png';
+        $this->logoPath = __DIR__ . '/logo.png';
         $this->SetMargins(15, 15, 15);
         $this->SetAutoPageBreak(true, 25);
         $this->AddPage();
