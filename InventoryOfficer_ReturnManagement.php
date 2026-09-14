@@ -1638,6 +1638,67 @@ body {
         padding: 0 !important;
     }
 }
+
+
+/* =========================================================
+   FIXED TOPBAR - THIS PAGE ONLY
+   Keeps the topbar above the main content while leaving the
+   sidebar in its original position.
+   ========================================================= */
+.topbar {
+    position: fixed !important;
+    top: 0 !important;
+    left: 260px !important;
+    width: calc(100% - 260px) !important;
+    height: 80px !important;
+    margin: 0 !important;
+    z-index: 1100 !important;
+    background: #fff !important;
+}
+
+.main {
+    padding-top: 80px !important;
+}
+
+@media (max-width: 991px) {
+    .topbar {
+        left: 90px !important;
+        width: calc(100% - 90px) !important;
+        height: 72px !important;
+    }
+
+    .main {
+        padding-top: 72px !important;
+    }
+}
+
+@media (max-width: 768px) {
+    .topbar {
+        left: 90px !important;
+        width: calc(100% - 90px) !important;
+        height: 68px !important;
+        min-height: 68px !important;
+    }
+
+    .main {
+        padding-top: 68px !important;
+    }
+}
+
+@media (max-width: 480px) {
+    .topbar {
+        left: 90px !important;
+        width: calc(100% - 90px) !important;
+        height: 60px !important;
+        min-height: 60px !important;
+        padding: 0 11px !important;
+    }
+
+    .main {
+        padding-top: 60px !important;
+    }
+}
+
 </style>
 </head>
 

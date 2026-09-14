@@ -2,309 +2,755 @@
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
-require_once 'sources/inventory_officer_activity_helper.php';
 
-if (!isset($_SESSION['user_id'], $_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 5) {
+if (
+    !isset($_SESSION['user_id']) ||
+    !isset($_SESSION['role_id']) ||
+    (int)$_SESSION['role_id'] !== 5
+) {
     header('Location: login.php');
     exit();
 }
 
 $user_id = (int)$_SESSION['user_id'];
-$username = 'Inventory Officer';
 $branch_id = null;
 $branch_name = 'No Branch Assigned';
+$notification_count = getUnreadNotificationCount($conn, $user_id);
+$username = 'Inventory Officer';
 
-function h($value): string { return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8'); }
-function jsonResponse(bool $success, string $message = '', array $extra = [], int $status = 200): void {
-    http_response_code($status);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(array_merge(['success'=>$success,'message'=>$message], $extra));
-    exit();
-}
-function notificationTypeClass(string $type): string {
-    return match ($type) {
-        'low_stock','critical_stock' => 'low_stock',
-        'expiring','expired_stock' => 'expiring',
-        // The last two values are retained only so older saved notifications
-        // continue to display correctly after the forecasting rename.
-        'forecast','shortage_forecast','prediction','shortage_prediction' => 'forecast',
-        'stock_in' => 'stock_in',
-        'stock_out' => 'stock_out',
-        'stock_adjustment' => 'stock_adjustment',
-        default => 'low_stock'
-    };
-}
-function notifIconClass(string $type): string {
-    return match (notificationTypeClass($type)) {
-        'low_stock' => 'icon-low', 'expiring' => 'icon-expiring', 'forecast' => 'icon-forecast',
-        'stock_in' => 'icon-in', 'stock_out' => 'icon-out', 'stock_adjustment' => 'icon-adjustment',
-        default => 'icon-low'
-    };
-}
-function notifIcon(string $type): string {
-    return match (notificationTypeClass($type)) {
-        'low_stock' => 'bi-exclamation-triangle-fill', 'expiring' => 'bi-hourglass-split',
-        'forecast' => 'bi-graph-up-arrow', 'stock_in' => 'bi-box-arrow-in-down',
-        'stock_out' => 'bi-box-arrow-up', 'stock_adjustment' => 'bi-sliders', default => 'bi-bell-fill'
-    };
-}
-function formatNotificationTime(string $createdAt): string {
-    $timestamp = strtotime($createdAt);
-    if ($timestamp === false) return $createdAt;
-    $date = date('Y-m-d', $timestamp);
-    if ($date === date('Y-m-d')) return 'Today, '.date('g:i A',$timestamp);
-    if ($date === date('Y-m-d',strtotime('-1 day'))) return 'Yesterday, '.date('g:i A',$timestamp);
-    return date('M j, Y g:i A',$timestamp);
-}
-function badgeText(string $type): string {
-    return match (notificationTypeClass($type)) {
-        'low_stock' => 'Low Stock', 'expiring' => 'Expiring', 'forecast' => 'Forecast',
-        'stock_in' => 'Stock In', 'stock_out' => 'Stock Out', 'stock_adjustment' => 'Adjusted', default => 'Update'
-    };
-}
-function bindDynamic(mysqli_stmt $stmt, string $types, array &$params): void {
-    $refs = [];
-    $refs[] = $types;
-    foreach ($params as $k => &$v) $refs[] = &$v;
-    call_user_func_array([$stmt,'bind_param'],$refs);
+/* -------------------------------------------------------------
+ * Helpers
+ * ----------------------------------------------------------- */
+function h($value): string
+{
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
 }
 
-$userSql = "SELECT u.branch_id,u.username,b.branch_name FROM users u LEFT JOIN branches b ON b.branch_id=u.branch_id WHERE u.user_id=? AND u.status='Active' LIMIT 1";
-$userStmt = $conn->prepare($userSql);
-if (!$userStmt) { http_response_code(500); die('Database error: Unable to prepare user query.'); }
-$userStmt->bind_param('i',$user_id);
-if (!$userStmt->execute()) { $userStmt->close(); http_response_code(500); die('Database error: Unable to retrieve user information.'); }
+function validDate(string $date): bool
+{
+    $d = DateTime::createFromFormat('Y-m-d', $date);
+    return $d !== false && $d->format('Y-m-d') === $date;
+}
+
+function moneylessNumber($value): string
+{
+    return number_format((float)$value, 0);
+}
+
+function reportLabel(string $type): string
+{
+    $labels = [
+        'low_stock'       => 'Low Stock Report',
+        'expiring_stock'  => 'Expiring Stock Report',
+        'stock_usage'     => 'Stock Usage Report',
+        'transactions'    => 'Stock Transaction Summary',
+        'shortage'        => 'Shortage Prediction Report'
+    ];
+    return $labels[$type] ?? $labels['low_stock'];
+}
+
+function csvCell($value): string
+{
+    $value = (string)$value;
+    return '"' . str_replace('"', '""', $value) . '"';
+}
+
+/* -------------------------------------------------------------
+ * Authenticated user + branch
+ * ----------------------------------------------------------- */
+$userQuery = "
+    SELECT u.branch_id, u.username, b.branch_name
+    FROM users u
+    LEFT JOIN branches b ON u.branch_id = b.branch_id
+    WHERE u.user_id = ?
+      AND u.status = 'Active'
+    LIMIT 1
+";
+
+$userStmt = $conn->prepare($userQuery);
+
+if (!$userStmt) {
+    http_response_code(500);
+    die('Database error: Unable to prepare user query.');
+}
+
+$userStmt->bind_param('i', $user_id);
+
+if (!$userStmt->execute()) {
+    $userStmt->close();
+    http_response_code(500);
+    die('Database error: Unable to retrieve user information.');
+}
+
 $userResult = $userStmt->get_result();
 $userStmt->close();
-if ($userResult->num_rows !== 1) { session_unset(); session_destroy(); header('Location: login.php'); exit(); }
-$userData=$userResult->fetch_assoc();
-$branch_id=$userData['branch_id']; $username=$userData['username'] ?: 'Inventory Officer'; $branch_name=$userData['branch_name'] ?: 'No Branch Assigned';
-if ($branch_id===null || $branch_id==='') { http_response_code(403); die('Your account is not assigned to a branch.'); }
 
-if (empty($_SESSION['notifications_csrf'])) $_SESSION['notifications_csrf']=bin2hex(random_bytes(32));
-$csrf_token=$_SESSION['notifications_csrf'];
+if ($userResult->num_rows === 0) {
+    session_unset();
+    session_destroy();
+    header('Location: login.php');
+    exit();
+}
 
-/* AJAX/read actions. Every update is scoped to the authenticated user and authenticated branch. */
-if ($_SERVER['REQUEST_METHOD']==='POST') {
-    if (!hash_equals($csrf_token,(string)($_POST['csrf_token']??''))) jsonResponse(false,'Invalid security token.',[],403);
-    $action=(string)($_POST['action']??'');
-    if ($action==='mark_read') {
-        $notification_id=filter_var($_POST['notification_id']??null,FILTER_VALIDATE_INT);
-        if ($notification_id===false || $notification_id===null || $notification_id<=0) jsonResponse(false,'Invalid notification ID.',[],400);
+$userData = $userResult->fetch_assoc();
+$branch_id = $userData['branch_id'];
+$username = $userData['username'] ?: 'Inventory Officer';
+$branch_name = $userData['branch_name'] ?: 'No Branch Assigned';
 
-        $conn->begin_transaction();
-        try {
-            $sql="UPDATE notifications n INNER JOIN users u ON u.user_id=n.user_id SET n.is_read=1 WHERE n.notification_id=? AND n.user_id=? AND u.user_id=? AND u.branch_id=? AND u.status='Active'";
-            $stmt=$conn->prepare($sql);
-            if (!$stmt) throw new RuntimeException('Unable to prepare notification update.');
-            $stmt->bind_param('iiis',$notification_id,$user_id,$user_id,$branch_id);
-            if (!$stmt->execute()) { $error=$stmt->error; $stmt->close(); throw new RuntimeException('Unable to update notification: '.$error); }
-            $stmt->close();
+if ($branch_id === null || $branch_id === '') {
+    http_response_code(403);
+    die('Your account is not assigned to a branch.');
+}
 
-            $verify=$conn->prepare("SELECT n.is_read FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE n.notification_id=? AND n.user_id=? AND u.branch_id=? LIMIT 1");
-            $isRead=false; $exists=false;
-            if ($verify) { $verify->bind_param('iis',$notification_id,$user_id,$branch_id); if($verify->execute()){ $r=$verify->get_result(); if($r->num_rows===1){$exists=true;$isRead=(int)$r->fetch_assoc()['is_read']===1;}} $verify->close(); }
-            if (!$exists) throw new RuntimeException('Notification not found.');
+/* -------------------------------------------------------------
+ * Filters
+ * ----------------------------------------------------------- */
+$report_type = $_POST['report_type'] ?? $_GET['report_type'] ?? 'low_stock';
+$allowedReports = ['low_stock', 'expiring_stock', 'stock_usage', 'transactions', 'shortage'];
 
-            if (!inventoryOfficerAudit(
-                $conn,
-                $user_id,
-                $branch_id,
-                'Inventory Notifications',
-                'Marked notification #' . $notification_id . ' as read'
-            )) {
-                throw new RuntimeException('Unable to save the notification audit log.');
-            }
+if (!in_array($report_type, $allowedReports, true)) {
+    $report_type = 'low_stock';
+}
 
-            $conn->commit();
-        } catch (Throwable $e) {
-            $conn->rollback();
-            jsonResponse(false,$e->getMessage(),[],500);
-        }
+$today = date('Y-m-d');
+$firstDayOfMonth = date('Y-m-01');
 
-        $c=$conn->prepare("SELECT COUNT(*) unread_count FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE n.user_id=? AND u.branch_id=? AND n.is_read=0");
-        $unread=0;
-        if($c){$c->bind_param('is',$user_id,$branch_id);if($c->execute())$unread=(int)($c->get_result()->fetch_assoc()['unread_count']??0);$c->close();}
-        jsonResponse(true,'Notification marked as read.',['notification_id'=>$notification_id,'is_read'=>$isRead,'unread_count'=>$unread]);
-    }
-    if ($action==='mark_all_read') {
-        $conn->begin_transaction();
-        try {
-            $stmt=$conn->prepare("UPDATE notifications n INNER JOIN users u ON u.user_id=n.user_id SET n.is_read=1 WHERE n.user_id=? AND u.branch_id=? AND u.status='Active'");
-            if(!$stmt) throw new RuntimeException('Unable to prepare mark-all action.');
-            $stmt->bind_param('is',$user_id,$branch_id);
-            if(!$stmt->execute()){ $error=$stmt->error; $stmt->close(); throw new RuntimeException('Unable to mark notifications as read: '.$error); }
-            $affected=(int)$stmt->affected_rows;
-            $stmt->close();
+$date_from = trim($_POST['date_from'] ?? $_GET['date_from'] ?? $firstDayOfMonth);
+$date_to   = trim($_POST['date_to'] ?? $_GET['date_to'] ?? $today);
+$search    = trim($_POST['search'] ?? $_GET['search'] ?? '');
 
-            if (!inventoryOfficerAudit(
-                $conn,
-                $user_id,
-                $branch_id,
-                'Inventory Notifications',
-                'Marked all Inventory Officer notifications as read (' . $affected . ' updated)'
-            )) {
-                throw new RuntimeException('Unable to save the notification audit log.');
-            }
+$errors = [];
 
-            $conn->commit();
-        } catch (Throwable $e) {
-            $conn->rollback();
-            jsonResponse(false,$e->getMessage(),[],500);
-        }
+if (!validDate($date_from)) {
+    $date_from = $firstDayOfMonth;
+    $errors[] = 'Invalid start date. The current month start was used instead.';
+}
 
-        jsonResponse(true,'All notifications have been marked as read.',['unread_count'=>0]);
-    }
-    jsonResponse(false,'Unsupported notification action.',[],400);
+if (!validDate($date_to)) {
+    $date_to = $today;
+    $errors[] = 'Invalid end date. Today was used instead.';
+}
+
+if ($date_from > $date_to) {
+    [$date_from, $date_to] = [$date_to, $date_from];
+    $errors[] = 'The date range was reversed, so the dates were automatically corrected.';
 }
 
 /*
- * Notification source tracking.
- * source_key is unique per user and represents the real inventory event/condition.
- * This prevents page refreshes from creating another copy of the same event.
+ * Expiration monitoring uses the selected date range against expiration_date.
+ * Transaction/usage/forecast reports use their respective event dates.
+ * Low-stock is a current-stock snapshot, so its stock quantity is not
+ * artificially filtered by transaction date.
  */
-function saveNotification(mysqli $conn,int $userId,string $type,string $title,string $message,string $sourceKey): void {
-    $sql="INSERT INTO notifications (user_id,title,message,notification_type,source_key,is_read) VALUES (?,?,?,?,?,0)
-          ON DUPLICATE KEY UPDATE title=VALUES(title), message=VALUES(message), notification_type=VALUES(notification_type)";
-    $stmt=$conn->prepare($sql);
-    if(!$stmt)return;
-    $stmt->bind_param('issss',$userId,$title,$message,$type,$sourceKey);
-    $stmt->execute(); $stmt->close();
+
+/* -------------------------------------------------------------
+ * Report query functions
+ * ----------------------------------------------------------- */
+function fetchReportRows(
+    mysqli $conn,
+    string $reportType,
+    string $branchId,
+    string $dateFrom,
+    string $dateTo,
+    string $search
+): array {
+    $rows = [];
+
+    switch ($reportType) {
+
+        case 'low_stock':
+            $sql = "
+                SELECT
+                    i.item_id,
+                    i.item_name,
+                    c.category_name,
+                    u.unit_name,
+                    i.minimum_stock,
+                    COALESCE(SUM(s.quantity_available), 0) AS current_stock,
+                    COALESCE(SUM(
+                        CASE
+                            WHEN s.quantity_available > 0 THEN s.quantity_available
+                            ELSE 0
+                        END
+                    ), 0) AS positive_stock
+                FROM inventory_items i
+                INNER JOIN inventory_categories c
+                    ON c.category_id = i.category_id
+                INNER JOIN units u
+                    ON u.unit_id = i.unit_id
+                LEFT JOIN inventory_stocks s
+                    ON s.item_id = i.item_id
+                   AND s.branch_id = ?
+                WHERE (
+                    ? = ''
+                    OR i.item_name LIKE CONCAT('%', ?, '%')
+                    OR c.category_name LIKE CONCAT('%', ?, '%')
+                )
+                GROUP BY
+                    i.item_id,
+                    i.item_name,
+                    c.category_name,
+                    u.unit_name,
+                    i.minimum_stock
+                HAVING current_stock <= i.minimum_stock
+                ORDER BY current_stock ASC, i.item_name ASC
+            ";
+
+            $stmt = $conn->prepare($sql);
+            if (!$stmt) {
+                throw new RuntimeException('Unable to prepare Low Stock Report query.');
+            }
+
+            $stmt->bind_param(
+                'ssss',
+                $branchId,
+                $search,
+                $search,
+                $search
+            );
+            break;
+
+        case 'expiring_stock':
+            $sql = "
+                SELECT
+                    s.stock_id,
+                    i.item_name,
+                    c.category_name,
+                    u.unit_name,
+                    s.batch_lot_no,
+                    s.manufacturing_date,
+                    s.expiration_date,
+                    s.quantity_available,
+                    DATEDIFF(s.expiration_date, ?) AS days_remaining,
+                    CASE
+                        WHEN s.expiration_date < ? THEN 'Expired'
+                        WHEN s.expiration_date <= DATE_ADD(?, INTERVAL 30 DAY) THEN 'Expiring Soon'
+                        ELSE 'Valid'
+                    END AS expiry_status
+                FROM inventory_stocks s
+                INNER JOIN inventory_items i
+                    ON i.item_id = s.item_id
+                INNER JOIN inventory_categories c
+                    ON c.category_id = i.category_id
+                INNER JOIN units u
+                    ON u.unit_id = i.unit_id
+                WHERE s.branch_id = ?
+                  AND s.expiration_date IS NOT NULL
+                  AND s.expiration_date BETWEEN ? AND ?
+                  AND (
+                      ? = ''
+                      OR i.item_name LIKE CONCAT('%', ?, '%')
+                      OR c.category_name LIKE CONCAT('%', ?, '%')
+                      OR COALESCE(s.batch_lot_no, '') LIKE CONCAT('%', ?, '%')
+                  )
+                ORDER BY s.expiration_date ASC, i.item_name ASC, s.batch_lot_no ASC
+            ";
+
+            $stmt = $conn->prepare($sql);
+            if (!$stmt) {
+                throw new RuntimeException('Unable to prepare Expiring Stock Report query.');
+            }
+
+            $stmt->bind_param(
+                'ssssssssss',
+                $dateFrom,
+                $dateFrom,
+                $dateFrom,
+                $branchId,
+                $dateFrom,
+                $dateTo,
+                $search,
+                $search,
+                $search,
+                $search
+            );
+            break;
+
+        case 'stock_usage':
+            $sql = "
+                SELECT
+                    h.usage_id,
+                    h.usage_date,
+                    i.item_name,
+                    c.category_name,
+                    u.unit_name,
+                    h.quantity_used,
+                    h.patient_count,
+                    h.stock_received
+                FROM inventory_usage_history h
+                INNER JOIN inventory_items i
+                    ON i.item_id = h.item_id
+                INNER JOIN inventory_categories c
+                    ON c.category_id = i.category_id
+                INNER JOIN units u
+                    ON u.unit_id = i.unit_id
+                WHERE h.branch_id = ?
+                  AND h.usage_date BETWEEN ? AND ?
+                  AND (
+                      ? = ''
+                      OR i.item_name LIKE CONCAT('%', ?, '%')
+                      OR c.category_name LIKE CONCAT('%', ?, '%')
+                  )
+                ORDER BY h.usage_date DESC, i.item_name ASC, h.usage_id DESC
+            ";
+
+            $stmt = $conn->prepare($sql);
+            if (!$stmt) {
+                throw new RuntimeException('Unable to prepare Stock Usage Report query.');
+            }
+
+            $stmt->bind_param(
+                'ssssss',
+                $branchId,
+                $dateFrom,
+                $dateTo,
+                $search,
+                $search,
+                $search
+            );
+            break;
+
+        case 'transactions':
+            $sql = "
+                SELECT
+                    st.transaction_id,
+                    st.transaction_type,
+                    i.item_name,
+                    c.category_name,
+                    u.unit_name,
+                    st.quantity,
+                    st.transaction_date,
+                    usr.username,
+                    st.remarks
+                FROM stock_transactions st
+                INNER JOIN inventory_items i
+                    ON i.item_id = st.item_id
+                INNER JOIN inventory_categories c
+                    ON c.category_id = i.category_id
+                INNER JOIN units u
+                    ON u.unit_id = i.unit_id
+                INNER JOIN users usr
+                    ON usr.user_id = st.user_id
+                WHERE st.branch_id = ?
+                  AND DATE(st.transaction_date) BETWEEN ? AND ?
+                  AND (
+                      ? = ''
+                      OR i.item_name LIKE CONCAT('%', ?, '%')
+                      OR c.category_name LIKE CONCAT('%', ?, '%')
+                      OR st.transaction_type LIKE CONCAT('%', ?, '%')
+                      OR usr.username LIKE CONCAT('%', ?, '%')
+                      OR COALESCE(st.remarks, '') LIKE CONCAT('%', ?, '%')
+                  )
+                ORDER BY st.transaction_date DESC, st.transaction_id DESC
+            ";
+
+            $stmt = $conn->prepare($sql);
+            if (!$stmt) {
+                throw new RuntimeException('Unable to prepare Stock Transaction Summary query.');
+            }
+
+            $stmt->bind_param(
+                'sssssssss',
+                $branchId,
+                $dateFrom,
+                $dateTo,
+                $search,
+                $search,
+                $search,
+                $search,
+                $search,
+                $search
+            );
+            break;
+
+        case 'shortage':
+            $sql = "
+                SELECT
+                    p.forecast_id,
+                    p.forecast_date,
+                    i.item_name,
+                    c.category_name,
+                    u.unit_name,
+                    p.shortage_probability,
+                    p.forecast_status,
+                    p.recommended_reorder,
+                    p.predicted_consumption,
+                    p.forecast_days,
+                    usr.username AS generated_by_name
+                FROM forecast_results p
+                INNER JOIN inventory_items i
+                    ON i.item_id = p.item_id
+                INNER JOIN inventory_categories c
+                    ON c.category_id = i.category_id
+                INNER JOIN units u
+                    ON u.unit_id = i.unit_id
+                LEFT JOIN users usr
+                    ON usr.user_id = p.generated_by
+                WHERE p.branch_id = ?
+                  AND p.forecast_date BETWEEN ? AND ?
+                  AND (
+                      ? = ''
+                      OR i.item_name LIKE CONCAT('%', ?, '%')
+                      OR c.category_name LIKE CONCAT('%', ?, '%')
+                      OR p.forecast_status LIKE CONCAT('%', ?, '%')
+                  )
+                ORDER BY p.forecast_date DESC, p.shortage_probability DESC, i.item_name ASC
+            ";
+
+            $stmt = $conn->prepare($sql);
+            if (!$stmt) {
+                throw new RuntimeException('Unable to prepare Shortage Prediction Report query.');
+            }
+
+            $stmt->bind_param(
+                'sssssss',
+                $branchId,
+                $dateFrom,
+                $dateTo,
+                $search,
+                $search,
+                $search,
+                $search
+            );
+            break;
+
+        default:
+            throw new RuntimeException('Unsupported report type.');
+    }
+
+    if (!$stmt->execute()) {
+        $error = $stmt->error;
+        $stmt->close();
+        throw new RuntimeException('Report query failed: ' . $error);
+    }
+
+    $result = $stmt->get_result();
+
+    while ($row = $result->fetch_assoc()) {
+        $rows[] = $row;
+    }
+
+    $stmt->close();
+
+    return $rows;
 }
 
-/*
- * Remove legacy notifications created by the old page before source_key existed.
- * They cannot be mapped reliably to a real transaction/condition, so keeping
- * them would mix stale duplicates with the synchronized notifications below.
- * Other notification types (vaccination, patient records, etc.) are untouched.
- */
-$generatedTypes=['low_stock','critical_stock','expiring','expired_stock','forecast','shortage_forecast','prediction','shortage_prediction','stock_in','stock_out','stock_adjustment'];
-$typePlaceholders=implode(',',array_fill(0,count($generatedTypes),'?'));
-$cleanupSql="DELETE n FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE n.user_id=? AND u.branch_id=? AND u.status='Active' AND n.source_key IS NULL AND n.notification_type IN ($typePlaceholders)";
-$cleanup=$conn->prepare($cleanupSql);
-if($cleanup){$params=array_merge([$user_id,$branch_id],$generatedTypes);$types='is'.str_repeat('s',count($generatedTypes));bindDynamic($cleanup,$types,$params);$cleanup->execute();$cleanup->close();}
-
-/* LOW/CRITICAL STOCK: one current condition alert per item. */
-$sql="SELECT i.item_id,i.item_name,i.minimum_stock,u.unit_name,COALESCE(SUM(s.quantity_available),0) current_stock FROM inventory_items i INNER JOIN units u ON u.unit_id=i.unit_id LEFT JOIN inventory_stocks s ON s.item_id=i.item_id AND s.branch_id=? GROUP BY i.item_id,i.item_name,i.minimum_stock,u.unit_name HAVING current_stock<=i.minimum_stock ORDER BY current_stock ASC,i.item_name ASC";
-$stmt=$conn->prepare($sql);
-if($stmt){$stmt->bind_param('s',$branch_id);if($stmt->execute()){ $r=$stmt->get_result(); while($row=$r->fetch_assoc()){
-    $qty=(int)$row['current_stock'];$min=(int)$row['minimum_stock'];$critical=$qty<=0;
-    $type=$critical?'critical_stock':'low_stock';$title=$critical?'Critical Stock Alert':'Low Stock Alert';
-    $message=sprintf('%s has %s %s remaining. Minimum stock is %s %s.',$row['item_name'],number_format($qty),$row['unit_name'],number_format($min),$row['unit_name']);
-    saveNotification($conn,$user_id,$type,$title,$message,'condition:stock:'.$row['item_id']);
-}}}$stmt->close();
-
-/* EXPIRY: one alert per stock lot/date. */
-$sql="SELECT s.stock_id,i.item_name,u.unit_name,s.quantity_available,s.expiration_date,DATEDIFF(s.expiration_date,CURDATE()) days_remaining FROM inventory_stocks s INNER JOIN inventory_items i ON i.item_id=s.item_id INNER JOIN units u ON u.unit_id=i.unit_id WHERE s.branch_id=? AND s.expiration_date IS NOT NULL AND s.quantity_available>0 AND s.expiration_date<=DATE_ADD(CURDATE(),INTERVAL 30 DAY) ORDER BY s.expiration_date,i.item_name";
-$stmt=$conn->prepare($sql);
-if($stmt){$stmt->bind_param('s',$branch_id);if($stmt->execute()){ $r=$stmt->get_result();while($row=$r->fetch_assoc()){
-    $days=(int)$row['days_remaining'];$qty=(int)$row['quantity_available'];
-    if($days<0){$title='Expired Stock Alert';$message=sprintf('%s expired on %s. %s %s remain in stock.',$row['item_name'],date('M j, Y',strtotime($row['expiration_date'])),number_format($qty),$row['unit_name']);}
-    elseif($days===0){$title='Expiring Stock Alert';$message=sprintf('%s expires today. %s %s remain in stock.', $row['item_name'],number_format($qty),$row['unit_name']);}
-    else{$title='Expiring Stock Alert';$message=sprintf('%s expires in %d day%s (%s). %s %s remain in stock.',$row['item_name'],$days,$days===1?'':'s',date('M j, Y',strtotime($row['expiration_date'])),number_format($qty),$row['unit_name']);}
-    saveNotification($conn,$user_id,$days<0?'expired_stock':'expiring',$title,$message,'condition:expiry:'.$row['stock_id'].':'.$row['expiration_date']);
-}}}$stmt->close();
-
-/*
- * SUPPLY FORECAST: one alert per item and forecast run date.
- * forecast_results is the renamed forecasting table. The source key uses the
- * item and forecast date because those columns are stable across the rename.
- */
-$sql="SELECT fr.item_id,i.item_name,fr.forecast_date,fr.shortage_probability,
-             fr.forecast_status,fr.recommended_reorder,
-             fr.forecasted_consumption,fr.forecast_days
-      FROM forecast_results fr
-      INNER JOIN inventory_items i ON i.item_id=fr.item_id
-      WHERE fr.branch_id=?
-        AND fr.is_stale=0
-        AND i.is_forecastable=1
-        AND (
-            fr.shortage_probability>=0.75
-            OR LOWER(COALESCE(fr.forecast_status,'')) LIKE '%high%'
-            OR LOWER(COALESCE(fr.forecast_status,'')) LIKE '%shortage%'
-            OR LOWER(COALESCE(fr.forecast_status,'')) LIKE '%risk%'
-        )
-      ORDER BY fr.forecast_date DESC,fr.shortage_probability DESC,i.item_name ASC";
+/* -------------------------------------------------------------
+ * Load report rows
+ * ----------------------------------------------------------- */
+$reportRows = [];
+$reportError = '';
 
 try {
-    $stmt=$conn->prepare($sql);
-    $stmt->bind_param('s',$branch_id);
-    if($stmt->execute()){
-        $r=$stmt->get_result();
-        while($row=$r->fetch_assoc()){
-            $message='Forecasted shortage risk for '.$row['item_name'].'.';
-            if(trim((string)$row['forecast_status'])!==''){
-                $message.=' Status: '.trim((string)$row['forecast_status']).'.';
+    $reportRows = fetchReportRows(
+        $conn,
+        $report_type,
+        (string)$branch_id,
+        $date_from,
+        $date_to,
+        $search
+    );
+} catch (Throwable $e) {
+    $reportError = $e->getMessage();
+}
+
+/* -------------------------------------------------------------
+ * Dashboard/chart data is also branch-scoped and based on real data.
+ * Top Supply Usage: usage history in the selected date range.
+ * Category Share: usage history grouped by category.
+ * ----------------------------------------------------------- */
+$barData = [];
+$pieData = [];
+
+try {
+    $usageChartSql = "
+        SELECT
+            i.item_name AS label,
+            COALESCE(SUM(h.quantity_used), 0) AS value
+        FROM inventory_usage_history h
+        INNER JOIN inventory_items i
+            ON i.item_id = h.item_id
+        WHERE h.branch_id = ?
+          AND h.usage_date BETWEEN ? AND ?
+        GROUP BY i.item_id, i.item_name
+        HAVING value > 0
+        ORDER BY value DESC, i.item_name ASC
+        LIMIT 6
+    ";
+
+    $chartStmt = $conn->prepare($usageChartSql);
+
+    if ($chartStmt) {
+        $chartStmt->bind_param('sss', $branch_id, $date_from, $date_to);
+        if ($chartStmt->execute()) {
+            $chartResult = $chartStmt->get_result();
+            while ($row = $chartResult->fetch_assoc()) {
+                $barData[] = [
+                    'label' => $row['label'],
+                    'value' => (int)$row['value']
+                ];
             }
-            $message.=' Risk: '.number_format(((float)$row['shortage_probability'])*100,1).'%. ';
-            if($row['forecast_days']!==null){
-                $message.='Forecast period: '.(int)$row['forecast_days'].' days. ';
+        }
+        $chartStmt->close();
+    }
+
+    $pieSql = "
+        SELECT
+            c.category_name AS label,
+            COALESCE(SUM(h.quantity_used), 0) AS value
+        FROM inventory_usage_history h
+        INNER JOIN inventory_items i
+            ON i.item_id = h.item_id
+        INNER JOIN inventory_categories c
+            ON c.category_id = i.category_id
+        WHERE h.branch_id = ?
+          AND h.usage_date BETWEEN ? AND ?
+        GROUP BY c.category_id, c.category_name
+        HAVING value > 0
+        ORDER BY value DESC, c.category_name ASC
+    ";
+
+    $pieStmt = $conn->prepare($pieSql);
+
+    if ($pieStmt) {
+        $pieStmt->bind_param('sss', $branch_id, $date_from, $date_to);
+        if ($pieStmt->execute()) {
+            $pieResult = $pieStmt->get_result();
+            while ($row = $pieResult->fetch_assoc()) {
+                $pieData[] = [
+                    'label' => $row['label'],
+                    'value' => (int)$row['value']
+                ];
             }
-            if($row['forecasted_consumption']!==null){
-                $message.='Forecasted consumption: '.number_format((float)$row['forecasted_consumption'],2).'. ';
-            }
-            if($row['recommended_reorder']!==null){
-                $message.='Recommended reorder: '.number_format((int)$row['recommended_reorder']).'.';
-            }
-            saveNotification(
-                $conn,
-                $user_id,
-                'forecast',
-                'Supply Forecast Alert',
-                trim($message),
-                'forecast:'.$row['item_id'].':'.$row['forecast_date'].':'.(int)$row['forecast_days']
-            );
+        }
+        $pieStmt->close();
+    }
+} catch (Throwable $e) {
+    // Chart failure should not prevent the detailed report from displaying.
+}
+
+/* Convert pie quantities into percentages. */
+$pieTotal = array_sum(array_column($pieData, 'value'));
+
+if ($pieTotal > 0) {
+    foreach ($pieData as &$slice) {
+        $slice['percent'] = round(($slice['value'] / $pieTotal) * 100, 1);
+    }
+    unset($slice);
+}
+
+/* -------------------------------------------------------------
+ * CSV export
+ * ----------------------------------------------------------- */
+if (isset($_GET['export']) && $_GET['export'] === 'csv') {
+
+    /*
+     * Re-fetch using the exact same validated filters. The branch is still
+     * taken only from the authenticated user, never from GET.
+     */
+    try {
+        $exportRows = fetchReportRows(
+            $conn,
+            $report_type,
+            (string)$branch_id,
+            $date_from,
+            $date_to,
+            $search
+        );
+    } catch (Throwable $e) {
+        http_response_code(500);
+        die('Unable to export report: ' . h($e->getMessage()));
+    }
+
+    $filename = 'SmartBiteCare_' . preg_replace('/[^A-Za-z0-9_-]/', '_', reportLabel($report_type))
+              . '_' . $date_from . '_to_' . $date_to . '.csv';
+
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('Pragma: no-cache');
+    header('Expires: 0');
+
+    $output = fopen('php://output', 'w');
+
+    /* UTF-8 BOM for Excel compatibility. */
+    fwrite($output, "\xEF\xBB\xBF");
+
+    if ($report_type === 'low_stock') {
+        fputcsv($output, [
+            'Item', 'Category', 'Unit', 'Minimum Stock', 'Current Stock', 'Status'
+        ]);
+
+        foreach ($exportRows as $row) {
+            $status = ((int)$row['current_stock'] <= 0)
+                ? 'Critical'
+                : 'Low';
+
+            fputcsv($output, [
+                $row['item_name'],
+                $row['category_name'],
+                $row['unit_name'],
+                $row['minimum_stock'],
+                $row['current_stock'],
+                $status
+            ]);
+        }
+
+    } elseif ($report_type === 'expiring_stock') {
+        fputcsv($output, [
+            'Item', 'Category', 'Unit', 'Batch/Lot No.', 'Manufacturing Date',
+            'Expiration Date', 'Quantity', 'Days Remaining', 'Status'
+        ]);
+
+        foreach ($exportRows as $row) {
+            fputcsv($output, [
+                $row['item_name'],
+                $row['category_name'],
+                $row['unit_name'],
+                $row['batch_lot_no'],
+                $row['manufacturing_date'],
+                $row['expiration_date'],
+                $row['quantity_available'],
+                $row['days_remaining'],
+                $row['expiry_status']
+            ]);
+        }
+
+    } elseif ($report_type === 'stock_usage') {
+        fputcsv($output, [
+            'Usage ID', 'Usage Date', 'Item', 'Category', 'Unit',
+            'Quantity Used', 'Patient Count', 'Stock Received'
+        ]);
+
+        foreach ($exportRows as $row) {
+            fputcsv($output, [
+                $row['usage_id'],
+                $row['usage_date'],
+                $row['item_name'],
+                $row['category_name'],
+                $row['unit_name'],
+                $row['quantity_used'],
+                $row['patient_count'],
+                $row['stock_received']
+            ]);
+        }
+
+    } elseif ($report_type === 'transactions') {
+        fputcsv($output, [
+            'Transaction No.', 'Type', 'Item', 'Category', 'Unit',
+            'Quantity', 'Transaction Date', 'By', 'Remarks'
+        ]);
+
+        foreach ($exportRows as $row) {
+            fputcsv($output, [
+                'TRX-' . str_pad($row['transaction_id'], 4, '0', STR_PAD_LEFT),
+                $row['transaction_type'],
+                $row['item_name'],
+                $row['category_name'],
+                $row['unit_name'],
+                $row['quantity'],
+                $row['transaction_date'],
+                $row['username'],
+                $row['remarks']
+            ]);
+        }
+
+    } elseif ($report_type === 'shortage') {
+        fputcsv($output, [
+            'Prediction ID', 'Prediction Date', 'Item', 'Category', 'Unit',
+            'Probability Score', 'Status', 'Recommended Reorder',
+            'Predicted Consumption', 'Forecast Days', 'Generated By'
+        ]);
+
+        foreach ($exportRows as $row) {
+            fputcsv($output, [
+                $row['forecast_id'],
+                $row['forecast_date'],
+                $row['item_name'],
+                $row['category_name'],
+                $row['unit_name'],
+                $row['shortage_probability'],
+                $row['forecast_status'],
+                $row['recommended_reorder'],
+                $row['predicted_consumption'],
+                $row['forecast_days'],
+                $row['generated_by_name']
+            ]);
         }
     }
-    $stmt->close();
-} catch (mysqli_sql_exception $e) {
-    // Inventory notifications should remain usable even before the forecasting
-    // migration is installed. Other notification sources continue to load.
-    error_log('Forecast notification query failed: '.$e->getMessage());
+
+    fclose($output);
+    exit();
 }
 
-/* STOCK MOVEMENTS: each transaction_id is a unique real inventory event. */
-$sql="SELECT t.transaction_id,t.quantity,t.transaction_type,t.transaction_date,t.remarks,i.item_name,u.unit_name,COALESCE(actor.username,'Inventory User') actor_name FROM stock_transactions t INNER JOIN inventory_items i ON i.item_id=t.item_id INNER JOIN units u ON u.unit_id=i.unit_id LEFT JOIN users actor ON actor.user_id=t.user_id WHERE t.branch_id=? AND t.transaction_date>=DATE_SUB(NOW(),INTERVAL 7 DAY) AND t.transaction_type IN ('IN','OUT','ADJUSTMENT') ORDER BY t.transaction_date DESC,t.transaction_id DESC";
-$stmt=$conn->prepare($sql);
-if($stmt){$stmt->bind_param('s',$branch_id);if($stmt->execute()){ $r=$stmt->get_result();while($row=$r->fetch_assoc()){
-    $type=(string)$row['transaction_type'];$qty=(int)$row['quantity'];$item=$row['item_name'];$unit=$row['unit_name'];$actor=$row['actor_name'];
-    if($type==='IN'){$notifType='stock_in';$title='Stock In Confirmed';$message=sprintf('%s %s of %s were added to inventory by %s.',number_format($qty),$unit,$item,$actor);}
-    elseif($type==='OUT'){$notifType='stock_out';$title='Stock Out Recorded';$message=sprintf('%s %s of %s were released from inventory by %s.',number_format($qty),$unit,$item,$actor);}
-    else{$notifType='stock_adjustment';$title='Stock Adjustment Recorded';$message=sprintf('Stock for %s was adjusted by %s %s by %s.', $item,number_format($qty),$unit,$actor);}
-    if(trim((string)$row['remarks'])!=='')$message.='';
-    saveNotification($conn,$user_id,$notifType,$title,$message,'transaction:'.$row['transaction_id']);
-}}}$stmt->close();
+/* -------------------------------------------------------------
+ * Summary calculations for the selected report
+ * ----------------------------------------------------------- */
+$summary = [
+    'rows' => count($reportRows),
+    'quantity' => 0,
+    'patients' => 0,
+    'transactions' => 0
+];
 
-/* FILTERS + PAGINATION */
-$search=trim((string)($_GET['search']??''));
-$filter=(string)($_GET['filter']??'all');
-$allowedFilters=['all','low_stock','critical_stock','expiring','expired_stock','forecast','stock_in','stock_out','stock_adjustment'];
-if(!in_array($filter,$allowedFilters,true))$filter='all';
-$page=filter_var($_GET['page']??1,FILTER_VALIDATE_INT); if($page===false||$page<1)$page=1;
-$perPage=10;
-$where="n.user_id=? AND u.user_id=? AND u.branch_id=? AND u.status='Active'";
-$params=[$user_id,$user_id,$branch_id];$types='iis';
-if($filter==='forecast'){
-    // Include notification rows saved before prediction terminology was retired.
-    $where.=" AND n.notification_type IN ('forecast','shortage_forecast','prediction','shortage_prediction')";
-} elseif($filter!=='all'){
-    $where.=' AND n.notification_type=?';$types.='s';$params[]=$filter;
+foreach ($reportRows as $row) {
+    if ($report_type === 'stock_usage') {
+        $summary['quantity'] += (int)$row['quantity_used'];
+        $summary['patients'] += (int)$row['patient_count'];
+    } elseif ($report_type === 'transactions') {
+        $summary['quantity'] += (int)$row['quantity'];
+        $summary['transactions']++;
+    } elseif ($report_type === 'low_stock') {
+        $summary['quantity'] += (int)$row['current_stock'];
+    } elseif ($report_type === 'expiring_stock') {
+        $summary['quantity'] += (int)$row['quantity_available'];
+    } elseif ($report_type === 'shortage') {
+        $summary['quantity'] += (int)$row['recommended_reorder'];
+    }
 }
-if($search!==''){$where.=" AND (n.title LIKE CONCAT('%',?,'%') OR n.message LIKE CONCAT('%',?,'%') OR n.notification_type LIKE CONCAT('%',?,'%'))";$types.='sss';array_push($params,$search,$search,$search);}
-$countStmt=$conn->prepare("SELECT COUNT(*) total FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE $where");
-$total=0;if($countStmt){bindDynamic($countStmt,$types,$params);if($countStmt->execute())$total=(int)($countStmt->get_result()->fetch_assoc()['total']??0);$countStmt->close();}
-$totalPages=max(1,(int)ceil($total/$perPage));if($page>$totalPages)$page=$totalPages;$offset=($page-1)*$perPage;
-$listSql="SELECT n.notification_id,n.title,n.message,n.notification_type,n.is_read,n.created_at FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE $where ORDER BY n.created_at DESC,n.notification_id DESC LIMIT ? OFFSET ?";
-$listParams=$params;$listTypes=$types.'ii';$listParams[]=$perPage;$listParams[]=$offset;
-$stmt=$conn->prepare($listSql);$notifications=[];
-if($stmt){bindDynamic($stmt,$listTypes,$listParams);if($stmt->execute()){ $r=$stmt->get_result();while($row=$r->fetch_assoc()){$row['type']=notificationTypeClass((string)$row['notification_type']);$row['icon']=notifIcon((string)$row['notification_type']);$notifications[]=$row;}}$stmt->close();}
-$countStmt=$conn->prepare("SELECT COUNT(*) unread_count FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE n.user_id=? AND u.user_id=? AND u.branch_id=? AND u.status='Active' AND n.is_read=0");$unreadCount=0;if($countStmt){$countStmt->bind_param('iis',$user_id,$user_id,$branch_id);if($countStmt->execute())$unreadCount=(int)($countStmt->get_result()->fetch_assoc()['unread_count']??0);$countStmt->close();}
-$notification_count = $unreadCount;
 
-$flashMessage=$_SESSION['notifications_flash_message']??'';$flashType=$_SESSION['notifications_flash_type']??'success';unset($_SESSION['notifications_flash_message'],$_SESSION['notifications_flash_type']);
+/* Pie CSS gradient. */
+$gradientParts = [];
+$cursor = 0;
+
+foreach ($pieData as $slice) {
+    $start = $cursor;
+    $cursor += (float)$slice['percent'];
+    $gradientParts[] = 'hsl(' . (($start * 3.1) % 360) . ' 55% 45%) ' . $start . '% ' . $cursor . '%';
+}
+
+$conicGradient = $gradientParts
+    ? implode(', ', $gradientParts)
+    : 'hsl(220 10% 90%) 0% 100%';
+
+$maxBarValue = 1;
+foreach ($barData as $bar) {
+    $maxBarValue = max($maxBarValue, (int)$bar['value']);
+}
+
+function statusClass(string $status): string
+{
+    $statusLower = strtolower($status);
+
+    if (str_contains($statusLower, 'critical') || str_contains($statusLower, 'expired')) {
+        return 'status-critical';
+    }
+
+    if (
+        str_contains($statusLower, 'low') ||
+        str_contains($statusLower, 'expiring') ||
+        str_contains($statusLower, 'shortage') ||
+        str_contains($statusLower, 'risk')
+    ) {
+        return 'status-warning';
+    }
+
+    if (str_contains($statusLower, 'completed') || str_contains($statusLower, 'valid')) {
+        return 'status-good';
+    }
+
+    return 'status-neutral';
+}
 ?>
-
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -312,7 +758,7 @@ $flashMessage=$_SESSION['notifications_flash_message']??'';$flashType=$_SESSION[
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
-<title>Notifications</title>
+<title>Inventory Reports</title>
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 
@@ -330,9 +776,8 @@ href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.m
 }
 
 body{
-background:#f0f2f5; 
-font-family:'Segoe UI', Roboto, system-ui, sans-serif;
-color:#1e293b;
+background: #f0f2f5;
+font-family:'Segoe UI',sans-serif;
 }
 
 .main{
@@ -365,24 +810,6 @@ min-height:100vh;
     margin-left:10px;
 }
 
-.top-unread-badge{
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    min-width:24px;
-    height:24px;
-    padding:0 7px;
-    margin-left:8px;
-    vertical-align:middle;
-    background:#dc3545;
-    color:#fff;
-    border-radius:999px;
-    font-size:13px;
-    font-weight:700;
-    line-height:1;
-    white-space:nowrap;
-}
-
 .profile{
     display:flex;
     align-items:center;
@@ -398,293 +825,363 @@ min-height:100vh;
     margin-left:4px;
 }
 
+
 .page-body{
 padding:35px;
 }
-.toolbar{
+
+.filter-card{
 display:flex;
-align-items:center;
-justify-content:space-between;
-margin-bottom:28px;
+align-items:flex-end;
+gap:24px;
 flex-wrap:wrap;
-gap:12px;
+margin-bottom:26px;
 }
 
-.toolbar-left{
+.filter-group{
 display:flex;
-align-items:center;
-gap:14px;
-flex-wrap:wrap;
+flex-direction:column;
+gap:6px;
 }
 
-.search-box{
-display:flex;
-align-items:center;
-background:white;
-border:1.5px solid #64748b;
+.filter-group label{
+font-weight:600;
+color:var(--primary);
+font-size:14px;
+}
+
+.filter-group select,
+.filter-group input{
 border-radius:10px;
-padding:0 16px;
-height:42px;
-width:320px;
-transition:border 0.2s;
+border:1px solid #dcdee8;
+padding:10px 14px;
+font-size:14px;
+min-width:220px;
 }
 
-.search-box:focus-within{
-border:1.5px solid var(--primary);
-box-shadow:0 0 0 2px rgba(43,58,140,0.1);
-}
-
-.search-box i{
-color:#94a3b8;
-font-size:1.1rem;
-margin-right:8px;
-}
-
-.search-box input{
-border:none;
+.filter-group select:focus,
+.filter-group input:focus{
 outline:none;
-width:100%;
-font-size:14px;
-background:transparent;
-color:#334155;
+border-color:var(--primary);
 }
 
-.search-box input::placeholder{
-color:#94a3b8;
-font-weight:500;
-}
-
-.btn-filter{
-background:white;
-color:var(--primary);
-border:1.5px solid #64748b;
-padding:0 18px;
-height:42px;
-border-radius:8px;
-display:flex;
-align-items:center;
-gap:8px;
-font-weight:600;
-font-size:14px;
-}
-
-.btn-filter i{
-font-size:0.9rem;
-}
-
-.branch-text{
-color:#64748b;
-font-size:14px;
-font-weight:500;
-}
-
-.btn-mark-all{
-background:#22c55e; /* Reference Green */
+.btn-custom{
+background:var(--primary);
 color:white;
-border:none;
-padding:0 22px;
-height:42px;
 border-radius:8px;
-display:flex;
-align-items:center;
-gap:8px;
+padding:10px 22px;
+border:none;
 font-weight:600;
 font-size:14px;
-transition:background 0.2s;
+height:44px;
 }
 
-.btn-mark-all:hover{
-background:#16a34a;
+.btn-custom:hover{
+background:#1d2863;
+color:white;
 }
 
-/* --- DATE GROUP HEADER --- */
-.date-header{
-color:var(--primary);
-font-size:18px;
+.large-card{
+background:white;
+border-radius:18px;
+padding:24px;
+box-shadow:0 3px 8px rgba(0,0,0,.08);
+height:100%;
+}
+
+.section-title{
+font-size:16px;
 font-weight:700;
-margin:24px 0 16px 0;
-}
-.date-header:first-of-type{
-margin-top:0;
+color:var(--primary);
+margin-bottom:20px;
 }
 
-/* --- FACEBOOK-STYLE NOTIFICATION CARD --- */
-.notif-item{
-    display:flex;
-    background:#ffffff;
-    border-radius:12px;
-    margin-bottom:14px;
-    padding:18px 20px;
-    border:1px solid #e2e8f0;
-    position:relative;
-    box-shadow:0 1px 2px rgba(0,0,0,0.04);
-    transition:background-color .18s ease, box-shadow .18s ease,
-                border-color .18s ease, transform .18s ease;
-    cursor:pointer;
-    outline:none;
+/* CSS bar chart */
+.bar-chart{
+display:flex;
+align-items:flex-end;
+gap:14px;
+height:220px;
+background:white;
+border-radius:12px;
+padding:20px 20px 10px;
+border:1px solid #dfe1ee;
 }
 
-/* Unread = highlighted, like Facebook's unread notification treatment. */
-.notif-item.is-unread{
-    background:#eef3ff;
-    border-color:#d5defa;
-    box-shadow:0 1px 3px rgba(43,58,140,.08);
+.bar-col{
+flex:1;
+display:flex;
+flex-direction:column;
+align-items:center;
+justify-content:flex-end;
+height:100%;
 }
 
-/* Read = quieter / less prominent. */
-.notif-item.is-read{
-    background:#ffffff;
-    border-color:#e2e8f0;
-    box-shadow:0 1px 2px rgba(0,0,0,.035);
+.bar{
+width:100%;
+max-width:34px;
+background:var(--primary);
+border-radius:6px 6px 0 0;
+opacity:.85;
 }
 
-.notif-item:hover,
-.notif-item:focus-visible{
-    background:#f8faff;
-    box-shadow:0 5px 16px rgba(43,58,140,.10);
-    border-color:#cbd5e1;
-    transform:translateY(-1px);
+.bar-label{
+margin-top:8px;
+font-size:11px;
+color:#666;
+text-align:center;
+line-height:1.2;
 }
 
-.notif-item.is-unread:hover,
-.notif-item.is-unread:focus-visible{
-    background:#e5ecff;
-    border-color:#b9c7f2;
+/* CSS pie chart */
+.pie-wrap{
+display:flex;
+align-items:center;
+gap:26px;
+background:white;
+border-radius:12px;
+padding:24px;
+border:1px solid #dfe1ee;
+flex-wrap:wrap;
+justify-content:center;
 }
 
-.notif-item:active{
-    transform:translateY(0);
+.pie{
+width:160px;
+height:160px;
+border-radius:50%;
+flex-shrink:0;
 }
 
-/* Left accent borders based on type. */
-.border-low_stock{ border-left:6px solid #ef4444; }
-.border-expiring{ border-left:6px solid #eab308; }
-.border-forecast{ border-left:6px solid #3b82f6; }
-.border-stock_in{ border-left:6px solid #22c55e; }
-
-.notif-icon-wrap{
-    display:flex;
-    align-items:flex-start;
-    padding-right:16px;
+.pie-legend{
+display:flex;
+flex-direction:column;
+gap:10px;
 }
 
-.notif-icon{
-    width:48px;
-    height:48px;
-    border-radius:12px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    font-size:1.4rem;
-    flex-shrink:0;
+.legend-row{
+display:flex;
+align-items:center;
+gap:10px;
+font-size:14px;
+color:#333;
 }
 
-.icon-low{ background:#fee2e2; color:#dc2626; }
-.icon-expiring{ background:#fef9c3; color:#ca8a04; }
-.icon-forecast{ background:#dbeafe; color:#2563eb; }
-.icon-in{ background:#dcfce7; color:#16a34a; }
-
-.notif-content{
-    flex:1;
-    min-width:0;
-    padding:2px 0;
-    display:flex;
-    flex-direction:column;
-    justify-content:center;
+.legend-dot{
+width:12px;
+height:12px;
+border-radius:3px;
+flex-shrink:0;
 }
 
-.notif-title{
-    font-weight:700;
-    color:#0f172a;
-    font-size:15px;
-    margin-bottom:4px;
+.legend-value{
+margin-left:auto;
+font-weight:700;
+color:var(--primary);
 }
 
-.notif-message{
-    font-size:14px;
-    color:#475569;
-    margin-bottom:6px;
-    line-height:1.45;
+.summary-empty{
+background:white;
+border:1px dashed #c7cbe6;
+border-radius:12px;
+padding:40px 24px;
+text-align:center;
+color:#8a8fb0;
 }
 
-.notif-time{
-    font-size:12px;
-    color:#94a3b8;
+.summary-empty i{
+font-size:30px;
+color:var(--primary);
+opacity:.5;
+margin-bottom:10px;
+display:block;
 }
 
-.notif-actions{
-    display:flex;
-    align-items:center;
-    padding-left:16px;
-    flex-shrink:0;
+
+.filter-card {
+    align-items: flex-end;
 }
 
-.badge-status-pill{
-    padding:4px 14px;
-    border-radius:30px;
-    font-size:12px;
-    font-weight:600;
-    display:inline-block;
+.filter-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
-.badge-low_stock{ background:#fee2e2; color:#dc2626; }
-.badge-expiring{ background:#fef9c3; color:#ca8a04; }
-.badge-forecast{ background:#dbeafe; color:#2563eb; }
-.badge-stock_in{ background:#dcfce7; color:#16a34a; }
-
-.unread-dot{
-    display:inline-block;
-    width:8px;
-    height:8px;
-    border-radius:50%;
-    background:#2B3A8C;
-    margin-left:7px;
-    vertical-align:middle;
+.filter-actions .btn-custom,
+.filter-actions .btn-outline-custom {
+    width: auto;
+    height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
 }
 
-/* Single details modal is opened by clicking the whole notification card. */
-.notification-modal-icon{
-    width:46px;
-    height:46px;
-    border-radius:12px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    font-size:1.25rem;
-    flex-shrink:0;
+.btn-outline-custom {
+    background: white;
+    color: var(--primary);
+    border: 1px solid var(--primary);
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-weight: 600;
+    font-size: 14px;
 }
 
-.notification-modal-meta{
-    display:grid;
-    gap:8px;
-    font-size:13px;
-    color:#64748b;
+.btn-outline-custom:hover {
+    background: var(--primary);
+    color: white;
 }
 
-.notification-modal-meta strong{
-    color:#334155;
+.report-meta {
+    background: white;
+    border: 1px solid #dfe1ee;
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin-bottom: 18px;
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    color: #666;
+    font-size: 13px;
+}
+
+.report-meta strong {
+    color: var(--primary);
+    font-size: 15px;
+}
+
+.summary-cards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.summary-card {
+    background: white;
+    border: 1px solid #dfe1ee;
+    border-radius: 14px;
+    padding: 16px 18px;
+}
+
+.summary-card span {
+    display: block;
+    color: #777;
+    font-size: 12px;
+    margin-bottom: 4px;
+}
+
+.summary-card strong {
+    color: var(--primary);
+    font-size: 22px;
+}
+
+.report-status {
+    display: inline-block;
+    padding: 5px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.status-critical {
+    background: #FFEAEA;
+    color: #D7192D;
+}
+
+.status-warning {
+    background: #FFF1D6;
+    color: #9A5B00;
+}
+
+.status-good {
+    background: #E6F4EA;
+    color: #1E7B34;
+}
+
+.status-neutral {
+    background: #EDEFFA;
+    color: var(--primary);
+}
+
+.bar-value {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--primary);
+    margin-bottom: 4px;
+}
+
+.chart-empty {
+    width: 100%;
+    border: 0;
+    padding: 20px;
+}
+
+.report-table-wrap {
+    overflow-x: auto;
+}
+
+.report-table-wrap .data-table {
+    min-width: 850px;
+}
+
+.alert {
+    margin-bottom: 18px;
+}
+
+@media print {
+    .sidebar,
+    .topbar,
+    .filter-card,
+    .btn-outline-custom,
+    .btn-custom,
+    .alert,
+    .summary-cards,
+    .row.g-4 > .col-lg-6 {
+        display: none !important;
+    }
+
+    .main {
+        margin-left: 0 !important;
+    }
+
+    .page-body {
+        padding: 0 !important;
+    }
+
+    .report-meta {
+        border: 0;
+        padding: 0 0 12px 0;
+    }
+
+    .large-card {
+        box-shadow: none;
+        padding: 0;
+    }
+
+    .report-table-wrap {
+        border: 0;
+    }
 }
 
 @media(max-width:991px){
-    .main{ margin-left:90px; }
-    .search-box{ width:100%; max-width:300px; }
-    .toolbar-left{ width:100%; }
-    .btn-mark-all{ width:100%; justify-content:center; }
+    .summary-cards {
+        grid-template-columns: 1fr;
+    }
+
+    .filter-actions {
+        width: 100%;
+    }
+}
+@media(max-width:991px){
+.main{
+margin-left:90px;
+}
 }
 
-@media(max-width:640px){
-    .page-body{ padding:20px; }
-    .notif-item{ padding:15px; }
-    .notif-icon-wrap{ padding-right:12px; }
-    .notif-icon{ width:42px; height:42px; font-size:1.2rem; }
-    .notif-actions{ display:none; }
-    .notif-message{ font-size:13px; }
-}
-
-.icon-out{background:#ffedd5;color:#ea580c}.icon-adjustment{background:#ede9fe;color:#7c3aed}
-.border-stock_out{border-left:6px solid #f97316}.border-stock_adjustment{border-left:6px solid #8b5cf6}
-.badge-stock_out{background:#ffedd5;color:#ea580c}.badge-stock_adjustment{background:#ede9fe;color:#7c3aed}
-.notification-pagination{display:flex;justify-content:center;align-items:center;gap:6px;margin:28px 0 8px;flex-wrap:wrap}.page-link-custom{display:inline-flex;align-items:center;justify-content:center;min-width:38px;height:38px;padding:0 12px;border:1px solid #d7def0;border-radius:8px;background:#fff;color:#2B3A8C;text-decoration:none;font-size:13px;font-weight:600}.page-link-custom:hover{background:#eef3ff}.page-link-custom.active{background:#2B3A8C;color:#fff;border-color:#2B3A8C}.page-link-custom.disabled{opacity:.45;pointer-events:none}.pagination-ellipsis{border-color:transparent;background:transparent;cursor:default;pointer-events:none;padding:0 4px;min-width:20px}.pagination-summary{text-align:center;color:#94a3b8;font-size:12px;margin-bottom:20px}
 </style>
 
 </head>
@@ -711,25 +1208,21 @@ margin-top:0;
 <li><a href="InventoryOfficer_StockManagement.php"><i class="bi bi-boxes"></i><span>Stock Management</span></a></li>
 <li><a href="InventoryOfficer_StockTransactions.php"><i class="bi bi-arrow-left-right"></i><span>Stock Transactions</span></a></li>
 <li><a href="InventoryOfficer_ReturnManagement.php"><i class="bi bi-arrow-return-left"></i><span>Return Management</span></a></li>
-<li><a href="InventoryOfficer_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Inventory Reports</span></a></li>
-<li><a  href="InventoryOfficer_Notifications.php" class="active notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
+<li><a class="active" href="InventoryOfficer_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Inventory Reports</span></a></li>
+<li><a  href="InventoryOfficer_Notifications.php" class="notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
                         <?php if ($notification_count > 0): ?>
                             <span class="notification-badge"><?php echo $notification_count; ?></span>
                         <?php endif; ?>
                     </a></li>
-</ul>
-</nav>
 
+</nav>
 </div>
 
 <div class="main">
 
  <div class="topbar">
-        <h3>Notifications
-            <span id="topUnreadBadge" class="top-unread-badge" <?php echo $unreadCount > 0 ? '' : 'hidden'; ?>><?php echo $unreadCount; ?></span>
-            <small><?php echo htmlspecialchars($branch_name); ?></small>
-        </h3>
-        <div class="dropdown">
+        <h3>Inventory Reports<small><?php echo htmlspecialchars($branch_name); ?></small></h3>
+       <div class="dropdown">
             <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
                     type="button" id="inventoryOfficerProfileMenu"
                     data-bs-toggle="dropdown" aria-expanded="false">
@@ -755,192 +1248,244 @@ margin-top:0;
         </div>
 </div>
 
-
 <div class="page-body">
 
-<!-- Notification Toolbar -->
-<div class="toolbar">
-    <form method="get" class="toolbar-left" id="notificationFilters">
-        <div class="search-box">
-            <i class="bi bi-search"></i>
-            <input type="text" name="search"
-                   value="<?php echo h($search); ?>"
-                   placeholder="Search Notifications..."
-                   autocomplete="off" aria-label="Search notifications">
-        </div>
-
-        <select class="btn-filter" name="filter" aria-label="Filter notifications"
-                onchange="this.form.submit()">
-            <option value="all" <?php echo $filter === 'all' ? 'selected' : ''; ?>>All Notifications</option>
-            <option value="low_stock" <?php echo $filter === 'low_stock' ? 'selected' : ''; ?>>Low Stock</option>
-            <option value="expiring" <?php echo $filter === 'expiring' ? 'selected' : ''; ?>>Expiring</option>
-            <option value="forecast" <?php echo $filter === 'forecast' ? 'selected' : ''; ?>>Supply Forecast</option>
-            <option value="stock_in" <?php echo $filter === 'stock_in' ? 'selected' : ''; ?>>Stock In</option>
-        </select>
-
-        <span class="branch-text"><?php echo h($branch_name); ?></span>
-    </form>
-
-    <form method="post" style="margin:0;">
-        <input type="hidden" name="csrf_token" value="<?php echo h($csrf_token); ?>">
-        <input type="hidden" name="action" value="mark_all_read">
-        <button type="submit" class="btn-mark-all" <?php echo $unreadCount === 0 ? 'disabled' : ''; ?>>
-            <i class="bi bi-check-lg"></i> Mark All as Read
-        </button>
-    </form>
+<form class="filter-card" method="POST" action="InventoryOfficer_Reports.php" id="reportForm">
+<div class="filter-group">
+<label for="report_type">Select Report</label>
+<select name="report_type" id="report_type">
+<option value="low_stock" <?php echo $report_type === 'low_stock' ? 'selected' : ''; ?>>Low Stock Report</option>
+<option value="expiring_stock" <?php echo $report_type === 'expiring_stock' ? 'selected' : ''; ?>>Expiring Stock Report</option>
+<option value="stock_usage" <?php echo $report_type === 'stock_usage' ? 'selected' : ''; ?>>Stock Usage Report</option>
+<option value="transactions" <?php echo $report_type === 'transactions' ? 'selected' : ''; ?>>Stock Transaction Summary</option>
+<option value="shortage" <?php echo $report_type === 'shortage' ? 'selected' : ''; ?>>Shortage Prediction Report</option>
+</select>
 </div>
 
-<?php if ($flashMessage !== ''): ?>
-    <div class="alert alert-<?php echo $flashType === 'success' ? 'success' : 'danger'; ?>" role="alert">
-        <?php echo h($flashMessage); ?>
-    </div>
+<div class="filter-group">
+<label for="date_from">Date From</label>
+<input type="date" name="date_from" id="date_from" value="<?php echo h($date_from); ?>" required>
+</div>
+
+<div class="filter-group">
+<label for="date_to">Date To</label>
+<input type="date" name="date_to" id="date_to" value="<?php echo h($date_to); ?>" required>
+</div>
+
+<div class="filter-group">
+<label for="search">Search</label>
+<input type="text" name="search" id="search" value="<?php echo h($search); ?>" maxlength="100" placeholder="Item, category, or keyword">
+</div>
+
+<div class="filter-actions">
+<button type="submit" class="btn-custom">
+<i class="bi bi-file-earmark-bar-graph me-1"></i> Generate Report
+</button>
+<a class="btn-outline-custom" target="_blank"
+   href="?export=csv&amp;report_type=<?php echo urlencode($report_type); ?>&amp;date_from=<?php echo urlencode($date_from); ?>&amp;date_to=<?php echo urlencode($date_to); ?>&amp;search=<?php echo urlencode($search); ?>">
+<i class="bi bi-download me-1"></i> Export CSV
+</a>
+<button type="button" class="btn-outline-custom" onclick="window.print();">
+<i class="bi bi-printer me-1"></i> Print
+</button>
+</div>
+</form>
+
+<?php if (!empty($errors)): ?>
+<div class="alert alert-warning">
+<?php foreach ($errors as $error): ?>
+<div><?php echo h($error); ?></div>
+<?php endforeach; ?>
+</div>
 <?php endif; ?>
 
-<?php if ($unreadCount > 0): ?>
-    <div class="text-muted mb-3 unread-summary" style="font-size:13px;">
-        <?php echo $unreadCount; ?> unread notification<?php echo $unreadCount === 1 ? '' : 's'; ?>
-    </div>
+<?php if ($reportError !== ''): ?>
+<div class="alert alert-danger">
+<?php echo h($reportError); ?>
+</div>
 <?php endif; ?>
 
-<!-- Paginated Notifications -->
-<?php if (empty($notifications)): ?>
-    <div class="notif-item is-read" style="cursor:default;">
-        <div class="notif-icon-wrap"><div class="notif-icon icon-forecast"><i class="bi bi-bell-slash"></i></div></div>
-        <div class="notif-content">
-            <div class="notif-title">No Notifications Found</div>
-            <div class="notif-message">There are no notifications matching the current search or filter for <?php echo h($branch_name); ?>.</div>
-        </div>
-    </div>
+<div class="report-meta">
+<strong><?php echo h(reportLabel($report_type)); ?></strong>
+<span>Branch: <?php echo h($branch_name); ?></span>
+<span>Date: <?php echo h(date('m/d/Y', strtotime($date_from))); ?> – <?php echo h(date('m/d/Y', strtotime($date_to))); ?></span>
+</div>
+
+<div class="summary-cards">
+<div class="summary-card"><span>Report Rows</span><strong><?php echo moneylessNumber($summary['rows']); ?></strong></div>
+<div class="summary-card"><span>Quantity</span><strong><?php echo moneylessNumber($summary['quantity']); ?></strong></div>
+<?php if ($report_type === 'stock_usage'): ?>
+<div class="summary-card"><span>Patients</span><strong><?php echo moneylessNumber($summary['patients']); ?></strong></div>
+<?php elseif ($report_type === 'transactions'): ?>
+<div class="summary-card"><span>Transactions</span><strong><?php echo moneylessNumber($summary['transactions']); ?></strong></div>
+<?php elseif ($report_type === 'shortage'): ?>
+<div class="summary-card"><span>Recommended Reorder</span><strong><?php echo moneylessNumber($summary['quantity']); ?></strong></div>
 <?php else: ?>
-    <?php
-    $lastGroup='';
-    foreach($notifications as $n):
-        $ts=strtotime((string)$n['created_at']);
-        $date=$ts!==false?date('Y-m-d',$ts):'';
-        $group=$date===date('Y-m-d')?'Today':($date===date('Y-m-d',strtotime('-1 day'))?'Yesterday':'Earlier');
-        if($group!==$lastGroup): $lastGroup=$group;
-    ?>
-        <div class="date-header"><?php echo h($group); ?></div>
-    <?php endif; $isRead=(int)$n['is_read']===1; $notificationId=(int)$n['notification_id']; ?>
-        <div class="notif-item border-<?php echo h($n['type']); ?> <?php echo $isRead?'is-read':'is-unread'; ?>"
-             id="notification-<?php echo $notificationId; ?>"
-             data-notification-id="<?php echo $notificationId; ?>"
-             data-is-read="<?php echo $isRead?'1':'0'; ?>"
-             data-title="<?php echo h($n['title']?:'Notification'); ?>"
-             data-message="<?php echo h($n['message']?:''); ?>"
-             data-type="<?php echo h(badgeText($n['notification_type'])); ?>"
-             data-created-at="<?php echo h(date('F j, Y g:i A',strtotime($n['created_at']))); ?>"
-             data-icon="<?php echo h($n['icon']); ?>"
-             data-icon-class="<?php echo h(notifIconClass($n['notification_type'])); ?>"
-             data-branch="<?php echo h($branch_name); ?>"
-             role="button" tabindex="0">
-            <div class="notif-icon-wrap"><div class="notif-icon <?php echo h(notifIconClass($n['notification_type'])); ?>"><i class="bi <?php echo h($n['icon']); ?>"></i></div></div>
-            <div class="notif-content">
-                <div class="notif-title"><?php echo h($n['title']?:'Notification'); ?><span class="unread-dot" <?php echo $isRead?'hidden':''; ?>></span></div>
-                <div class="notif-message"><?php echo h($n['message']?:''); ?></div>
-                <div class="notif-time"><?php echo h(formatNotificationTime($n['created_at'])); ?></div>
-            </div>
-            <div class="notif-actions" aria-hidden="true"><span class="badge-status-pill badge-<?php echo h($n['type']); ?>"><?php echo h(badgeText($n['notification_type'])); ?></span></div>
-        </div>
-    <?php endforeach; ?>
-
-    <?php if ($totalPages > 1): ?>
-    <nav class="notification-pagination" aria-label="Notification pages">
-        <?php
-        $buildPageUrl=function(int $p) use ($search,$filter){$q=['page'=>$p];if($search!=='')$q['search']=$search;if($filter!=='all')$q['filter']=$filter;return basename($_SERVER['PHP_SELF']).'?'.http_build_query($q);};
-        ?>
-        <a class="page-link-custom <?php echo $page<=1?'disabled':''; ?>" href="<?php echo $page>1?h($buildPageUrl($page-1)):'#'; ?>" aria-label="Previous">&laquo; Previous</a>
-
-        <?php
-        // Keep pagination compact instead of displaying every page number.
-        // Show all pages when there are only a few; otherwise show the first/last
-        // pages, the current page, nearby pages, and ellipses where pages are skipped.
-        $paginationPages = [];
-        if ($totalPages <= 7) {
-            $paginationPages = range(1, $totalPages);
-        } elseif ($page <= 4) {
-            $paginationPages = [1, 2, 3, 4, 5, 'ellipsis', $totalPages];
-        } elseif ($page >= $totalPages - 3) {
-            $paginationPages = [1, 'ellipsis', $totalPages - 4, $totalPages - 3, $totalPages - 2, $totalPages - 1, $totalPages];
-        } else {
-            $paginationPages = [1, 'ellipsis', $page - 1, $page, $page + 1, 'ellipsis', $totalPages];
-        }
-        ?>
-
-        <?php foreach ($paginationPages as $paginationPage): ?>
-            <?php if ($paginationPage === 'ellipsis'): ?>
-                <span class="page-link-custom pagination-ellipsis" aria-hidden="true">&hellip;</span>
-            <?php else: ?>
-                <a class="page-link-custom <?php echo $paginationPage===$page?'active':''; ?>"
-                   href="<?php echo h($buildPageUrl($paginationPage)); ?>"
-                   aria-current="<?php echo $paginationPage===$page?'page':'false'; ?>">
-                    <?php echo $paginationPage; ?>
-                </a>
-            <?php endif; ?>
-        <?php endforeach; ?>
-
-        <a class="page-link-custom <?php echo $page>=$totalPages?'disabled':''; ?>" href="<?php echo $page<$totalPages?h($buildPageUrl($page+1)):'#'; ?>" aria-label="Next">Next &raquo;</a>
-    </nav>
-    <div class="pagination-summary">Showing <?php echo $offset+1; ?>–<?php echo min($offset+$perPage,$total); ?> of <?php echo $total; ?> notifications</div>
-    <?php endif; ?>
+<div class="summary-card"><span>Branch</span><strong><?php echo h($branch_id); ?></strong></div>
 <?php endif; ?>
-
-<!-- Existing details mechanism, now opened by clicking the entire card. -->
-<div class="modal fade" id="notificationDetailsModal" tabindex="-1"
-     aria-labelledby="notificationDetailsModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content" style="border:0;border-radius:14px;overflow:hidden;">
-            <div class="modal-header">
-                <div class="d-flex align-items-center gap-3">
-                    <div id="notificationModalIcon" class="notification-modal-icon icon-forecast">
-                        <i id="notificationModalIconGlyph" class="bi bi-bell-fill"></i>
-                    </div>
-                    <div>
-                        <h5 class="modal-title mb-0" id="notificationDetailsModalLabel">Notification</h5>
-                        <div id="notificationModalStatus" class="small text-muted mt-1">Read</div>
-                    </div>
-                </div>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <p id="notificationModalMessage" class="mb-4" style="line-height:1.55;"></p>
-                <div class="notification-modal-meta">
-                    <div><strong>Type:</strong> <span id="notificationModalType"></span></div>
-                    <div><strong>Date:</strong> <span id="notificationModalDate"></span></div>
-                    <div><strong>Status:</strong> <span id="notificationModalReadState"></span></div>
-                    <div><strong>Branch:</strong> <span id="notificationModalBranch"></span></div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-            </div>
-        </div>
-    </div>
 </div>
+
+<div class="row g-4">
+
+<div class="col-lg-6">
+<div class="large-card">
+<div class="section-title">Top Supply Usage (Units Consumed)</div>
+<div class="bar-chart">
+<?php if (!empty($barData)): ?>
+<?php foreach ($barData as $bar): ?>
+<div class="bar-col">
+<div class="bar-value"><?php echo (int)$bar['value']; ?></div>
+<div class="bar" style="height:<?php echo max(8, round(((int)$bar['value'] / $maxBarValue) * 100)); ?>%;"></div>
+<div class="bar-label"><?php echo h($bar['label']); ?></div>
+</div>
+<?php endforeach; ?>
+<?php else: ?>
+<div class="summary-empty chart-empty">
+<i class="bi bi-bar-chart"></i>
+No usage data for the selected date range.
+</div>
+<?php endif; ?>
+</div>
+</div>
+</div>
+
+<div class="col-lg-6">
+<div class="large-card">
+<div class="section-title">Inventory Usage by Category</div>
+<div class="pie-wrap">
+<div class="pie" style="background:conic-gradient(<?php echo h($conicGradient); ?>);"></div>
+<div class="pie-legend">
+<?php if (!empty($pieData)): ?>
+<?php foreach ($pieData as $slice): ?>
+<div class="legend-row">
+<span class="legend-dot" style="background:hsl(<?php echo (($slice['percent'] * 3.1) % 360); ?> 55% 45%);"></span>
+<span><?php echo h($slice['label']); ?></span>
+<span class="legend-value"><?php echo h($slice['percent']); ?>%</span>
+</div>
+<?php endforeach; ?>
+<?php else: ?>
+<div class="summary-empty chart-empty">No usage data for the selected date range.</div>
+<?php endif; ?>
+</div>
+</div>
+</div>
+</div>
+
+<div class="col-12">
+<div class="large-card">
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+<div class="section-title mb-0">Detailed Line-Item Summary</div>
+<span class="small text-muted"><?php echo count($reportRows); ?> result(s)</span>
+</div>
+
+<div class="table-wrap report-table-wrap">
+<table class="table data-table">
+<thead>
+<?php if ($report_type === 'low_stock'): ?>
+<tr><th>Category</th><th>Item</th><th>Unit</th><th>Minimum Stock</th><th>Current Stock</th><th>Status</th></tr>
+<?php elseif ($report_type === 'expiring_stock'): ?>
+<tr><th>Item</th><th>Category</th><th>Batch / Lot No.</th><th>Unit</th><th>Stock</th><th>Manufacturing Date</th><th>Expiration Date</th><th>Days Remaining</th><th>Status</th></tr>
+<?php elseif ($report_type === 'stock_usage'): ?>
+<tr><th>Usage Date</th><th>Item</th><th>Category</th><th>Unit</th><th>Qty Used</th><th>Patients</th><th>Stock Received</th></tr>
+<?php elseif ($report_type === 'transactions'): ?>
+<tr><th>Trx No.</th><th>Type</th><th>Item</th><th>Unit</th><th>Qty</th><th>Date</th><th>By</th><th>Remarks</th></tr>
+<?php elseif ($report_type === 'shortage'): ?>
+<tr><th>Date</th><th>Item</th><th>Category</th><th>Unit</th><th>Probability</th><th>Status</th><th>Recommended Reorder</th><th>Predicted Consumption</th><th>Forecast Days</th><th>Generated By</th></tr>
+<?php endif; ?>
+</thead>
+<tbody>
+<?php if (empty($reportRows)): ?>
+<tr><td colspan="12" class="text-center text-muted py-4">No records found for the selected filters.</td></tr>
+<?php else: ?>
+<?php foreach ($reportRows as $row): ?>
+<?php if ($report_type === 'low_stock'): ?>
+<tr>
+<td><?php echo h($row['category_name']); ?></td>
+<td><?php echo h($row['item_name']); ?></td>
+<td><?php echo h($row['unit_name']); ?></td>
+<td><?php echo moneylessNumber($row['minimum_stock']); ?></td>
+<td><strong><?php echo moneylessNumber($row['current_stock']); ?></strong></td>
+<td><span class="report-status <?php echo (int)$row['current_stock'] <= 0 ? 'status-critical' : 'status-warning'; ?>"><?php echo (int)$row['current_stock'] <= 0 ? 'Critical' : 'Low'; ?></span></td>
+</tr>
+<?php elseif ($report_type === 'expiring_stock'): ?>
+<tr>
+<td><?php echo h($row['item_name']); ?></td>
+<td><?php echo h($row['category_name']); ?></td>
+<td><?php echo h($row['batch_lot_no'] ?: '—'); ?></td>
+<td><?php echo h($row['unit_name']); ?></td>
+<td><?php echo moneylessNumber($row['quantity_available']); ?></td>
+<td><?php echo h($row['manufacturing_date'] ?: '—'); ?></td>
+<td><?php echo h($row['expiration_date']); ?></td>
+<td><?php echo h($row['days_remaining']); ?></td>
+<td><span class="report-status <?php echo h(statusClass($row['expiry_status'])); ?>"><?php echo h($row['expiry_status']); ?></span></td>
+</tr>
+<?php elseif ($report_type === 'stock_usage'): ?>
+<tr>
+<td><?php echo h($row['usage_date']); ?></td>
+<td><?php echo h($row['item_name']); ?></td>
+<td><?php echo h($row['category_name']); ?></td>
+<td><?php echo h($row['unit_name']); ?></td>
+<td><strong><?php echo moneylessNumber($row['quantity_used']); ?></strong></td>
+<td><?php echo moneylessNumber($row['patient_count']); ?></td>
+<td><?php echo moneylessNumber($row['stock_received']); ?></td>
+</tr>
+<?php elseif ($report_type === 'transactions'): ?>
+<tr>
+<td>TRX-<?php echo str_pad((string)$row['transaction_id'], 4, '0', STR_PAD_LEFT); ?></td>
+<td><span class="report-status <?php echo $row['transaction_type'] === 'OUT' ? 'status-warning' : ($row['transaction_type'] === 'IN' ? 'status-good' : 'status-neutral'); ?>"><?php echo h($row['transaction_type']); ?></span></td>
+<td><?php echo h($row['item_name']); ?></td>
+<td><?php echo h($row['unit_name']); ?></td>
+<td><?php echo moneylessNumber($row['quantity']); ?></td>
+<td><?php echo h(date('m/d/Y H:i', strtotime($row['transaction_date']))); ?></td>
+<td><?php echo h($row['username']); ?></td>
+<td><?php echo h($row['remarks'] ?: '—'); ?></td>
+</tr>
+<?php elseif ($report_type === 'shortage'): ?>
+<tr>
+<td><?php echo h($row['forecast_date']); ?></td>
+<td><?php echo h($row['item_name']); ?></td>
+<td><?php echo h($row['category_name']); ?></td>
+<td><?php echo h($row['unit_name']); ?></td>
+<td><?php echo $row['shortage_probability'] !== null ? h($row['shortage_probability']) . '%' : '—'; ?></td>
+<td><span class="report-status <?php echo h(statusClass($row['forecast_status'] ?? '')); ?>"><?php echo h($row['forecast_status'] ?: '—'); ?></span></td>
+<td><?php echo moneylessNumber($row['recommended_reorder']); ?></td>
+<td><?php echo moneylessNumber($row['predicted_consumption']); ?></td>
+<td><?php echo $row['forecast_days'] !== null ? moneylessNumber($row['forecast_days']) : '—'; ?></td>
+<td><?php echo h($row['generated_by_name'] ?: '—'); ?></td>
+</tr>
+<?php endif; ?>
+<?php endforeach; ?>
+<?php endif; ?>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+
+</div>
+
 </div>
 
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
-<script>
-(function(){'use strict';
-const csrfToken=<?php echo json_encode($csrf_token); ?>;
-const pageUrl=<?php echo json_encode(basename($_SERVER['PHP_SELF'])); ?>;
-const modalEl=document.getElementById('notificationDetailsModal');
-const modal=modalEl?new bootstrap.Modal(modalEl):null;
-const topBadge=document.getElementById('topUnreadBadge');
-const unreadText=document.querySelector('.unread-summary');
-function updateUnreadCount(count){count=Math.max(0,parseInt(count,10)||0);if(topBadge){topBadge.textContent=count;topBadge.hidden=count===0;}if(unreadText){unreadText.textContent=count+' unread notification'+(count===1?'':'s');unreadText.style.display=count?'':'none';}const btn=document.querySelector('.btn-mark-all');if(btn)btn.disabled=count===0;}
-function setRead(card){card.classList.remove('is-unread');card.classList.add('is-read');card.dataset.isRead='1';card.setAttribute('aria-label','Read: '+(card.dataset.title||'Notification'));const dot=card.querySelector('.unread-dot');if(dot)dot.hidden=true;}
-function fillModal(card){if(!modalEl)return;document.getElementById('notificationModalIcon').className='notification-modal-icon '+(card.dataset.iconClass||'icon-forecast');document.getElementById('notificationModalIconGlyph').className='bi '+(card.dataset.icon||'bi-bell-fill');document.getElementById('notificationDetailsModalLabel').textContent=card.dataset.title||'Notification';document.getElementById('notificationModalMessage').textContent=card.dataset.message||'';document.getElementById('notificationModalType').textContent=card.dataset.type||'Update';document.getElementById('notificationModalDate').textContent=card.dataset.createdAt||'';document.getElementById('notificationModalBranch').textContent=card.dataset.branch||'';const read=card.dataset.isRead==='1';document.getElementById('notificationModalStatus').textContent=read?'Read':'Unread';document.getElementById('notificationModalReadState').textContent=read?'Read':'Unread';}
-async function markRead(card){if(card.dataset.isRead==='1')return true;const id=Number(card.dataset.notificationId);if(!Number.isInteger(id)||id<=0){console.error('Invalid notification ID');return false;}const body=new URLSearchParams({csrf_token:csrfToken,action:'mark_read',notification_id:String(id)});try{const response=await fetch(pageUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','X-Requested-With':'XMLHttpRequest'},body});const data=await response.json();if(!response.ok||!data.success)throw new Error(data.message||'Unable to mark notification as read.');setRead(card);updateUnreadCount(data.unread_count);return true;}catch(e){console.error(e);return false;}}
-async function openCard(card){if(card.dataset.busy==='1')return;card.dataset.busy='1';try{if(!(await markRead(card)))return;fillModal(card);if(modal)modal.show();}finally{card.dataset.busy='0';}}
-document.addEventListener('click',e=>{const card=e.target.closest('.notif-item[data-notification-id]');if(card)openCard(card);});
-document.addEventListener('keydown',e=>{if(e.key!=='Enter'&&e.key!==' ')return;const card=e.target.closest('.notif-item[data-notification-id]');if(!card)return;e.preventDefault();openCard(card);});
-const markAll=document.querySelector('.btn-mark-all');if(markAll){markAll.closest('form').addEventListener('submit',async e=>{e.preventDefault();if(markAll.disabled)return;const body=new URLSearchParams({csrf_token:csrfToken,action:'mark_all_read'});try{const response=await fetch(pageUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','X-Requested-With':'XMLHttpRequest'},body});const data=await response.json();if(!response.ok||!data.success)throw new Error(data.message||'Unable to mark all as read.');document.querySelectorAll('.notif-item[data-notification-id]').forEach(setRead);updateUnreadCount(data.unread_count);}catch(e){console.error(e);window.alert(e.message||'Unable to mark notifications as read.');}});}
-})();
-</script>
 
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const form = document.getElementById('reportForm');
+    const from = document.getElementById('date_from');
+    const to = document.getElementById('date_to');
+
+    if (form) {
+        form.addEventListener('submit', function (event) {
+            if (from.value && to.value && from.value > to.value) {
+                event.preventDefault();
+                alert('Date From cannot be later than Date To.');
+            }
+        });
+    }
+});
+</script>
 </body>
 </html>

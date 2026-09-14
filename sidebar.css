@@ -229,3 +229,14 @@
     line-height: 1;
     white-space: nowrap;
 }
+/* =========================================================
+   GLOBAL FIXED/STICKY TOP BAR
+   Applies to all pages using sidebar.css
+   ========================================================= */
+
+.topbar {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 1000 !important;
+    background: #ffffff !important;
+}

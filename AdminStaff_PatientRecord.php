@@ -2785,7 +2785,63 @@ if ($action) {
                 flex-wrap: wrap;
             }
         }
-    </style>
+    
+
+        /* =========================================================
+           FIXED TOP BAR — STAYS ABOVE MAIN CONTENT, NOT SIDEBAR
+           ========================================================= */
+        .topbar {
+            position: fixed !important;
+            top: 0 !important;
+            left: 260px !important;
+            right: 0 !important;
+            width: calc(100% - 260px) !important;
+            height: 80px !important;
+            margin: 0 !important;
+            z-index: 1000 !important;
+            background: #ffffff !important;
+        }
+
+        .topbar h3 {
+            margin-left: 0 !important;
+        }
+
+        /* Keep page content below the fixed top bar. */
+        .main {
+            padding-top: 104px;
+        }
+
+        @media (max-width: 991px) {
+            .topbar {
+                left: 112px !important;
+                right: 0 !important;
+                width: calc(100% - 112px) !important;
+                height: 64px !important;
+            }
+
+            .main {
+                padding-top: 88px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .topbar h3 {
+                margin-left: 0 !important;
+            }
+        }
+
+        @media (max-width: 576px) {
+            .topbar {
+                left: 90px !important;
+                width: calc(100% - 90px) !important;
+                height: 64px !important;
+            }
+
+            .main {
+                padding-top: 88px;
+            }
+        }
+</style>
 </head>
 <body>
     <!-- Sidebar -->
