@@ -602,7 +602,97 @@ $statusClasses = [
                 padding: 18px;
             }
         }
-    </style>
+    
+        /* =========================================================
+           CLIENT-SIDE TABLE PAGINATION
+           ========================================================= */
+        .table-pagination-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            flex-wrap: wrap;
+            padding: 14px 20px;
+            background: #fff;
+            border-top: 1px solid #edf0f5;
+        }
+
+        .table-pagination-summary {
+            color: #6f7b91;
+            font-size: 12px;
+        }
+
+        .table-pagination-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .rows-per-page-control {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            color: #6f7b91;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .rows-per-page-control select {
+            width: 78px;
+            min-height: 34px;
+            padding: 4px 28px 4px 10px;
+            border: 1px solid #dde3ee;
+            border-radius: 8px;
+            background-color: #fff;
+            color: #34405d;
+            font-size: 12px;
+        }
+
+        .table-page-buttons {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+
+        .table-page-btn {
+            min-width: 34px;
+            height: 34px;
+            padding: 0 9px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #dde3ee;
+            border-radius: 8px;
+            background: #fff;
+            color: #2B3A8C;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: .15s ease;
+        }
+
+        .table-page-btn:hover:not(:disabled),
+        .table-page-btn.active {
+            color: #fff;
+            background: #2B3A8C;
+            border-color: #2B3A8C;
+        }
+
+        .table-page-btn:disabled {
+            opacity: .45;
+            cursor: not-allowed;
+        }
+
+        @media (max-width: 576px) {
+            .table-pagination-bar {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+        }
+
+</style>
 </head>
 
 <body>
@@ -785,7 +875,7 @@ $statusClasses = [
                 </div>
 
                 <div class="table-responsive">
-                    <table class="table visit-table align-middle">
+                    <table class="table visit-table align-middle" id="visitHistoryTable">
                         <thead>
                             <tr>
                                 <th>Date and Time</th>
@@ -797,7 +887,7 @@ $statusClasses = [
                                 <th>Action</th>
                             </tr>
                         </thead>
-                        <tbody>
+                        <tbody id="visitHistoryBody">
                             <?php if (!$visits): ?>
                                 <tr>
                                     <td colspan="7" class="empty-state">
@@ -812,7 +902,7 @@ $statusClasses = [
                                 $visitStatus = (string)$visit['workflow_status'];
                                 $statusClass = $statusClasses[$visitStatus] ?? 'status-info';
                                 ?>
-                                <tr>
+                                <tr class="visit-history-row">
                                     <td>
                                         <strong><?php echo workflowH(date('M d, Y', strtotime($visit['visit_date']))); ?></strong>
                                         <div class="text-muted small">
@@ -854,6 +944,24 @@ $statusClasses = [
                         </tbody>
                     </table>
                 </div>
+
+                <?php if ($visits): ?>
+                    <div class="table-pagination-bar">
+                        <div class="table-pagination-summary" id="visitPaginationSummary">Showing recent visits</div>
+                        <div class="table-pagination-actions">
+                            <label class="rows-per-page-control" for="visitRowsPerPage">
+                                Rows
+                                <select id="visitRowsPerPage">
+                                    <option value="10" selected>10</option>
+                                    <option value="25">25</option>
+                                    <option value="50">50</option>
+                                    <option value="100">100</option>
+                                </select>
+                            </label>
+                            <div class="table-page-buttons" id="visitPageButtons" aria-label="Visit history pages"></div>
+                        </div>
+                    </div>
+                <?php endif; ?>
             </section>
         </div>
     </div>
@@ -870,6 +978,76 @@ $statusClasses = [
                 patientIdInput.value = selectedOption.dataset.patient || '';
                 caseIdInput.value = selectedOption.value || '';
             });
+        }
+
+        const visitRows = Array.from(document.querySelectorAll('.visit-history-row'));
+        const visitRowsPerPage = document.getElementById('visitRowsPerPage');
+        const visitPageButtons = document.getElementById('visitPageButtons');
+        const visitPaginationSummary = document.getElementById('visitPaginationSummary');
+        let visitCurrentPage = 1;
+
+        function renderVisitPageButtons(totalPages) {
+            if (!visitPageButtons) return;
+            visitPageButtons.innerHTML = '';
+
+            if (totalPages <= 1) return;
+
+            const addButton = (label, page, disabled = false, active = false) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'table-page-btn' + (active ? ' active' : '');
+                button.innerHTML = label;
+                button.disabled = disabled;
+
+                if (!disabled && !active) {
+                    button.addEventListener('click', function () {
+                        visitCurrentPage = page;
+                        renderVisitPage(false);
+                    });
+                }
+
+                visitPageButtons.appendChild(button);
+            };
+
+            addButton('<i class="bi bi-chevron-left"></i>', visitCurrentPage - 1, visitCurrentPage === 1);
+
+            let startPage = Math.max(1, visitCurrentPage - 2);
+            let endPage = Math.min(totalPages, startPage + 4);
+            startPage = Math.max(1, endPage - 4);
+
+            for (let page = startPage; page <= endPage; page++) {
+                addButton(String(page), page, false, page === visitCurrentPage);
+            }
+
+            addButton('<i class="bi bi-chevron-right"></i>', visitCurrentPage + 1, visitCurrentPage === totalPages);
+        }
+
+        function renderVisitPage(resetPage = true) {
+            if (!visitRows.length || !visitRowsPerPage || !visitPaginationSummary) return;
+
+            if (resetPage) visitCurrentPage = 1;
+
+            const rowsPerPage = Math.max(1, parseInt(visitRowsPerPage.value, 10) || 10);
+            const totalPages = Math.max(1, Math.ceil(visitRows.length / rowsPerPage));
+
+            if (visitCurrentPage > totalPages) visitCurrentPage = totalPages;
+
+            visitRows.forEach(row => row.style.display = 'none');
+
+            const startIndex = (visitCurrentPage - 1) * rowsPerPage;
+            const endIndex = Math.min(startIndex + rowsPerPage, visitRows.length);
+
+            visitRows.slice(startIndex, endIndex).forEach(row => row.style.display = '');
+
+            visitPaginationSummary.textContent =
+                `Showing ${startIndex + 1}–${endIndex} of ${visitRows.length} visit${visitRows.length === 1 ? '' : 's'}`;
+
+            renderVisitPageButtons(totalPages);
+        }
+
+        if (visitRowsPerPage) {
+            visitRowsPerPage.addEventListener('change', () => renderVisitPage(true));
+            renderVisitPage(true);
         }
     </script>
 </body>

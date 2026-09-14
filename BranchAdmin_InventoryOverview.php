@@ -663,7 +663,97 @@ $recentStmt->close();
             .content-card-header { align-items: flex-start; flex-direction: column; }
             .filters { grid-template-columns: 1fr; }
         }
-    </style>
+    
+        /* =========================================================
+           CLIENT-SIDE TABLE PAGINATION
+           ========================================================= */
+        .table-pagination-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            flex-wrap: wrap;
+            padding: 14px 20px;
+            background: #fff;
+            border-top: 1px solid #edf0f5;
+        }
+
+        .table-pagination-summary {
+            color: #6f7b91;
+            font-size: 12px;
+        }
+
+        .table-pagination-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .rows-per-page-control {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            color: #6f7b91;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .rows-per-page-control select {
+            width: 78px;
+            min-height: 34px;
+            padding: 4px 28px 4px 10px;
+            border: 1px solid #dde3ee;
+            border-radius: 8px;
+            background-color: #fff;
+            color: #34405d;
+            font-size: 12px;
+        }
+
+        .table-page-buttons {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+
+        .table-page-btn {
+            min-width: 34px;
+            height: 34px;
+            padding: 0 9px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #dde3ee;
+            border-radius: 8px;
+            background: #fff;
+            color: #2B3A8C;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: .15s ease;
+        }
+
+        .table-page-btn:hover:not(:disabled),
+        .table-page-btn.active {
+            color: #fff;
+            background: #2B3A8C;
+            border-color: #2B3A8C;
+        }
+
+        .table-page-btn:disabled {
+            opacity: .45;
+            cursor: not-allowed;
+        }
+
+        @media (max-width: 576px) {
+            .table-pagination-bar {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+        }
+
+</style>
 </head>
 
 <body>
@@ -763,11 +853,11 @@ $recentStmt->close();
                         <option value="expiring">Expiring Soon</option>
                         <option value="expired">Expired</option>
                     </select>
-                    <div class="result-count"><span id="visibleCount"><?php echo number_format($totalItems); ?></span>&nbsp;items shown</div>
+                    <div class="result-count"><span id="visibleCount"><?php echo number_format($totalItems); ?></span>&nbsp;items found</div>
                 </div>
 
                 <div class="table-responsive">
-                    <table class="table inventory-table align-middle">
+                    <table class="table inventory-table align-middle" id="inventoryOverviewTable">
                         <thead><tr><th>Item</th><th>Category</th><th>Current Stock</th><th>Minimum</th><th>Batches</th><th>Nearest Expiry</th><th>Status</th><th>Decision Support</th></tr></thead>
                         <tbody id="inventoryTableBody">
                             <?php if (!$items): ?><tr class="initial-empty"><td colspan="8" class="empty-state"><i class="bi bi-inbox"></i>No inventory items are configured.</td></tr><?php endif; ?>
@@ -812,6 +902,22 @@ $recentStmt->close();
                         </tbody>
                     </table>
                 </div>
+
+                <div class="table-pagination-bar" id="inventoryPaginationBar">
+                    <div class="table-pagination-summary" id="inventoryPaginationSummary">Showing inventory items</div>
+                    <div class="table-pagination-actions">
+                        <label class="rows-per-page-control" for="inventoryRowsPerPage">
+                            Rows
+                            <select id="inventoryRowsPerPage">
+                                <option value="10" selected>10</option>
+                                <option value="25">25</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                        </label>
+                        <div class="table-page-buttons" id="inventoryPageButtons" aria-label="Inventory table pages"></div>
+                    </div>
+                </div>
             </section>
 
             <section class="content-card">
@@ -851,23 +957,94 @@ $recentStmt->close();
         const filteredEmpty = document.getElementById('filteredEmpty');
         let selectedCategory = 'all';
 
-        function applyInventoryFilters() {
+        const inventoryRowsPerPage = document.getElementById('inventoryRowsPerPage');
+        const inventoryPageButtons = document.getElementById('inventoryPageButtons');
+        const inventoryPaginationSummary = document.getElementById('inventoryPaginationSummary');
+        let inventoryCurrentPage = 1;
+
+        function renderInventoryPagination(totalPages) {
+            inventoryPageButtons.innerHTML = '';
+
+            if (totalPages <= 1) {
+                return;
+            }
+
+            const addButton = (label, page, disabled = false, active = false) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'table-page-btn' + (active ? ' active' : '');
+                button.innerHTML = label;
+                button.disabled = disabled;
+
+                if (!disabled && !active) {
+                    button.addEventListener('click', () => {
+                        inventoryCurrentPage = page;
+                        applyInventoryFilters(false);
+                    });
+                }
+
+                inventoryPageButtons.appendChild(button);
+            };
+
+            addButton('<i class="bi bi-chevron-left"></i>', inventoryCurrentPage - 1, inventoryCurrentPage === 1);
+
+            let startPage = Math.max(1, inventoryCurrentPage - 2);
+            let endPage = Math.min(totalPages, startPage + 4);
+            startPage = Math.max(1, endPage - 4);
+
+            for (let page = startPage; page <= endPage; page++) {
+                addButton(String(page), page, false, page === inventoryCurrentPage);
+            }
+
+            addButton('<i class="bi bi-chevron-right"></i>', inventoryCurrentPage + 1, inventoryCurrentPage === totalPages);
+        }
+
+        function applyInventoryFilters(resetPage = true) {
+            if (resetPage) {
+                inventoryCurrentPage = 1;
+            }
+
             const searchValue = searchInput.value.trim().toLowerCase();
             const selectedStatus = statusFilter.value;
-            let shown = 0;
 
-            rows.forEach((row) => {
+            const matchingRows = rows.filter((row) => {
                 const matchesCategory = selectedCategory === 'all' || row.dataset.category === selectedCategory;
                 const matchesSearch = searchValue === '' || row.dataset.search.includes(searchValue);
                 const statuses = row.dataset.status.split(' ');
                 const matchesStatus = selectedStatus === 'all' || statuses.includes(selectedStatus);
-                const display = matchesCategory && matchesSearch && matchesStatus;
-                row.style.display = display ? '' : 'none';
-                if (display) shown++;
+
+                return matchesCategory && matchesSearch && matchesStatus;
             });
 
-            visibleCount.textContent = shown.toLocaleString();
-            filteredEmpty.style.display = rows.length > 0 && shown === 0 ? '' : 'none';
+            const rowsPerPage = Math.max(1, parseInt(inventoryRowsPerPage.value, 10) || 10);
+            const totalPages = Math.max(1, Math.ceil(matchingRows.length / rowsPerPage));
+
+            if (inventoryCurrentPage > totalPages) {
+                inventoryCurrentPage = totalPages;
+            }
+
+            rows.forEach((row) => {
+                row.style.display = 'none';
+            });
+
+            const startIndex = (inventoryCurrentPage - 1) * rowsPerPage;
+            const endIndex = Math.min(startIndex + rowsPerPage, matchingRows.length);
+
+            matchingRows.slice(startIndex, endIndex).forEach((row) => {
+                row.style.display = '';
+            });
+
+            visibleCount.textContent = matchingRows.length.toLocaleString();
+            filteredEmpty.style.display = rows.length > 0 && matchingRows.length === 0 ? '' : 'none';
+
+            if (matchingRows.length === 0) {
+                inventoryPaginationSummary.textContent = 'No inventory items match the selected filters.';
+                inventoryPageButtons.innerHTML = '';
+            } else {
+                inventoryPaginationSummary.textContent =
+                    `Showing ${startIndex + 1}–${endIndex} of ${matchingRows.length} item${matchingRows.length === 1 ? '' : 's'}`;
+                renderInventoryPagination(totalPages);
+            }
         }
 
         tabs.forEach((tab) => {
@@ -879,12 +1056,15 @@ $recentStmt->close();
                 tab.classList.add('active');
                 tab.setAttribute('aria-selected', 'true');
                 selectedCategory = tab.dataset.category;
-                applyInventoryFilters();
+                applyInventoryFilters(true);
             });
         });
 
-        searchInput.addEventListener('input', applyInventoryFilters);
-        statusFilter.addEventListener('change', applyInventoryFilters);
+        searchInput.addEventListener('input', () => applyInventoryFilters(true));
+        statusFilter.addEventListener('change', () => applyInventoryFilters(true));
+        inventoryRowsPerPage.addEventListener('change', () => applyInventoryFilters(true));
+
+        applyInventoryFilters(true);
     </script>
 </body>
 </html>

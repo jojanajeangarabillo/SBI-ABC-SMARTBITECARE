@@ -1218,9 +1218,9 @@ body {
     overflow-wrap: anywhere;
 }
 
-.details-modal .modal-dialog {
+.modal-dialog.details-modal {
     width: calc(100% - 32px);
-    max-width: 860px;
+    max-width: 620px;
     margin: 1rem auto;
 }
 
@@ -1943,7 +1943,7 @@ body {
 
 <!-- Record / Edit Return Modal -->
 <div class="modal fade" id="returnModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-dialog modal-md modal-dialog-centered">
         <div class="modal-content border-0 shadow">
             <div class="modal-header modal-header-custom">
                 <h5 class="modal-title">
@@ -2080,7 +2080,7 @@ body {
 
 <!-- Return Details Modal -->
 <div class="modal fade" id="detailsModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-lg modal-dialog-centered details-modal">
+    <div class="modal-dialog modal-md modal-dialog-centered details-modal">
         <div class="modal-content border-0 shadow">
             <div class="modal-header modal-header-custom py-3">
                 <h5 class="modal-title"><i class="bi bi-file-earmark-text me-2"></i>Return Details</h5>

@@ -1640,7 +1640,97 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 font-size: 12px;
             }
         }
-    </style>
+    
+        /* =========================================================
+           CLIENT-SIDE TABLE PAGINATION
+           ========================================================= */
+        .table-pagination-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            flex-wrap: wrap;
+            padding: 14px 20px;
+            background: #fff;
+            border-top: 1px solid #edf0f5;
+        }
+
+        .table-pagination-summary {
+            color: #6f7b91;
+            font-size: 12px;
+        }
+
+        .table-pagination-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .rows-per-page-control {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            color: #6f7b91;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .rows-per-page-control select {
+            width: 78px;
+            min-height: 34px;
+            padding: 4px 28px 4px 10px;
+            border: 1px solid #dde3ee;
+            border-radius: 8px;
+            background-color: #fff;
+            color: #34405d;
+            font-size: 12px;
+        }
+
+        .table-page-buttons {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+
+        .table-page-btn {
+            min-width: 34px;
+            height: 34px;
+            padding: 0 9px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #dde3ee;
+            border-radius: 8px;
+            background: #fff;
+            color: #2B3A8C;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: .15s ease;
+        }
+
+        .table-page-btn:hover:not(:disabled),
+        .table-page-btn.active {
+            color: #fff;
+            background: #2B3A8C;
+            border-color: #2B3A8C;
+        }
+
+        .table-page-btn:disabled {
+            opacity: .45;
+            cursor: not-allowed;
+        }
+
+        @media (max-width: 576px) {
+            .table-pagination-bar {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+        }
+
+</style>
 </head>
 
 <body>
@@ -2000,14 +2090,30 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
 
                 <!-- Table Footer -->
                 <div class="table-footer">
-                    <div class="pagination-info">
-                        Showing <strong id="recordCountDisplayFooter"><?php echo count($followUpRecords); ?></strong> of <strong id="totalRecordCount"><?php echo $totalCount; ?></strong> records
+                    <div class="pagination-info" id="calendarPaginationSummary">
+                        Showing follow-up records
                     </div>
-                    <div>
+
+                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                        <label class="rows-per-page-control" for="calendarRowsPerPage">
+                            Rows
+                            <select id="calendarRowsPerPage">
+                                <option value="10" selected>10</option>
+                                <option value="25">25</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                        </label>
+
+                        <div class="table-page-buttons" id="calendarPageButtons" aria-label="Follow-up table pages"></div>
+
                         <button class="export-btn" id="exportBtn">
                             <i class="bi bi-download"></i> Export
                         </button>
                     </div>
+
+                    <span id="recordCountDisplayFooter" class="d-none"><?php echo count($followUpRecords); ?></span>
+                    <span id="totalRecordCount" class="d-none"><?php echo $totalCount; ?></span>
                 </div>
             </div>
         </div>
@@ -2241,6 +2347,105 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
     }
 
     // ----------------------------------------------------------------
+    // TABLE PAGINATION
+    // ----------------------------------------------------------------
+    let calendarCurrentPage = 1;
+
+    function getCalendarRows() {
+        return Array.from(
+            document.querySelectorAll('#recordsTableBody tr[data-status]')
+        );
+    }
+
+    function renderCalendarPageButtons(totalPages) {
+        const container = document.getElementById('calendarPageButtons');
+        if (!container) return;
+
+        container.innerHTML = '';
+
+        if (totalPages <= 1) {
+            return;
+        }
+
+        const addButton = (label, page, disabled = false, active = false) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'table-page-btn' + (active ? ' active' : '');
+            button.innerHTML = label;
+            button.disabled = disabled;
+
+            if (!disabled && !active) {
+                button.addEventListener('click', function () {
+                    calendarCurrentPage = page;
+                    paginateCalendarRows(false);
+                });
+            }
+
+            container.appendChild(button);
+        };
+
+        addButton('<i class="bi bi-chevron-left"></i>', calendarCurrentPage - 1, calendarCurrentPage === 1);
+
+        let startPage = Math.max(1, calendarCurrentPage - 2);
+        let endPage = Math.min(totalPages, startPage + 4);
+        startPage = Math.max(1, endPage - 4);
+
+        for (let page = startPage; page <= endPage; page++) {
+            addButton(String(page), page, false, page === calendarCurrentPage);
+        }
+
+        addButton('<i class="bi bi-chevron-right"></i>', calendarCurrentPage + 1, calendarCurrentPage === totalPages);
+    }
+
+    function paginateCalendarRows(resetPage = true) {
+        if (resetPage) {
+            calendarCurrentPage = 1;
+        }
+
+        const rows = getCalendarRows();
+        const select = document.getElementById('calendarRowsPerPage');
+        const summary = document.getElementById('calendarPaginationSummary');
+
+        if (!select || !summary) {
+            return;
+        }
+
+        const rowsPerPage = Math.max(1, parseInt(select.value, 10) || 10);
+        const totalPages = Math.max(1, Math.ceil(rows.length / rowsPerPage));
+
+        if (calendarCurrentPage > totalPages) {
+            calendarCurrentPage = totalPages;
+        }
+
+        rows.forEach(row => {
+            row.style.display = 'none';
+        });
+
+        const startIndex = (calendarCurrentPage - 1) * rowsPerPage;
+        const endIndex = Math.min(startIndex + rowsPerPage, rows.length);
+
+        rows.slice(startIndex, endIndex).forEach(row => {
+            row.style.display = '';
+        });
+
+        if (rows.length === 0) {
+            summary.textContent = 'No follow-up records found.';
+            document.getElementById('calendarPageButtons').innerHTML = '';
+        } else {
+            summary.textContent =
+                `Showing ${startIndex + 1}–${endIndex} of ${rows.length} filtered record${rows.length === 1 ? '' : 's'}`;
+            renderCalendarPageButtons(totalPages);
+        }
+    }
+
+    const calendarRowsPerPage = document.getElementById('calendarRowsPerPage');
+    if (calendarRowsPerPage) {
+        calendarRowsPerPage.addEventListener('change', function () {
+            paginateCalendarRows(true);
+        });
+    }
+
+    // ----------------------------------------------------------------
     // FETCH RECORDS (AJAX)
     // ----------------------------------------------------------------
     function fetchRecords() {
@@ -2299,6 +2504,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     </td>
                 </tr>
             `;
+            paginateCalendarRows(true);
             return;
         }
 
@@ -2346,6 +2552,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
 
         tbody.innerHTML = html;
         bindMarkCompleteButtons();
+        paginateCalendarRows(true);
     }
 
     // ----------------------------------------------------------------
@@ -2556,6 +2763,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
     // ----------------------------------------------------------------
     renderCalendar(currentMonth, currentYear);
     bindMarkCompleteButtons();
+    paginateCalendarRows(true);
 
     console.log('Follow-up Records loaded successfully');
     console.log('Branch:', '<?php echo htmlspecialchars($branch_name); ?>');

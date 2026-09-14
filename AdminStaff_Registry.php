@@ -638,7 +638,97 @@ $flash = workflowTakeFlash();
                 flex-direction: column;
             }
         }
-    </style>
+    
+        /* =========================================================
+           CLIENT-SIDE TABLE PAGINATION
+           ========================================================= */
+        .table-pagination-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            flex-wrap: wrap;
+            padding: 14px 20px;
+            background: #fff;
+            border-top: 1px solid #edf0f5;
+        }
+
+        .table-pagination-summary {
+            color: #6f7b91;
+            font-size: 12px;
+        }
+
+        .table-pagination-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .rows-per-page-control {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            color: #6f7b91;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .rows-per-page-control select {
+            width: 78px;
+            min-height: 34px;
+            padding: 4px 28px 4px 10px;
+            border: 1px solid #dde3ee;
+            border-radius: 8px;
+            background-color: #fff;
+            color: #34405d;
+            font-size: 12px;
+        }
+
+        .table-page-buttons {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+
+        .table-page-btn {
+            min-width: 34px;
+            height: 34px;
+            padding: 0 9px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #dde3ee;
+            border-radius: 8px;
+            background: #fff;
+            color: #2B3A8C;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: .15s ease;
+        }
+
+        .table-page-btn:hover:not(:disabled),
+        .table-page-btn.active {
+            color: #fff;
+            background: #2B3A8C;
+            border-color: #2B3A8C;
+        }
+
+        .table-page-btn:disabled {
+            opacity: .45;
+            cursor: not-allowed;
+        }
+
+        @media (max-width: 576px) {
+            .table-pagination-bar {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+        }
+
+</style>
 </head>
 
 <body>
@@ -746,7 +836,7 @@ $flash = workflowTakeFlash();
                 </div>
 
                 <div class="table-responsive">
-                    <table class="table registry-table align-middle">
+                    <table class="table registry-table align-middle" id="registryQueueTable">
                         <thead>
                             <tr>
                                 <th>Patient and Case</th>
@@ -755,7 +845,7 @@ $flash = workflowTakeFlash();
                                 <th>Registry Verification</th>
                             </tr>
                         </thead>
-                        <tbody>
+                        <tbody id="registryQueueBody">
                             <?php if (!$records): ?>
                                 <tr>
                                     <td colspan="4" class="empty-state">
@@ -766,7 +856,7 @@ $flash = workflowTakeFlash();
                             <?php endif; ?>
 
                             <?php foreach ($records as $row): ?>
-                                <tr>
+                                <tr class="registry-queue-row">
                                     <td>
                                         <div class="patient-name"><?php echo workflowH($row['full_name']); ?></div>
                                         <div class="case-number"><?php echo workflowH($row['case_number']); ?></div>
@@ -905,6 +995,24 @@ $flash = workflowTakeFlash();
                         </tbody>
                     </table>
                 </div>
+
+                <?php if ($records): ?>
+                    <div class="table-pagination-bar">
+                        <div class="table-pagination-summary" id="registryPaginationSummary">Showing registry records</div>
+                        <div class="table-pagination-actions">
+                            <label class="rows-per-page-control" for="registryRowsPerPage">
+                                Rows
+                                <select id="registryRowsPerPage">
+                                    <option value="10" selected>10</option>
+                                    <option value="25">25</option>
+                                    <option value="50">50</option>
+                                    <option value="100">100</option>
+                                </select>
+                            </label>
+                            <div class="table-page-buttons" id="registryPageButtons" aria-label="Registry queue pages"></div>
+                        </div>
+                    </div>
+                <?php endif; ?>
             </section>
         </div>
     </div>
@@ -971,6 +1079,76 @@ $flash = workflowTakeFlash();
             const caseOutput = document.getElementById('confirmCaseNumber');
             const registryOutput = document.getElementById('confirmRegistryNumber');
             let pendingForm = null;
+            const registryRows = Array.from(document.querySelectorAll('.registry-queue-row'));
+            const registryRowsPerPage = document.getElementById('registryRowsPerPage');
+            const registryPageButtons = document.getElementById('registryPageButtons');
+            const registryPaginationSummary = document.getElementById('registryPaginationSummary');
+            let registryCurrentPage = 1;
+
+            function renderRegistryPageButtons(totalPages) {
+                if (!registryPageButtons) return;
+                registryPageButtons.innerHTML = '';
+
+                if (totalPages <= 1) return;
+
+                const addButton = (label, page, disabled = false, active = false) => {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'table-page-btn' + (active ? ' active' : '');
+                    button.innerHTML = label;
+                    button.disabled = disabled;
+
+                    if (!disabled && !active) {
+                        button.addEventListener('click', function () {
+                            registryCurrentPage = page;
+                            renderRegistryPage(false);
+                        });
+                    }
+
+                    registryPageButtons.appendChild(button);
+                };
+
+                addButton('<i class="bi bi-chevron-left"></i>', registryCurrentPage - 1, registryCurrentPage === 1);
+
+                let startPage = Math.max(1, registryCurrentPage - 2);
+                let endPage = Math.min(totalPages, startPage + 4);
+                startPage = Math.max(1, endPage - 4);
+
+                for (let page = startPage; page <= endPage; page++) {
+                    addButton(String(page), page, false, page === registryCurrentPage);
+                }
+
+                addButton('<i class="bi bi-chevron-right"></i>', registryCurrentPage + 1, registryCurrentPage === totalPages);
+            }
+
+            function renderRegistryPage(resetPage = true) {
+                if (!registryRows.length || !registryRowsPerPage || !registryPaginationSummary) return;
+
+                if (resetPage) registryCurrentPage = 1;
+
+                const rowsPerPage = Math.max(1, parseInt(registryRowsPerPage.value, 10) || 10);
+                const totalPages = Math.max(1, Math.ceil(registryRows.length / rowsPerPage));
+
+                if (registryCurrentPage > totalPages) registryCurrentPage = totalPages;
+
+                registryRows.forEach(row => row.style.display = 'none');
+
+                const startIndex = (registryCurrentPage - 1) * rowsPerPage;
+                const endIndex = Math.min(startIndex + rowsPerPage, registryRows.length);
+
+                registryRows.slice(startIndex, endIndex).forEach(row => row.style.display = '');
+
+                registryPaginationSummary.textContent =
+                    `Showing ${startIndex + 1}–${endIndex} of ${registryRows.length} record${registryRows.length === 1 ? '' : 's'}`;
+
+                renderRegistryPageButtons(totalPages);
+            }
+
+            if (registryRowsPerPage) {
+                registryRowsPerPage.addEventListener('change', () => renderRegistryPage(true));
+                renderRegistryPage(true);
+            }
+
 
             document.querySelectorAll('.registry-form').forEach(function (form) {
                 form.addEventListener('submit', function (event) {
