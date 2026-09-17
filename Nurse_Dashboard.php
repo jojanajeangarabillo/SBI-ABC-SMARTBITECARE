@@ -1357,13 +1357,6 @@ $todayDisplay = date('l, F j, Y');
 
         <!-- TODAY / ATTENTION -->
         <section class="dashboard-section">
-            <div class="section-heading">
-                <div>
-                    <h2>Today's Workload</h2>
-                    <p>Items that may need the nurse's attention first.</p>
-                </div>
-            </div>
-
             <div class="stats-grid">
                 <a class="stat-card-link" href="Nurse_Vaccination.php?tab=patients">
                     <div class="stat-card stat-danger">

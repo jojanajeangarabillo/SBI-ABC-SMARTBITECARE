@@ -1,7 +1,6 @@
 <?php
 session_start();
 require_once __DIR__ . '/sources/db_connect.php';
-require_once 'sources/notification_helper.php';
 require_once __DIR__ . '/sources/app_config.php';
 require_once __DIR__ . '/sources/mailer.php';
 
@@ -16,7 +15,6 @@ if (
 }
 
 $user_id = $_SESSION['user_id'];
-$notification_count = getUnreadNotificationCount($conn, $user_id);
 $branch_id = null;
 $branch_name = '';
 $username = '';
@@ -104,7 +102,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             // Never use HTTP_HOST here because email links must continue to
             // work outside the computer that sent the message.
             $reset_link = APP_URL
-                . '/change_password.php?'
+                . '/reset_password.php?'
                 . http_build_query([
                     'token' => $token,
                     'email' => $email
@@ -470,123 +468,6 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
         .table-card .table tbody tr:hover {
             background: #f8faff;
         }
-
-        /* =========================================================
-   GLOBAL LOGOUT CONFIRMATION MODAL 
-   ========================================================= */
-
-.confirm-modal .modal-dialog {
-    max-width: 500px !important;
-    width: calc(100% - 30px);
-    margin: 1.75rem auto;
-}
-
-.confirm-modal .modal-content {
-    overflow: hidden !important;
-    border: 0 !important;
-    border-radius: 20px !important;
-    background: #fff !important;
-    box-shadow: 0 20px 55px rgba(31, 45, 110, 0.20) !important;
-}
-
-.confirm-modal .modal-header {
-    display: block !important;
-    padding: 26px 24px 6px !important;
-    border: 0 !important;
-    background: #fff !important;
-    text-align: center !important;
-}
-
-.confirm-modal .modal-icon {
-    width: 64px !important;
-    height: 64px !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    margin: 0 auto 14px !important;
-
-    color: #fff !important;
-    background: linear-gradient(135deg, #ef3340, #f05b68) !important;
-    border-radius: 50% !important;
-
-    box-shadow: 0 9px 22px rgba(239, 51, 64, 0.22) !important;
-    font-size: 27px !important;
-}
-
-.confirm-modal .modal-icon.logout-icon {
-    background: linear-gradient(135deg, #ef3340, #f05b68) !important;
-    box-shadow: 0 9px 22px rgba(239, 51, 64, 0.22) !important;
-}
-
-.confirm-modal .modal-title {
-    margin: 0 !important;
-    color: #283a7a !important;
-    font-size: 24px !important;
-    font-weight: 700 !important;
-    line-height: 1.3 !important;
-}
-
-.confirm-modal .modal-body {
-    padding: 6px 30px 22px !important;
-    background: #fff !important;
-    color: #7a879e !important;
-    text-align: center !important;
-}
-
-.confirm-modal .modal-body p {
-    margin: 0 !important;
-    color: #7a879e !important;
-    font-size: 17px !important;
-    line-height: 1.45 !important;
-}
-
-.confirm-modal .modal-footer {
-    display: grid !important;
-    grid-template-columns: 1fr 1fr !important;
-    gap: 10px !important;
-    padding: 0 24px 26px !important;
-    border: 0 !important;
-    background: #fff !important;
-}
-
-.confirm-modal .modal-footer .btn {
-    min-height: 50px !important;
-    margin: 0 !important;
-    border-radius: 10px !important;
-    font-size: 16px !important;
-    font-weight: 700 !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-}
-
-.confirm-modal .btn-light,
-.confirm-modal .btn-cancel {
-    color: #111 !important;
-    background: #f8f9fa !important;
-    border: 1px solid #d9dfe8 !important;
-}
-
-.confirm-modal .btn-light:hover,
-.confirm-modal .btn-cancel:hover {
-    background: #eef0f3 !important;
-}
-
-.confirm-modal .btn-danger,
-.confirm-modal .btn-logout {
-    color: #fff !important;
-    background: #e83445 !important;
-    border: 1px solid #e83445 !important;
-    text-decoration: none !important;
-}
-
-.confirm-modal .btn-danger:hover,
-.confirm-modal .btn-logout:hover {
-    color: #fff !important;
-    background: #d92839 !important;
-    border-color: #d92839 !important;
-}
-
         .badge-status {
             font-weight: 600;
             font-size: 12px;
@@ -782,6 +663,232 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
             .qa-btn-group { flex-direction: column; }
             .qa-btn-group .btn-qa { justify-content: center; }
         }
+    
+
+
+
+    
+
+        /* =========================================================
+           TOPBAR PROFILE — SAME STYLE AS DASHBOARD
+           ========================================================= */
+        .profile {
+            font-weight: 600;
+            color: var(--primary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .profile-button {
+            border: 0;
+            background: transparent;
+            padding: 10px 12px;
+            border-radius: 10px;
+            transition: background-color 0.2s ease;
+        }
+
+        .profile-button::after {
+            margin-left: 4px;
+        }
+
+        .profile-role {
+            color: #adb5bd;
+            font-size: 12px;
+            font-weight: 400;
+            margin-left: 4px;
+        }
+
+        .profile-menu {
+            min-width: 220px;
+            padding: 8px;
+            margin-top: 10px !important;
+            border: 1px solid #e4e8f1;
+            border-radius: 12px;
+            box-shadow: 0 10px 28px rgba(32, 45, 110, 0.14);
+        }
+
+        .profile-menu .dropdown-header {
+            padding: 8px 12px 10px;
+            color: #6c757d;
+            font-size: 12px;
+        }
+
+        .profile-menu .dropdown-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            color: #24315f;
+            font-weight: 500;
+        }
+
+        .profile-menu .dropdown-item:hover,
+        .profile-menu .dropdown-item:focus {
+            color: var(--primary);
+            background: #f1f3fb;
+        }
+
+        .profile-menu .dropdown-item.text-danger:hover,
+        .profile-menu .dropdown-item.text-danger:focus {
+            color: #b42332 !important;
+            background: #fff0f2;
+        }
+
+        /* =========================================================
+           LOGOUT CONFIRMATION — SAME STYLE AS DASHBOARD
+           ========================================================= */
+        .confirm-modal .modal-dialog {
+            max-width: 500px !important;
+            width: calc(100% - 30px);
+            margin: 1.75rem auto;
+        }
+
+        .confirm-modal .modal-content {
+            overflow: hidden !important;
+            border: 0 !important;
+            border-radius: 20px !important;
+            background: #fff !important;
+            box-shadow: 0 20px 55px rgba(31, 45, 110, 0.20) !important;
+        }
+
+        .confirm-modal .modal-header {
+            display: block !important;
+            padding: 26px 24px 6px !important;
+            border: 0 !important;
+            background: #fff !important;
+            text-align: center !important;
+        }
+
+        .confirm-modal .modal-icon {
+            width: 64px !important;
+            height: 64px !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            margin: 0 auto 14px !important;
+            color: #fff !important;
+            background: linear-gradient(135deg, #ef3340, #f05b68) !important;
+            border-radius: 50% !important;
+            box-shadow: 0 9px 22px rgba(239, 51, 64, 0.22) !important;
+            font-size: 27px !important;
+        }
+
+        .confirm-modal .modal-icon.logout-icon {
+            background: linear-gradient(135deg, #ef3340, #f05b68) !important;
+            box-shadow: 0 9px 22px rgba(239, 51, 64, 0.22) !important;
+        }
+
+        .confirm-modal .modal-title {
+            margin: 0 !important;
+            color: #283a7a !important;
+            font-size: 24px !important;
+            font-weight: 700 !important;
+            line-height: 1.3 !important;
+        }
+
+        .confirm-modal .modal-body {
+            padding: 6px 30px 22px !important;
+            background: #fff !important;
+            color: #7a879e !important;
+            text-align: center !important;
+        }
+
+        .confirm-modal .modal-body p {
+            margin: 0 !important;
+            color: #7a879e !important;
+            font-size: 17px !important;
+            line-height: 1.45 !important;
+        }
+
+        .confirm-modal .modal-footer {
+            display: grid !important;
+            grid-template-columns: 1fr 1fr !important;
+            gap: 10px !important;
+            padding: 0 24px 26px !important;
+            border: 0 !important;
+            background: #fff !important;
+        }
+
+        .confirm-modal .modal-footer .btn {
+            min-height: 50px !important;
+            margin: 0 !important;
+            border-radius: 10px !important;
+            font-size: 16px !important;
+            font-weight: 700 !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+
+        .confirm-modal .btn-light,
+        .confirm-modal .btn-cancel {
+            color: #111 !important;
+            background: #f8f9fa !important;
+            border: 1px solid #d9dfe8 !important;
+        }
+
+        .confirm-modal .btn-light:hover,
+        .confirm-modal .btn-cancel:hover {
+            background: #eef0f3 !important;
+        }
+
+        .confirm-modal .btn-danger,
+        .confirm-modal .btn-logout {
+            color: #fff !important;
+            background: #e83445 !important;
+            border: 1px solid #e83445 !important;
+            text-decoration: none !important;
+        }
+
+        .confirm-modal .btn-danger:hover,
+        .confirm-modal .btn-logout:hover {
+            color: #fff !important;
+            background: #d92839 !important;
+            border-color: #d92839 !important;
+        }
+
+        @media (max-width: 576px) {
+            .confirm-modal .modal-dialog {
+                width: calc(100% - 20px);
+                margin: 10px auto;
+            }
+
+            .confirm-modal .modal-header {
+                padding: 22px 18px 6px !important;
+            }
+
+            .confirm-modal .modal-icon {
+                width: 58px !important;
+                height: 58px !important;
+                margin-bottom: 12px !important;
+                font-size: 24px !important;
+            }
+
+            .confirm-modal .modal-title {
+                font-size: 21px !important;
+            }
+
+            .confirm-modal .modal-body {
+                padding: 6px 20px 18px !important;
+            }
+
+            .confirm-modal .modal-body p {
+                font-size: 15px !important;
+            }
+
+            .confirm-modal .modal-footer {
+                padding: 0 18px 20px !important;
+            }
+
+            .confirm-modal .modal-footer .btn {
+                min-height: 46px !important;
+                font-size: 15px !important;
+            }
+        }
+
     </style>
 </head>
 <body>
@@ -803,43 +910,54 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
                 <li><a href="BranchAdmin_Forecasting.php"><i class="bi bi-graph-up-arrow"></i><span>Supply Forecasting</span></a></li>
                 <li><a href="BranchAdmin_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
                 <li><a href="BranchAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
-                <li><a href="BranchAdmin_Notifications.php" class="notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
-                <?php if ($notification_count > 0): ?>
-                    <span class="notification-badge"><?php echo $notification_count; ?></span>
-                <?php endif; ?>
-            </a></li>
+                <li><a href="BranchAdmin_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
                 <li><a href="BranchAdmin_Settings.php"><i class="bi bi-gear-fill"></i><span>Settings</span></a></li>
             </ul>
         </nav>
-</div>
+        <div class="logout">
+            <a href="#"
+               data-bs-toggle="modal"
+               data-bs-target="#logoutConfirmModal">
+                <i class="bi bi-box-arrow-right"></i><span>Logout</span>
+            </a>
+        </div>
+    </div>
 
     <!-- Main Content -->
     <div class="main">
         <div class="topbar">
             <h3>User Management <small><?php echo htmlspecialchars($branch_name); ?></small></h3>
             
-             <div class="dropdown">
-                <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
-                        type="button" id="branchAdminProfileMenu"
-                        data-bs-toggle="dropdown" aria-expanded="false">
+            <div class="dropdown">
+                <button
+                    class="profile profile-button dropdown-toggle"
+                    type="button"
+                    id="branchAdminProfileMenu"
+                    data-bs-toggle="dropdown"
+                    aria-expanded="false"
+                >
                     <i class="bi bi-person-circle"></i>
                     <span><?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?></span>
                     <span class="profile-role">| Branch Admin</span>
                 </button>
-                <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2"
+
+                <ul class="dropdown-menu dropdown-menu-end profile-menu"
                     aria-labelledby="branchAdminProfileMenu">
-                    <li><h6 class="dropdown-header">Account options</h6></li>
                     <li>
-                        <a class="dropdown-item rounded-2 py-2" href="Account_ChangePassword.php">
-                            <i class="bi bi-key-fill me-2"></i>Change Password
+                        <div class="dropdown-header">Account options</div>
+                    </li>
+                    <li>
+                        <a class="dropdown-item" href="Account_ChangePassword.php">
+                            <i class="bi bi-key-fill"></i>
+                            <span>Change Password</span>
                         </a>
                     </li>
                     <li><hr class="dropdown-divider"></li>
                     <li>
                         <a class="dropdown-item rounded-2 py-2 text-danger"
-                            href="#"
-                            data-bs-toggle="modal"
-                            data-bs-target="#logoutConfirmModal">
+                           href="#"
+                           data-bs-toggle="modal"
+                           data-bs-target="#logoutConfirmModal">
                             <i class="bi bi-box-arrow-right me-2"></i>Logout
                         </a>
                     </li>
@@ -1072,48 +1190,50 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
         </div>
     </div>
 
-<div class="modal fade confirm-modal" id="logoutConfirmModal" tabindex="-1"
-     aria-labelledby="logoutConfirmModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
+    
 
-            <div class="modal-header">
-                <div class="modal-icon logout-icon">
-                    <i class="bi bi-box-arrow-right"></i>
+    <div class="modal fade confirm-modal" id="logoutConfirmModal" tabindex="-1"
+         aria-labelledby="logoutConfirmModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+
+                <div class="modal-header">
+                    <div class="modal-icon logout-icon">
+                        <i class="bi bi-box-arrow-right"></i>
+                    </div>
+
+                    <h2 class="modal-title" id="logoutConfirmModalLabel">
+                        Log out of Smart Bite Care?
+                    </h2>
                 </div>
 
-                <h2 class="modal-title" id="logoutConfirmModalLabel">
-                    Log out of Smart Bite Care?
-                </h2>
+                <div class="modal-body">
+                    <p class="mb-0">
+                        Make sure you have saved any unfinished work before leaving your account.
+                    </p>
+                </div>
+
+                <div class="modal-footer">
+                    <button
+                        type="button"
+                        class="btn btn-light border"
+                        data-bs-dismiss="modal"
+                    >
+                        Cancel
+                    </button>
+
+                    <a
+                        href="logout.php"
+                        class="btn btn-danger d-flex align-items-center justify-content-center"
+                    >
+                        <i class="bi bi-box-arrow-right me-1"></i>
+                        Yes, Log Out
+                    </a>
+                </div>
+
             </div>
-
-            <div class="modal-body">
-                <p class="mb-0">
-                    Make sure you have saved any unfinished work before leaving your account.
-                </p>
-            </div>
-
-            <div class="modal-footer">
-                <button
-                    type="button"
-                    class="btn btn-light border"
-                    data-bs-dismiss="modal"
-                >
-                    Cancel
-                </button>
-
-                <a
-                    href="logout.php"
-                    class="btn btn-danger d-flex align-items-center justify-content-center"
-                >
-                    <i class="bi bi-box-arrow-right me-1"></i>
-                    Yes, Log Out
-                </a>
-            </div>
-
         </div>
     </div>
-</div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>

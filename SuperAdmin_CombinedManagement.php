@@ -1,9 +1,8 @@
 <?php
 session_start();
-require_once __DIR__ . '/sources/db_connect.php';
-require_once 'sources/notification_helper.php';
-require_once __DIR__ . '/sources/app_config.php';
-require_once __DIR__ . '/sources/mailer.php';
+require_once 'sources/db_connect.php';
+require_once 'sources/app_config.php';
+require_once 'sources/mailer.php';
 
 // Check if user is logged in and is super admin
 if (
@@ -15,9 +14,6 @@ if (
     exit();
 }
 
-
-$user_id = (int)$_SESSION['user_id'];
-$notification_count = getUnreadNotificationCount($conn, $user_id);
 // ========== AUDIT LOG FUNCTION ==========
 function addAuditLog($conn, $user_id, $action, $module = 'Branch & Admin Management') {
     try {
@@ -387,9 +383,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $action_detail = "SUCCESS | Created Branch Admin account and initial password-reset token: $username (ID: $user_id) for branch ID: $branch_id";
         addAuditLog($conn, (int)$_SESSION['user_id'], $action_detail);
 
-        // APP_URL is configured once in sources/app_config.php. This prevents
-        // emailed links from incorrectly using localhost or an untrusted Host header.
-        $reset_link = APP_URL
+        // Generate a URL that works whether the project is in htdocs directly
+        // or in a subdirectory such as /SBI-ABC-SMARTBITECARE.
+        $https_enabled = isset($_SERVER['HTTPS'])
+            && $_SERVER['HTTPS'] !== ''
+            && strtolower((string)$_SERVER['HTTPS']) !== 'off';
+        $protocol = $https_enabled ? 'https' : 'http';
+        $host = (string)($_SERVER['HTTP_HOST'] ?? 'localhost');
+        $script_directory = str_replace(
+            '\\',
+            '/',
+            dirname((string)($_SERVER['SCRIPT_NAME'] ?? ''))
+        );
+        $script_directory = $script_directory === '/' ? '' : rtrim($script_directory, '/');
+        $reset_link = $protocol
+            . '://'
+            . $host
+            . $script_directory
             . '/change_password.php?'
             . http_build_query([
                 'token' => $token,
@@ -829,233 +839,15 @@ if (isset($_GET['archive_id'])) {
         .profile {
             font-weight: 600;
             color: var(--primary);
-            cursor: pointer;
+            cursor: default;
             display: flex;
             align-items: center;
             gap: 6px;
         }
 
-        .profile-button {
-            border: 0;
-            background: transparent;
-            padding: 10px 12px;
-            border-radius: 10px;
-            transition: background-color 0.2s ease;
-        }
-
-
-        .profile-button::after {
-            margin-left: 4px;
-        }
-
-        .profile-role {
-            color: #adb5bd;
-            font-size: 12px;
-            font-weight: 400;
-            margin-left: 4px;
-        }
-
-        .profile-menu {
-            min-width: 220px;
-            padding: 8px;
-            margin-top: 10px !important;
-            border: 1px solid #e4e8f1;
-            border-radius: 12px;
-            box-shadow: 0 10px 28px rgba(32, 45, 110, 0.14);
-        }
-
-        .profile-menu .dropdown-header {
-            padding: 8px 12px 10px;
-            color: #6c757d;
-            font-size: 12px;
-        }
-
-        .profile-menu .dropdown-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 10px 12px;
-            border-radius: 8px;
-            color: #24315f;
-            font-weight: 500;
-        }
-
-        .profile-menu .dropdown-item:hover,
-        .profile-menu .dropdown-item:focus {
-            color: var(--primary);
-            background: #f1f3fb;
-        }
-
-        .profile-menu .dropdown-item.text-danger:hover,
-        .profile-menu .dropdown-item.text-danger:focus {
-            color: #b42332 !important;
-            background: #fff0f2;
-        }
-
         .content {
             padding: 35px 35px 40px;
         }
-
-        /* =========================================================
-   GLOBAL LOGOUT CONFIRMATION MODAL 
-   ========================================================= */
-
-.confirm-modal .modal-dialog {
-    max-width: 500px !important;
-    width: calc(100% - 30px);
-    margin: 1.75rem auto;
-}
-
-.confirm-modal .modal-content {
-    overflow: hidden !important;
-    border: 0 !important;
-    border-radius: 20px !important;
-    background: #fff !important;
-    box-shadow: 0 20px 55px rgba(31, 45, 110, 0.20) !important;
-}
-
-.confirm-modal .modal-header {
-    display: block !important;
-    padding: 26px 24px 6px !important;
-    border: 0 !important;
-    background: #fff !important;
-    text-align: center !important;
-}
-
-.confirm-modal .modal-icon {
-    width: 64px !important;
-    height: 64px !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    margin: 0 auto 14px !important;
-
-    color: #fff !important;
-    background: linear-gradient(135deg, #ef3340, #f05b68) !important;
-    border-radius: 50% !important;
-
-    box-shadow: 0 9px 22px rgba(239, 51, 64, 0.22) !important;
-    font-size: 27px !important;
-}
-
-.confirm-modal .modal-icon.logout-icon {
-    background: linear-gradient(135deg, #ef3340, #f05b68) !important;
-    box-shadow: 0 9px 22px rgba(239, 51, 64, 0.22) !important;
-}
-
-.confirm-modal .modal-title {
-    margin: 0 !important;
-    color: #283a7a !important;
-    font-size: 24px !important;
-    font-weight: 700 !important;
-    line-height: 1.3 !important;
-}
-
-.confirm-modal .modal-body {
-    padding: 6px 30px 22px !important;
-    background: #fff !important;
-    color: #7a879e !important;
-    text-align: center !important;
-}
-
-.confirm-modal .modal-body p {
-    margin: 0 !important;
-    color: #7a879e !important;
-    font-size: 17px !important;
-    line-height: 1.45 !important;
-}
-
-.confirm-modal .modal-footer {
-    display: grid !important;
-    grid-template-columns: 1fr 1fr !important;
-    gap: 10px !important;
-    padding: 0 24px 26px !important;
-    border: 0 !important;
-    background: #fff !important;
-}
-
-.confirm-modal .modal-footer .btn {
-    min-height: 50px !important;
-    margin: 0 !important;
-    border-radius: 10px !important;
-    font-size: 16px !important;
-    font-weight: 700 !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-}
-
-.confirm-modal .btn-light,
-.confirm-modal .btn-cancel {
-    color: #111 !important;
-    background: #f8f9fa !important;
-    border: 1px solid #d9dfe8 !important;
-}
-
-.confirm-modal .btn-light:hover,
-.confirm-modal .btn-cancel:hover {
-    background: #eef0f3 !important;
-}
-
-.confirm-modal .btn-danger,
-.confirm-modal .btn-logout {
-    color: #fff !important;
-    background: #e83445 !important;
-    border: 1px solid #e83445 !important;
-    text-decoration: none !important;
-}
-
-.confirm-modal .btn-danger:hover,
-.confirm-modal .btn-logout:hover {
-    color: #fff !important;
-    background: #d92839 !important;
-    border-color: #d92839 !important;
-}
-
-/* Hide elements that are not part of the logout confirmation */
-#logoutConfirmModal .confirmation-summary,
-#logoutConfirmModal .confirmation-warning {
-    display: none !important;
-}
-
-@media (max-width: 576px) {
-    .confirm-modal .modal-dialog {
-        width: calc(100% - 20px);
-        margin: 10px auto;
-    }
-
-    .confirm-modal .modal-header {
-        padding: 22px 18px 6px !important;
-    }
-
-    .confirm-modal .modal-icon {
-        width: 58px !important;
-        height: 58px !important;
-        margin-bottom: 12px !important;
-        font-size: 24px !important;
-    }
-
-    .confirm-modal .modal-title {
-        font-size: 21px !important;
-    }
-
-    .confirm-modal .modal-body {
-        padding: 6px 20px 18px !important;
-    }
-
-    .confirm-modal .modal-body p {
-        font-size: 15px !important;
-    }
-
-    .confirm-modal .modal-footer {
-        padding: 0 18px 20px !important;
-    }
-
-    .confirm-modal .modal-footer .btn {
-        min-height: 46px !important;
-        font-size: 15px !important;
-    }
-}
 
         /* ===== TABS ===== */
         .nav-tabs-custom {
@@ -1414,33 +1206,233 @@ if (isset($_GET['archive_id'])) {
             .search-wrap { max-width: 100%; }
             .btn-add { justify-content: center; }
         }
-            /* Notification sidebar badge */
-        .notification-link {
-            display: flex !important;
+    
+
+
+
+    
+
+        /* =========================================================
+           TOPBAR PROFILE — SAME STYLE AS DASHBOARD
+           ========================================================= */
+        .profile {
+            font-weight: 600;
+            color: var(--primary);
+            cursor: pointer;
+            display: flex;
             align-items: center;
-            width: 100%;
+            gap: 6px;
         }
 
-        .notification-badge {
+        .profile-button {
+            border: 0;
+            background: transparent;
+            padding: 10px 12px;
+            border-radius: 10px;
+            transition: background-color 0.2s ease;
+        }
+
+        .profile-button::after {
+            margin-left: 4px;
+        }
+
+        .profile-role {
+            color: #adb5bd;
+            font-size: 12px;
+            font-weight: 400;
+            margin-left: 4px;
+        }
+
+        .profile-menu {
+            min-width: 220px;
+            padding: 8px;
+            margin-top: 10px !important;
+            border: 1px solid #e4e8f1;
+            border-radius: 12px;
+            box-shadow: 0 10px 28px rgba(32, 45, 110, 0.14);
+        }
+
+        .profile-menu .dropdown-header {
+            padding: 8px 12px 10px;
+            color: #6c757d;
+            font-size: 12px;
+        }
+
+        .profile-menu .dropdown-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            color: #24315f;
+            font-weight: 500;
+        }
+
+        .profile-menu .dropdown-item:hover,
+        .profile-menu .dropdown-item:focus {
+            color: var(--primary);
+            background: #f1f3fb;
+        }
+
+        .profile-menu .dropdown-item.text-danger:hover,
+        .profile-menu .dropdown-item.text-danger:focus {
+            color: #b42332 !important;
+            background: #fff0f2;
+        }
+
+        /* =========================================================
+           LOGOUT CONFIRMATION — SAME STYLE AS DASHBOARD
+           ========================================================= */
+        .confirm-modal .modal-dialog {
+            max-width: 500px !important;
+            width: calc(100% - 30px);
+            margin: 1.75rem auto;
+        }
+
+        .confirm-modal .modal-content {
+            overflow: hidden !important;
+            border: 0 !important;
+            border-radius: 20px !important;
+            background: #fff !important;
+            box-shadow: 0 20px 55px rgba(31, 45, 110, 0.20) !important;
+        }
+
+        .confirm-modal .modal-header {
+            display: block !important;
+            padding: 26px 24px 6px !important;
+            border: 0 !important;
+            background: #fff !important;
+            text-align: center !important;
+        }
+
+        .confirm-modal .modal-icon {
+            width: 64px !important;
+            height: 64px !important;
             display: inline-flex !important;
-            align-items: center;
-            justify-content: center;
-            min-width: 20px;
-            height: 20px;
-            padding: 0 6px;
-            margin-left: auto;
-            border-radius: 999px;
-            background: #F21D2F;
+            align-items: center !important;
+            justify-content: center !important;
+            margin: 0 auto 14px !important;
             color: #fff !important;
-            font-size: 10px !important;
-            font-weight: 700 !important;
-            line-height: 1;
-            white-space: nowrap;
-            flex: 0 0 auto;
+            background: linear-gradient(135deg, #ef3340, #f05b68) !important;
+            border-radius: 50% !important;
+            box-shadow: 0 9px 22px rgba(239, 51, 64, 0.22) !important;
+            font-size: 27px !important;
         }
 
-</style>
+        .confirm-modal .modal-icon.logout-icon {
+            background: linear-gradient(135deg, #ef3340, #f05b68) !important;
+            box-shadow: 0 9px 22px rgba(239, 51, 64, 0.22) !important;
+        }
 
+        .confirm-modal .modal-title {
+            margin: 0 !important;
+            color: #283a7a !important;
+            font-size: 24px !important;
+            font-weight: 700 !important;
+            line-height: 1.3 !important;
+        }
+
+        .confirm-modal .modal-body {
+            padding: 6px 30px 22px !important;
+            background: #fff !important;
+            color: #7a879e !important;
+            text-align: center !important;
+        }
+
+        .confirm-modal .modal-body p {
+            margin: 0 !important;
+            color: #7a879e !important;
+            font-size: 17px !important;
+            line-height: 1.45 !important;
+        }
+
+        .confirm-modal .modal-footer {
+            display: grid !important;
+            grid-template-columns: 1fr 1fr !important;
+            gap: 10px !important;
+            padding: 0 24px 26px !important;
+            border: 0 !important;
+            background: #fff !important;
+        }
+
+        .confirm-modal .modal-footer .btn {
+            min-height: 50px !important;
+            margin: 0 !important;
+            border-radius: 10px !important;
+            font-size: 16px !important;
+            font-weight: 700 !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+
+        .confirm-modal .btn-light,
+        .confirm-modal .btn-cancel {
+            color: #111 !important;
+            background: #f8f9fa !important;
+            border: 1px solid #d9dfe8 !important;
+        }
+
+        .confirm-modal .btn-light:hover,
+        .confirm-modal .btn-cancel:hover {
+            background: #eef0f3 !important;
+        }
+
+        .confirm-modal .btn-danger,
+        .confirm-modal .btn-logout {
+            color: #fff !important;
+            background: #e83445 !important;
+            border: 1px solid #e83445 !important;
+            text-decoration: none !important;
+        }
+
+        .confirm-modal .btn-danger:hover,
+        .confirm-modal .btn-logout:hover {
+            color: #fff !important;
+            background: #d92839 !important;
+            border-color: #d92839 !important;
+        }
+
+        @media (max-width: 576px) {
+            .confirm-modal .modal-dialog {
+                width: calc(100% - 20px);
+                margin: 10px auto;
+            }
+
+            .confirm-modal .modal-header {
+                padding: 22px 18px 6px !important;
+            }
+
+            .confirm-modal .modal-icon {
+                width: 58px !important;
+                height: 58px !important;
+                margin-bottom: 12px !important;
+                font-size: 24px !important;
+            }
+
+            .confirm-modal .modal-title {
+                font-size: 21px !important;
+            }
+
+            .confirm-modal .modal-body {
+                padding: 6px 20px 18px !important;
+            }
+
+            .confirm-modal .modal-body p {
+                font-size: 15px !important;
+            }
+
+            .confirm-modal .modal-footer {
+                padding: 0 18px 20px !important;
+            }
+
+            .confirm-modal .modal-footer .btn {
+                min-height: 46px !important;
+                font-size: 15px !important;
+            }
+        }
+
+    </style>
 </head>
 <body>
 
@@ -1464,15 +1456,17 @@ if (isset($_GET['archive_id'])) {
             <li><a href="SuperAdmin_BranchPerformanceMonitoring.php"><i class="bi bi-graph-up-arrow"></i><span>Branch Performance Monitoring</span></a></li>
             <li><a href="SuperAdmin_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
             <li><a href="SuperAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
-            <li><a href="SuperAdmin_Notifications.php" class="notification-link">
-                <i class="bi bi-bell-fill"></i><span>Notifications</span>
-                <?php if ($notification_count > 0): ?>
-                    <span class="notification-badge"><?php echo $notification_count; ?></span>
-                <?php endif; ?>
-            </a></li>
+            <li><a href="SuperAdmin_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
         </ul>
     </nav>
 
+    <div class="logout">
+        <a href="#"
+           data-bs-toggle="modal"
+           data-bs-target="#logoutConfirmModal">
+            <i class="bi bi-box-arrow-right"></i><span>Logout</span>
+        </a>
+    </div>
 </div>
 
 <!-- ========== MAIN CONTENT ========== -->
@@ -1488,13 +1482,14 @@ if (isset($_GET['archive_id'])) {
                 id="superAdminProfileMenu"
                 data-bs-toggle="dropdown"
                 aria-expanded="false"
-
+            >
                 <i class="bi bi-person-circle"></i>
                 <span><?php echo htmlspecialchars($_SESSION['username'] ?? 'SUPER ADMIN', ENT_QUOTES, 'UTF-8'); ?></span>
                 <span class="profile-role">| Super Admin</span>
             </button>
 
-            <ul class="dropdown-menu dropdown-menu-end profile-menu" aria-labelledby="superAdminProfileMenu">
+            <ul class="dropdown-menu dropdown-menu-end profile-menu"
+                aria-labelledby="superAdminProfileMenu">
                 <li>
                     <div class="dropdown-header">Account options</div>
                 </li>
@@ -1506,10 +1501,10 @@ if (isset($_GET['archive_id'])) {
                 </li>
                 <li><hr class="dropdown-divider"></li>
                 <li>
-                     <a class="dropdown-item rounded-2 py-2 text-danger"
-                        href="#"
-                        data-bs-toggle="modal"
-                        data-bs-target="#logoutConfirmModal">
+                    <a class="dropdown-item rounded-2 py-2 text-danger"
+                       href="#"
+                       data-bs-toggle="modal"
+                       data-bs-target="#logoutConfirmModal">
                         <i class="bi bi-box-arrow-right me-2"></i>Logout
                     </a>
                 </li>
@@ -2072,50 +2067,52 @@ if (isset($_GET['archive_id'])) {
     </div>
 </div>
 
-<div class="modal fade confirm-modal" id="logoutConfirmModal" tabindex="-1"
-     aria-labelledby="logoutConfirmModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
 
-            <div class="modal-header">
-                <div class="modal-icon logout-icon">
-                    <i class="bi bi-box-arrow-right"></i>
+
+    <div class="modal fade confirm-modal" id="logoutConfirmModal" tabindex="-1"
+         aria-labelledby="logoutConfirmModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+
+                <div class="modal-header">
+                    <div class="modal-icon logout-icon">
+                        <i class="bi bi-box-arrow-right"></i>
+                    </div>
+
+                    <h2 class="modal-title" id="logoutConfirmModalLabel">
+                        Log out of Smart Bite Care?
+                    </h2>
                 </div>
 
-                <h2 class="modal-title" id="logoutConfirmModalLabel">
-                    Log out of Smart Bite Care?
-                </h2>
+                <div class="modal-body">
+                    <p class="mb-0">
+                        Make sure you have saved any unfinished work before leaving your account.
+                    </p>
+                </div>
+
+                <div class="modal-footer">
+                    <button
+                        type="button"
+                        class="btn btn-light border"
+                        data-bs-dismiss="modal"
+                    >
+                        Cancel
+                    </button>
+
+                    <a
+                        href="logout.php"
+                        class="btn btn-danger d-flex align-items-center justify-content-center"
+                    >
+                        <i class="bi bi-box-arrow-right me-1"></i>
+                        Yes, Log Out
+                    </a>
+                </div>
+
             </div>
-
-            <div class="modal-body">
-                <p class="mb-0">
-                    Make sure you have saved any unfinished work before leaving your account.
-                </p>
-            </div>
-
-            <div class="modal-footer">
-                <button
-                    type="button"
-                    class="btn btn-light border"
-                    data-bs-dismiss="modal"
-                >
-                    Cancel
-                </button>
-
-                <a
-                    href="logout.php"
-                    class="btn btn-danger d-flex align-items-center justify-content-center"
-                >
-                    <i class="bi bi-box-arrow-right me-1"></i>
-                    Yes, Log Out
-                </a>
-            </div>
-
         </div>
     </div>
-</div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
     // ========== BRANCH FUNCTIONS ==========

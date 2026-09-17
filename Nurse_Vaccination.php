@@ -117,29 +117,79 @@ function getCompletedDoseStages($conn, $patient_id, $case_id) {
         6 => false  // D28/30
     ];
 
-    // Registry dose flags are the stage-level record.
-    $regSql = "SELECT dose_d0, dose_d3, dose_d7, dose_d14, dose_d21, dose_d28_30
-               FROM registry_records
-               WHERE case_id = ? AND is_archived = 0
-               LIMIT 1";
-    $regStmt = $conn->prepare($regSql);
-    $regStmt->bind_param("i", $case_id);
-    $regStmt->execute();
-    $reg = $regStmt->get_result()->fetch_assoc();
-    $regStmt->close();
+    /*
+     * A restarted treatment cycle archives the previous vaccination rows
+     * and creates fresh active Scheduled rows.
+     *
+     * When active vaccination rows exist, THEY are the source of truth for
+     * the current cycle. Old registry dose flags must not make the restarted
+     * cycle look partially/fully completed.
+     *
+     * Registry flags are kept only as a legacy fallback for older records
+     * that have no active vaccination_records rows at all.
+     */
+    $activeCycleStmt = $conn->prepare(
+        "SELECT COUNT(*) AS active_rows
+         FROM vaccination_records
+         WHERE patient_id = ?
+           AND case_id = ?
+           AND is_archived = 0"
+    );
 
-    if ($reg) {
-        $stages[1] = ((int)($reg['dose_d0'] ?? 0) === 1);
-        $stages[2] = ((int)($reg['dose_d3'] ?? 0) === 1);
-        $stages[3] = ((int)($reg['dose_d7'] ?? 0) === 1);
-        $stages[4] = ((int)($reg['dose_d14'] ?? 0) === 1);
-        $stages[5] = ((int)($reg['dose_d21'] ?? 0) === 1);
-        $stages[6] = ((int)($reg['dose_d28_30'] ?? 0) === 1);
+    $activeCycleStmt->bind_param(
+        "ii",
+        $patient_id,
+        $case_id
+    );
+
+    $activeCycleStmt->execute();
+
+    $activeCycleRows = (int)(
+        $activeCycleStmt
+            ->get_result()
+            ->fetch_assoc()['active_rows']
+        ?? 0
+    );
+
+    $activeCycleStmt->close();
+
+    if ($activeCycleRows === 0) {
+        $regSql = "SELECT
+                        dose_d0,
+                        dose_d3,
+                        dose_d7,
+                        dose_d14,
+                        dose_d21,
+                        dose_d28_30
+                   FROM registry_records
+                   WHERE case_id = ?
+                     AND is_archived = 0
+                   LIMIT 1";
+
+        $regStmt = $conn->prepare($regSql);
+        $regStmt->bind_param("i", $case_id);
+        $regStmt->execute();
+
+        $reg = $regStmt
+            ->get_result()
+            ->fetch_assoc();
+
+        $regStmt->close();
+
+        if ($reg) {
+            $stages[1] = ((int)($reg['dose_d0'] ?? 0) === 1);
+            $stages[2] = ((int)($reg['dose_d3'] ?? 0) === 1);
+            $stages[3] = ((int)($reg['dose_d7'] ?? 0) === 1);
+            $stages[4] = ((int)($reg['dose_d14'] ?? 0) === 1);
+            $stages[5] = ((int)($reg['dose_d21'] ?? 0) === 1);
+            $stages[6] = ((int)($reg['dose_d28_30'] ?? 0) === 1);
+        }
     }
 
-    // Also recognize legitimate completed records. This supports older cases
-    // whose registry flags were not populated yet. Future-dated and Default
-    // placeholder records are deliberately ignored.
+    /*
+     * Current-cycle completed vaccination records always count.
+     * Archived rows from a previous/restarted cycle do not.
+     */
     $vaccSql = "SELECT DISTINCT dose_number
                 FROM vaccination_records
                 WHERE patient_id = ?
@@ -150,16 +200,21 @@ function getCompletedDoseStages($conn, $patient_id, $case_id) {
                   AND date_administered <= CURDATE()
                   AND COALESCE(vaccine_name, '') NOT LIKE '%Default%'
                   AND dose_number BETWEEN 1 AND 6";
+
     $vaccStmt = $conn->prepare($vaccSql);
     $vaccStmt->bind_param("ii", $patient_id, $case_id);
     $vaccStmt->execute();
+
     $vaccResult = $vaccStmt->get_result();
+
     while ($row = $vaccResult->fetch_assoc()) {
         $dose = (int)$row['dose_number'];
+
         if ($dose >= 1 && $dose <= 6) {
             $stages[$dose] = true;
         }
     }
+
     $vaccStmt->close();
 
     return $stages;
@@ -415,17 +470,26 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_patient_cases') {
                       AND vr_done.date_administered <= CURDATE()
                       AND COALESCE(vr_done.vaccine_name, '') NOT LIKE '%Default%'
                   ) < 6
-              AND NOT EXISTS (
-                    SELECT 1
-                    FROM registry_records rr_done
-                    WHERE rr_done.case_id = a.case_id
-                      AND rr_done.is_archived = 0
-                      AND rr_done.dose_d0 = 1
-                      AND rr_done.dose_d3 = 1
-                      AND rr_done.dose_d7 = 1
-                      AND rr_done.dose_d14 = 1
-                      AND rr_done.dose_d21 = 1
-                      AND rr_done.dose_d28_30 = 1
+              AND (
+                    EXISTS (
+                        SELECT 1
+                        FROM vaccination_records vr_cycle
+                        WHERE vr_cycle.patient_id = p.patient_id
+                          AND vr_cycle.case_id = a.case_id
+                          AND vr_cycle.is_archived = 0
+                    )
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM registry_records rr_done
+                        WHERE rr_done.case_id = a.case_id
+                          AND rr_done.is_archived = 0
+                          AND rr_done.dose_d0 = 1
+                          AND rr_done.dose_d3 = 1
+                          AND rr_done.dose_d7 = 1
+                          AND rr_done.dose_d14 = 1
+                          AND rr_done.dose_d21 = 1
+                          AND rr_done.dose_d28_30 = 1
+                    )
                   )
             ORDER BY a.created_at DESC";
     
@@ -1197,10 +1261,10 @@ if (isset($_POST['submit_vaccination'])) {
 // ============================================================
 // GET PATIENTS ELIGIBLE FOR VACCINATION DROPDOWN
 // ============================================================
-// Only patients in the nurse's branch who still have at least one
-// active case with fewer than six DISTINCT completed dose stages
-// are shown. Patients who already completed D0-D28/30 disappear
-// from the Select Patient dropdown after the page reloads.
+// Only patients in the nurse's branch who still have an active vaccination-
+// eligible case are shown. A restarted case uses its NEW active vaccination
+// rows as the current cycle, so old registry completion flags do not block it.
+// Archived rows from the previous cycle are historical only.
 
 $sql_patients = "SELECT DISTINCT
                     p.patient_id,
@@ -1223,17 +1287,26 @@ $sql_patients = "SELECT DISTINCT
                           AND vr_done.date_administered <= CURDATE()
                           AND COALESCE(vr_done.vaccine_name, '') NOT LIKE '%Default%'
                    ) < 6
-                   AND NOT EXISTS (
-                        SELECT 1
-                        FROM registry_records rr_done
-                        WHERE rr_done.case_id = a.case_id
-                          AND rr_done.is_archived = 0
-                          AND rr_done.dose_d0 = 1
-                          AND rr_done.dose_d3 = 1
-                          AND rr_done.dose_d7 = 1
-                          AND rr_done.dose_d14 = 1
-                          AND rr_done.dose_d21 = 1
-                          AND rr_done.dose_d28_30 = 1
+                   AND (
+                        EXISTS (
+                            SELECT 1
+                            FROM vaccination_records vr_cycle
+                            WHERE vr_cycle.patient_id = p.patient_id
+                              AND vr_cycle.case_id = a.case_id
+                              AND vr_cycle.is_archived = 0
+                        )
+                        OR NOT EXISTS (
+                            SELECT 1
+                            FROM registry_records rr_done
+                            WHERE rr_done.case_id = a.case_id
+                              AND rr_done.is_archived = 0
+                              AND rr_done.dose_d0 = 1
+                              AND rr_done.dose_d3 = 1
+                              AND rr_done.dose_d7 = 1
+                              AND rr_done.dose_d14 = 1
+                              AND rr_done.dose_d21 = 1
+                              AND rr_done.dose_d28_30 = 1
+                        )
                    )
                  ORDER BY p.full_name ASC";
 
@@ -1369,17 +1442,26 @@ $patient_list_sql = "SELECT
                                   AND COALESCE(vr_done.vaccine_name, '') NOT LIKE '%Default%'
                                   AND vr_done.dose_number BETWEEN 1 AND 6
                            ) < 6
-                           AND NOT EXISTS (
-                                SELECT 1
-                                FROM registry_records rr_done
-                                WHERE rr_done.case_id = abc.case_id
-                                  AND rr_done.is_archived = 0
-                                  AND rr_done.dose_d0 = 1
-                                  AND rr_done.dose_d3 = 1
-                                  AND rr_done.dose_d7 = 1
-                                  AND rr_done.dose_d14 = 1
-                                  AND rr_done.dose_d21 = 1
-                                  AND rr_done.dose_d28_30 = 1
+                           AND (
+                                EXISTS (
+                                    SELECT 1
+                                    FROM vaccination_records vr_cycle
+                                    WHERE vr_cycle.patient_id = abc.patient_id
+                                      AND vr_cycle.case_id = abc.case_id
+                                      AND vr_cycle.is_archived = 0
+                                )
+                                OR NOT EXISTS (
+                                    SELECT 1
+                                    FROM registry_records rr_done
+                                    WHERE rr_done.case_id = abc.case_id
+                                      AND rr_done.is_archived = 0
+                                      AND rr_done.dose_d0 = 1
+                                      AND rr_done.dose_d3 = 1
+                                      AND rr_done.dose_d7 = 1
+                                      AND rr_done.dose_d14 = 1
+                                      AND rr_done.dose_d21 = 1
+                                      AND rr_done.dose_d28_30 = 1
+                                )
                            )
                      ) a
                         ON p.patient_id = a.patient_id
