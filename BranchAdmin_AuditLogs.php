@@ -1023,7 +1023,123 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
             flex-wrap: wrap;
         }
 
-       
+    /* =========================================================
+   GLOBAL LOGOUT CONFIRMATION MODAL 
+   ========================================================= */
+
+.confirm-modal .modal-dialog {
+    max-width: 500px !important;
+    width: calc(100% - 30px);
+    margin: 1.75rem auto;
+}
+
+.confirm-modal .modal-content {
+    overflow: hidden !important;
+    border: 0 !important;
+    border-radius: 20px !important;
+    background: #fff !important;
+    box-shadow: 0 20px 55px rgba(31, 45, 110, 0.20) !important;
+}
+
+.confirm-modal .modal-header {
+    display: block !important;
+    padding: 26px 24px 6px !important;
+    border: 0 !important;
+    background: #fff !important;
+    text-align: center !important;
+}
+
+.confirm-modal .modal-icon {
+    width: 64px !important;
+    height: 64px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    margin: 0 auto 14px !important;
+
+    color: #fff !important;
+    background: linear-gradient(135deg, #ef3340, #f05b68) !important;
+    border-radius: 50% !important;
+
+    box-shadow: 0 9px 22px rgba(239, 51, 64, 0.22) !important;
+    font-size: 27px !important;
+}
+
+.confirm-modal .modal-icon.logout-icon {
+    background: linear-gradient(135deg, #ef3340, #f05b68) !important;
+    box-shadow: 0 9px 22px rgba(239, 51, 64, 0.22) !important;
+}
+
+.confirm-modal .modal-title {
+    margin: 0 !important;
+    color: #283a7a !important;
+    font-size: 24px !important;
+    font-weight: 700 !important;
+    line-height: 1.3 !important;
+}
+
+.confirm-modal .modal-body {
+    padding: 6px 30px 22px !important;
+    background: #fff !important;
+    color: #7a879e !important;
+    text-align: center !important;
+}
+
+.confirm-modal .modal-body p {
+    margin: 0 !important;
+    color: #7a879e !important;
+    font-size: 17px !important;
+    line-height: 1.45 !important;
+}
+
+.confirm-modal .modal-footer {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 10px !important;
+    padding: 0 24px 26px !important;
+    border: 0 !important;
+    background: #fff !important;
+}
+
+.confirm-modal .modal-footer .btn {
+    min-height: 50px !important;
+    margin: 0 !important;
+    border-radius: 10px !important;
+    font-size: 16px !important;
+    font-weight: 700 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+.confirm-modal .btn-light,
+.confirm-modal .btn-cancel {
+    color: #111 !important;
+    background: #f8f9fa !important;
+    border: 1px solid #d9dfe8 !important;
+}
+
+.confirm-modal .btn-light:hover,
+.confirm-modal .btn-cancel:hover {
+    background: #eef0f3 !important;
+}
+
+.confirm-modal .btn-danger,
+.confirm-modal .btn-logout {
+    color: #fff !important;
+    background: #e83445 !important;
+    border: 1px solid #e83445 !important;
+    text-decoration: none !important;
+}
+
+.confirm-modal .btn-danger:hover,
+.confirm-modal .btn-logout:hover {
+    color: #fff !important;
+    background: #d92839 !important;
+    border-color: #d92839 !important;
+}
+
+
 .search-box {
     position: relative;
     width: 400px;
@@ -1476,7 +1592,10 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
                     </li>
                     <li><hr class="dropdown-divider"></li>
                     <li>
-                        <a class="dropdown-item rounded-2 py-2 text-danger" href="logout.php">
+                        <a class="dropdown-item rounded-2 py-2 text-danger"
+                            href="#"
+                            data-bs-toggle="modal"
+                            data-bs-target="#logoutConfirmModal">
                             <i class="bi bi-box-arrow-right me-2"></i>Logout
                         </a>
                     </li>
@@ -1780,6 +1899,49 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
             </div>
         </div>
     </div>
+
+    <div class="modal fade confirm-modal" id="logoutConfirmModal" tabindex="-1"
+     aria-labelledby="logoutConfirmModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+
+            <div class="modal-header">
+                <div class="modal-icon logout-icon">
+                    <i class="bi bi-box-arrow-right"></i>
+                </div>
+
+                <h2 class="modal-title" id="logoutConfirmModalLabel">
+                    Log out of Smart Bite Care?
+                </h2>
+            </div>
+
+            <div class="modal-body">
+                <p class="mb-0">
+                    Make sure you have saved any unfinished work before leaving your account.
+                </p>
+            </div>
+
+            <div class="modal-footer">
+                <button
+                    type="button"
+                    class="btn btn-light border"
+                    data-bs-dismiss="modal"
+                >
+                    Cancel
+                </button>
+
+                <a
+                    href="logout.php"
+                    class="btn btn-danger d-flex align-items-center justify-content-center"
+                >
+                    <i class="bi bi-box-arrow-right me-1"></i>
+                    Yes, Log Out
+                </a>
+            </div>
+
+        </div>
+    </div>
+</div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
