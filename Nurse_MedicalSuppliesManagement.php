@@ -284,7 +284,7 @@ $stmt = $conn->prepare(
              AND s.expiration_date>=CURDATE()
             THEN s.expiration_date END
         ) AS nearest_expiry,
-        COALESCE(MAX(s.last_updated),i.created_at) AS last_updated,
+        MAX(s.last_updated) AS last_updated,
         COALESCE(ut.today_used,0) AS today_used
      FROM inventory_items i
      INNER JOIN inventory_categories c ON c.category_id=i.category_id
@@ -842,4 +842,3 @@ updateRestockDetails();
 </script>
 </body>
 </html>
-
