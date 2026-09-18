@@ -711,7 +711,6 @@ function nurseCalendarUrl(string $range, string $search, int $page = 1): string
     <div class="content">
         <div class="page-intro">
             <div>
-                <h4><i class="bi bi-calendar2-week me-2"></i>Nurse Vaccination Schedule</h4>
                 <p>View active vaccination appointments for your branch. Only current Scheduled records are shown.</p>
             </div>
             <div class="text-muted small">
