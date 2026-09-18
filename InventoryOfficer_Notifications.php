@@ -14,7 +14,10 @@ $username = 'Inventory Officer';
 $branch_id = null;
 $branch_name = 'No Branch Assigned';
 
-function h($value): string { return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8'); }
+function h(mixed $value): string
+{
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+}
 function jsonResponse(bool $success, string $message = '', array $extra = [], int $status = 200): void {
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
@@ -31,21 +34,25 @@ function notificationTypeClass(string $type): string {
         'stock_in' => 'stock_in',
         'stock_out' => 'stock_out',
         'stock_adjustment' => 'stock_adjustment',
-        default => 'low_stock'
+        'restock_request' => 'restock_request',
+        default => 'general'
     };
 }
 function notifIconClass(string $type): string {
     return match (notificationTypeClass($type)) {
         'low_stock' => 'icon-low', 'expiring' => 'icon-expiring', 'forecast' => 'icon-forecast',
         'stock_in' => 'icon-in', 'stock_out' => 'icon-out', 'stock_adjustment' => 'icon-adjustment',
-        default => 'icon-low'
+        'restock_request' => 'icon-restock',
+        default => 'icon-general'
     };
 }
 function notifIcon(string $type): string {
     return match (notificationTypeClass($type)) {
         'low_stock' => 'bi-exclamation-triangle-fill', 'expiring' => 'bi-hourglass-split',
         'forecast' => 'bi-graph-up-arrow', 'stock_in' => 'bi-box-arrow-in-down',
-        'stock_out' => 'bi-box-arrow-up', 'stock_adjustment' => 'bi-sliders', default => 'bi-bell-fill'
+        'stock_out' => 'bi-box-arrow-up', 'stock_adjustment' => 'bi-sliders',
+        'restock_request' => 'bi-cart-plus-fill',
+        default => 'bi-bell-fill'
     };
 }
 function formatNotificationTime(string $createdAt): string {
@@ -59,7 +66,9 @@ function formatNotificationTime(string $createdAt): string {
 function badgeText(string $type): string {
     return match (notificationTypeClass($type)) {
         'low_stock' => 'Low Stock', 'expiring' => 'Expiring', 'forecast' => 'Forecast',
-        'stock_in' => 'Stock In', 'stock_out' => 'Stock Out', 'stock_adjustment' => 'Adjusted', default => 'Update'
+        'stock_in' => 'Stock In', 'stock_out' => 'Stock Out', 'stock_adjustment' => 'Adjusted',
+        'restock_request' => 'Restock Request',
+        default => 'Update'
     };
 }
 function bindDynamic(mysqli_stmt $stmt, string $types, array &$params): void {
@@ -92,6 +101,9 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
         $notification_id=filter_var($_POST['notification_id']??null,FILTER_VALIDATE_INT);
         if ($notification_id===false || $notification_id===null || $notification_id<=0) jsonResponse(false,'Invalid notification ID.',[],400);
 
+        $isRead = false;
+        $exists = false;
+
         $conn->begin_transaction();
         try {
             $sql="UPDATE notifications n INNER JOIN users u ON u.user_id=n.user_id SET n.is_read=1 WHERE n.notification_id=? AND n.user_id=? AND u.user_id=? AND u.branch_id=? AND u.status='Active'";
@@ -102,7 +114,6 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
             $stmt->close();
 
             $verify=$conn->prepare("SELECT n.is_read FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE n.notification_id=? AND n.user_id=? AND u.branch_id=? LIMIT 1");
-            $isRead=false; $exists=false;
             if ($verify) { $verify->bind_param('iis',$notification_id,$user_id,$branch_id); if($verify->execute()){ $r=$verify->get_result(); if($r->num_rows===1){$exists=true;$isRead=(int)$r->fetch_assoc()['is_read']===1;}} $verify->close(); }
             if (!$exists) throw new RuntimeException('Notification not found.');
 
@@ -178,6 +189,8 @@ function saveNotification(mysqli $conn,int $userId,string $type,string $title,st
  * them would mix stale duplicates with the synchronized notifications below.
  * Other notification types (vaccination, patient records, etc.) are untouched.
  */
+// IMPORTANT: restock_request is intentionally NOT included here. It is a
+// user-created workflow notification and must never be deleted by synchronization.
 $generatedTypes=['low_stock','critical_stock','expiring','expired_stock','forecast','shortage_forecast','prediction','shortage_prediction','stock_in','stock_out','stock_adjustment'];
 $typePlaceholders=implode(',',array_fill(0,count($generatedTypes),'?'));
 $cleanupSql="DELETE n FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE n.user_id=? AND u.branch_id=? AND u.status='Active' AND n.source_key IS NULL AND n.notification_type IN ($typePlaceholders)";
@@ -277,7 +290,7 @@ if($stmt){$stmt->bind_param('s',$branch_id);if($stmt->execute()){ $r=$stmt->get_
 /* FILTERS + PAGINATION */
 $search=trim((string)($_GET['search']??''));
 $filter=(string)($_GET['filter']??'all');
-$allowedFilters=['all','low_stock','critical_stock','expiring','expired_stock','forecast','stock_in','stock_out','stock_adjustment'];
+$allowedFilters=['all','low_stock','critical_stock','expiring','expired_stock','forecast','stock_in','stock_out','stock_adjustment','restock_request'];
 if(!in_array($filter,$allowedFilters,true))$filter='all';
 $page=filter_var($_GET['page']??1,FILTER_VALIDATE_INT); if($page===false||$page<1)$page=1;
 $perPage=10;
@@ -293,7 +306,7 @@ if($search!==''){$where.=" AND (n.title LIKE CONCAT('%',?,'%') OR n.message LIKE
 $countStmt=$conn->prepare("SELECT COUNT(*) total FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE $where");
 $total=0;if($countStmt){bindDynamic($countStmt,$types,$params);if($countStmt->execute())$total=(int)($countStmt->get_result()->fetch_assoc()['total']??0);$countStmt->close();}
 $totalPages=max(1,(int)ceil($total/$perPage));if($page>$totalPages)$page=$totalPages;$offset=($page-1)*$perPage;
-$listSql="SELECT n.notification_id,n.title,n.message,n.notification_type,n.is_read,n.created_at FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE $where ORDER BY n.created_at DESC,n.notification_id DESC LIMIT ? OFFSET ?";
+$listSql="SELECT n.notification_id,n.title,n.message,n.notification_type,n.is_read,n.created_at FROM notifications n INNER JOIN users u ON u.user_id=n.user_id WHERE $where ORDER BY CASE WHEN n.notification_type='restock_request' AND n.is_read=0 THEN 0 ELSE 1 END ASC, n.created_at DESC,n.notification_id DESC LIMIT ? OFFSET ?";
 $listParams=$params;$listTypes=$types.'ii';$listParams[]=$perPage;$listParams[]=$offset;
 $stmt=$conn->prepare($listSql);$notifications=[];
 if($stmt){bindDynamic($stmt,$listTypes,$listParams);if($stmt->execute()){ $r=$stmt->get_result();while($row=$r->fetch_assoc()){$row['type']=notificationTypeClass((string)$row['notification_type']);$row['icon']=notifIcon((string)$row['notification_type']);$notifications[]=$row;}}$stmt->close();}
@@ -676,6 +689,8 @@ margin-top:0;
 .border-expiring{ border-left:6px solid #eab308; }
 .border-forecast{ border-left:6px solid #3b82f6; }
 .border-stock_in{ border-left:6px solid #22c55e; }
+.border-restock_request{ border-left:6px solid #0ea5e9; }
+.border-general{ border-left:6px solid #64748b; }
 
 .notif-icon-wrap{
     display:flex;
@@ -698,6 +713,8 @@ margin-top:0;
 .icon-expiring{ background:#fef9c3; color:#ca8a04; }
 .icon-forecast{ background:#dbeafe; color:#2563eb; }
 .icon-in{ background:#dcfce7; color:#16a34a; }
+.icon-restock{ background:#e0f2fe; color:#0284c7; }
+.icon-general{ background:#eef2ff; color:#2B3A8C; }
 
 .notif-content{
     flex:1;
@@ -720,6 +737,11 @@ margin-top:0;
     color:#475569;
     margin-bottom:6px;
     line-height:1.45;
+    white-space:pre-line;
+}
+
+#notificationModalMessage{
+    white-space:pre-line;
 }
 
 .notif-time{
@@ -746,6 +768,8 @@ margin-top:0;
 .badge-expiring{ background:#fef9c3; color:#ca8a04; }
 .badge-forecast{ background:#dbeafe; color:#2563eb; }
 .badge-stock_in{ background:#dcfce7; color:#16a34a; }
+.badge-restock_request{ background:#e0f2fe; color:#0284c7; }
+.badge-general{ background:#eef2ff; color:#2B3A8C; }
 
 .unread-dot{
     display:inline-block;
@@ -893,6 +917,7 @@ margin-top:0;
             <option value="low_stock" <?php echo $filter === 'low_stock' ? 'selected' : ''; ?>>Low Stock</option>
             <option value="expiring" <?php echo $filter === 'expiring' ? 'selected' : ''; ?>>Expiring</option>
             <option value="forecast" <?php echo $filter === 'forecast' ? 'selected' : ''; ?>>Supply Forecast</option>
+            <option value="restock_request" <?php echo $filter === 'restock_request' ? 'selected' : ''; ?>>Restock Requests</option>
             <option value="stock_in" <?php echo $filter === 'stock_in' ? 'selected' : ''; ?>>Stock In</option>
         </select>
 
@@ -947,6 +972,7 @@ margin-top:0;
              data-title="<?php echo h($n['title']?:'Notification'); ?>"
              data-message="<?php echo h($n['message']?:''); ?>"
              data-type="<?php echo h(badgeText($n['notification_type'])); ?>"
+             data-notification-type="<?php echo h($n['notification_type']); ?>"
              data-created-at="<?php echo h(date('F j, Y g:i A',strtotime($n['created_at']))); ?>"
              data-icon="<?php echo h($n['icon']); ?>"
              data-icon-class="<?php echo h(notifIconClass($n['notification_type'])); ?>"
@@ -1029,8 +1055,14 @@ margin-top:0;
                     <div><strong>Branch:</strong> <span id="notificationModalBranch"></span></div>
                 </div>
             </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            <div class="modal-footer d-flex justify-content-between gap-2">
+                <a id="restockStockManagementBtn"
+                   href="InventoryOfficer_StockManagement.php"
+                   class="btn btn-primary"
+                   style="display:none; background:#2B3A8C; border-color:#2B3A8C;">
+                    <i class="bi bi-boxes me-1"></i>Open Stock Management
+                </a>
+                <button type="button" class="btn btn-secondary ms-auto" data-bs-dismiss="modal">Close</button>
             </div>
         </div>
     </div>
@@ -1095,7 +1127,7 @@ const topBadge=document.getElementById('topUnreadBadge');
 const unreadText=document.querySelector('.unread-summary');
 function updateUnreadCount(count){count=Math.max(0,parseInt(count,10)||0);if(topBadge){topBadge.textContent=count;topBadge.hidden=count===0;}if(unreadText){unreadText.textContent=count+' unread notification'+(count===1?'':'s');unreadText.style.display=count?'':'none';}const btn=document.querySelector('.btn-mark-all');if(btn)btn.disabled=count===0;}
 function setRead(card){card.classList.remove('is-unread');card.classList.add('is-read');card.dataset.isRead='1';card.setAttribute('aria-label','Read: '+(card.dataset.title||'Notification'));const dot=card.querySelector('.unread-dot');if(dot)dot.hidden=true;}
-function fillModal(card){if(!modalEl)return;document.getElementById('notificationModalIcon').className='notification-modal-icon '+(card.dataset.iconClass||'icon-forecast');document.getElementById('notificationModalIconGlyph').className='bi '+(card.dataset.icon||'bi-bell-fill');document.getElementById('notificationDetailsModalLabel').textContent=card.dataset.title||'Notification';document.getElementById('notificationModalMessage').textContent=card.dataset.message||'';document.getElementById('notificationModalType').textContent=card.dataset.type||'Update';document.getElementById('notificationModalDate').textContent=card.dataset.createdAt||'';document.getElementById('notificationModalBranch').textContent=card.dataset.branch||'';const read=card.dataset.isRead==='1';document.getElementById('notificationModalStatus').textContent=read?'Read':'Unread';document.getElementById('notificationModalReadState').textContent=read?'Read':'Unread';}
+function fillModal(card){if(!modalEl)return;document.getElementById('notificationModalIcon').className='notification-modal-icon '+(card.dataset.iconClass||'icon-general');document.getElementById('notificationModalIconGlyph').className='bi '+(card.dataset.icon||'bi-bell-fill');document.getElementById('notificationDetailsModalLabel').textContent=card.dataset.title||'Notification';document.getElementById('notificationModalMessage').textContent=card.dataset.message||'';document.getElementById('notificationModalType').textContent=card.dataset.type||'Update';document.getElementById('notificationModalDate').textContent=card.dataset.createdAt||'';document.getElementById('notificationModalBranch').textContent=card.dataset.branch||'';const read=card.dataset.isRead==='1';document.getElementById('notificationModalStatus').textContent=read?'Read':'Unread';document.getElementById('notificationModalReadState').textContent=read?'Read':'Unread';const stockBtn=document.getElementById('restockStockManagementBtn');if(stockBtn){stockBtn.style.display=card.dataset.notificationType==='restock_request'?'inline-flex':'none';}}
 async function markRead(card){if(card.dataset.isRead==='1')return true;const id=Number(card.dataset.notificationId);if(!Number.isInteger(id)||id<=0){console.error('Invalid notification ID');return false;}const body=new URLSearchParams({csrf_token:csrfToken,action:'mark_read',notification_id:String(id)});try{const response=await fetch(pageUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','X-Requested-With':'XMLHttpRequest'},body});const data=await response.json();if(!response.ok||!data.success)throw new Error(data.message||'Unable to mark notification as read.');setRead(card);updateUnreadCount(data.unread_count);return true;}catch(e){console.error(e);return false;}}
 async function openCard(card){if(card.dataset.busy==='1')return;card.dataset.busy='1';try{if(!(await markRead(card)))return;fillModal(card);if(modal)modal.show();}finally{card.dataset.busy='0';}}
 document.addEventListener('click',e=>{const card=e.target.closest('.notif-item[data-notification-id]');if(card)openCard(card);});
