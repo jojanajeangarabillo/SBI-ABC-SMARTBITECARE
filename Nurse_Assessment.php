@@ -1682,6 +1682,13 @@ $flash = workflowTakeFlash();
             </li>
 
             <li>
+                <a href="Nurse_Calendar.php">
+                    <i class="bi bi-calendar3"></i>
+                    <span>Calendar</span>
+                </a>
+            </li>
+
+            <li>
                 <a href="Nurse_Patients.php">
                     <i class="bi bi-heart-pulse-fill"></i>
                     <span>Patients</span>
