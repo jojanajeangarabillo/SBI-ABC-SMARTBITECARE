@@ -6,14 +6,17 @@ require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/notification_helper.php';
 require_once __DIR__ . '/fpdf/fpdf.php';
 
-// Get logged-in Nurse
-$user_id = (int)$_SESSION['user_id'];
-// Get unread notification count
-$notification_count = getUnreadNotificationCount($conn, $user_id);
-
+// Require an authenticated Nurse first.
+// This must happen before reading $_SESSION['user_id'] so unauthenticated
+// requests can redirect to login.php without PHP warnings/output.
 $user = workflowRequireUser($conn, 3);
 $userId = (int)$user['user_id'];
+$user_id = $userId; // Kept for notification helper / existing page code.
 $branchId = (string)$user['branch_id'];
+
+// Get unread notification count only after authentication succeeded.
+$notification_count = getUnreadNotificationCount($conn, $userId);
+
 $csrf = workflowCsrfToken();
 
 function dailyInventoryValidDate(string $date): bool
