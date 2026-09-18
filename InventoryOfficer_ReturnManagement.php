@@ -1214,6 +1214,99 @@ body {
     text-decoration: underline;
 }
 
+
+/* =========================================================
+   TABLE PAGINATION
+   ========================================================= */
+
+.return-table-footer {
+    display: grid;
+    grid-template-columns: minmax(160px, 1fr) auto minmax(160px, 1fr);
+    align-items: center;
+    gap: 12px;
+    padding: 14px;
+    border-top: 1px solid #edf0f5;
+    background: #fff;
+}
+
+.return-table-footer .branch-summary {
+    text-align: right;
+}
+
+.pagination-wrap {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.pagination-wrap .pagination {
+    margin: 0;
+    gap: 5px;
+}
+
+.pagination-wrap .page-item {
+    margin: 0;
+}
+
+.pagination-wrap .page-link {
+    min-width: 36px;
+    height: 36px;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #dfe4ef;
+    border-radius: 8px !important;
+    color: var(--primary);
+    background: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    box-shadow: none !important;
+    cursor: pointer;
+}
+
+.pagination-wrap .page-link:hover {
+    background: #f0f3fc;
+    border-color: #bac5e5;
+    color: var(--primary-dark);
+}
+
+.pagination-wrap .page-item.active .page-link {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+.pagination-wrap .page-item.disabled .page-link {
+    color: #a8b0bf;
+    background: #f8f9fb;
+    border-color: #e7eaf0;
+    cursor: default;
+    pointer-events: none;
+}
+
+.pagination-ellipsis .page-link {
+    border-color: transparent;
+    background: transparent;
+    cursor: default;
+    pointer-events: none;
+}
+
+@media (max-width: 768px) {
+    .return-table-footer {
+        grid-template-columns: 1fr;
+        text-align: center;
+    }
+
+    .return-table-footer .branch-summary {
+        text-align: center;
+    }
+
+    .pagination-wrap {
+        order: 3;
+    }
+}
+
 /* =========================================================
    STATUS
    ========================================================= */
@@ -2048,14 +2141,30 @@ body {
                                 </td>
                             </tr>
                         <?php endforeach; ?>
+                        <tr id="noFilteredReturnsRow" style="display:none;">
+                            <td colspan="9">
+                                <div class="empty-state py-4">
+                                    <i class="bi bi-search"></i>
+                                    <div class="fw-semibold">No matching return records.</div>
+                                    <div class="small">Try changing or resetting the search and filters.</div>
+                                </div>
+                            </td>
+                        </tr>
                     <?php endif; ?>
                     </tbody>
                 </table>
             </div>
 
-            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 p-3 border-top">
+            <div class="return-table-footer">
                 <div class="small text-muted" id="returnCountLabel"></div>
-                <div class="small text-muted">Branch: <strong><?php echo h($branch_name); ?></strong></div>
+
+                <nav class="pagination-wrap" aria-label="Return records pagination">
+                    <ul class="pagination pagination-sm" id="returnsPagination"></ul>
+                </nav>
+
+                <div class="small text-muted branch-summary">
+                    Branch: <strong><?php echo h($branch_name); ?></strong>
+                </div>
             </div>
         </div>
     </div>
@@ -2486,29 +2595,183 @@ function escapeHtml(value) {
     }[char]));
 }
 
-function applyReturnFilters() {
+const RETURNS_PER_PAGE = 10;
+let currentReturnPage = 1;
+
+function getFilteredReturnRows() {
     const search = document.getElementById('returnSearch').value.trim().toLowerCase();
     const status = document.getElementById('statusFilter').value;
     const reason = document.getElementById('reasonFilter').value;
     const route = document.getElementById('routeFilter').value;
     const date = document.getElementById('dateFilter').value;
-    const rows = document.querySelectorAll('.return-row');
-    let visible = 0;
 
-    rows.forEach(row => {
-        const matchesSearch = !search || row.dataset.search.includes(search);
+    return Array.from(document.querySelectorAll('.return-row')).filter(row => {
+        const matchesSearch = !search || (row.dataset.search || '').includes(search);
         const matchesStatus = !status || row.dataset.status === status;
         const matchesReason = !reason || row.dataset.reason === reason;
         const matchesRoute = !route || row.dataset.route === route;
         const matchesDate = !date || row.dataset.date === date;
-        const show = matchesSearch && matchesStatus && matchesReason && matchesRoute && matchesDate;
 
-        row.style.display = show ? '' : 'none';
-        if (show) visible++;
+        return matchesSearch && matchesStatus && matchesReason && matchesRoute && matchesDate;
+    });
+}
+
+function paginationSequence(currentPage, totalPages) {
+    if (totalPages <= 7) {
+        return Array.from({ length: totalPages }, (_, index) => index + 1);
+    }
+
+    if (currentPage <= 4) {
+        return [1, 2, 3, 4, 5, 'ellipsis', totalPages];
+    }
+
+    if (currentPage >= totalPages - 3) {
+        return [
+            1,
+            'ellipsis',
+            totalPages - 4,
+            totalPages - 3,
+            totalPages - 2,
+            totalPages - 1,
+            totalPages
+        ];
+    }
+
+    return [
+        1,
+        'ellipsis',
+        currentPage - 1,
+        currentPage,
+        currentPage + 1,
+        'ellipsis',
+        totalPages
+    ];
+}
+
+function renderReturnPagination(totalPages) {
+    const pagination = document.getElementById('returnsPagination');
+    if (!pagination) return;
+
+    pagination.innerHTML = '';
+
+    if (totalPages <= 1) {
+        pagination.closest('.pagination-wrap')?.classList.add('d-none');
+        return;
+    }
+
+    pagination.closest('.pagination-wrap')?.classList.remove('d-none');
+
+    const addPageItem = (label, pageNumber, options = {}) => {
+        const li = document.createElement('li');
+        li.className = 'page-item';
+
+        if (options.active) li.classList.add('active');
+        if (options.disabled) li.classList.add('disabled');
+        if (options.ellipsis) li.classList.add('pagination-ellipsis');
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'page-link';
+        button.innerHTML = label;
+
+        if (options.active) {
+            button.setAttribute('aria-current', 'page');
+        }
+
+        if (!options.disabled && !options.ellipsis && Number.isInteger(pageNumber)) {
+            button.addEventListener('click', () => {
+                currentReturnPage = pageNumber;
+                applyReturnFilters(false);
+
+                const table = document.querySelector('.return-table');
+                if (table) {
+                    table.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            });
+        }
+
+        li.appendChild(button);
+        pagination.appendChild(li);
+    };
+
+    addPageItem(
+        '<i class="bi bi-chevron-left"></i>',
+        currentReturnPage - 1,
+        {
+            disabled: currentReturnPage <= 1
+        }
+    );
+
+    paginationSequence(currentReturnPage, totalPages).forEach(pageNumber => {
+        if (pageNumber === 'ellipsis') {
+            addPageItem('&hellip;', null, {
+                disabled: true,
+                ellipsis: true
+            });
+            return;
+        }
+
+        addPageItem(String(pageNumber), pageNumber, {
+            active: pageNumber === currentReturnPage
+        });
     });
 
-    document.getElementById('returnCountLabel').textContent =
-        `${visible} ${visible === 1 ? 'return' : 'returns'} shown`;
+    addPageItem(
+        '<i class="bi bi-chevron-right"></i>',
+        currentReturnPage + 1,
+        {
+            disabled: currentReturnPage >= totalPages
+        }
+    );
+}
+
+function applyReturnFilters(resetPage = true) {
+    const allRows = Array.from(document.querySelectorAll('.return-row'));
+    const filteredRows = getFilteredReturnRows();
+
+    if (resetPage) {
+        currentReturnPage = 1;
+    }
+
+    const totalFiltered = filteredRows.length;
+    const totalPages = Math.max(1, Math.ceil(totalFiltered / RETURNS_PER_PAGE));
+
+    if (currentReturnPage > totalPages) {
+        currentReturnPage = totalPages;
+    }
+
+    /* Hide every normal data row first. */
+    allRows.forEach(row => {
+        row.style.display = 'none';
+    });
+
+    const startIndex = (currentReturnPage - 1) * RETURNS_PER_PAGE;
+    const endIndex = Math.min(startIndex + RETURNS_PER_PAGE, totalFiltered);
+
+    filteredRows.slice(startIndex, endIndex).forEach(row => {
+        row.style.display = '';
+    });
+
+    const noFilteredRow = document.getElementById('noFilteredReturnsRow');
+    if (noFilteredRow) {
+        noFilteredRow.style.display = totalFiltered === 0 && allRows.length > 0 ? '' : 'none';
+    }
+
+    const countLabel = document.getElementById('returnCountLabel');
+    if (countLabel) {
+        if (totalFiltered === 0) {
+            countLabel.textContent = 'No returns found';
+        } else {
+            countLabel.textContent =
+                `Showing ${startIndex + 1}–${endIndex} of ${totalFiltered} ` +
+                `${totalFiltered === 1 ? 'return' : 'returns'}`;
+        }
+    }
+
+    renderReturnPagination(totalFiltered === 0 ? 0 : totalPages);
 }
 
 function resetReturnFilters() {
@@ -2517,7 +2780,8 @@ function resetReturnFilters() {
     document.getElementById('reasonFilter').value = '';
     document.getElementById('routeFilter').value = '';
     document.getElementById('dateFilter').value = '';
-    applyReturnFilters();
+    currentReturnPage = 1;
+    applyReturnFilters(true);
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -2526,13 +2790,28 @@ document.addEventListener('DOMContentLoaded', function() {
     const reason = document.getElementById('reasonFilter');
     const route = document.getElementById('routeFilter');
     const date = document.getElementById('dateFilter');
-    if (search) search.addEventListener('input', applyReturnFilters);
-    if (status) status.addEventListener('change', applyReturnFilters);
-    if (reason) reason.addEventListener('change', applyReturnFilters);
-    if (route) route.addEventListener('change', applyReturnFilters);
-    if (date) date.addEventListener('change', applyReturnFilters);
 
-    applyReturnFilters();
+    if (search) {
+        search.addEventListener('input', () => applyReturnFilters(true));
+    }
+
+    if (status) {
+        status.addEventListener('change', () => applyReturnFilters(true));
+    }
+
+    if (reason) {
+        reason.addEventListener('change', () => applyReturnFilters(true));
+    }
+
+    if (route) {
+        route.addEventListener('change', () => applyReturnFilters(true));
+    }
+
+    if (date) {
+        date.addEventListener('change', () => applyReturnFilters(true));
+    }
+
+    applyReturnFilters(true);
 });
 </script>
 

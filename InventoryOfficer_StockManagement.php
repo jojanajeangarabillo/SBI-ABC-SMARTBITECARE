@@ -60,20 +60,57 @@ function validYmdDate($date) {
  * ----------------------------------------------------------- */
 function ensureStockArchiveTable($conn) {
     if (!$conn->query("CREATE TABLE IF NOT EXISTS inventory_stocks_archive LIKE inventory_stocks")) {
-        throw new Exception('Unable to create inventory stock archive table.');
+        throw new Exception('Unable to create inventory stock archive table: ' . $conn->error);
     }
 
-    $archiveColumns = [
-        "ALTER TABLE inventory_stocks_archive ADD COLUMN IF NOT EXISTS archived_at DATETIME NULL",
-        "ALTER TABLE inventory_stocks_archive ADD COLUMN IF NOT EXISTS archived_by INT NULL",
-        "ALTER TABLE inventory_stocks_archive ADD COLUMN IF NOT EXISTS archive_reason VARCHAR(255) NULL"
+    /*
+     * Railway uses MySQL, where ALTER TABLE ... ADD COLUMN IF NOT EXISTS
+     * is not portable across versions. Check INFORMATION_SCHEMA first,
+     * then add only columns that are missing.
+     */
+    $requiredColumns = [
+        'archived_at' => "ALTER TABLE inventory_stocks_archive ADD COLUMN archived_at DATETIME NULL",
+        'archived_by' => "ALTER TABLE inventory_stocks_archive ADD COLUMN archived_by INT NULL",
+        'archive_reason' => "ALTER TABLE inventory_stocks_archive ADD COLUMN archive_reason VARCHAR(255) NULL"
     ];
 
-    foreach ($archiveColumns as $sql) {
-        if (!$conn->query($sql)) {
-            throw new Exception('Unable to prepare inventory stock archive fields.');
+    $checkStmt = $conn->prepare(
+        "SELECT COUNT(*) AS column_exists
+         FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'inventory_stocks_archive'
+           AND COLUMN_NAME = ?"
+    );
+
+    if (!$checkStmt) {
+        throw new Exception('Unable to prepare archive column check: ' . $conn->error);
+    }
+
+    foreach ($requiredColumns as $columnName => $alterSql) {
+        $checkStmt->bind_param('s', $columnName);
+
+        if (!$checkStmt->execute()) {
+            $error = $checkStmt->error;
+            $checkStmt->close();
+            throw new Exception('Unable to check inventory stock archive fields: ' . $error);
+        }
+
+        $result = $checkStmt->get_result();
+        $row = $result->fetch_assoc();
+        $exists = (int)($row['column_exists'] ?? 0) > 0;
+
+        if (!$exists) {
+            if (!$conn->query($alterSql)) {
+                $error = $conn->error;
+                $checkStmt->close();
+                throw new Exception(
+                    'Unable to add archive field ' . $columnName . ': ' . $error
+                );
+            }
         }
     }
+
+    $checkStmt->close();
 }
 
 

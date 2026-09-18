@@ -44,6 +44,7 @@ function reportLabel(string $type): string
         'expiring_stock'  => 'Expiring Stock Report',
         'stock_usage'     => 'Stock Usage Report',
         'transactions'    => 'Stock Transaction Summary',
+        'returns'         => 'Return Report',
         'shortage'        => 'Shortage Forecast Report'
     ];
     return $labels[$type] ?? $labels['low_stock'];
@@ -106,7 +107,7 @@ if ($branch_id === null || $branch_id === '') {
  * Filters
  * ----------------------------------------------------------- */
 $report_type = $_POST['report_type'] ?? $_GET['report_type'] ?? 'low_stock';
-$allowedReports = ['low_stock', 'expiring_stock', 'stock_usage', 'transactions', 'shortage'];
+$allowedReports = ['low_stock', 'expiring_stock', 'stock_usage', 'transactions', 'returns', 'shortage'];
 
 if (!in_array($report_type, $allowedReports, true)) {
     $report_type = 'low_stock';
@@ -358,6 +359,78 @@ function fetchReportRows(
                 $search,
                 $search,
                 $search,
+                $search,
+                $search
+            );
+            break;
+
+        case 'returns':
+            $sql = "
+                SELECT
+                    ir.return_id,
+                    ir.return_number,
+                    ir.branch_id,
+                    ir.destination_branch_id,
+                    CASE
+                        WHEN ir.branch_id = ? THEN 'Sent'
+                        ELSE 'Received'
+                    END AS direction,
+                    sb.branch_name AS source_branch,
+                    db.branch_name AS destination_branch,
+                    ir.item_name,
+                    un.unit_name,
+                    ir.quantity,
+                    ir.return_reason,
+                    ir.status,
+                    ir.transportation_details,
+                    ir.remarks,
+                    ir.created_at,
+                    ir.sent_at,
+                    ir.received_at,
+                    creator.username AS created_by_name,
+                    processor.username AS processed_by_name
+                FROM inventory_returns ir
+                LEFT JOIN units un
+                    ON un.unit_id = ir.unit_id
+                LEFT JOIN branches sb
+                    ON sb.branch_id = ir.branch_id
+                LEFT JOIN branches db
+                    ON db.branch_id = ir.destination_branch_id
+                LEFT JOIN users creator
+                    ON creator.user_id = ir.created_by
+                LEFT JOIN users processor
+                    ON processor.user_id = ir.processed_by
+                WHERE (ir.branch_id = ? OR ir.destination_branch_id = ?)
+                  AND DATE(ir.created_at) BETWEEN ? AND ?
+                  AND (
+                      ? = ''
+                      OR CONCAT_WS(
+                          ' ',
+                          COALESCE(ir.return_number, ''),
+                          COALESCE(ir.item_name, ''),
+                          COALESCE(ir.return_reason, ''),
+                          COALESCE(ir.status, ''),
+                          COALESCE(sb.branch_name, ''),
+                          COALESCE(db.branch_name, ''),
+                          COALESCE(ir.remarks, ''),
+                          COALESCE(ir.transportation_details, '')
+                      ) LIKE CONCAT('%', ?, '%')
+                  )
+                ORDER BY ir.created_at DESC, ir.return_id DESC
+            ";
+
+            $stmt = $conn->prepare($sql);
+            if (!$stmt) {
+                throw new RuntimeException('Unable to prepare Return Report query.');
+            }
+
+            $stmt->bind_param(
+                'sssssss',
+                $branchId,
+                $branchId,
+                $branchId,
+                $dateFrom,
+                $dateTo,
                 $search,
                 $search
             );
@@ -654,11 +727,40 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
             ]);
         }
 
+    } elseif ($report_type === 'returns') {
+        fputcsv($output, [
+            'Return No.', 'Direction', 'Source Branch', 'Destination Branch',
+            'Item', 'Unit', 'Quantity', 'Reason', 'Status',
+            'Created At', 'Sent At', 'Received At',
+            'Created By', 'Received By', 'Transportation Details', 'Remarks'
+        ]);
+
+        foreach ($exportRows as $row) {
+            fputcsv($output, [
+                $row['return_number'] ?: ('RET-' . $row['return_id']),
+                $row['direction'],
+                $row['source_branch'] ?: $row['branch_id'],
+                $row['destination_branch'] ?: $row['destination_branch_id'],
+                $row['item_name'],
+                $row['unit_name'],
+                $row['quantity'],
+                $row['return_reason'],
+                $row['status'],
+                $row['created_at'],
+                $row['sent_at'],
+                $row['received_at'],
+                $row['created_by_name'],
+                $row['processed_by_name'],
+                $row['transportation_details'],
+                $row['remarks']
+            ]);
+        }
+
     } elseif ($report_type === 'shortage') {
         fputcsv($output, [
-            'Prediction ID', 'Prediction Date', 'Item', 'Category', 'Unit',
+            'Forecast ID', 'Forecast Date', 'Item', 'Category', 'Unit',
             'Probability Score', 'Status', 'Recommended Reorder',
-            'Predicted Consumption', 'Forecast Days', 'Generated By'
+            'Forecasted Consumption', 'Forecast Days', 'Generated By'
         ]);
 
         foreach ($exportRows as $row) {
@@ -689,7 +791,9 @@ $summary = [
     'rows' => count($reportRows),
     'quantity' => 0,
     'patients' => 0,
-    'transactions' => 0
+    'transactions' => 0,
+    'returns_received' => 0,
+    'returns_in_transit' => 0
 ];
 
 foreach ($reportRows as $row) {
@@ -703,6 +807,14 @@ foreach ($reportRows as $row) {
         $summary['quantity'] += (int)$row['current_stock'];
     } elseif ($report_type === 'expiring_stock') {
         $summary['quantity'] += (int)$row['quantity_available'];
+    } elseif ($report_type === 'returns') {
+        $summary['quantity'] += (float)$row['quantity'];
+
+        if (($row['status'] ?? '') === 'Received') {
+            $summary['returns_received']++;
+        } else {
+            $summary['returns_in_transit']++;
+        }
     } elseif ($report_type === 'shortage') {
         $summary['quantity'] += (int)$row['recommended_reorder'];
     }
@@ -744,8 +856,16 @@ function statusClass(string $status): string
         return 'status-warning';
     }
 
-    if (str_contains($statusLower, 'completed') || str_contains($statusLower, 'valid')) {
+    if (
+        str_contains($statusLower, 'completed') ||
+        str_contains($statusLower, 'valid') ||
+        str_contains($statusLower, 'received')
+    ) {
         return 'status-good';
+    }
+
+    if (str_contains($statusLower, 'in transit')) {
+        return 'status-warning';
     }
 
     return 'status-neutral';
@@ -1170,7 +1290,7 @@ display:block;
 
 .summary-cards {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 16px;
     margin-bottom: 24px;
 }
@@ -1242,6 +1362,10 @@ display:block;
 
 .report-table-wrap .data-table {
     min-width: 850px;
+}
+
+.report-table-wrap .data-table.return-report-table {
+    min-width: 1900px;
 }
 
 .alert {
@@ -1467,7 +1591,8 @@ margin-left:90px;
 <option value="expiring_stock" <?php echo $report_type === 'expiring_stock' ? 'selected' : ''; ?>>Expiring Stock Report</option>
 <option value="stock_usage" <?php echo $report_type === 'stock_usage' ? 'selected' : ''; ?>>Stock Usage Report</option>
 <option value="transactions" <?php echo $report_type === 'transactions' ? 'selected' : ''; ?>>Stock Transaction Summary</option>
-<option value="shortage" <?php echo $report_type === 'shortage' ? 'selected' : ''; ?>>Shortage Prediction Report</option>
+<option value="returns" <?php echo $report_type === 'returns' ? 'selected' : ''; ?>>Return Report</option>
+<option value="shortage" <?php echo $report_type === 'shortage' ? 'selected' : ''; ?>>Shortage Forecast Report</option>
 </select>
 </div>
 
@@ -1483,7 +1608,7 @@ margin-left:90px;
 
 <div class="filter-group">
 <label for="search">Search</label>
-<input type="text" name="search" id="search" value="<?php echo h($search); ?>" maxlength="100" placeholder="Item, category, or keyword">
+<input type="text" name="search" id="search" value="<?php echo h($search); ?>" maxlength="100" placeholder="Item, branch, status, or keyword">
 </div>
 
 <div class="filter-actions">
@@ -1527,6 +1652,9 @@ margin-left:90px;
 <div class="summary-card"><span>Patients</span><strong><?php echo moneylessNumber($summary['patients']); ?></strong></div>
 <?php elseif ($report_type === 'transactions'): ?>
 <div class="summary-card"><span>Transactions</span><strong><?php echo moneylessNumber($summary['transactions']); ?></strong></div>
+<?php elseif ($report_type === 'returns'): ?>
+<div class="summary-card"><span>Received</span><strong><?php echo moneylessNumber($summary['returns_received']); ?></strong></div>
+<div class="summary-card"><span>In Transit</span><strong><?php echo moneylessNumber($summary['returns_in_transit']); ?></strong></div>
 <?php elseif ($report_type === 'shortage'): ?>
 <div class="summary-card"><span>Recommended Reorder</span><strong><?php echo moneylessNumber($summary['quantity']); ?></strong></div>
 <?php else: ?>
@@ -1588,7 +1716,7 @@ No usage data for the selected date range.
 </div>
 
 <div class="table-wrap report-table-wrap">
-<table class="table data-table" id="inventoryReportTable">
+<table class="table data-table<?php echo $report_type === 'returns' ? ' return-report-table' : ''; ?>" id="inventoryReportTable">
 <thead>
 <?php if ($report_type === 'low_stock'): ?>
 <tr><th>Category</th><th>Item</th><th>Unit</th><th>Minimum Stock</th><th>Current Stock</th><th>Status</th></tr>
@@ -1598,6 +1726,24 @@ No usage data for the selected date range.
 <tr><th>Usage Date</th><th>Item</th><th>Category</th><th>Unit</th><th>Qty Used</th><th>Patients</th><th>Stock Received</th></tr>
 <?php elseif ($report_type === 'transactions'): ?>
 <tr><th>Trx No.</th><th>Type</th><th>Item</th><th>Unit</th><th>Qty</th><th>Date</th><th>By</th><th>Remarks</th></tr>
+<?php elseif ($report_type === 'returns'): ?>
+<tr>
+    <th>Return No.</th>
+    <th>Direction</th>
+    <th>Route</th>
+    <th>Item</th>
+    <th>Unit</th>
+    <th>Qty</th>
+    <th>Reason</th>
+    <th>Status</th>
+    <th>Created</th>
+    <th>Sent</th>
+    <th>Received</th>
+    <th>Created By</th>
+    <th>Received By</th>
+    <th>Transportation</th>
+    <th>Remarks</th>
+</tr>
 <?php elseif ($report_type === 'shortage'): ?>
 <tr><th>Date</th><th>Item</th><th>Category</th><th>Unit</th><th>Probability</th><th>Status</th><th>Recommended Reorder</th><th>Predicted Consumption</th><th>Forecast Days</th><th>Generated By</th></tr>
 <?php endif; ?>
@@ -1647,6 +1793,34 @@ No usage data for the selected date range.
 <td><?php echo moneylessNumber($row['quantity']); ?></td>
 <td><?php echo h(date('m/d/Y H:i', strtotime($row['transaction_date']))); ?></td>
 <td><?php echo h($row['username']); ?></td>
+<td><?php echo h($row['remarks'] ?: '—'); ?></td>
+</tr>
+<?php elseif ($report_type === 'returns'): ?>
+<tr>
+<td><strong><?php echo h($row['return_number'] ?: ('RET-' . $row['return_id'])); ?></strong></td>
+<td>
+    <span class="report-status <?php echo $row['direction'] === 'Sent' ? 'status-warning' : 'status-neutral'; ?>">
+        <?php echo h($row['direction']); ?>
+    </span>
+</td>
+<td>
+    <?php
+    $sourceBranch = $row['source_branch'] ?: $row['branch_id'];
+    $destinationBranch = $row['destination_branch'] ?: $row['destination_branch_id'];
+    echo h($sourceBranch . ' → ' . $destinationBranch);
+    ?>
+</td>
+<td><?php echo h($row['item_name']); ?></td>
+<td><?php echo h($row['unit_name'] ?: '—'); ?></td>
+<td><strong><?php echo h(rtrim(rtrim(number_format((float)$row['quantity'], 2, '.', ''), '0'), '.')); ?></strong></td>
+<td><?php echo h($row['return_reason']); ?></td>
+<td><span class="report-status <?php echo h(statusClass($row['status'] ?? '')); ?>"><?php echo h($row['status']); ?></span></td>
+<td><?php echo h($row['created_at'] ? date('m/d/Y H:i', strtotime($row['created_at'])) : '—'); ?></td>
+<td><?php echo h($row['sent_at'] ? date('m/d/Y H:i', strtotime($row['sent_at'])) : '—'); ?></td>
+<td><?php echo h($row['received_at'] ? date('m/d/Y H:i', strtotime($row['received_at'])) : '—'); ?></td>
+<td><?php echo h($row['created_by_name'] ?: '—'); ?></td>
+<td><?php echo h($row['processed_by_name'] ?: '—'); ?></td>
+<td><?php echo h($row['transportation_details'] ?: '—'); ?></td>
 <td><?php echo h($row['remarks'] ?: '—'); ?></td>
 </tr>
 <?php elseif ($report_type === 'shortage'): ?>
