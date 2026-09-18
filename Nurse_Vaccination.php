@@ -273,6 +273,32 @@ function validYmdDate($date) {
     return $d && $d->format('Y-m-d') === $date;
 }
 
+
+/**
+ * A product purchased/displayed as a vial must use mL as its inventory
+ * base unit before partial-vial vaccination usage can be recorded safely.
+ * The exact mL-per-vial conversion is product-specific and must come from
+ * the clinic/product label; this code deliberately does not guess it.
+ */
+function inventoryIsVialProduct(array $item): bool {
+    $labels = [
+        strtolower(trim((string)($item['unit_name'] ?? ''))),
+        strtolower(trim((string)($item['display_unit_label'] ?? '')))
+    ];
+
+    return in_array('vial', $labels, true)
+        || in_array('vials', $labels, true);
+}
+
+function inventoryIsMlBased(array $item): bool {
+    $base = strtolower(trim(inventoryBaseUnitLabel($item)));
+    return in_array($base, ['ml', 'milliliter', 'milliliters', 'millilitre', 'millilitres'], true);
+}
+
+function inventoryRequiresMlConfiguration(array $item): bool {
+    return inventoryIsVialProduct($item) && !inventoryIsMlBased($item);
+}
+
 // Get a Medical Supplies inventory item. Unit is loaded from the database
 // rather than trusted from browser-submitted data.
 function getMedicalSupplyItem($conn, $item_id) {
@@ -422,6 +448,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_vaccines') {
         );
         $vaccine['quantity_step'] = inventoryInputStep($vaccine);
         $vaccine['is_site_based'] = inventoryIsSiteBased($vaccine);
+        $vaccine['requires_ml_configuration'] = inventoryRequiresMlConfiguration($vaccine);
         $vaccine['is_available'] = (float)$vaccine['quantity_available'] > 0;
     }
     unset($vaccine);
@@ -806,6 +833,17 @@ if (isset($_POST['submit_vaccination'])) {
             $base_unit_label = inventoryBaseUnitLabel($vaccine);
             $display_unit_label = inventoryDisplayUnitLabel($vaccine);
             $conversion_to_base = inventoryConversionToBase($vaccine);
+
+            // Do not allow vial-count subtraction for partial-vial products.
+            // Configure the exact product-specific mL per vial in inventory_items
+            // first, then the existing base-unit workflow will deduct mL.
+            if ($vaccination_status === 'Completed' && inventoryRequiresMlConfiguration($vaccine)) {
+                throw new Exception(
+                    $vaccine_name .
+                    ' is still configured as a Vial-based inventory item. ' .
+                    'Set its base unit to mL and its verified mL-per-vial conversion before recording vaccination usage.'
+                );
+            }
 
             if ($vaccination_status === 'Completed' && $quantity <= 0) {
                 throw new Exception("Actual {$base_unit_label} used must be greater than zero for {$vaccine_name}.");
@@ -2794,9 +2832,12 @@ function addVaccineEntry(autoSuggest = false) {
     
     var vaccineOptions = availableVaccines.map(v => {
         const hasStock = Number(v.quantity_available || 0) > 0;
-        const availabilityLabel = hasStock
-            ? (v.quantity_available_display || (v.quantity_available + ' available'))
-            : 'OUT OF STOCK';
+        const needsMlConfig = Boolean(v.requires_ml_configuration);
+        const availabilityLabel = needsMlConfig
+            ? 'CONFIGURE mL PER VIAL FIRST'
+            : (hasStock
+                ? (v.quantity_available_display || (v.quantity_available + ' available'))
+                : 'OUT OF STOCK');
 
         return `<option value="${Number(v.item_id)}"
                  data-unit-id="${Number(v.unit_id)}"
@@ -2807,7 +2848,8 @@ function addVaccineEntry(autoSuggest = false) {
                  data-stock-display="${escapeHtml(v.quantity_available_display || '')}"
                  data-step="${escapeHtml(v.quantity_step || '0.0001')}"
                  data-site-based="${v.is_site_based ? '1' : '0'}"
-                 ${hasStock ? '' : 'disabled'}>
+                 data-requires-ml-config="${needsMlConfig ? '1' : '0'}"
+                 ${hasStock && !needsMlConfig ? '' : 'disabled'}>
              ${escapeHtml(v.item_name)} - ${escapeHtml(availabilityLabel)}
          </option>`;
     }).join('');
@@ -2876,10 +2918,21 @@ function updateVaccineUnit(select) {
     quantity.max = String(stock);
 
     var isSiteBased = opt.getAttribute('data-site-based') === '1';
+    var needsMlConfig = opt.getAttribute('data-requires-ml-config') === '1';
     entry.querySelector('.site-presets').style.display = isSiteBased ? 'block' : 'none';
-    entry.querySelector('.conversion-help').textContent = conversion > 1
-        ? `Inventory rule: 1 ${displayUnit} = ${formatInventoryNumber(conversion)} ${baseUnit}. Enter the actual ${baseUnit} administered.`
-        : `Enter the actual ${baseUnit} administered.`;
+
+    if (needsMlConfig) {
+        entry.querySelector('.conversion-help').textContent =
+            'This vial product is not yet configured for mL-based inventory. Configure its verified mL per vial before recording vaccination usage.';
+        quantity.disabled = true;
+        quantity.required = false;
+    } else {
+        quantity.disabled = false;
+        quantity.required = true;
+        entry.querySelector('.conversion-help').textContent = conversion > 1
+            ? `Inventory rule: 1 ${displayUnit} = ${formatInventoryNumber(conversion)} ${baseUnit}. Enter the actual ${baseUnit} administered.`
+            : `Enter the actual ${baseUnit} administered.`;
+    }
     entry.querySelector('.vaccine-item-id').value = opt.value;
     entry.querySelector('.vaccine-unit-id').value = opt.getAttribute('data-unit-id') || '';
 }

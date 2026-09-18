@@ -15,6 +15,73 @@ $userId = (int)$user['user_id'];
 $branchId = (string)$user['branch_id'];
 $csrf = workflowCsrfToken();
 
+
+/*
+ * Live daily consumption endpoint.
+ * Vaccination and other usage flows write actual consumption into
+ * inventory_usage_history. This endpoint lets Daily Inventory show that
+ * consumption immediately for the selected item/date without trusting
+ * browser-supplied totals.
+ */
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'daily_usage') {
+    header('Content-Type: application/json');
+
+    $itemId = (int)($_GET['item_id'] ?? 0);
+    $inventoryDate = trim((string)($_GET['date'] ?? ''));
+
+    if (
+        $itemId < 1 ||
+        DateTime::createFromFormat('Y-m-d', $inventoryDate)?->format('Y-m-d') !== $inventoryDate
+    ) {
+        echo json_encode([
+            'success' => false,
+            'message' => 'Select a valid item and inventory date.'
+        ]);
+        exit;
+    }
+
+    $itemStmt = $conn->prepare(
+        "SELECT i.item_name, u.unit_name,
+                COALESCE(NULLIF(i.base_unit_label,''),u.unit_name) AS base_unit_label,
+                COALESCE(NULLIF(i.display_unit_label,''),u.unit_name) AS display_unit_label,
+                COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base
+         FROM inventory_items i
+         INNER JOIN units u ON u.unit_id=i.unit_id
+         WHERE i.item_id=? AND i.is_consumable=1
+         LIMIT 1"
+    );
+    $itemStmt->bind_param('i', $itemId);
+    $itemStmt->execute();
+    $item = $itemStmt->get_result()->fetch_assoc();
+    $itemStmt->close();
+
+    if (!$item) {
+        echo json_encode([
+            'success' => false,
+            'message' => 'Consumable item not found.'
+        ]);
+        exit;
+    }
+
+    $usageStmt = $conn->prepare(
+        "SELECT COALESCE(SUM(quantity_used),0) AS consumed
+         FROM inventory_usage_history
+         WHERE item_id=? AND branch_id=? AND usage_date=?"
+    );
+    $usageStmt->bind_param('iss', $itemId, $branchId, $inventoryDate);
+    $usageStmt->execute();
+    $consumed = (float)($usageStmt->get_result()->fetch_assoc()['consumed'] ?? 0);
+    $usageStmt->close();
+
+    echo json_encode([
+        'success' => true,
+        'consumed' => $consumed,
+        'base_unit' => inventoryBaseUnitLabel($item),
+        'display' => inventoryUsageDescription($consumed, $item)
+    ]);
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         workflowVerifyCsrf();
@@ -493,6 +560,11 @@ $flash=workflowTakeFlash();
                         <input type="number" step="0.0001" min="0" value="0" class="form-control inventory-number" id="delivery" name="delivery">
                     </div>
                     <div class="col-xl-2 col-md-6">
+                        <label class="form-label" for="consumed_auto">Consumed (Auto) <span class="inventory-unit-label"></span></label>
+                        <input type="text" class="form-control" id="consumed_auto" value="0" readonly>
+                        <small class="text-muted">From completed vaccination / usage records.</small>
+                    </div>
+                    <div class="col-xl-2 col-md-6">
                         <label class="form-label" for="pull_out">Pull-out <span class="inventory-unit-label"></span></label>
                         <input type="number" step="0.0001" min="0" value="0" class="form-control inventory-number" id="pull_out" name="pull_out">
                     </div>
@@ -510,7 +582,7 @@ $flash=workflowTakeFlash();
                     <div class="col-12">
                         <div id="unitConversionHelp" class="alert alert-info py-2 px-3 mb-0" style="display:none"></div>
                     </div>
-                    <div class="col-12 small-help"><i class="bi bi-info-circle-fill"></i><span>All numbers on this form use the selected item's base unit. Consumed quantity is automatically read from completed vaccination and supply-usage records.</span></div>
+                    <div class="col-12 small-help"><i class="bi bi-info-circle-fill"></i><span>All numbers on this form use the selected item's base unit. Consumed quantity is read automatically from completed Nurse Vaccination and other recorded supply usage for the selected date; it is not manually entered here.</span></div>
                 </form>
             </div>
         </section>
@@ -592,6 +664,48 @@ $flash=workflowTakeFlash();
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+async function refreshAutomaticConsumption() {
+    const itemSelect = document.getElementById('item_id');
+    const dateInput = document.getElementById('inventory_date');
+    const consumedInput = document.getElementById('consumed_auto');
+
+    if (!itemSelect || !dateInput || !consumedInput) return;
+
+    const itemId = itemSelect.value;
+    const date = dateInput.value;
+
+    if (!itemId || !date) {
+        consumedInput.value = '0';
+        return;
+    }
+
+    consumedInput.value = 'Loading...';
+
+    try {
+        const params = new URLSearchParams({
+            ajax: 'daily_usage',
+            item_id: itemId,
+            date: date
+        });
+
+        const response = await fetch(`Nurse_DailyInventory.php?${params.toString()}`, {
+            headers: { 'Accept': 'application/json' }
+        });
+
+        const data = await response.json();
+
+        if (!data.success) {
+            consumedInput.value = 'Unavailable';
+            return;
+        }
+
+        consumedInput.value = data.display || `${data.consumed} ${data.base_unit || ''}`.trim();
+    } catch (error) {
+        console.error('Unable to load automatic consumption:', error);
+        consumedInput.value = 'Unavailable';
+    }
+}
+
 document.getElementById('item_id')?.addEventListener('change', function () {
     const selected = this.options[this.selectedIndex];
     const beginning = document.getElementById('beginning_stock');
@@ -600,6 +714,7 @@ document.getElementById('item_id')?.addEventListener('change', function () {
     if (!selected || !selected.value) {
         document.querySelectorAll('.inventory-unit-label').forEach(label => label.textContent = '');
         if (help) help.style.display = 'none';
+        refreshAutomaticConsumption();
         return;
     }
 
@@ -623,15 +738,18 @@ document.getElementById('item_id')?.addEventListener('change', function () {
         const stockDisplay = selected.dataset.stockDisplay || `${selected.dataset.stock} ${baseUnit}`;
         if (conversion > 1 && baseUnit.toLowerCase() !== displayUnit.toLowerCase()) {
             help.innerHTML = `<strong>Current stock:</strong> ${stockDisplay}. ` +
-                `Enter all fields in <strong>${baseUnit}</strong>. ` +
-                `Rule: 1 ${displayUnit} = ${conversion} ${baseUnit}. ` +
-                `Example: 5 ${displayUnit} + 3 ${baseUnit} = ${(5 * conversion) + 3} ${baseUnit}.`;
+                `Enter all manually counted fields in <strong>${baseUnit}</strong>. ` +
+                `Rule: 1 ${displayUnit} = ${conversion} ${baseUnit}.`;
         } else {
-            help.innerHTML = `<strong>Current stock:</strong> ${stockDisplay}. Enter all fields in ${baseUnit}.`;
+            help.innerHTML = `<strong>Current stock:</strong> ${stockDisplay}. Enter all manually counted fields in ${baseUnit}.`;
         }
         help.style.display = 'block';
     }
+
+    refreshAutomaticConsumption();
 });
+
+document.getElementById('inventory_date')?.addEventListener('change', refreshAutomaticConsumption);
 </script>
 </body>
 </html>
