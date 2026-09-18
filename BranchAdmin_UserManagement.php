@@ -913,14 +913,6 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
                 <li><a href="BranchAdmin_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
                 <li><a href="BranchAdmin_Settings.php"><i class="bi bi-gear-fill"></i><span>Settings</span></a></li>
             </ul>
-        </nav>
-        <div class="logout">
-            <a href="#"
-               data-bs-toggle="modal"
-               data-bs-target="#logoutConfirmModal">
-                <i class="bi bi-box-arrow-right"></i><span>Logout</span>
-            </a>
-        </div>
     </div>
 
     <!-- Main Content -->
