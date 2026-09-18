@@ -42,6 +42,52 @@ function nurseStockStatusClass(string $status): string
     };
 }
 
+
+
+function nurseForecastUnitMeta(array $row): array
+{
+    $legacyUnit = trim((string)($row['unit_name'] ?? ''));
+    $baseUnit = trim((string)($row['base_unit_label'] ?? ''));
+    $displayUnit = trim((string)($row['display_unit_label'] ?? ''));
+    $conversion = (float)($row['conversion_to_base'] ?? 1);
+
+    if ($baseUnit === '') {
+        $baseUnit = $legacyUnit !== '' ? $legacyUnit : 'unit';
+    }
+
+    if ($displayUnit === '') {
+        $displayUnit = $legacyUnit !== '' ? $legacyUnit : $baseUnit;
+    }
+
+    if ($conversion <= 0) {
+        $conversion = 1.0;
+    }
+
+    return [
+        'base_unit' => $baseUnit,
+        'display_unit' => $displayUnit,
+        'conversion' => $conversion,
+        'is_converted' => (
+            $conversion > 1.000001
+            && strcasecmp($baseUnit, $displayUnit) !== 0
+        ),
+    ];
+}
+
+function nurseForecastFormatQuantity(float $value, int $decimals = 2): string
+{
+    $formatted = number_format($value, $decimals, '.', ',');
+    return rtrim(rtrim($formatted, '0'), '.');
+}
+
+function nurseForecastDisplayUnitLabel(string $label, float $quantity): string
+{
+    if (strcasecmp($label, 'Vial') === 0 && abs($quantity - 1.0) > 0.000001) {
+        return 'Vials';
+    }
+    return $label;
+}
+
 /* =========================================================
    FORECAST HORIZON
    ========================================================= */
@@ -95,6 +141,9 @@ if ($latestDate !== null) {
             fr.forecasted_consumption,
             fr.forecast_days,
             i.item_name,
+            i.base_unit_label,
+            i.display_unit_label,
+            i.conversion_to_base,
             u.unit_name
          FROM forecast_results fr
          INNER JOIN inventory_items i
@@ -145,6 +194,12 @@ foreach ($forecasts as &$forecast) {
     $forecast['minimum_stock'] = (float)($forecast['minimum_stock_snapshot'] ?? 0);
     $forecast['stock_status'] = (string)($forecast['stock_status'] ?? 'SUFFICIENT STOCK');
     $forecast['stock_status_class'] = nurseStockStatusClass($forecast['stock_status']);
+
+    $unitMeta = nurseForecastUnitMeta($forecast);
+    $forecast['base_unit'] = $unitMeta['base_unit'];
+    $forecast['display_unit'] = $unitMeta['display_unit'];
+    $forecast['conversion_to_base'] = (float)$unitMeta['conversion'];
+    $forecast['is_converted'] = (bool)$unitMeta['is_converted'];
 }
 unset($forecast);
 
@@ -1393,14 +1448,35 @@ $chartRiskValues = array_map(
                             $riskClass = (string)$forecast['risk_class'];
                             $riskLabel = (string)$forecast['risk_label'];
 
-                            $unit = trim((string)($forecast['unit_name'] ?? ''));
-                            if ($unit === '') {
-                                $unit = 'unit(s)';
+                            $baseUnit = trim((string)($forecast['base_unit'] ?? ''));
+                            $displayUnit = trim((string)($forecast['display_unit'] ?? ''));
+                            $conversion = (float)($forecast['conversion_to_base'] ?? 1);
+                            $isConverted = (bool)($forecast['is_converted'] ?? false);
+
+                            if ($baseUnit === '') {
+                                $baseUnit = 'unit';
+                            }
+                            if ($displayUnit === '') {
+                                $displayUnit = $baseUnit;
+                            }
+                            if ($conversion <= 0) {
+                                $conversion = 1.0;
                             }
 
-                            $reorder = max(
-                                0,
-                                (int)$forecast['recommended_reorder']
+                            $currentStock = max(0.0, (float)$forecast['current_stock']);
+                            $minimumStock = max(0.0, (float)$forecast['minimum_stock']);
+                            $forecastUse = max(0.0, (float)$forecast['forecasted_consumption']);
+                            $reorderBase = max(0.0, (float)$forecast['recommended_reorder']);
+
+                            $currentDisplay = $isConverted ? $currentStock / $conversion : $currentStock;
+                            $minimumDisplay = $isConverted ? $minimumStock / $conversion : $minimumStock;
+                            $reorderDisplay = $isConverted
+                                ? (int)ceil($reorderBase / $conversion)
+                                : (int)ceil($reorderBase);
+
+                            $reorderDisplayUnit = nurseForecastDisplayUnitLabel(
+                                $displayUnit,
+                                (float)$reorderDisplay
                             );
 
                             $stockStatus = (string)$forecast['stock_status'];
@@ -1420,16 +1496,45 @@ $chartRiskValues = array_map(
                                 </span>
 
                                 <span class="item-unit">
-                                    <?= workflowH($unit) ?>
+                                    <?= workflowH($baseUnit) ?>
+                                    <?php if ($isConverted): ?>
+                                        · 1 <?= workflowH($displayUnit) ?>
+                                        = <?= workflowH(nurseForecastFormatQuantity($conversion)) ?>
+                                        <?= workflowH($baseUnit) ?>
+                                    <?php endif; ?>
                                 </span>
                             </td>
 
                             <td>
-                                <?= number_format((float)$forecast['current_stock'], 2) ?>
+                                <strong>
+                                    <?= workflowH(nurseForecastFormatQuantity($currentStock)) ?>
+                                    <?= workflowH($baseUnit) ?>
+                                </strong>
+
+                                <?php if ($isConverted): ?>
+                                    <div class="text-muted" style="font-size:11px;">
+                                        ≈ <?= workflowH(nurseForecastFormatQuantity($currentDisplay)) ?>
+                                        <?= workflowH(
+                                            nurseForecastDisplayUnitLabel($displayUnit, $currentDisplay)
+                                        ) ?>
+                                    </div>
+                                <?php endif; ?>
                             </td>
 
                             <td>
-                                <?= number_format((float)$forecast['minimum_stock'], 2) ?>
+                                <strong>
+                                    <?= workflowH(nurseForecastFormatQuantity($minimumStock)) ?>
+                                    <?= workflowH($baseUnit) ?>
+                                </strong>
+
+                                <?php if ($isConverted): ?>
+                                    <div class="text-muted" style="font-size:11px;">
+                                        = <?= workflowH(nurseForecastFormatQuantity($minimumDisplay)) ?>
+                                        <?= workflowH(
+                                            nurseForecastDisplayUnitLabel($displayUnit, $minimumDisplay)
+                                        ) ?>
+                                    </div>
+                                <?php endif; ?>
                             </td>
 
                             <td>
@@ -1439,10 +1544,22 @@ $chartRiskValues = array_map(
                             </td>
 
                             <td>
-                                <?= number_format((float)$forecast['forecasted_consumption'], 2) ?>
-                                <span class="text-muted">
-                                    <?= workflowH($unit) ?>
-                                </span>
+                                <strong>
+                                    <?= workflowH(nurseForecastFormatQuantity($forecastUse)) ?>
+                                    <?= workflowH($baseUnit) ?>
+                                </strong>
+
+                                <?php if ($isConverted): ?>
+                                    <div class="text-muted" style="font-size:11px;">
+                                        ≈ <?= workflowH(nurseForecastFormatQuantity($forecastUse / $conversion)) ?>
+                                        <?= workflowH(
+                                            nurseForecastDisplayUnitLabel(
+                                                $displayUnit,
+                                                $forecastUse / $conversion
+                                            )
+                                        ) ?>
+                                    </div>
+                                <?php endif; ?>
                             </td>
 
                             <td>
@@ -1474,13 +1591,22 @@ $chartRiskValues = array_map(
 
                             <td>
 
-                                <?php if ($reorder > 0): ?>
+                                <?php if ($reorderBase > 0): ?>
 
                                     <span class="reorder-value">
                                         Reorder
-                                        <?= number_format($reorder) ?>
-                                        <?= workflowH($unit) ?>
+                                        <?= number_format($reorderDisplay) ?>
+                                        <?= workflowH(
+                                            $isConverted ? $reorderDisplayUnit : $displayUnit
+                                        ) ?>
                                     </span>
+
+                                    <?php if ($isConverted): ?>
+                                        <div class="text-muted mt-1" style="font-size:11px;">
+                                            <?= workflowH(nurseForecastFormatQuantity($reorderBase)) ?>
+                                            <?= workflowH($baseUnit) ?> required
+                                        </div>
+                                    <?php endif; ?>
 
                                 <?php else: ?>
 
@@ -1558,7 +1684,7 @@ $chartRiskValues = array_map(
                 <div class="reading-item">
                     <strong>Recommended Reorder</strong>
                     <span>
-                        Amount suggested to cover forecasted use while restoring the supply toward its minimum stock level.
+                        Amount suggested to cover forecasted use while restoring the supply toward its minimum stock level. Converted supplies are reordered in whole physical units (for example, whole vials), while the model continues calculating in the base unit such as mL.
                     </span>
                 </div>
 

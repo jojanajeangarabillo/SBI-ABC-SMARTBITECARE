@@ -72,6 +72,60 @@ function addAuditLog($conn, $user_id, $action, $module = 'Supply Forecasting') {
     return false;
 }
 
+
+
+/**
+ * Forecast quantities are stored/calculated in the item's base unit.
+ * Example for converted vial-based products:
+ *   base_unit_label = mL
+ *   display_unit_label = Vial
+ *   conversion_to_base = 5
+ * means 1 physical vial contains 5 mL.
+ */
+function forecastUnitMeta(array $row): array
+{
+    $legacyUnit = trim((string)($row['unit_name'] ?? ''));
+    $baseUnit = trim((string)($row['base_unit_label'] ?? ''));
+    $displayUnit = trim((string)($row['display_unit_label'] ?? ''));
+    $conversion = (float)($row['conversion_to_base'] ?? 1);
+
+    if ($baseUnit === '') {
+        $baseUnit = $legacyUnit !== '' ? $legacyUnit : 'unit';
+    }
+
+    if ($displayUnit === '') {
+        $displayUnit = $legacyUnit !== '' ? $legacyUnit : $baseUnit;
+    }
+
+    if ($conversion <= 0) {
+        $conversion = 1.0;
+    }
+
+    $isConverted = $conversion > 1.000001
+        && strcasecmp($baseUnit, $displayUnit) !== 0;
+
+    return [
+        'base_unit' => $baseUnit,
+        'display_unit' => $displayUnit,
+        'conversion' => $conversion,
+        'is_converted' => $isConverted,
+    ];
+}
+
+function forecastFormatQuantity(float $value, int $decimals = 2): string
+{
+    $formatted = number_format($value, $decimals, '.', ',');
+    return rtrim(rtrim($formatted, '0'), '.');
+}
+
+function forecastDisplayUnitLabel(string $label, float $quantity): string
+{
+    if (strcasecmp($label, 'Vial') === 0 && abs($quantity - 1.0) > 0.000001) {
+        return 'Vials';
+    }
+    return $label;
+}
+
 // ============================================
 // AUTOMATIC DAILY FORECAST GENERATION
 // ============================================
@@ -292,6 +346,9 @@ $forecasts = [];
 $forecast_sql = "SELECT 
                 p.*,
                 i.item_name,
+                i.base_unit_label,
+                i.display_unit_label,
+                i.conversion_to_base,
                 u.unit_name
              FROM forecast_results p
              JOIN inventory_items i ON p.item_id = i.item_id
@@ -326,6 +383,9 @@ while ($row = $forecast_result->fetch_assoc()) {
     $forecasts[] = [
         'item_name' => $row['item_name'],
         'unit_name' => $row['unit_name'],
+        'base_unit_label' => $row['base_unit_label'],
+        'display_unit_label' => $row['display_unit_label'],
+        'conversion_to_base' => (float)$row['conversion_to_base'],
         'shortage_probability' => (float)$row['shortage_probability'],
         'forecast_status' => $row['forecast_status'],
         'status_color' => $status_color,
@@ -371,7 +431,14 @@ $stats_stmt->close();
 // ============================================
 
 $forecastable_items = [];
-$items_sql = "SELECT i.item_id, i.item_name, u.unit_name, i.minimum_stock
+$items_sql = "SELECT
+                    i.item_id,
+                    i.item_name,
+                    i.minimum_stock,
+                    i.base_unit_label,
+                    i.display_unit_label,
+                    i.conversion_to_base,
+                    u.unit_name
               FROM inventory_items i
               LEFT JOIN units u ON i.unit_id = u.unit_id
               WHERE i.is_forecastable = 1
@@ -1446,6 +1513,28 @@ while ($row = $items_result->fetch_assoc()) {
                                     $risk_level = $forecast['shortage_probability'] >= 0.8
                                         ? 'high'
                                         : ($forecast['shortage_probability'] >= 0.6 ? 'moderate' : 'low');
+
+                                    $unitMeta = forecastUnitMeta($forecast);
+                                    $baseUnit = $unitMeta['base_unit'];
+                                    $displayUnit = $unitMeta['display_unit'];
+                                    $conversion = (float)$unitMeta['conversion'];
+                                    $isConverted = (bool)$unitMeta['is_converted'];
+
+                                    $currentStock = max(0.0, (float)$forecast['current_stock']);
+                                    $minimumStock = max(0.0, (float)$forecast['minimum_stock']);
+                                    $forecastUse = max(0.0, (float)($forecast['forecasted_consumption'] ?? 0));
+                                    $reorderBase = max(0.0, (float)$forecast['recommended_reorder']);
+
+                                    $currentDisplay = $isConverted ? $currentStock / $conversion : $currentStock;
+                                    $minimumDisplay = $isConverted ? $minimumStock / $conversion : $minimumStock;
+                                    $reorderDisplay = $isConverted
+                                        ? (int)ceil($reorderBase / $conversion)
+                                        : (int)ceil($reorderBase);
+
+                                    $reorderDisplayUnit = forecastDisplayUnitLabel(
+                                        $displayUnit,
+                                        (float)$reorderDisplay
+                                    );
                                 ?>
                                 <tr
                                     class="forecast-row"
@@ -1454,9 +1543,46 @@ while ($row = $items_result->fetch_assoc()) {
                                     data-stock-status="<?php echo htmlspecialchars($forecast['stock_status'], ENT_QUOTES, 'UTF-8'); ?>"
                                 >
                                     <td><strong><?php echo htmlspecialchars($forecast['item_name']); ?></strong></td>
-                                    <td><?php echo htmlspecialchars($forecast['unit_name'] ?? 'N/A'); ?></td>
-                                    <td><?php echo number_format((float)$forecast['current_stock'], 2); ?></td>
-                                    <td><?php echo number_format((float)$forecast['minimum_stock'], 2); ?></td>
+                                    <td>
+                                        <strong><?php echo htmlspecialchars($baseUnit); ?></strong>
+                                        <?php if ($isConverted): ?>
+                                            <div class="text-muted" style="font-size:11px;">
+                                                1 <?php echo htmlspecialchars($displayUnit); ?>
+                                                = <?php echo forecastFormatQuantity($conversion); ?>
+                                                <?php echo htmlspecialchars($baseUnit); ?>
+                                            </div>
+                                        <?php endif; ?>
+                                    </td>
+
+                                    <td>
+                                        <strong>
+                                            <?php echo forecastFormatQuantity($currentStock); ?>
+                                            <?php echo htmlspecialchars($baseUnit); ?>
+                                        </strong>
+                                        <?php if ($isConverted): ?>
+                                            <div class="text-muted" style="font-size:11px;">
+                                                ≈ <?php echo forecastFormatQuantity($currentDisplay); ?>
+                                                <?php echo htmlspecialchars(
+                                                    forecastDisplayUnitLabel($displayUnit, $currentDisplay)
+                                                ); ?>
+                                            </div>
+                                        <?php endif; ?>
+                                    </td>
+
+                                    <td>
+                                        <strong>
+                                            <?php echo forecastFormatQuantity($minimumStock); ?>
+                                            <?php echo htmlspecialchars($baseUnit); ?>
+                                        </strong>
+                                        <?php if ($isConverted): ?>
+                                            <div class="text-muted" style="font-size:11px;">
+                                                = <?php echo forecastFormatQuantity($minimumDisplay); ?>
+                                                <?php echo htmlspecialchars(
+                                                    forecastDisplayUnitLabel($displayUnit, $minimumDisplay)
+                                                ); ?>
+                                            </div>
+                                        <?php endif; ?>
+                                    </td>
                                     <td>
                                         <?php
                                             $stock_status_class = $forecast['stock_status'] === 'OUT OF STOCK'
@@ -1467,7 +1593,20 @@ while ($row = $items_result->fetch_assoc()) {
                                             <?php echo htmlspecialchars($forecast['stock_status']); ?>
                                         </span>
                                     </td>
-                                    <td><?php echo number_format((float)($forecast['forecasted_consumption'] ?? 0), 2); ?></td>
+                                    <td>
+                                        <strong>
+                                            <?php echo forecastFormatQuantity($forecastUse); ?>
+                                            <?php echo htmlspecialchars($baseUnit); ?>
+                                        </strong>
+                                        <?php if ($isConverted): ?>
+                                            <div class="text-muted" style="font-size:11px;">
+                                                ≈ <?php echo forecastFormatQuantity($forecastUse / $conversion); ?>
+                                                <?php echo htmlspecialchars(
+                                                    forecastDisplayUnitLabel($displayUnit, $forecastUse / $conversion)
+                                                ); ?>
+                                            </div>
+                                        <?php endif; ?>
+                                    </td>
                                     <td>
                                         <?php echo number_format($forecast['shortage_probability'] * 100, 1); ?>%
                                         <div class="probability-bar">
@@ -1488,12 +1627,21 @@ while ($row = $items_result->fetch_assoc()) {
                                         </span>
                                     </td>
                                     <td>
-                                        <?php if ($forecast['recommended_reorder'] > 0): ?>
+                                        <?php if ($reorderBase > 0): ?>
                                             <span class="badge bg-warning text-dark">
                                                 Reorder
-                                                <?php echo htmlspecialchars($forecast['recommended_reorder']); ?>
-                                                <?php echo htmlspecialchars($forecast['unit_name'] ?? 'units'); ?>
+                                                <?php echo number_format($reorderDisplay); ?>
+                                                <?php echo htmlspecialchars(
+                                                    $isConverted ? $reorderDisplayUnit : $displayUnit
+                                                ); ?>
                                             </span>
+
+                                            <?php if ($isConverted): ?>
+                                                <div class="text-muted mt-1" style="font-size:11px;">
+                                                    <?php echo forecastFormatQuantity($reorderBase); ?>
+                                                    <?php echo htmlspecialchars($baseUnit); ?> required
+                                                </div>
+                                            <?php endif; ?>
                                         <?php else: ?>
                                             <span class="text-success fw-semibold">
                                                 <i class="bi bi-check-circle-fill me-1"></i>No reorder
@@ -1552,9 +1700,21 @@ while ($row = $items_result->fetch_assoc()) {
             <div class="d-flex flex-wrap gap-2">
                 <?php foreach ($forecastable_items as $item): ?>
                     <span class="badge bg-light text-dark border" style="padding:6px 14px;font-weight:600;">
+                        <?php
+                            $itemUnitMeta = forecastUnitMeta($item);
+                            $itemBaseUnit = $itemUnitMeta['base_unit'];
+                            $itemDisplayUnit = $itemUnitMeta['display_unit'];
+                            $itemConversion = (float)$itemUnitMeta['conversion'];
+                        ?>
                         <?php echo htmlspecialchars($item['item_name']); ?>
                         <span class="text-muted ms-1" style="font-weight:400;">
-                            (<?php echo htmlspecialchars($item['unit_name'] ?? 'N/A'); ?>)
+                            (<?php echo htmlspecialchars($itemBaseUnit); ?>
+                            <?php if ($itemUnitMeta['is_converted']): ?>
+                                → <?php echo htmlspecialchars($itemDisplayUnit); ?>,
+                                1 <?php echo htmlspecialchars($itemDisplayUnit); ?>
+                                = <?php echo forecastFormatQuantity($itemConversion); ?>
+                                <?php echo htmlspecialchars($itemBaseUnit); ?>
+                            <?php endif; ?>)
                         </span>
                     </span>
                 <?php endforeach; ?>
