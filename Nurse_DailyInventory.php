@@ -4,6 +4,7 @@ require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/notification_helper.php';
+require_once __DIR__ . '/fpdf/fpdf.php';
 
 // Get logged-in Nurse
 $user_id = (int)$_SESSION['user_id'];
@@ -14,6 +15,224 @@ $user = workflowRequireUser($conn, 3);
 $userId = (int)$user['user_id'];
 $branchId = (string)$user['branch_id'];
 $csrf = workflowCsrfToken();
+
+function dailyInventoryValidDate(string $date): bool
+{
+    $parsed = DateTime::createFromFormat('Y-m-d', $date);
+    return $parsed !== false && $parsed->format('Y-m-d') === $date;
+}
+
+function dailyInventoryPdfText($value): string
+{
+    $text = trim((string)$value);
+    if ($text === '') {
+        return '';
+    }
+    if (function_exists('iconv')) {
+        $converted = @iconv('UTF-8', 'windows-1252//TRANSLIT//IGNORE', $text);
+        if ($converted !== false) {
+            return $converted;
+        }
+    }
+    return preg_replace('/[^\\x20-\\x7E]/', '', $text) ?: '';
+}
+
+function dailyInventoryPdfShort($value, int $max = 28): string
+{
+    $text = dailyInventoryPdfText($value);
+    if (strlen($text) <= $max) {
+        return $text;
+    }
+    return substr($text, 0, max(0, $max - 3)) . '...';
+}
+
+class DailyInventoryClosingPdf extends FPDF
+{
+    private array $branch;
+    private string $inventoryDate;
+
+    public function __construct(array $branch, string $inventoryDate)
+    {
+        parent::__construct('L', 'mm', 'A4');
+        $this->branch = $branch;
+        $this->inventoryDate = $inventoryDate;
+        $this->SetMargins(12, 12, 12);
+        $this->SetAutoPageBreak(true, 18);
+        $this->AliasNbPages();
+    }
+
+    public function Header(): void
+    {
+        $logo = __DIR__ . DIRECTORY_SEPARATOR . 'logo.png';
+        if (is_file($logo)) {
+            $this->Image($logo, 12, 8, 20, 20);
+        }
+
+        $this->SetXY(36, 9);
+        $this->SetTextColor(43, 58, 140);
+        $this->SetFont('Arial', 'B', 15);
+        $this->Cell(0, 6, dailyInventoryPdfText($this->branch['branch_name'] ?? 'Smart Bite Care'), 0, 1);
+        $this->SetX(36);
+        $this->SetFont('Arial', '', 8.5);
+        $this->SetTextColor(75, 83, 105);
+        $this->Cell(0, 4.5, dailyInventoryPdfText($this->branch['branch_address'] ?? ''), 0, 1);
+        $this->SetX(36);
+        $contact = trim((string)($this->branch['contact_number'] ?? ''));
+        $email = trim((string)($this->branch['email'] ?? ''));
+        $this->Cell(0, 4.5, dailyInventoryPdfText(trim($contact . ($contact && $email ? ' | ' : '') . $email)), 0, 1);
+
+        $this->SetDrawColor(43, 58, 140);
+        $this->SetLineWidth(0.5);
+        $this->Line(12, 31, 285, 31);
+        $this->Ln(8);
+
+        $this->SetTextColor(43, 58, 140);
+        $this->SetFont('Arial', 'B', 16);
+        $this->Cell(0, 7, 'DAILY INVENTORY CLOSING REPORT', 0, 1, 'C');
+        $this->SetFont('Arial', '', 9);
+        $this->SetTextColor(85, 93, 115);
+        $this->Cell(0, 5, 'Inventory Date: ' . date('F d, Y', strtotime($this->inventoryDate)), 0, 1, 'C');
+        $this->Ln(4);
+    }
+
+    public function Footer(): void
+    {
+        $this->SetY(-12);
+        $this->SetFont('Arial', '', 8);
+        $this->SetTextColor(120, 126, 140);
+        $this->Cell(0, 5, 'SmartBiteCare - Daily Inventory | Page ' . $this->PageNo() . '/{nb}', 0, 0, 'C');
+    }
+}
+
+function fetchDailyInventoryClosingsForDate(mysqli $conn, string $branchId, string $date): array
+{
+    $stmt = $conn->prepare(
+        "SELECT d.*, i.item_name, u2.unit_name,
+                COALESCE(NULLIF(i.base_unit_label,''),u2.unit_name) AS base_unit_label,
+                COALESCE(NULLIF(i.display_unit_label,''),u2.unit_name) AS display_unit_label,
+                COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base,
+                u.username
+         FROM daily_inventory_closings d
+         INNER JOIN inventory_items i ON i.item_id=d.item_id
+         INNER JOIN users u ON u.user_id=d.submitted_by
+         INNER JOIN units u2 ON u2.unit_id=i.unit_id
+         WHERE d.branch_id=? AND d.inventory_date=?
+         ORDER BY i.item_name"
+    );
+    $stmt->bind_param('ss', $branchId, $date);
+    $stmt->execute();
+    $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+    return $rows;
+}
+
+if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
+    $exportDate = trim((string)($_GET['date'] ?? ''));
+    if (!dailyInventoryValidDate($exportDate)) {
+        http_response_code(400);
+        exit('Invalid inventory date.');
+    }
+
+    $exportRows = fetchDailyInventoryClosingsForDate($conn, $branchId, $exportDate);
+    if (!$exportRows) {
+        http_response_code(404);
+        exit('No daily inventory closing records were found for the selected date.');
+    }
+
+    $branchStmt = $conn->prepare(
+        "SELECT branch_name, branch_address, contact_number, email
+         FROM branches
+         WHERE branch_id=?
+         LIMIT 1"
+    );
+    $branchStmt->bind_param('s', $branchId);
+    $branchStmt->execute();
+    $branchInfo = $branchStmt->get_result()->fetch_assoc() ?: [
+        'branch_name' => (string)($user['branch_name'] ?? $branchId),
+        'branch_address' => '',
+        'contact_number' => '',
+        'email' => ''
+    ];
+    $branchStmt->close();
+
+    $pdf = new DailyInventoryClosingPdf($branchInfo, $exportDate);
+    $pdf->SetTitle(dailyInventoryPdfText('Daily Inventory - ' . $exportDate));
+    $pdf->SetAuthor('SmartBiteCare');
+    $pdf->AddPage();
+
+    $headers = ['Item','Beginning','Delivery','Consumed','Pull-out','Computed','Actual','Variance','Status'];
+    $widths = [55,28,25,28,25,29,29,27,24];
+
+    $pdf->SetFillColor(43, 58, 140);
+    $pdf->SetTextColor(255,255,255);
+    $pdf->SetFont('Arial','B',8);
+    foreach ($headers as $i => $header) {
+        $pdf->Cell($widths[$i], 8, $header, 1, 0, 'C', true);
+    }
+    $pdf->Ln();
+
+    $pdf->SetFont('Arial','',7.6);
+    $tallied = 0;
+    $differences = 0;
+    foreach ($exportRows as $row) {
+        $variance = (float)$row['variance'];
+        $isTallied = abs($variance) <= 0.009;
+        if ($isTallied) { $tallied++; } else { $differences++; }
+
+        $cells = [
+            dailyInventoryPdfShort($row['item_name'], 34),
+            inventoryStockBreakdown((float)$row['beginning_stock'], $row),
+            inventoryStockBreakdown((float)$row['delivery'], $row),
+            inventoryStockBreakdown((float)$row['consumed'], $row),
+            inventoryStockBreakdown((float)$row['pull_out'], $row),
+            inventoryStockBreakdown((float)$row['computed_ending'], $row),
+            inventoryStockBreakdown((float)$row['actual_count'], $row),
+            inventoryUsageDescription($variance, $row),
+            $isTallied ? 'Tallied' : 'Variance'
+        ];
+
+        $pdf->SetTextColor(45, 52, 70);
+        foreach ($cells as $i => $cell) {
+            $align = $i === 0 ? 'L' : 'C';
+            $pdf->Cell($widths[$i], 7.5, dailyInventoryPdfShort($cell, $i === 0 ? 34 : 20), 1, 0, $align);
+        }
+        $pdf->Ln();
+    }
+
+    $pdf->Ln(4);
+    $pdf->SetFont('Arial','B',9);
+    $pdf->SetTextColor(43,58,140);
+    $pdf->Cell(0,5,'Daily Closing Summary',0,1);
+    $pdf->SetFont('Arial','',9);
+    $pdf->SetTextColor(60,68,88);
+    $pdf->Cell(0,5,'Items closed: ' . count($exportRows) . ' | Tallied: ' . $tallied . ' | With variance: ' . $differences,0,1);
+
+    $remarks = array_values(array_filter($exportRows, fn($row) => trim((string)($row['remarks'] ?? '')) !== ''));
+    if ($remarks) {
+        $pdf->Ln(2);
+        $pdf->SetFont('Arial','B',9);
+        $pdf->SetTextColor(43,58,140);
+        $pdf->Cell(0,5,'Remarks / Adjustments',0,1);
+        $pdf->SetFont('Arial','',8.5);
+        $pdf->SetTextColor(60,68,88);
+        foreach ($remarks as $row) {
+            $line = $row['item_name'] . ': ' . $row['remarks'];
+            $pdf->MultiCell(0,4.5,dailyInventoryPdfText($line),0,'L');
+        }
+    }
+
+    workflowAudit(
+        $conn,
+        $userId,
+        $branchId,
+        'Exported daily inventory closing PDF for ' . $exportDate,
+        'Daily Inventory'
+    );
+
+    $filename = 'Daily_Inventory_' . preg_replace('/[^A-Za-z0-9_-]/', '_', (string)($branchInfo['branch_name'] ?? $branchId)) . '_' . $exportDate . '.pdf';
+    $pdf->Output('D', $filename);
+    exit;
+}
 
 
 /*
@@ -191,19 +410,64 @@ foreach ($items as &$itemRow) {
     $itemRow['input_step']=inventoryInputStep($itemRow);
 }
 unset($itemRow);
-$stmt = $conn->prepare(
+$historyRange = trim((string)($_GET['range'] ?? 'today'));
+$historyDate = trim((string)($_GET['history_date'] ?? ''));
+$allowedHistoryRanges = ['today', '7', '30', 'all'];
+if (!in_array($historyRange, $allowedHistoryRanges, true)) {
+    $historyRange = 'today';
+}
+if ($historyDate !== '' && !dailyInventoryValidDate($historyDate)) {
+    $historyDate = '';
+}
+
+$historySql =
     "SELECT d.*,i.item_name,u2.unit_name,
             COALESCE(NULLIF(i.base_unit_label,''),u2.unit_name) AS base_unit_label,
             COALESCE(NULLIF(i.display_unit_label,''),u2.unit_name) AS display_unit_label,
             COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base,
             u.username
-     FROM daily_inventory_closings d INNER JOIN inventory_items i ON i.item_id=d.item_id
+     FROM daily_inventory_closings d
+     INNER JOIN inventory_items i ON i.item_id=d.item_id
      INNER JOIN users u ON u.user_id=d.submitted_by
      INNER JOIN units u2 ON u2.unit_id=i.unit_id
-     WHERE d.branch_id=? AND d.inventory_date>=DATE_SUB(CURDATE(),INTERVAL 30 DAY)
-     ORDER BY d.inventory_date DESC,i.item_name"
-);
-$stmt->bind_param('s',$branchId);$stmt->execute();$closings=$stmt->get_result()->fetch_all(MYSQLI_ASSOC);$stmt->close();
+     WHERE d.branch_id=?";
+
+$historyLabel = 'Today';
+
+if ($historyDate !== '') {
+    $historySql .= ' AND d.inventory_date=?';
+    $historyLabel = date('F d, Y', strtotime($historyDate));
+} elseif ($historyRange === '7') {
+    $historySql .= ' AND d.inventory_date BETWEEN DATE_SUB(CURDATE(),INTERVAL 6 DAY) AND CURDATE()';
+    $historyLabel = 'Last 7 days';
+} elseif ($historyRange === '30') {
+    $historySql .= ' AND d.inventory_date BETWEEN DATE_SUB(CURDATE(),INTERVAL 29 DAY) AND CURDATE()';
+    $historyLabel = 'Last 30 days';
+} elseif ($historyRange === 'all') {
+    $historyLabel = 'All closing history';
+} else {
+    $historySql .= ' AND d.inventory_date=CURDATE()';
+}
+
+$historySql .= ' ORDER BY d.inventory_date DESC,i.item_name';
+$stmt = $conn->prepare($historySql);
+if ($historyDate !== '') {
+    $stmt->bind_param('ss', $branchId, $historyDate);
+} else {
+    $stmt->bind_param('s', $branchId);
+}
+$stmt->execute();
+$closings = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
+
+$closingsByDate = [];
+foreach ($closings as $closingRow) {
+    $dateKey = (string)$closingRow['inventory_date'];
+    if (!isset($closingsByDate[$dateKey])) {
+        $closingsByDate[$dateKey] = [];
+    }
+    $closingsByDate[$dateKey][] = $closingRow;
+}
 $flash=workflowTakeFlash();
 ?>
 <!DOCTYPE html>
@@ -266,7 +530,36 @@ $flash=workflowTakeFlash();
         .variance-badge.match { color: #198754; background: #e8f7ef; }
         .variance-badge.difference { color: #c0392b; background: #fdebec; }
         .empty { padding: 38px 20px !important; color: #8a94a6 !important; text-align: center; }
-        
+
+        .history-tools { display:flex; align-items:end; gap:12px; flex-wrap:wrap; }
+        .history-tools .filter-block { min-width:155px; }
+        .history-tools .filter-block.date-filter { min-width:180px; }
+        .history-tools .form-label { margin-bottom:5px; }
+        .day-closing { margin: 0 24px 20px; border:1px solid #e7ebf3; border-radius:14px; overflow:hidden; background:#fff; }
+        .day-closing:first-child { margin-top:20px; }
+        .day-closing-header { display:flex; justify-content:space-between; align-items:center; gap:14px; flex-wrap:wrap; padding:15px 17px; background:#f7f9ff; border-bottom:1px solid #e7ebf3; }
+        .day-closing-title { display:flex; align-items:center; gap:10px; }
+        .day-closing-title .date-icon { width:38px; height:38px; display:inline-flex; align-items:center; justify-content:center; border-radius:10px; background:#e9edff; color:var(--primary); font-size:18px; }
+        .day-closing-title strong { display:block; color:var(--primary); font-size:15px; }
+        .day-closing-title small { color:var(--muted); }
+        .day-summary { display:flex; gap:7px; flex-wrap:wrap; align-items:center; }
+        .summary-pill { display:inline-flex; align-items:center; gap:5px; padding:5px 9px; border-radius:999px; font-size:12px; font-weight:700; }
+        .summary-pill.total { color:#435176; background:#edf1f7; }
+        .summary-pill.tallied { color:#177245; background:#e8f7ef; }
+        .summary-pill.variance { color:#b04a36; background:#fff0ec; }
+        .result-badge { display:inline-flex; align-items:center; gap:5px; padding:5px 9px; border-radius:999px; font-size:12px; font-weight:700; white-space:nowrap; }
+        .result-badge.tallied { color:#177245; background:#e8f7ef; }
+        .result-badge.variance { color:#b04a36; background:#fff0ec; }
+        .closing-preview { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:4px; }
+        .preview-box { padding:12px 14px; border:1px solid #e3e8f1; border-radius:11px; background:#fafbff; }
+        .preview-box .label { display:block; margin-bottom:4px; color:#7a8498; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.25px; }
+        .preview-box .value { color:#273661; font-size:17px; font-weight:750; }
+        .preview-box.match { background:#f0faf4; border-color:#cee9d9; }
+        .preview-box.difference { background:#fff5f2; border-color:#f3d5ce; }
+        .btn-soft-primary { color:var(--primary); background:#eef1ff; border:1px solid #d6ddff; font-weight:650; }
+        .btn-soft-primary:hover { color:#fff; background:var(--primary); border-color:var(--primary); }
+        .history-empty { padding:42px 24px; text-align:center; color:#8791a4; }
+
         /* =========================================================
    GLOBAL LOGOUT CONFIRMATION MODAL 
    ========================================================= */
@@ -571,14 +864,35 @@ $flash=workflowTakeFlash();
                     </div>
                     <div class="col-lg-3 col-md-6">
                         <label class="form-label required" for="actual_count">Actual Physical Count <span class="inventory-unit-label"></span></label>
-                        <input type="number" step="0.0001" min="0" class="form-control inventory-number" id="actual_count" name="actual_count" required>
+                        <div class="input-group">
+                            <input type="number" step="0.0001" min="0" class="form-control inventory-number" id="actual_count" name="actual_count" required>
+                            <button class="btn btn-soft-primary" type="button" id="useComputedBtn" title="Use this only when the physical count confirms the computed ending.">Use Computed</button>
+                        </div>
+                        <small class="text-muted">Actual should come from the physical count. Use Computed only when the tally matches.</small>
                     </div>
                     <div class="col-lg-7 col-md-6">
-                        <label class="form-label" for="remarks">Remarks</label>
-                        <input class="form-control" id="remarks" name="remarks" maxlength="500" placeholder="Explain any variance or pull-out">
+                        <label class="form-label" for="remarks">Remarks / Adjustment Note</label>
+                        <input class="form-control" id="remarks" name="remarks" maxlength="500" placeholder="Explain a variance, correction, adjustment, or pull-out">
                     </div>
                     <div class="col-lg-2 d-flex align-items-end">
                         <button class="btn btn-primary w-100" type="submit"><i class="bi bi-send-check-fill me-1"></i>Submit</button>
+                    </div>
+                    <div class="col-12">
+                        <input type="hidden" id="consumed_numeric" value="0">
+                        <div class="closing-preview">
+                            <div class="preview-box">
+                                <span class="label">Computed Ending</span>
+                                <span class="value" id="computedPreview">0</span>
+                            </div>
+                            <div class="preview-box" id="actualPreviewBox">
+                                <span class="label">Actual Count</span>
+                                <span class="value" id="actualPreview">-</span>
+                            </div>
+                            <div class="preview-box" id="variancePreviewBox">
+                                <span class="label">Tally Status</span>
+                                <span class="value" id="variancePreview">Enter actual count</span>
+                            </div>
+                        </div>
                     </div>
                     <div class="col-12">
                         <div id="unitConversionHelp" class="alert alert-info py-2 px-3 mb-0" style="display:none"></div>
@@ -590,33 +904,113 @@ $flash=workflowTakeFlash();
 
         <section class="content-card mb-0">
             <div class="content-card-header">
-                <div><h2><span class="section-icon"><i class="bi bi-clock-history"></i></span>Closing History</h2><p>Submitted daily inventory closings from the last 30 days.</p></div>
+                <div>
+                    <h2><span class="section-icon"><i class="bi bi-clock-history"></i></span>Closing History</h2>
+                    <p>Daily closings are grouped by date. Default view is today; use the filters to review earlier days.</p>
+                </div>
+                <form method="get" class="history-tools">
+                    <div class="filter-block">
+                        <label class="form-label" for="range">Quick Filter</label>
+                        <select class="form-select" id="range" name="range">
+                            <option value="today" <?= $historyRange === 'today' ? 'selected' : '' ?>>Today</option>
+                            <option value="7" <?= $historyRange === '7' ? 'selected' : '' ?>>Last 7 Days</option>
+                            <option value="30" <?= $historyRange === '30' ? 'selected' : '' ?>>Last 30 Days</option>
+                            <option value="all" <?= $historyRange === 'all' ? 'selected' : '' ?>>All History</option>
+                        </select>
+                    </div>
+                    <div class="filter-block date-filter">
+                        <label class="form-label" for="history_date">Specific Day</label>
+                        <input type="date" class="form-control" id="history_date" name="history_date" value="<?= workflowH($historyDate) ?>" max="<?= date('Y-m-d') ?>">
+                    </div>
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-funnel me-1"></i>Apply</button>
+                    <a href="Nurse_DailyInventory.php" class="btn btn-light border"><i class="bi bi-arrow-counterclockwise me-1"></i>Today</a>
+                </form>
             </div>
-            <div class="table-responsive">
-                <table class="table inventory-table align-middle">
-                    <thead><tr><th>Date</th><th>Item</th><th>Beginning</th><th>Delivery</th><th>Consumed</th><th>Pull-out</th><th>Computed</th><th>Actual</th><th>Variance</th><th>Submitted By</th></tr></thead>
-                    <tbody>
-                    <?php if (!$closings): ?>
-                        <tr><td colspan="10" class="empty"><i class="bi bi-inbox me-1"></i>No submitted closing reports in the last 30 days.</td></tr>
-                    <?php endif; ?>
-                    <?php foreach ($closings as $closing): ?>
-                        <?php $hasVariance = abs((float)$closing['variance']) > .009; ?>
-                        <tr>
-                            <td><?= workflowH(date('M d, Y', strtotime((string)$closing['inventory_date']))) ?></td>
-                            <td class="item-name"><?= workflowH((string)$closing['item_name']) ?></td>
-                            <td><?= workflowH(inventoryStockBreakdown((float)$closing['beginning_stock'],$closing)) ?></td>
-                            <td><?= workflowH(inventoryStockBreakdown((float)$closing['delivery'],$closing)) ?></td>
-                            <td><?= workflowH(inventoryStockBreakdown((float)$closing['consumed'],$closing)) ?></td>
-                            <td><?= workflowH(inventoryStockBreakdown((float)$closing['pull_out'],$closing)) ?></td>
-                            <td><?= workflowH(inventoryStockBreakdown((float)$closing['computed_ending'],$closing)) ?></td>
-                            <td><?= workflowH(inventoryStockBreakdown((float)$closing['actual_count'],$closing)) ?></td>
-                            <td><span class="variance-badge <?= $hasVariance ? 'difference' : 'match' ?>"><?= workflowH(inventoryUsageDescription((float)$closing['variance'],$closing)) ?></span></td>
-                            <td><?= workflowH((string)$closing['username']) ?></td>
-                        </tr>
-                    <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
+
+            <?php if (!$closingsByDate): ?>
+                <div class="history-empty">
+                    <i class="bi bi-inbox d-block mb-2" style="font-size:34px;color:#c0c7d5;"></i>
+                    No submitted daily inventory closings found for <strong><?= workflowH($historyLabel) ?></strong>.
+                </div>
+            <?php endif; ?>
+
+            <?php foreach ($closingsByDate as $closingDate => $dailyRows): ?>
+                <?php
+                    $dayTallied = 0;
+                    $dayVariance = 0;
+                    foreach ($dailyRows as $dailyRow) {
+                        if (abs((float)$dailyRow['variance']) <= .009) {
+                            $dayTallied++;
+                        } else {
+                            $dayVariance++;
+                        }
+                    }
+                ?>
+                <div class="day-closing">
+                    <div class="day-closing-header">
+                        <div class="day-closing-title">
+                            <span class="date-icon"><i class="bi bi-calendar-check-fill"></i></span>
+                            <div>
+                                <strong><?= workflowH(date('l, F d, Y', strtotime($closingDate))) ?></strong>
+                                <small>Daily closing report for <?= workflowH((string)($user['branch_name'] ?? $branchId)) ?></small>
+                            </div>
+                        </div>
+                        <div class="day-summary">
+                            <span class="summary-pill total"><i class="bi bi-box-seam"></i><?= count($dailyRows) ?> item<?= count($dailyRows) === 1 ? '' : 's' ?></span>
+                            <span class="summary-pill tallied"><i class="bi bi-check-circle-fill"></i><?= $dayTallied ?> tallied</span>
+                            <?php if ($dayVariance > 0): ?>
+                                <span class="summary-pill variance"><i class="bi bi-exclamation-circle-fill"></i><?= $dayVariance ?> variance</span>
+                            <?php endif; ?>
+                            <a class="btn btn-sm btn-outline-danger" href="Nurse_DailyInventory.php?export=pdf&amp;date=<?= workflowH($closingDate) ?>">
+                                <i class="bi bi-file-earmark-pdf-fill me-1"></i>Export PDF
+                            </a>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table inventory-table align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Item</th><th>Beginning</th><th>Delivery</th><th>Consumed</th><th>Pull-out</th>
+                                    <th>Computed</th><th>Actual</th><th>Variance</th><th>Result</th><th>Submitted By</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            <?php foreach ($dailyRows as $closing): ?>
+                                <?php $hasVariance = abs((float)$closing['variance']) > .009; ?>
+                                <tr>
+                                    <td class="item-name"><?= workflowH((string)$closing['item_name']) ?></td>
+                                    <td><?= workflowH(inventoryStockBreakdown((float)$closing['beginning_stock'],$closing)) ?></td>
+                                    <td><?= workflowH(inventoryStockBreakdown((float)$closing['delivery'],$closing)) ?></td>
+                                    <td><?= workflowH(inventoryStockBreakdown((float)$closing['consumed'],$closing)) ?></td>
+                                    <td><?= workflowH(inventoryStockBreakdown((float)$closing['pull_out'],$closing)) ?></td>
+                                    <td><?= workflowH(inventoryStockBreakdown((float)$closing['computed_ending'],$closing)) ?></td>
+                                    <td><?= workflowH(inventoryStockBreakdown((float)$closing['actual_count'],$closing)) ?></td>
+                                    <td><span class="variance-badge <?= $hasVariance ? 'difference' : 'match' ?>"><?= workflowH(inventoryUsageDescription((float)$closing['variance'],$closing)) ?></span></td>
+                                    <td>
+                                        <span class="result-badge <?= $hasVariance ? 'variance' : 'tallied' ?>">
+                                            <i class="bi <?= $hasVariance ? 'bi-exclamation-triangle-fill' : 'bi-check-circle-fill' ?>"></i>
+                                            <?= $hasVariance ? 'Needs review' : 'Tallied' ?>
+                                        </span>
+                                        <?php if ($hasVariance && trim((string)($closing['remarks'] ?? '')) !== ''): ?>
+                                            <div class="small text-muted mt-1" title="<?= workflowH((string)$closing['remarks']) ?>">Adjustment note recorded</div>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td><?= workflowH((string)$closing['username']) ?></td>
+                                </tr>
+                                <?php if (trim((string)($closing['remarks'] ?? '')) !== ''): ?>
+                                    <tr>
+                                        <td colspan="10" class="py-2 px-3 bg-light text-muted small">
+                                            <i class="bi bi-chat-left-text me-1"></i><strong><?= workflowH((string)$closing['item_name']) ?> note:</strong>
+                                            <?= workflowH((string)$closing['remarks']) ?>
+                                        </td>
+                                    </tr>
+                                <?php endif; ?>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            <?php endforeach; ?>
         </section>
     </div>
     <div class="modal fade confirm-modal" id="logoutConfirmModal" tabindex="-1"
@@ -665,6 +1059,62 @@ $flash=workflowTakeFlash();
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+function numericField(id) {
+    const el = document.getElementById(id);
+    const value = el ? Number(el.value || 0) : 0;
+    return Number.isFinite(value) ? value : 0;
+}
+
+function selectedBaseUnit() {
+    const select = document.getElementById('item_id');
+    const option = select?.options[select.selectedIndex];
+    return option?.dataset.baseUnit || 'unit';
+}
+
+function formatClosingNumber(value) {
+    return Number(value || 0).toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 4
+    });
+}
+
+function refreshClosingPreview() {
+    const consumed = Number(document.getElementById('consumed_numeric')?.value || 0);
+    const computed = numericField('beginning_stock') + numericField('delivery') - consumed - numericField('pull_out');
+    const actualEl = document.getElementById('actual_count');
+    const hasActual = !!actualEl && actualEl.value !== '';
+    const actual = hasActual ? Number(actualEl.value) : 0;
+    const variance = hasActual ? actual - computed : 0;
+    const unit = selectedBaseUnit();
+
+    const computedPreview = document.getElementById('computedPreview');
+    const actualPreview = document.getElementById('actualPreview');
+    const variancePreview = document.getElementById('variancePreview');
+    const varianceBox = document.getElementById('variancePreviewBox');
+    const actualBox = document.getElementById('actualPreviewBox');
+
+    if (computedPreview) computedPreview.textContent = `${formatClosingNumber(computed)} ${unit}`;
+    if (actualPreview) actualPreview.textContent = hasActual ? `${formatClosingNumber(actual)} ${unit}` : '-';
+
+    if (varianceBox) varianceBox.classList.remove('match', 'difference');
+    if (actualBox) actualBox.classList.remove('match', 'difference');
+
+    if (!hasActual) {
+        if (variancePreview) variancePreview.textContent = 'Enter actual count';
+        return;
+    }
+
+    if (Math.abs(variance) <= 0.009) {
+        if (variancePreview) variancePreview.textContent = 'Tallied - actual matches computed';
+        varianceBox?.classList.add('match');
+        actualBox?.classList.add('match');
+    } else {
+        if (variancePreview) variancePreview.textContent = `Variance: ${formatClosingNumber(variance)} ${unit}`;
+        varianceBox?.classList.add('difference');
+        actualBox?.classList.add('difference');
+    }
+}
+
 async function refreshAutomaticConsumption() {
     const itemSelect = document.getElementById('item_id');
     const dateInput = document.getElementById('inventory_date');
@@ -677,6 +1127,8 @@ async function refreshAutomaticConsumption() {
 
     if (!itemId || !date) {
         consumedInput.value = '0';
+        document.getElementById('consumed_numeric').value = '0';
+        refreshClosingPreview();
         return;
     }
 
@@ -697,13 +1149,19 @@ async function refreshAutomaticConsumption() {
 
         if (!data.success) {
             consumedInput.value = 'Unavailable';
+            document.getElementById('consumed_numeric').value = '0';
+            refreshClosingPreview();
             return;
         }
 
         consumedInput.value = data.display || `${data.consumed} ${data.base_unit || ''}`.trim();
+        document.getElementById('consumed_numeric').value = String(Number(data.consumed || 0));
+        refreshClosingPreview();
     } catch (error) {
         console.error('Unable to load automatic consumption:', error);
         consumedInput.value = 'Unavailable';
+        document.getElementById('consumed_numeric').value = '0';
+        refreshClosingPreview();
     }
 }
 
@@ -748,9 +1206,26 @@ document.getElementById('item_id')?.addEventListener('change', function () {
     }
 
     refreshAutomaticConsumption();
+    refreshClosingPreview();
 });
 
 document.getElementById('inventory_date')?.addEventListener('change', refreshAutomaticConsumption);
+['beginning_stock','delivery','pull_out','actual_count'].forEach(function(id) {
+    document.getElementById(id)?.addEventListener('input', refreshClosingPreview);
+});
+
+document.getElementById('useComputedBtn')?.addEventListener('click', function() {
+    const consumed = Number(document.getElementById('consumed_numeric')?.value || 0);
+    const computed = numericField('beginning_stock') + numericField('delivery') - consumed - numericField('pull_out');
+    const actual = document.getElementById('actual_count');
+    if (actual) {
+        actual.value = String(Math.max(0, computed));
+        refreshClosingPreview();
+    }
+});
+
+refreshAutomaticConsumption();
+refreshClosingPreview();
 </script>
 </body>
 </html>
