@@ -541,7 +541,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 <!-- Forgot Password -->
                 <div class="mb-3 d-flex justify-content-end">
-                    <a href="#" class="forgot-link">Forgot password?</a>
+                    <a href="forgot_password.php" class="forgot-link">Forgot password?</a>
                 </div>
 
                 <!-- Login Button -->
