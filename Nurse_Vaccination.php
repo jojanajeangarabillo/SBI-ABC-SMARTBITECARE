@@ -295,8 +295,18 @@ function inventoryIsMlBased(array $item): bool {
     return in_array($base, ['ml', 'milliliter', 'milliliters', 'millilitre', 'millilitres'], true);
 }
 
-function inventoryRequiresMlConfiguration(array $item): bool {
-    return inventoryIsVialProduct($item) && !inventoryIsMlBased($item);
+function inventoryRequiresMlConfiguration(array $item): bool
+{
+    // Site-based vial products such as Speeda are already configured.
+    // Example: Speeda = 1 Vial = 6 sites.
+    if (inventoryIsSiteBased($item)) {
+        return false;
+    }
+
+    // Other vial products that support partial-vial consumption
+    // must be configured using mL as their inventory base unit.
+    return inventoryIsVialProduct($item)
+        && !inventoryIsMlBased($item);
 }
 
 // Get a Medical Supplies inventory item. Unit is loaded from the database
@@ -2032,7 +2042,6 @@ function getStatusBadge($status)
        <nav class="nav-menu">
         <ul>
             <li><a href="Nurse_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
-             <li><a href="Nurse_Calendar.php" aria-current="page"><i class="bi bi-calendar3"></i><span>Calendar</span></a></li>
             <li><a href="Nurse_Patients.php"><i class="bi bi-heart-pulse-fill"></i><span>Patients</span></a></li>
             <li><a href="Nurse_Assessment.php"><i class="bi bi-clipboard2-pulse-fill"></i><span>Assessment Queue</span></a></li>
             <li><a class="active" href="Nurse_Vaccination.php"><i class="bi-shield-plus"></i><span>Vaccination</span></a></li>

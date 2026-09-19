@@ -4,6 +4,7 @@ session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/inventory_unit_helpers.php';
 
 // ============================================================
 // AUTHENTICATED NURSE
@@ -42,6 +43,476 @@ $csrf = workflowCsrfToken();
  *      because a new treatment cycle may be required.
  */
 $catchUpWindowDays = 30;
+
+/**
+ * Load one Medical Supplies item from the database.
+ * The browser is never trusted for unit/conversion metadata.
+ */
+function assessmentGetMedicalSupplyItem(
+    mysqli $conn,
+    int $itemId
+): ?array {
+    $stmt = $conn->prepare(
+        "SELECT
+            i.item_id,
+            i.item_name,
+            i.unit_id,
+            u.unit_name,
+            c.category_name,
+            COALESCE(NULLIF(i.base_unit_label, ''), u.unit_name) AS base_unit_label,
+            COALESCE(NULLIF(i.display_unit_label, ''), u.unit_name) AS display_unit_label,
+            COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base
+         FROM inventory_items i
+         INNER JOIN units u
+            ON u.unit_id = i.unit_id
+         INNER JOIN inventory_categories c
+            ON c.category_id = i.category_id
+         WHERE i.item_id = ?
+           AND c.category_name = 'Medical Supplies'
+           AND i.item_name NOT LIKE '%Default%'
+         LIMIT 1"
+    );
+
+    if (!$stmt) {
+        throw new RuntimeException(
+            'Unable to prepare the medical supply lookup.'
+        );
+    }
+
+    $stmt->bind_param('i', $itemId);
+    $stmt->execute();
+
+    $row = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    return $row ?: null;
+}
+
+/**
+ * Deduct actual administered quantity using FEFO.
+ *
+ * Quantities are always stored in the item's base unit, such as:
+ * - mL for configured liquid vial products
+ * - site for SPEEDA
+ * - Ampule / Piece / Dose when that is the base unit
+ *
+ * This function records what the nurse actually entered. It does not
+ * determine or recommend a clinical dose.
+ */
+function assessmentDeductStockFEFO(
+    mysqli $conn,
+    int $itemId,
+    string $branchId,
+    float $quantityNeeded
+): array {
+    if ($quantityNeeded <= 0) {
+        throw new RuntimeException(
+            'Actual quantity administered must be greater than zero.'
+        );
+    }
+
+    $stmt = $conn->prepare(
+        "SELECT
+            stock_id,
+            batch_lot_no,
+            quantity_available,
+            expiration_date
+         FROM inventory_stocks
+         WHERE item_id = ?
+           AND branch_id = ?
+           AND quantity_available > 0
+           AND (
+                expiration_date IS NULL
+                OR expiration_date >= CURDATE()
+           )
+         ORDER BY
+            CASE WHEN expiration_date IS NULL THEN 1 ELSE 0 END ASC,
+            expiration_date ASC,
+            stock_id ASC
+         FOR UPDATE"
+    );
+
+    if (!$stmt) {
+        throw new RuntimeException(
+            'Unable to prepare stock deduction.'
+        );
+    }
+
+    $stmt->bind_param(
+        'is',
+        $itemId,
+        $branchId
+    );
+
+    $stmt->execute();
+    $result = $stmt->get_result();
+
+    $stocks = [];
+    $totalAvailable = 0.0;
+
+    while ($row = $result->fetch_assoc()) {
+        $stocks[] = $row;
+        $totalAvailable += (float)$row['quantity_available'];
+    }
+
+    $stmt->close();
+
+    if (($totalAvailable + 0.00005) < $quantityNeeded) {
+        throw new RuntimeException(
+            'Insufficient non-expired stock. Available base quantity: '
+            . inventoryFormatNumber($totalAvailable)
+            . '.'
+        );
+    }
+
+    $remaining = round($quantityNeeded, 4);
+    $usedBatches = [];
+
+    foreach ($stocks as $stock) {
+        if ($remaining <= 0.00005) {
+            break;
+        }
+
+        $available = (float)$stock['quantity_available'];
+        $take = round(min($available, $remaining), 4);
+        $stockId = (int)$stock['stock_id'];
+
+        $update = $conn->prepare(
+            "UPDATE inventory_stocks
+             SET
+                quantity_available = quantity_available - ?,
+                last_updated = CURRENT_TIMESTAMP
+             WHERE stock_id = ?"
+        );
+
+        if (!$update) {
+            throw new RuntimeException(
+                'Unable to prepare stock update.'
+            );
+        }
+
+        $update->bind_param(
+            'di',
+            $take,
+            $stockId
+        );
+
+        if (!$update->execute()) {
+            $error = $update->error;
+            $update->close();
+
+            throw new RuntimeException(
+                'Unable to deduct administered stock: ' . $error
+            );
+        }
+
+        $update->close();
+
+        $usedBatches[] = [
+            'batch_lot_no' =>
+                trim((string)($stock['batch_lot_no'] ?? '')) !== ''
+                    ? (string)$stock['batch_lot_no']
+                    : 'N/A',
+            'quantity' => $take,
+            'expiration_date' => $stock['expiration_date'] ?? null
+        ];
+
+        $remaining = round($remaining - $take, 4);
+    }
+
+    return $usedBatches;
+}
+
+function assessmentBatchSummary(
+    array $batches,
+    array $item
+): string {
+    $parts = [];
+    $baseUnit = inventoryBaseUnitLabel($item);
+
+    foreach ($batches as $batch) {
+        $text =
+            (string)$batch['batch_lot_no']
+            . ': '
+            . inventoryFormatNumber(
+                (float)$batch['quantity']
+            )
+            . ' '
+            . $baseUnit;
+
+        if (!empty($batch['expiration_date'])) {
+            $text .=
+                ' (exp '
+                . (string)$batch['expiration_date']
+                . ')';
+        }
+
+        $parts[] = $text;
+    }
+
+    return implode(', ', $parts);
+}
+
+/**
+ * Persist an assessment explicitly marked as NOT an anti-rabies schedule.
+ *
+ * clinical_assessments already supports treatment_profile='OTHER', so no
+ * database migration is required. d0_date is NOT NULL in the existing
+ * schema; for an OTHER assessment we retain the existing stored value or
+ * use today's date only as a technical placeholder. No vaccination schedule
+ * is generated from it.
+ */
+function assessmentSaveNonArvAssessment(
+    mysqli $conn,
+    array $visit,
+    int $visitId,
+    int $userId,
+    string $branchId,
+    array $payload
+): void {
+    $history = trim((string)($payload['exposure_history'] ?? ''));
+    $exposureDate = trim((string)($payload['date_of_exposure'] ?? ''));
+    $site = trim((string)($payload['exposure_site'] ?? ''));
+    $animal = trim((string)($payload['animal_type'] ?? ''));
+    $animalStatus = trim((string)($payload['animal_status'] ?? ''));
+    $category = trim((string)($payload['bite_category'] ?? ''));
+    $route = trim((string)($payload['route'] ?? ''));
+    $regimen = trim((string)($payload['active_regimen'] ?? ''));
+    $concerns = trim((string)($payload['important_concerns'] ?? ''));
+    $instructions = trim((string)($payload['instructions_given'] ?? ''));
+    $notes = trim((string)($payload['chart_notes'] ?? ''));
+
+    if ($history === '') {
+        throw new RuntimeException(
+            'History of incident/exposure is required.'
+        );
+    }
+
+    if (
+        $exposureDate !== ''
+        && DateTime::createFromFormat(
+            'Y-m-d',
+            $exposureDate
+        )?->format('Y-m-d') !== $exposureDate
+    ) {
+        throw new RuntimeException(
+            'Enter a valid exposure date.'
+        );
+    }
+
+    $patientId = (int)$visit['patient_id'];
+    $caseId = (int)$visit['case_id'];
+
+    $d0Date = date('Y-m-d');
+
+    $existing = $conn->prepare(
+        "SELECT d0_date
+         FROM clinical_assessments
+         WHERE visit_id = ?
+         LIMIT 1"
+    );
+
+    if ($existing) {
+        $existing->bind_param(
+            'i',
+            $visitId
+        );
+
+        $existing->execute();
+
+        $existingRow =
+            $existing
+                ->get_result()
+                ->fetch_assoc();
+
+        $existing->close();
+
+        if (
+            $existingRow
+            && !empty($existingRow['d0_date'])
+        ) {
+            $d0Date =
+                (string)$existingRow['d0_date'];
+        }
+    }
+
+    /*
+     * If this visit previously generated anti-rabies schedule placeholders,
+     * retire only the still-Scheduled rows for THIS visit. Completed/Missed
+     * records are historical clinical records and are never deleted here.
+     */
+    $archiveSchedule = $conn->prepare(
+        "UPDATE vaccination_records
+         SET
+            is_archived = 1,
+            archived_at = NOW(),
+            archived_by = ?
+         WHERE visit_id = ?
+           AND branch_id = ?
+           AND vaccination_status = 'Scheduled'
+           AND is_archived = 0"
+    );
+
+    if ($archiveSchedule) {
+        $archiveSchedule->bind_param(
+            'iis',
+            $userId,
+            $visitId,
+            $branchId
+        );
+
+        $archiveSchedule->execute();
+        $archiveSchedule->close();
+    }
+
+    $profile = 'OTHER';
+
+    $assessment = $conn->prepare(
+        "INSERT INTO clinical_assessments
+         (
+            visit_id,
+            patient_id,
+            case_id,
+            branch_id,
+            nurse_id,
+            exposure_history,
+            date_of_exposure,
+            exposure_site,
+            animal_type,
+            animal_status,
+            bite_category,
+            treatment_profile,
+            route,
+            active_regimen,
+            important_concerns,
+            instructions_given,
+            chart_notes,
+            d0_date
+         )
+         VALUES (
+            ?, ?, ?, ?, ?, ?, NULLIF(?, ''),
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         )
+         ON DUPLICATE KEY UPDATE
+            nurse_id = VALUES(nurse_id),
+            exposure_history = VALUES(exposure_history),
+            date_of_exposure = VALUES(date_of_exposure),
+            exposure_site = VALUES(exposure_site),
+            animal_type = VALUES(animal_type),
+            animal_status = VALUES(animal_status),
+            bite_category = VALUES(bite_category),
+            treatment_profile = VALUES(treatment_profile),
+            route = VALUES(route),
+            active_regimen = VALUES(active_regimen),
+            important_concerns = VALUES(important_concerns),
+            instructions_given = VALUES(instructions_given),
+            chart_notes = VALUES(chart_notes),
+            d0_date = VALUES(d0_date),
+            updated_at = NOW()"
+    );
+
+    if (!$assessment) {
+        throw new RuntimeException(
+            'Unable to prepare the non-ARV assessment.'
+        );
+    }
+
+    $assessment->bind_param(
+        'iiisisssssssssssss',
+        $visitId,
+        $patientId,
+        $caseId,
+        $branchId,
+        $userId,
+        $history,
+        $exposureDate,
+        $site,
+        $animal,
+        $animalStatus,
+        $category,
+        $profile,
+        $route,
+        $regimen,
+        $concerns,
+        $instructions,
+        $notes,
+        $d0Date
+    );
+
+    if (!$assessment->execute()) {
+        $error = $assessment->error;
+        $assessment->close();
+
+        throw new RuntimeException(
+            'Unable to save the non-ARV assessment: '
+            . $error
+        );
+    }
+
+    $assessment->close();
+
+    $caseUpdate = $conn->prepare(
+        "UPDATE animal_bite_cases
+         SET
+            animal_type = NULLIF(?, ''),
+            bite_location = NULLIF(?, ''),
+            bite_category = NULLIF(?, ''),
+            animal_status = NULLIF(?, ''),
+            date_of_bite = NULLIF(?, ''),
+            remarks = NULLIF(?, '')
+         WHERE case_id = ?
+           AND branch_id = ?"
+    );
+
+    if (!$caseUpdate) {
+        throw new RuntimeException(
+            'Unable to prepare the case update.'
+        );
+    }
+
+    $caseUpdate->bind_param(
+        'ssssssis',
+        $animal,
+        $site,
+        $category,
+        $animalStatus,
+        $exposureDate,
+        $notes,
+        $caseId,
+        $branchId
+    );
+
+    $caseUpdate->execute();
+    $caseUpdate->close();
+
+    $visitUpdate = $conn->prepare(
+        "UPDATE patient_visits
+         SET
+            workflow_status = 'Under Assessment',
+            assigned_nurse = ?,
+            assessment_started_at =
+                COALESCE(assessment_started_at, NOW()),
+            updated_at = NOW()
+         WHERE visit_id = ?
+           AND branch_id = ?"
+    );
+
+    if (!$visitUpdate) {
+        throw new RuntimeException(
+            'Unable to prepare the visit update.'
+        );
+    }
+
+    $visitUpdate->bind_param(
+        'iis',
+        $userId,
+        $visitId,
+        $branchId
+    );
+
+    $visitUpdate->execute();
+    $visitUpdate->close();
+}
 
 // ============================================================
 // POST ACTIONS
@@ -106,6 +577,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $animal = trim((string)($_POST['animal_type'] ?? ''));
             $animalStatus = trim((string)($_POST['animal_status'] ?? ''));
             $category = trim((string)($_POST['bite_category'] ?? ''));
+            $isNonRabies = isset($_POST['not_anti_rabies'])
+                && (string)$_POST['not_anti_rabies'] === '1';
+
             $profile = (string)($_POST['treatment_profile'] ?? '');
             $route = trim((string)($_POST['route'] ?? ''));
             $regimen = trim((string)($_POST['active_regimen'] ?? ''));
@@ -116,22 +590,77 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $profiles = ['PEP_ID', 'PEP_IM', 'PREP', 'BOOSTER'];
 
-            if (
-                $history === '' ||
-                $d0Date === '' ||
-                !in_array($profile, $profiles, true)
-            ) {
+            if ($history === '') {
                 throw new RuntimeException(
-                    'History, treatment profile, and D0 date are required.'
+                    'History of incident/exposure is required.'
                 );
             }
 
-            foreach ([$d0Date, $exposureDate] as $date) {
+            if ($isNonRabies) {
+                /*
+                 * OTHER is already supported by clinical_assessments.
+                 * It is used here only as a workflow marker so this assessment
+                 * does NOT generate the anti-rabies D0/D3/... schedule.
+                 */
+                $profile = 'OTHER';
+
+                // d0_date is NOT NULL in the current schema. Preserve the
+                // existing technical value when present; otherwise use today.
+                $existingD0 = $conn->prepare(
+                    "SELECT d0_date
+                     FROM clinical_assessments
+                     WHERE visit_id = ?
+                     LIMIT 1"
+                );
+
+                if ($existingD0) {
+                    $existingD0->bind_param(
+                        'i',
+                        $visitId
+                    );
+
+                    $existingD0->execute();
+
+                    $existingD0Row =
+                        $existingD0
+                            ->get_result()
+                            ->fetch_assoc();
+
+                    $existingD0->close();
+
+                    $d0Date =
+                        !empty($existingD0Row['d0_date'])
+                            ? (string)$existingD0Row['d0_date']
+                            : date('Y-m-d');
+                } else {
+                    $d0Date = date('Y-m-d');
+                }
+            } elseif (
+                $d0Date === ''
+                || !in_array($profile, $profiles, true)
+            ) {
+                throw new RuntimeException(
+                    'Treatment profile and D0 date are required for an anti-rabies schedule.'
+                );
+            }
+
+            $datesToValidate = [$exposureDate];
+
+            if (!$isNonRabies) {
+                $datesToValidate[] = $d0Date;
+            }
+
+            foreach ($datesToValidate as $date) {
                 if (
-                    $date !== '' &&
-                    DateTime::createFromFormat('Y-m-d', $date)?->format('Y-m-d') !== $date
+                    $date !== ''
+                    && DateTime::createFromFormat(
+                        'Y-m-d',
+                        $date
+                    )?->format('Y-m-d') !== $date
                 ) {
-                    throw new RuntimeException('Enter valid dates.');
+                    throw new RuntimeException(
+                        'Enter valid dates.'
+                    );
                 }
             }
 
@@ -159,6 +688,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
              */
             $restartRequired = false;
             $previousCycleRows = 0;
+
+            if (!$isNonRabies) {
 
             $restartCheck = $conn->prepare(
                 "SELECT
@@ -243,6 +774,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $reopenCase->execute();
                 $reopenCase->close();
+            }
+
+            } else {
+                /*
+                 * Non-anti-rabies assessments must not leave a newly generated
+                 * anti-rabies schedule for this visit. Retire only the active
+                 * Scheduled placeholders tied to the current visit.
+                 */
+                $archiveCurrentVisitSchedule = $conn->prepare(
+                    "UPDATE vaccination_records
+                     SET
+                        is_archived = 1,
+                        archived_at = NOW(),
+                        archived_by = ?
+                     WHERE visit_id = ?
+                       AND branch_id = ?
+                       AND vaccination_status = 'Scheduled'
+                       AND is_archived = 0"
+                );
+
+                if ($archiveCurrentVisitSchedule) {
+                    $archiveCurrentVisitSchedule->bind_param(
+                        'iis',
+                        $userId,
+                        $visitId,
+                        $branchId
+                    );
+
+                    $archiveCurrentVisitSchedule->execute();
+                    $archiveCurrentVisitSchedule->close();
+                }
             }
 
             $assessment = $conn->prepare(
@@ -363,51 +925,67 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $visitUpdate->execute();
             $visitUpdate->close();
 
-            /*
-             * Generate the active schedule only AFTER an old restart-required
-             * cycle has been retired. This prevents old Missed rows from
-             * remaining in Missed / Follow-ups and prevents Nurse Vaccination
-             * from reusing an old schedule placeholder.
-             */
-            workflowCreateSchedule(
-                $conn,
-                $visitId,
-                $patientId,
-                $caseId,
-                $branchId,
-                $profile,
-                $d0Date,
-                $userId
-            );
-
-            if ($restartRequired) {
-                workflowAudit(
+            if (!$isNonRabies) {
+                /*
+                 * Anti-rabies workflow only:
+                 * generate the configured D0/D3/... schedule.
+                 */
+                workflowCreateSchedule(
                     $conn,
-                    $userId,
+                    $visitId,
+                    $patientId,
+                    $caseId,
                     $branchId,
-                    'Restarted vaccination cycle for case '
-                        . $caseId
-                        . ' on visit '
-                        . $visitId
-                        . '; archived '
-                        . $previousCycleRows
-                        . ' previous vaccination record(s) and generated a new schedule from D0 '
-                        . $d0Date,
-                    'Vaccination Restart'
+                    $profile,
+                    $d0Date,
+                    $userId
                 );
+
+                if ($restartRequired) {
+                    workflowAudit(
+                        $conn,
+                        $userId,
+                        $branchId,
+                        'Restarted vaccination cycle for case '
+                            . $caseId
+                            . ' on visit '
+                            . $visitId
+                            . '; archived '
+                            . $previousCycleRows
+                            . ' previous vaccination record(s) and generated a new schedule from D0 '
+                            . $d0Date,
+                        'Vaccination Restart'
+                    );
+                } else {
+                    workflowAudit(
+                        $conn,
+                        $userId,
+                        $branchId,
+                        'Saved nurse assessment and anti-rabies schedule for visit '
+                            . $visitId,
+                        'Clinical Assessment'
+                    );
+                }
             } else {
                 workflowAudit(
                     $conn,
                     $userId,
                     $branchId,
-                    'Saved nurse assessment and schedule for visit ' . $visitId,
+                    'Saved non-anti-rabies assessment for visit '
+                        . $visitId
+                        . '; no anti-rabies schedule generated',
                     'Clinical Assessment'
                 );
             }
 
             $conn->commit();
 
-            if ($restartRequired) {
+            if ($isNonRabies) {
+                workflowFlash(
+                    'success',
+                    'Assessment saved as Not Anti-Rabies Vaccine. No anti-rabies schedule was generated.'
+                );
+            } elseif ($restartRequired) {
                 workflowFlash(
                     'success',
                     'Reassessment saved. The previous vaccination cycle was archived and a new schedule was generated from the confirmed D0 date.'
@@ -415,9 +993,380 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 workflowFlash(
                     'success',
-                    'Assessment saved. The schedule was generated from the confirmed D0 date.'
+                    'Assessment saved. The anti-rabies schedule was generated from the confirmed D0 date.'
                 );
             }
+
+        // ========================================================
+        // ADMINISTER A ONE-TIME / NON-ANTI-RABIES PRODUCT
+        // ========================================================
+        } elseif ($action === 'administer_non_rabies') {
+            if (!in_array(
+                $visit['workflow_status'],
+                [
+                    'Waiting for Nurse',
+                    'Under Assessment',
+                    'Treatment Completed'
+                ],
+                true
+            )) {
+                throw new RuntimeException(
+                    'This visit is no longer available for administration.'
+                );
+            }
+
+            $isNonRabies = isset($_POST['not_anti_rabies'])
+                && (string)$_POST['not_anti_rabies'] === '1';
+
+            if (!$isNonRabies) {
+                throw new RuntimeException(
+                    'Check "Not Anti-Rabies Vaccine" before using the one-time administration workflow.'
+                );
+            }
+
+            $itemId = (int)($_POST['non_rabies_item_id'] ?? 0);
+            $quantityBase = (float)($_POST['non_rabies_quantity_base'] ?? 0);
+            $administeredDate =
+                trim((string)($_POST['non_rabies_date_administered'] ?? ''));
+            $administrationRemarks =
+                trim((string)($_POST['non_rabies_remarks'] ?? ''));
+
+            if ($itemId <= 0) {
+                throw new RuntimeException(
+                    'Select the vaccine/product that was actually administered.'
+                );
+            }
+
+            if ($quantityBase <= 0) {
+                throw new RuntimeException(
+                    'Enter the actual quantity administered.'
+                );
+            }
+
+            if (
+                DateTime::createFromFormat(
+                    'Y-m-d',
+                    $administeredDate
+                )?->format('Y-m-d') !== $administeredDate
+            ) {
+                throw new RuntimeException(
+                    'Enter a valid administration date.'
+                );
+            }
+
+            if ($administeredDate > date('Y-m-d')) {
+                throw new RuntimeException(
+                    'An administered product cannot have a future administration date.'
+                );
+            }
+
+            $item = assessmentGetMedicalSupplyItem(
+                $conn,
+                $itemId
+            );
+
+            if (!$item) {
+                throw new RuntimeException(
+                    'Selected vaccine/product was not found under Medical Supplies.'
+                );
+            }
+
+            if (
+                inventoryIsSiteBased($item)
+                && abs(
+                    $quantityBase
+                    - round($quantityBase)
+                ) > 0.00001
+            ) {
+                throw new RuntimeException(
+                    'Site-based usage must be entered as a whole number of sites.'
+                );
+            }
+
+            $patientId = (int)$visit['patient_id'];
+            $caseId = (int)$visit['case_id'];
+
+            $conn->begin_transaction();
+
+            /*
+             * Saving through Administer also persists the current assessment
+             * fields as treatment_profile=OTHER and removes any still-Scheduled
+             * anti-rabies placeholders for this visit.
+             */
+            assessmentSaveNonArvAssessment(
+                $conn,
+                $visit,
+                $visitId,
+                $userId,
+                $branchId,
+                $_POST
+            );
+
+            $vaccineName = (string)$item['item_name'];
+            $unitId = (int)$item['unit_id'];
+            $baseUnit = inventoryBaseUnitLabel($item);
+            $displayUnit = inventoryDisplayUnitLabel($item);
+            $conversion = inventoryConversionToBase($item);
+
+            $recordRemarks =
+                'Non-anti-rabies / one-time administration';
+
+            if ($administrationRemarks !== '') {
+                $recordRemarks .=
+                    ' | '
+                    . $administrationRemarks;
+            }
+
+            /*
+             * dose_number=0 deliberately keeps this one-time/non-ARV
+             * administration outside the anti-rabies D0-D28 dose stages.
+             */
+            $insertVaccination = $conn->prepare(
+                "INSERT INTO vaccination_records
+                 (
+                    patient_id,
+                    case_id,
+                    visit_id,
+                    item_id,
+                    vaccine_name,
+                    unit_id,
+                    quantity_used,
+                    quantity_unit_label,
+                    display_unit_label_snapshot,
+                    conversion_to_base_snapshot,
+                    branch_id,
+                    dose_number,
+                    date_administered,
+                    administered_datetime,
+                    scheduled_date,
+                    vaccination_status,
+                    is_final_dose,
+                    remarks,
+                    nurse_id
+                 )
+                 VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    0, ?, NOW(), NULL, 'Completed', 1, ?, ?
+                 )"
+            );
+
+            if (!$insertVaccination) {
+                throw new RuntimeException(
+                    'Unable to prepare the administration record.'
+                );
+            }
+
+            $insertVaccination->bind_param(
+                'iiiisidssdsssi',
+                $patientId,
+                $caseId,
+                $visitId,
+                $itemId,
+                $vaccineName,
+                $unitId,
+                $quantityBase,
+                $baseUnit,
+                $displayUnit,
+                $conversion,
+                $branchId,
+                $administeredDate,
+                $recordRemarks,
+                $userId
+            );
+
+            if (!$insertVaccination->execute()) {
+                $error = $insertVaccination->error;
+                $insertVaccination->close();
+
+                throw new RuntimeException(
+                    'Unable to save the administration record: '
+                    . $error
+                );
+            }
+
+            $vaccinationId =
+                (int)$conn->insert_id;
+
+            $insertVaccination->close();
+
+            $usedBatches = assessmentDeductStockFEFO(
+                $conn,
+                $itemId,
+                $branchId,
+                $quantityBase
+            );
+
+            $batchSummary = assessmentBatchSummary(
+                $usedBatches,
+                $item
+            );
+
+            $usageDescription =
+                inventoryUsageDescription(
+                    $quantityBase,
+                    $item
+                );
+
+            $transactionRemarks =
+                'Non-anti-rabies administration'
+                . ' | Patient ID: '
+                . $patientId
+                . ' | Case ID: '
+                . $caseId
+                . ' | Product: '
+                . $vaccineName
+                . ' | Used: '
+                . $usageDescription
+                . ' | Batch(es): '
+                . $batchSummary
+                . ' | Date: '
+                . $administeredDate;
+
+            if ($administrationRemarks !== '') {
+                $transactionRemarks .=
+                    ' | Remarks: '
+                    . $administrationRemarks;
+            }
+
+            $transactionDate =
+                $administeredDate
+                . ' '
+                . date('H:i:s');
+
+            $stockTransaction = $conn->prepare(
+                "INSERT INTO stock_transactions
+                 (
+                    item_id,
+                    user_id,
+                    vaccination_id,
+                    branch_id,
+                    transaction_type,
+                    quantity,
+                    remarks,
+                    transaction_date
+                 )
+                 VALUES (
+                    ?, ?, ?, ?, 'OUT', ?, ?, ?
+                 )"
+            );
+
+            if (!$stockTransaction) {
+                throw new RuntimeException(
+                    'Unable to prepare the stock transaction.'
+                );
+            }
+
+            $stockTransaction->bind_param(
+                'iiisdss',
+                $itemId,
+                $userId,
+                $vaccinationId,
+                $branchId,
+                $quantityBase,
+                $transactionRemarks,
+                $transactionDate
+            );
+
+            if (!$stockTransaction->execute()) {
+                $error = $stockTransaction->error;
+                $stockTransaction->close();
+
+                throw new RuntimeException(
+                    'Unable to save the stock transaction: '
+                    . $error
+                );
+            }
+
+            $stockTransaction->close();
+
+            $usage = $conn->prepare(
+                "INSERT INTO inventory_usage_history
+                 (
+                    item_id,
+                    branch_id,
+                    usage_date,
+                    quantity_used,
+                    patient_count
+                 )
+                 VALUES (?, ?, ?, ?, 1)"
+            );
+
+            if (!$usage) {
+                throw new RuntimeException(
+                    'Unable to prepare the inventory usage record.'
+                );
+            }
+
+            $usage->bind_param(
+                'issd',
+                $itemId,
+                $branchId,
+                $administeredDate,
+                $quantityBase
+            );
+
+            if (!$usage->execute()) {
+                $error = $usage->error;
+                $usage->close();
+
+                throw new RuntimeException(
+                    'Unable to save inventory usage: '
+                    . $error
+                );
+            }
+
+            $usage->close();
+
+            $visitComplete = $conn->prepare(
+                "UPDATE patient_visits
+                 SET
+                    workflow_status = 'Treatment Completed',
+                    assigned_nurse = ?,
+                    assessment_started_at =
+                        COALESCE(assessment_started_at, NOW()),
+                    treatment_completed_at =
+                        COALESCE(treatment_completed_at, NOW()),
+                    updated_at = NOW()
+                 WHERE visit_id = ?
+                   AND branch_id = ?"
+            );
+
+            if ($visitComplete) {
+                $visitComplete->bind_param(
+                    'iis',
+                    $userId,
+                    $visitId,
+                    $branchId
+                );
+
+                $visitComplete->execute();
+                $visitComplete->close();
+            }
+
+            workflowAudit(
+                $conn,
+                $userId,
+                $branchId,
+                'Administered non-anti-rabies product '
+                    . $vaccineName
+                    . ' for visit '
+                    . $visitId
+                    . '; actual use '
+                    . $usageDescription
+                    . '; no anti-rabies schedule generated',
+                'Clinical Assessment'
+            );
+
+            $conn->commit();
+
+            workflowFlash(
+                'success',
+                $vaccineName
+                    . ' administered and saved. '
+                    . $usageDescription
+                    . ' was deducted from branch inventory. '
+                    . 'No anti-rabies schedule was generated.'
+            );
 
         // ========================================================
         // COMPLETE CHART + SEND TO REGISTRY
@@ -880,6 +1829,143 @@ if ($selectedId > 0) {
         ->fetch_assoc();
 
     $stmt->close();
+}
+
+$selectedNonRabies =
+    $selected
+    && (string)($selected['treatment_profile'] ?? '') === 'OTHER';
+
+$nonRabiesItems = [];
+$nonRabiesAdministrations = [];
+
+if ($selected) {
+    /*
+     * Load all Medical Supplies items with branch usable stock.
+     * The nurse chooses the clinic-approved one-time/non-ARV product.
+     * The system does not infer or recommend a clinical product/dose.
+     */
+    $itemsStmt = $conn->prepare(
+        "SELECT
+            i.item_id,
+            i.item_name,
+            i.unit_id,
+            u.unit_name,
+            COALESCE(NULLIF(i.base_unit_label, ''), u.unit_name) AS base_unit_label,
+            COALESCE(NULLIF(i.display_unit_label, ''), u.unit_name) AS display_unit_label,
+            COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base,
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN s.quantity_available > 0
+                         AND (
+                            s.expiration_date IS NULL
+                            OR s.expiration_date >= CURDATE()
+                         )
+                        THEN s.quantity_available
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS usable_stock
+         FROM inventory_items i
+         INNER JOIN units u
+            ON u.unit_id = i.unit_id
+         INNER JOIN inventory_categories c
+            ON c.category_id = i.category_id
+         LEFT JOIN inventory_stocks s
+            ON s.item_id = i.item_id
+           AND s.branch_id = ?
+         WHERE c.category_name = 'Medical Supplies'
+           AND i.item_name NOT LIKE '%Default%'
+         GROUP BY
+            i.item_id,
+            i.item_name,
+            i.unit_id,
+            u.unit_name,
+            i.base_unit_label,
+            i.display_unit_label,
+            i.conversion_to_base
+         ORDER BY i.item_name ASC"
+    );
+
+    if ($itemsStmt) {
+        $itemsStmt->bind_param(
+            's',
+            $branchId
+        );
+
+        $itemsStmt->execute();
+
+        $nonRabiesItems =
+            $itemsStmt
+                ->get_result()
+                ->fetch_all(MYSQLI_ASSOC);
+
+        $itemsStmt->close();
+
+        foreach ($nonRabiesItems as &$itemRow) {
+            $itemRow['usable_stock_display'] =
+                inventoryStockBreakdown(
+                    (float)$itemRow['usable_stock'],
+                    $itemRow
+                );
+
+            $itemRow['input_step'] =
+                inventoryInputStep($itemRow);
+        }
+
+        unset($itemRow);
+    }
+
+    /*
+     * dose_number=0 is reserved by this page for one-time/non-ARV
+     * administrations so they never become D0/D3/etc schedule stages.
+     */
+    $adminHistory = $conn->prepare(
+        "SELECT
+            vr.vaccination_id,
+            vr.item_id,
+            COALESCE(i.item_name, vr.vaccine_name) AS item_name,
+            vr.quantity_used,
+            COALESCE(
+                NULLIF(vr.quantity_unit_label, ''),
+                u.unit_name,
+                'unit'
+            ) AS quantity_unit_label,
+            vr.date_administered,
+            vr.remarks,
+            vr.created_at
+         FROM vaccination_records vr
+         LEFT JOIN inventory_items i
+            ON i.item_id = vr.item_id
+         LEFT JOIN units u
+            ON u.unit_id = vr.unit_id
+         WHERE vr.visit_id = ?
+           AND vr.branch_id = ?
+           AND vr.dose_number = 0
+           AND vr.vaccination_status = 'Completed'
+           AND vr.is_archived = 0
+         ORDER BY
+            vr.administered_datetime DESC,
+            vr.vaccination_id DESC"
+    );
+
+    if ($adminHistory) {
+        $adminHistory->bind_param(
+            'is',
+            $selectedId,
+            $branchId
+        );
+
+        $adminHistory->execute();
+
+        $nonRabiesAdministrations =
+            $adminHistory
+                ->get_result()
+                ->fetch_all(MYSQLI_ASSOC);
+
+        $adminHistory->close();
+    }
 }
 
 $flash = workflowTakeFlash();
@@ -1405,6 +2491,96 @@ $flash = workflowTakeFlash();
 
         .registry-panel small {
             color: var(--muted);
+        }
+
+        /* =========================================================
+           NON-ANTI-RABIES / ONE-TIME ADMINISTRATION
+           ========================================================= */
+        .non-arv-toggle {
+            padding: 16px 17px;
+            background: #f7f9ff;
+            border: 1px solid #dfe6f5;
+            border-radius: 12px;
+        }
+
+        .non-arv-toggle .form-check-input {
+            width: 1.15rem;
+            height: 1.15rem;
+            margin-top: .15rem;
+        }
+
+        .non-arv-toggle .form-check-label {
+            color: #26345f;
+            font-weight: 700;
+        }
+
+        .non-arv-toggle small {
+            display: block;
+            margin-top: 5px;
+            margin-left: 29px;
+            color: var(--muted);
+            line-height: 1.45;
+        }
+
+        .non-arv-panel {
+            padding: 18px;
+            background: #fbfcff;
+            border: 1px solid #dfe6f5;
+            border-radius: 14px;
+        }
+
+        .non-arv-panel-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+            color: var(--primary);
+            font-weight: 800;
+            font-size: 15px;
+        }
+
+        .non-arv-panel-note {
+            margin-bottom: 16px;
+            color: #6f7b91;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .non-arv-stock-note {
+            margin-top: 5px;
+            color: #7b879d;
+            font-size: 11px;
+        }
+
+        .non-arv-history {
+            margin-top: 18px;
+            padding-top: 16px;
+            border-top: 1px solid #e7ebf3;
+        }
+
+        .non-arv-history-title {
+            margin-bottom: 10px;
+            color: #3c4966;
+            font-size: 13px;
+            font-weight: 750;
+        }
+
+        .non-arv-history-row {
+            display: grid;
+            grid-template-columns: minmax(150px, 1.6fr) 1fr 1fr;
+            gap: 10px;
+            padding: 9px 0;
+            border-bottom: 1px solid #edf0f5;
+            color: #52607b;
+            font-size: 12px;
+        }
+
+        .non-arv-history-row:last-child {
+            border-bottom: 0;
+        }
+
+        .non-arv-history-row strong {
+            color: #26345f;
         }
 
         /* =========================================================
@@ -2396,12 +3572,6 @@ $flash = workflowTakeFlash();
 
                                 <input
                                     type="hidden"
-                                    name="action"
-                                    value="save_assessment"
-                                >
-
-                                <input
-                                    type="hidden"
                                     name="visit_id"
                                     value="<?= $selectedId ?>"
                                 >
@@ -2589,6 +3759,39 @@ $flash = workflowTakeFlash();
 
                                 </div>
 
+                                <div class="col-12">
+                                    <div class="non-arv-toggle">
+                                        <div class="form-check mb-0">
+                                            <input
+                                                class="form-check-input"
+                                                type="checkbox"
+                                                id="not_anti_rabies"
+                                                name="not_anti_rabies"
+                                                value="1"
+                                                <?= $selectedNonRabies
+                                                    ? 'checked'
+                                                    : ''
+                                                ?>
+                                            >
+
+                                            <label
+                                                class="form-check-label"
+                                                for="not_anti_rabies"
+                                            >
+                                                Not Anti-Rabies Vaccine
+                                            </label>
+                                        </div>
+
+                                        <small>
+                                            Check this for a clinic-designated
+                                            one-time/non-anti-rabies administration.
+                                            The PEP/PrEP/Booster profile and D0 schedule
+                                            fields will be disabled, and no anti-rabies
+                                            schedule will be generated.
+                                        </small>
+                                    </div>
+                                </div>
+
                                 <div class="col-md-4">
 
                                     <label
@@ -2602,8 +3805,15 @@ $flash = workflowTakeFlash();
                                         class="form-select"
                                         id="treatment_profile"
                                         name="treatment_profile"
-                                        required
+                                        <?= $selectedNonRabies
+                                            ? 'disabled'
+                                            : 'required'
+                                        ?>
                                     >
+
+                                        <option value="">
+                                            Select anti-rabies profile
+                                        </option>
 
                                         <?php
                                         foreach (
@@ -2668,13 +3878,19 @@ $flash = workflowTakeFlash();
                                         class="form-control"
                                         id="d0_date"
                                         name="d0_date"
-                                        value="<?= workflowH(
-                                            (string)(
-                                                $selected['d0_date']
-                                                ?? date('Y-m-d')
+                                        value="<?= $selectedNonRabies
+                                            ? ''
+                                            : workflowH(
+                                                (string)(
+                                                    $selected['d0_date']
+                                                    ?? date('Y-m-d')
+                                                )
                                             )
-                                        ) ?>"
-                                        required
+                                        ?>"
+                                        <?= $selectedNonRabies
+                                            ? 'disabled'
+                                            : 'required'
+                                        ?>
                                     >
 
                                 </div>
@@ -2700,6 +3916,252 @@ $flash = workflowTakeFlash();
                                         ) ?>"
                                     >
 
+                                </div>
+
+                                <!-- Non-Anti-Rabies / One-Time Administration -->
+                                <div
+                                    class="col-12"
+                                    id="nonArvAdministrationPanel"
+                                    <?= $selectedNonRabies
+                                        ? ''
+                                        : 'style="display:none;"'
+                                    ?>
+                                >
+                                    <div class="non-arv-panel">
+
+                                        <div class="non-arv-panel-title">
+                                            <i class="bi bi-capsule-pill"></i>
+                                            Administer One-Time / Non-Anti-Rabies Product
+                                        </div>
+
+                                        <div class="non-arv-panel-note">
+                                            Choose the clinic-approved product that was actually
+                                            administered and enter the actual quantity used.
+                                            SmartBiteCare records the nurse's entry and inventory
+                                            movement; it does not choose or recommend a dose.
+                                        </div>
+
+                                        <div class="row g-3">
+
+                                            <div class="col-lg-5">
+
+                                                <label
+                                                    class="form-label"
+                                                    for="non_rabies_item_id"
+                                                >
+                                                    Vaccine / Product
+                                                </label>
+
+                                                <select
+                                                    class="form-select"
+                                                    id="non_rabies_item_id"
+                                                    name="non_rabies_item_id"
+                                                >
+                                                    <option value="">
+                                                        Select administered product
+                                                    </option>
+
+                                                    <?php foreach ($nonRabiesItems as $item): ?>
+                                                        <?php
+                                                        $usable =
+                                                            (float)$item['usable_stock'];
+
+                                                        $baseLabel =
+                                                            inventoryBaseUnitLabel(
+                                                                $item
+                                                            );
+
+                                                        $displayLabel =
+                                                            inventoryDisplayUnitLabel(
+                                                                $item
+                                                            );
+
+                                                        $conversion =
+                                                            inventoryConversionToBase(
+                                                                $item
+                                                            );
+                                                        ?>
+
+                                                        <option
+                                                            value="<?= (int)$item['item_id'] ?>"
+                                                            data-base-unit="<?= workflowH($baseLabel) ?>"
+                                                            data-display-unit="<?= workflowH($displayLabel) ?>"
+                                                            data-conversion="<?= workflowH((string)$conversion) ?>"
+                                                            data-step="<?= workflowH((string)$item['input_step']) ?>"
+                                                            data-stock="<?= workflowH((string)$usable) ?>"
+                                                            <?= $usable <= 0
+                                                                ? 'disabled'
+                                                                : ''
+                                                            ?>
+                                                        >
+                                                            <?= workflowH(
+                                                                (string)$item['item_name']
+                                                            ) ?>
+                                                            —
+                                                            <?= workflowH(
+                                                                (string)$item['usable_stock_display']
+                                                            ) ?>
+                                                            <?= $usable <= 0
+                                                                ? ' (No usable stock)'
+                                                                : ''
+                                                            ?>
+                                                        </option>
+
+                                                    <?php endforeach; ?>
+
+                                                </select>
+
+                                                <div
+                                                    class="non-arv-stock-note"
+                                                    id="nonArvStockNote"
+                                                >
+                                                    Select a product to see the base unit
+                                                    used for inventory deduction.
+                                                </div>
+
+                                            </div>
+
+                                            <div class="col-lg-3">
+
+                                                <label
+                                                    class="form-label"
+                                                    for="non_rabies_quantity_base"
+                                                >
+                                                    Actual Quantity Used
+                                                </label>
+
+                                                <div class="input-group">
+                                                    <input
+                                                        type="number"
+                                                        class="form-control"
+                                                        id="non_rabies_quantity_base"
+                                                        name="non_rabies_quantity_base"
+                                                        min="0"
+                                                        step="0.0001"
+                                                        placeholder="0"
+                                                    >
+
+                                                    <span
+                                                        class="input-group-text"
+                                                        id="nonArvQuantityUnit"
+                                                    >
+                                                        unit
+                                                    </span>
+                                                </div>
+
+                                            </div>
+
+                                            <div class="col-lg-4">
+
+                                                <label
+                                                    class="form-label"
+                                                    for="non_rabies_date_administered"
+                                                >
+                                                    Administration Date
+                                                </label>
+
+                                                <input
+                                                    type="date"
+                                                    class="form-control"
+                                                    id="non_rabies_date_administered"
+                                                    name="non_rabies_date_administered"
+                                                    value="<?= date('Y-m-d') ?>"
+                                                    max="<?= date('Y-m-d') ?>"
+                                                >
+
+                                            </div>
+
+                                            <div class="col-12">
+
+                                                <label
+                                                    class="form-label"
+                                                    for="non_rabies_remarks"
+                                                >
+                                                    Administration Remarks
+                                                </label>
+
+                                                <textarea
+                                                    class="form-control"
+                                                    id="non_rabies_remarks"
+                                                    name="non_rabies_remarks"
+                                                    rows="2"
+                                                    placeholder="Optional notes about this one-time administration"
+                                                ></textarea>
+
+                                            </div>
+
+                                            <div class="col-12 d-flex flex-wrap gap-2">
+
+                                                <button
+                                                    class="btn btn-success"
+                                                    type="submit"
+                                                    name="action"
+                                                    value="administer_non_rabies"
+                                                    id="administerNonArvButton"
+                                                >
+                                                    <i class="bi bi-check2-circle me-1"></i>
+                                                    Administer
+                                                </button>
+
+                                                <span
+                                                    class="text-muted align-self-center"
+                                                    style="font-size:12px;"
+                                                >
+                                                    This saves the assessment as
+                                                    <strong>Not Anti-Rabies Vaccine</strong>,
+                                                    records the administration,
+                                                    deducts actual branch stock using FEFO,
+                                                    and does not generate D0/D3/... schedules.
+                                                </span>
+
+                                            </div>
+
+                                        </div>
+
+                                        <?php if (!empty($nonRabiesAdministrations)): ?>
+
+                                            <div class="non-arv-history">
+
+                                                <div class="non-arv-history-title">
+                                                    Recorded one-time administrations for this visit
+                                                </div>
+
+                                                <?php foreach ($nonRabiesAdministrations as $adminRow): ?>
+
+                                                    <div class="non-arv-history-row">
+
+                                                        <strong>
+                                                            <?= workflowH(
+                                                                (string)$adminRow['item_name']
+                                                            ) ?>
+                                                        </strong>
+
+                                                        <span>
+                                                            <?= workflowH(
+                                                                inventoryFormatNumber(
+                                                                    (float)$adminRow['quantity_used']
+                                                                )
+                                                            ) ?>
+                                                            <?= workflowH(
+                                                                (string)$adminRow['quantity_unit_label']
+                                                            ) ?>
+                                                        </span>
+
+                                                        <span>
+                                                            <?= workflowH(
+                                                                (string)$adminRow['date_administered']
+                                                            ) ?>
+                                                        </span>
+
+                                                    </div>
+
+                                                <?php endforeach; ?>
+
+                                            </div>
+
+                                        <?php endif; ?>
+
+                                    </div>
                                 </div>
 
                                 <!-- Notes and Instructions -->
@@ -2789,10 +4251,18 @@ $flash = workflowTakeFlash();
                                     <button
                                         class="btn btn-primary"
                                         type="submit"
+                                        name="action"
+                                        value="save_assessment"
+                                        id="saveAssessmentButton"
                                     >
                                         <i class="bi bi-save-fill me-1"></i>
 
-                                        Save Assessment and Generate Schedule
+                                        <span id="saveAssessmentButtonText">
+                                            <?= $selectedNonRabies
+                                                ? 'Save Assessment - No ARV Schedule'
+                                                : 'Save Assessment and Generate Schedule'
+                                            ?>
+                                        </span>
                                     </button>
 
                                     <a
@@ -3049,6 +4519,259 @@ $flash = workflowTakeFlash();
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
+
+    const nonArvCheckbox =
+        document.getElementById('not_anti_rabies');
+
+    const treatmentProfile =
+        document.getElementById('treatment_profile');
+
+    const d0Date =
+        document.getElementById('d0_date');
+
+    const nonArvPanel =
+        document.getElementById('nonArvAdministrationPanel');
+
+    const saveButtonText =
+        document.getElementById('saveAssessmentButtonText');
+
+    const productSelect =
+        document.getElementById('non_rabies_item_id');
+
+    const quantityInput =
+        document.getElementById('non_rabies_quantity_base');
+
+    const quantityUnit =
+        document.getElementById('nonArvQuantityUnit');
+
+    const stockNote =
+        document.getElementById('nonArvStockNote');
+
+    let lastAntiRabiesProfile =
+        treatmentProfile
+            ? treatmentProfile.value
+            : '';
+
+    let lastD0Date =
+        d0Date
+            ? d0Date.value
+            : '';
+
+    function syncNonArvMode() {
+        if (
+            !nonArvCheckbox
+            || !treatmentProfile
+            || !d0Date
+        ) {
+            return;
+        }
+
+        const checked =
+            nonArvCheckbox.checked;
+
+        if (checked) {
+            if (treatmentProfile.value !== '') {
+                lastAntiRabiesProfile =
+                    treatmentProfile.value;
+            }
+
+            if (d0Date.value !== '') {
+                lastD0Date =
+                    d0Date.value;
+            }
+
+            treatmentProfile.value = '';
+            treatmentProfile.disabled = true;
+            treatmentProfile.required = false;
+
+            d0Date.value = '';
+            d0Date.disabled = true;
+            d0Date.required = false;
+
+            if (nonArvPanel) {
+                nonArvPanel.style.display = '';
+            }
+
+            if (saveButtonText) {
+                saveButtonText.textContent =
+                    'Save Assessment - No ARV Schedule';
+            }
+        } else {
+            treatmentProfile.disabled = false;
+            treatmentProfile.required = true;
+
+            if (treatmentProfile.value === '') {
+                treatmentProfile.value =
+                    lastAntiRabiesProfile || 'PEP_ID';
+            }
+
+            d0Date.disabled = false;
+            d0Date.required = true;
+
+            if (d0Date.value === '') {
+                d0Date.value =
+                    lastD0Date
+                    || new Date().toISOString().slice(0, 10);
+            }
+
+            if (nonArvPanel) {
+                nonArvPanel.style.display = 'none';
+            }
+
+            if (saveButtonText) {
+                saveButtonText.textContent =
+                    'Save Assessment and Generate Schedule';
+            }
+        }
+    }
+
+    function syncNonArvProduct() {
+        if (
+            !productSelect
+            || !quantityInput
+            || !quantityUnit
+            || !stockNote
+        ) {
+            return;
+        }
+
+        const option =
+            productSelect.options[
+                productSelect.selectedIndex
+            ];
+
+        if (
+            !option
+            || option.value === ''
+        ) {
+            quantityUnit.textContent = 'unit';
+            quantityInput.step = '0.0001';
+            quantityInput.removeAttribute('max');
+
+            stockNote.textContent =
+                'Select a product to see the base unit used for inventory deduction.';
+
+            return;
+        }
+
+        const baseUnit =
+            option.dataset.baseUnit || 'unit';
+
+        const displayUnit =
+            option.dataset.displayUnit || baseUnit;
+
+        const conversion =
+            Number(option.dataset.conversion || 1);
+
+        const stock =
+            Number(option.dataset.stock || 0);
+
+        const step =
+            option.dataset.step || '0.0001';
+
+        quantityUnit.textContent =
+            baseUnit;
+
+        quantityInput.step =
+            step;
+
+        quantityInput.max =
+            String(stock);
+
+        let note =
+            `Usable stock: ${stock} ${baseUnit}.`;
+
+        if (
+            conversion > 1
+            && displayUnit.toLowerCase()
+                !== baseUnit.toLowerCase()
+        ) {
+            note +=
+                ` 1 ${displayUnit} = ${conversion} ${baseUnit}.`;
+        }
+
+        stockNote.textContent =
+            note;
+    }
+
+    if (nonArvCheckbox) {
+        nonArvCheckbox.addEventListener(
+            'change',
+            syncNonArvMode
+        );
+
+        syncNonArvMode();
+    }
+
+    if (productSelect) {
+        productSelect.addEventListener(
+            'change',
+            syncNonArvProduct
+        );
+
+        syncNonArvProduct();
+    }
+
+    const assessmentForm =
+        nonArvCheckbox
+            ? nonArvCheckbox.closest('form')
+            : null;
+
+    if (assessmentForm) {
+        assessmentForm.addEventListener(
+            'submit',
+            function (event) {
+                const submitter =
+                    event.submitter;
+
+                if (
+                    submitter
+                    && submitter.value === 'administer_non_rabies'
+                ) {
+                    if (!nonArvCheckbox.checked) {
+                        event.preventDefault();
+
+                        window.alert(
+                            'Check "Not Anti-Rabies Vaccine" before using Administer.'
+                        );
+
+                        return;
+                    }
+
+                    if (
+                        !productSelect
+                        || productSelect.value === ''
+                    ) {
+                        event.preventDefault();
+
+                        window.alert(
+                            'Select the vaccine/product that was administered.'
+                        );
+
+                        return;
+                    }
+
+                    if (
+                        !quantityInput
+                        || Number(quantityInput.value) <= 0
+                    ) {
+                        event.preventDefault();
+
+                        window.alert(
+                            'Enter the actual quantity administered.'
+                        );
+
+                        return;
+                    }
+
+                    submitter.disabled = true;
+                    submitter.innerHTML =
+                        '<span class="spinner-border spinner-border-sm me-2" '
+                        + 'aria-hidden="true"></span>Saving...';
+                }
+            }
+        );
+    }
 
     const form =
         document.getElementById('registryConfirmationForm');

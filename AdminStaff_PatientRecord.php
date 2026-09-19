@@ -709,7 +709,6 @@ if ($action) {
                 $date = $_GET['date'] ?? null;
                 $search = trim($_GET['search'] ?? '');
                 $filter = $_GET['filter'] ?? 'all';
-                $sort = $_GET['sort'] ?? 'desc';
                 
                 $where = "WHERE c.branch_id = ? AND c.is_archived = 0 AND p.is_archived = 0";
                 $params = [$logged_branch_id];
@@ -732,7 +731,8 @@ if ($action) {
                     $types .= "sss";
                 }
 
-                $orderBy = ($sort === 'asc') ? 'ASC' : 'DESC';
+                // Always display newest patient records first.
+                $orderBy = 'DESC';
 
                 $sql = "
                     SELECT 
@@ -3537,15 +3537,6 @@ if ($action) {
                         </div>
                     </div>
                 </div>
-                <!-- Sort Buttons -->
-                <div class="sort-area">
-                    <button class="sort-btn active" id="sortDesc" data-sort="desc">
-                        <span class="sort-icon"><i class="bi bi-sort-down"></i></span> Newest First
-                    </button>
-                    <button class="sort-btn" id="sortAsc" data-sort="asc">
-                        <span class="sort-icon"><i class="bi bi-sort-up"></i></span> Oldest First
-                    </button>
-                </div>
             </div>
             <button class="btn" id="addPatientBtn">
                 <i class="bi bi-plus-circle"></i> Add New Patient
@@ -3965,7 +3956,12 @@ if ($action) {
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#039;');
     }
-    let currentAdmissionDate = '<?php echo date('m/d/Y'); ?>';
+    const todayAdmissionDate = '<?php echo date('m/d/Y'); ?>';
+
+    // Empty = no admission-date restriction.
+    // "All Patients" therefore shows every active patient/case in this branch.
+    let currentAdmissionDate = '';
+
     let currentPage = 1;
     const pageSize = 8;
     let searchTerm = '';
@@ -3973,10 +3969,10 @@ if ($action) {
     let allPatients = [];
     let isCheckingCaseNo = false;
     let currentFilter = 'all';
-    let currentSort = 'desc';
 
     // Flatpickr instances
     let flatpickrInstances = [];
+    let patientCalendar = null;
 
     // Define dose configurations with labels
     const DOSE_CONFIG = [
@@ -4342,7 +4338,6 @@ if ($action) {
         if (dateApi) url += `&date=${encodeURIComponent(dateApi)}`;
         if (search) url += `&search=${encodeURIComponent(search)}`;
         url += `&filter=${encodeURIComponent(currentFilter)}`;
-        url += `&sort=${encodeURIComponent(currentSort)}`;
         const res = await fetch(url);
         if (!res.ok) {
             const data = await res.json();
@@ -4353,9 +4348,9 @@ if ($action) {
 
     async function renderTable() {
         try {
-            // The calendar selection is the admission-date filter.
-            // Search and status filters remain independent and are combined
-            // with the selected calendar date when present.
+            // Calendar filtering is optional. With no selected date,
+            // all active patient/case records in this branch are loaded.
+            // Search and vaccination-status filters remain independent.
             const dateApi = frontToApi(currentAdmissionDate);
 
             allPatients = await fetchPatients(dateApi, searchTerm.trim());
@@ -4477,10 +4472,11 @@ if ($action) {
 
     function initCalendar() {
         const calendarEl = document.getElementById('calendarInline');
-        flatpickr(calendarEl, {
+
+        patientCalendar = flatpickr(calendarEl, {
             inline: true,
             dateFormat: 'm/d/Y',
-            defaultDate: currentAdmissionDate,
+            defaultDate: null,
             onChange: function(selectedDates, dateStr) {
                 if (!dateStr) return;
 
@@ -4963,7 +4959,8 @@ if ($action) {
         document.getElementById('caseNo').value = '';
         document.getElementById('caseNo').classList.remove('is-valid', 'is-invalid');
         document.getElementById('caseNoFeedback').style.display = 'none';
-        document.getElementById('admissionDate').value = currentAdmissionDate;
+        document.getElementById('admissionDate').value =
+            currentAdmissionDate || todayAdmissionDate;
         document.getElementById('historyPanel').style.display = 'none';
         
         document.querySelectorAll('input[name="gender"]').forEach(el => {
@@ -5022,6 +5019,15 @@ if ($action) {
             filterBadge.textContent = filterText;
             
             currentFilter = filterValue;
+
+
+            // All/Pending/Completed filters apply across ALL admission dates.
+            // The calendar restricts the list only after a date is selected.
+            currentAdmissionDate = '';
+
+            if (patientCalendar) {
+                patientCalendar.clear();
+            }
             
             filterDropdown.classList.remove('show');
             
@@ -5035,39 +5041,6 @@ if ($action) {
             };
             showToast(statusMap[filterValue] || filterValue);
         });
-    });
-
-    // Sort Button Functionality
-    const sortAscBtn = document.getElementById('sortAsc');
-    const sortDescBtn = document.getElementById('sortDesc');
-
-    function updateSortButtons(sortValue) {
-        sortAscBtn.classList.remove('active');
-        sortDescBtn.classList.remove('active');
-        
-        if (sortValue === 'asc') {
-            sortAscBtn.classList.add('active');
-        } else {
-            sortDescBtn.classList.add('active');
-        }
-    }
-
-    sortAscBtn.addEventListener('click', function() {
-        if (currentSort === 'asc') return;
-        currentSort = 'asc';
-        updateSortButtons('asc');
-        currentPage = 1;
-        renderTable();
-        showToast('Sorting: Oldest First');
-    });
-
-    sortDescBtn.addEventListener('click', function() {
-        if (currentSort === 'desc') return;
-        currentSort = 'desc';
-        updateSortButtons('desc');
-        currentPage = 1;
-        renderTable();
-        showToast('Sorting: Newest First');
     });
 
     document.getElementById('exportBtn').addEventListener('click', async function() {
