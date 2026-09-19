@@ -715,16 +715,15 @@ if ($action) {
                 $params = [$logged_branch_id];
                 $types = "s";
                 
-                // For 'all' filter, show ALL patients regardless of date
-                $isFilterAll = ($filter === 'all');
-                
-                if (!$isFilterAll && !empty($date)) {
-                    // Only apply date filter when NOT using the filter dropdown
+                // A calendar-selected date always filters by the existing
+                // admission field used by this module: animal_bite_cases.created_at.
+                // Status filters remain independent and are applied below.
+                if (!empty($date)) {
                     $where .= " AND DATE(c.created_at) = ?";
                     $params[] = $date;
                     $types .= "s";
                 }
-                
+
                 if ($search !== '') {
                     $where .= " AND (p.full_name LIKE ? OR c.case_number LIKE ? OR r.registry_number LIKE ?)";
                     $params[] = "%$search%";
@@ -763,8 +762,24 @@ if ($action) {
                         ph.status AS philhealth_status
                     FROM animal_bite_cases c
                     JOIN patients p ON c.patient_id = p.patient_id
-                    LEFT JOIN registry_records r ON c.case_id = r.case_id AND r.is_archived = 0
-                    LEFT JOIN philhealth_records ph ON c.case_id = ph.case_id AND ph.is_archived = 0
+                    LEFT JOIN (
+                        SELECT rr.case_id, MAX(rr.registry_id) AS registry_id
+                        FROM registry_records rr
+                        WHERE rr.is_archived = 0
+                        GROUP BY rr.case_id
+                    ) r_latest ON c.case_id = r_latest.case_id
+                    LEFT JOIN registry_records r
+                      ON r.registry_id = r_latest.registry_id
+                     AND r.is_archived = 0
+                    LEFT JOIN (
+                        SELECT pr.case_id, MAX(pr.philhealth_record_id) AS philhealth_record_id
+                        FROM philhealth_records pr
+                        WHERE pr.is_archived = 0
+                        GROUP BY pr.case_id
+                    ) ph_latest ON c.case_id = ph_latest.case_id
+                    LEFT JOIN philhealth_records ph
+                      ON ph.philhealth_record_id = ph_latest.philhealth_record_id
+                     AND ph.is_archived = 0
                     $where
                     ORDER BY c.created_at $orderBy
                 ";
@@ -825,7 +840,8 @@ if ($action) {
                         'age' => calcAge($row['birthday']),
                         'gender' => $row['gender'] ?? '',
                         'address' => $row['address'] ?? '',
-                        'admission_date' => dbToFrontDate($row['date_of_bite'] ?? $row['created_at']),
+                        // Admission/registration date is stored in animal_bite_cases.created_at.
+                        'admission_date' => dbToFrontDate(substr((string)$row['created_at'], 0, 10)),
                         'date_of_bite' => dbToFrontDate($row['date_of_bite']),
                         'site_of_bite' => $row['bite_location'] ?? '',
                         'biting_animal' => $row['animal_type'] ?? '',
@@ -2085,18 +2101,18 @@ if ($action) {
             font-size: 14px;
         }
 
-        .record-container {
-            display: grid;
-            grid-template-columns: 260px minmax(0, 1fr);
-            gap: 20px;
-            width: 100%;
-            max-width: 100%;
-            min-width: 0;
-        }
+      .record-container {
+        display: grid;
+        grid-template-columns: 300px minmax(0, 1fr);
+        gap: 20px;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+    }
 
       @media (max-width: 1200px) {
             .record-container {
-                grid-template-columns: 280px minmax(0, 1fr);
+                grid-template-columns:300px minmax(0, 1fr);
                 gap: 16px;
             }
             .search-area .search-wrapper input {
@@ -2176,6 +2192,13 @@ if ($action) {
             overflow: hidden;
             box-shadow: var(--shadow);
             height: fit-content;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .calendar-panel #calendarInline {
+            width: 100%;
+            min-width: 0;
+            overflow: hidden;
         }
 
         .calendar-panel .panel-header {
@@ -2198,9 +2221,12 @@ if ($action) {
         .calendar-panel .flatpickr-calendar.inline {
             box-shadow: none;
             border: none;
-            width: 100%;
             background: transparent;
             padding: 8px 0;
+            width: 100% !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
+            box-sizing: border-box;
         }
 
         .calendar-panel .flatpickr-calendar.inline .flatpickr-month {
@@ -2223,6 +2249,58 @@ if ($action) {
         .calendar-panel .flatpickr-calendar.inline .flatpickr-day:hover {
             background: var(--gray-100);
         }
+
+.calendar-panel .flatpickr-innerContainer,
+.calendar-panel .flatpickr-rContainer,
+.calendar-panel .flatpickr-days,
+.calendar-panel .dayContainer {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    box-sizing: border-box;
+}
+.calendar-panel .flatpickr-weekdays,
+.calendar-panel .flatpickr-weekdaycontainer {
+    width: 100% !important;
+}
+
+.calendar-panel .flatpickr-day {
+    width: calc(100% / 7) !important;
+    max-width: none !important;
+    box-sizing: border-box;
+}
+.date-stats {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border-top: 1px solid #e5e7eb;
+    min-height: 72px;
+}
+
+#selectedDateDisplay {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #243b7a;
+    font-weight: 500;
+}
+
+.stat-badge {
+    flex: 0 0 auto;
+    min-width: 84px;
+    padding: 8px 14px;
+    border-radius: 24px;
+    background: #293b8f;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.25;
+    text-align: center;
+    white-space: nowrap;
+}
 
         .calendar-panel .date-stats {
             padding: 12px 20px 16px;
@@ -2481,6 +2559,365 @@ if ($action) {
         .modal-footer {
             border-top: none;
             padding: 20px 30px 30px;
+        }
+
+        /* ------------------------------------------------------------
+           Patient View Modal
+           ------------------------------------------------------------ */
+        #viewModal .modal-dialog {
+            width: min(1000px, calc(100% - 32px));
+            max-width: 1000px;
+            margin: 1.5rem auto;
+        }
+
+        #viewModal .modal-content {
+            overflow: hidden;
+            border: 0;
+            border-radius: 18px;
+            box-shadow: 0 24px 70px rgba(22, 35, 85, 0.24);
+            background: #fff;
+        }
+
+        #viewModal .modal-header {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+            padding: 22px 28px;
+            background: linear-gradient(135deg, #2f408f 0%, #293b8f 100%);
+            border: 0;
+            border-radius: 0;
+        }
+
+        #viewModal .view-modal-heading {
+            min-width: 0;
+        }
+
+        #viewModal .view-modal-title {
+            margin: 0;
+            color: #fff;
+            font-size: 21px;
+            font-weight: 700;
+            line-height: 1.25;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #viewModal .view-modal-title i {
+            font-size: 20px;
+        }
+
+        #viewModal .view-modal-subtitle {
+            display: block;
+            margin-top: 5px;
+            color: rgba(255,255,255,.78);
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        #viewModal .btn-close {
+            flex: 0 0 auto;
+            width: 34px;
+            height: 34px;
+            margin: 0;
+            padding: 0;
+            border-radius: 9px;
+            opacity: .9;
+            background-size: 13px;
+            transition: background-color .2s ease, opacity .2s ease, transform .2s ease;
+        }
+
+        #viewModal .btn-close:hover {
+            opacity: 1;
+            background-color: rgba(255,255,255,.13);
+            transform: scale(1.04);
+        }
+
+        #viewModal .modal-body {
+            padding: 24px 28px 10px;
+            max-height: min(68vh, 650px);
+            overflow-y: auto;
+            background: #f8f9fc;
+            scrollbar-width: thin;
+            scrollbar-color: #b7bfdc transparent;
+        }
+
+        #viewModal .modal-body::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        #viewModal .modal-body::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        #viewModal .modal-body::-webkit-scrollbar-thumb {
+            background: #b7bfdc;
+            border-radius: 10px;
+        }
+
+        .patient-view-section {
+            margin-bottom: 18px;
+            padding: 0;
+            background: #fff;
+            border: 1px solid #e5e8f0;
+            border-radius: 14px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(30, 45, 90, .035);
+        }
+
+        .patient-view-section:last-child {
+            margin-bottom: 6px;
+        }
+
+        .patient-view-section-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 13px 18px;
+            background: #f6f7fb;
+            border-bottom: 1px solid #e8eaf1;
+            color: #293b8f;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        .patient-view-section-header i {
+            width: 28px;
+            height: 28px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            background: #e9edff;
+            color: #293b8f;
+            font-size: 14px;
+        }
+
+        .patient-view-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            column-gap: 30px;
+            row-gap: 0;
+            padding: 2px 18px;
+        }
+
+        .patient-view-field {
+            min-width: 0;
+            display: grid;
+            grid-template-columns: minmax(120px, 38%) minmax(0, 1fr);
+            align-items: start;
+            gap: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid #edf0f4;
+        }
+
+        .patient-view-field:nth-last-child(-n + 2) {
+            border-bottom: 0;
+        }
+
+        .patient-view-label {
+            color: #6b7280;
+            font-size: 12px;
+            font-weight: 600;
+            line-height: 1.45;
+        }
+
+        .patient-view-value {
+            min-width: 0;
+            color: #252b38;
+            font-size: 13.5px;
+            font-weight: 500;
+            line-height: 1.5;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        .patient-view-value.strong {
+            font-weight: 700;
+            color: #18213a;
+        }
+
+        .patient-view-value.address {
+            white-space: normal;
+        }
+
+        .patient-view-status {
+            display: inline-flex;
+            align-items: center;
+            min-height: 26px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .patient-view-status.completed {
+            background: #d9f1df;
+            color: #1d6b36;
+        }
+
+        .patient-view-status.in-progress {
+            background: #e1e9ff;
+            color: #2d438f;
+        }
+
+        .patient-view-status.pending {
+            background: #fff1cc;
+            color: #8a6500;
+        }
+
+        .patient-view-status.na {
+            background: #eef0f3;
+            color: #68707d;
+        }
+
+        .patient-view-schedule-wrap {
+            padding: 16px 18px 18px;
+            overflow-x: auto;
+        }
+
+        .patient-view-schedule {
+            width: 100%;
+            min-width: 620px;
+            margin: 0;
+            border-collapse: separate;
+            border-spacing: 0;
+            border: 1px solid #e2e6ee;
+            border-radius: 10px;
+            overflow: hidden;
+            font-size: 12.5px;
+        }
+
+        .patient-view-schedule thead th {
+            padding: 10px 12px;
+            background: #f7f8fb;
+            color: #5b6473;
+            border-bottom: 1px solid #e2e6ee;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .35px;
+            white-space: nowrap;
+        }
+
+        .patient-view-schedule tbody td {
+            padding: 11px 12px;
+            color: #303746;
+            border-bottom: 1px solid #edf0f4;
+            vertical-align: middle;
+        }
+
+        .patient-view-schedule tbody tr:last-child td {
+            border-bottom: 0;
+        }
+
+        .patient-view-schedule tbody tr:hover {
+            background: #fafbff;
+        }
+
+        .patient-view-dose {
+            color: #293b8f;
+            font-weight: 700;
+        }
+
+        .patient-view-remarks {
+            padding: 14px 18px 17px;
+            color: #3f4652;
+            font-size: 13px;
+            line-height: 1.6;
+            overflow-wrap: anywhere;
+        }
+
+        #viewModal .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            padding: 14px 28px 20px;
+            background: #fff;
+            border-top: 1px solid #e9ebf0;
+        }
+
+        #viewModal .view-close-btn {
+            min-width: 92px;
+            padding: 9px 18px;
+            border: 0;
+            border-radius: 9px;
+            background: #293b8f;
+            color: #fff;
+            font-size: 13px;
+            font-weight: 700;
+            transition: transform .18s ease, box-shadow .18s ease, background .18s ease;
+        }
+
+        #viewModal .view-close-btn:hover {
+            background: #23347f;
+            box-shadow: 0 6px 16px rgba(41,59,143,.22);
+            transform: translateY(-1px);
+        }
+
+        #viewModal .view-close-btn:focus-visible {
+            outline: 3px solid rgba(41,59,143,.2);
+            outline-offset: 2px;
+        }
+
+        .patient-view-loading {
+            min-height: 280px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            color: #697386;
+            background: #fff;
+            border-radius: 12px;
+        }
+
+        @media (max-width: 768px) {
+            #viewModal .modal-dialog {
+                width: calc(100% - 20px);
+                margin: .75rem auto;
+            }
+
+            #viewModal .modal-header {
+                padding: 18px 20px;
+            }
+
+            #viewModal .modal-body {
+                padding: 16px 12px 6px;
+                max-height: 72vh;
+            }
+
+            .patient-view-grid {
+                grid-template-columns: 1fr;
+                column-gap: 0;
+                padding-left: 16px;
+                padding-right: 16px;
+            }
+
+            .patient-view-field {
+                grid-template-columns: 42% minmax(0, 1fr);
+            }
+
+            .patient-view-field:nth-last-child(-n + 2) {
+                border-bottom: 1px solid #edf0f4;
+            }
+
+            .patient-view-field:last-child {
+                border-bottom: 0;
+            }
+
+            .patient-view-section-header {
+                padding: 12px 16px;
+            }
+
+            .patient-view-schedule-wrap {
+                padding: 12px;
+            }
+
+            #viewModal .modal-footer {
+                padding: 12px 16px 16px;
+            }
         }
 
         .form-label {
@@ -3119,7 +3556,7 @@ if ($action) {
             <!-- Calendar Panel -->
             <div class="calendar-panel">
                 <div class="panel-header">
-                    Follow-Up Calendar
+                    Daily Patient List | Calendar
                     <i class="bi bi-calendar3"></i>
                 </div>
                 <div id="calendarInline" style="padding: 8px 12px 4px;"></div>
@@ -3410,16 +3847,29 @@ if ($action) {
     </div>
 
     <!-- View Modal -->
-    <div class="modal fade" id="viewModal" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal fade" id="viewModal" tabindex="-1" aria-labelledby="viewModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">Patient Details</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    <div class="view-modal-heading">
+                        <h5 class="view-modal-title" id="viewModalLabel">
+                            <i class="bi bi-person-vcard-fill"></i>
+                            Patient Details
+                        </h5>
+                        <span class="view-modal-subtitle" id="patientModalSubtitle">Patient information</span>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <div class="modal-body" id="viewModalBody"></div>
+                <div class="modal-body" id="viewModalBody">
+                    <div class="patient-view-loading">
+                        <div class="spinner-border text-primary mb-3" role="status"></div>
+                        <div>Loading patient information...</div>
+                    </div>
+                </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="view-close-btn" data-bs-dismiss="modal">
+                        <i class="bi bi-x-lg me-1"></i> Close
+                    </button>
                 </div>
             </div>
         </div>
@@ -3903,16 +4353,11 @@ if ($action) {
 
     async function renderTable() {
         try {
-            let dateApi = '';
-            
-            if (currentFilter === 'all' && !searchTerm.trim()) {
-                dateApi = '';
-            } else if (currentFilter !== 'all' && !searchTerm.trim()) {
-                dateApi = '';
-            } else if (currentFilter === 'all' && searchTerm.trim()) {
-                dateApi = '';
-            }
-            
+            // The calendar selection is the admission-date filter.
+            // Search and status filters remain independent and are combined
+            // with the selected calendar date when present.
+            const dateApi = frontToApi(currentAdmissionDate);
+
             allPatients = await fetchPatients(dateApi, searchTerm.trim());
 
             const total = allPatients.length;
@@ -3925,8 +4370,16 @@ if ($action) {
             document.getElementById('patientCountBadge').textContent = total;
             
             let displayText = '';
-            if (currentFilter === 'all') {
-                displayText = 'All Patients';
+            if (currentAdmissionDate) {
+                const selectedDate = new Date(currentAdmissionDate + ' 00:00:00');
+                const formattedSelectedDate = Number.isNaN(selectedDate.getTime())
+                    ? currentAdmissionDate
+                    : selectedDate.toLocaleDateString('en-US', {
+                        month: 'long',
+                        day: 'numeric',
+                        year: 'numeric'
+                    });
+                displayText = 'Patients admitted on ' + formattedSelectedDate;
             } else if (currentFilter === 'pending') {
                 displayText = 'Pending Vaccination';
             } else if (currentFilter === 'completed') {
@@ -3934,15 +4387,20 @@ if ($action) {
             } else {
                 displayText = 'All Patients';
             }
-            
+
             document.getElementById('selectedDateDisplay').textContent = displayText;
             document.getElementById('selectedDateDisplay2').textContent = displayText;
 
             const tbody = document.getElementById('patientTableBody');
             if (items.length === 0) {
                 let message = 'No records found.';
-                if (currentFilter === 'pending') message = 'No patients with pending vaccination.';
-                if (currentFilter === 'completed') message = 'No patients with completed vaccination.';
+                if (currentAdmissionDate) {
+                    message = 'No patients admitted on this date.';
+                } else if (currentFilter === 'pending') {
+                    message = 'No patients with pending vaccination.';
+                } else if (currentFilter === 'completed') {
+                    message = 'No patients with completed vaccination.';
+                }
                 tbody.innerHTML = `
                     <tr>
                         <td colspan="10">
@@ -4024,13 +4482,13 @@ if ($action) {
             dateFormat: 'm/d/Y',
             defaultDate: currentAdmissionDate,
             onChange: function(selectedDates, dateStr) {
-                if (dateStr && currentFilter === 'all') {
-                    currentAdmissionDate = dateStr;
-                    currentPage = 1;
-                    renderTable();
-                } else if (dateStr && currentFilter !== 'all') {
-                    showToast('Filter is active. Click "All Patients" to view by date.', '', true);
-                }
+                if (!dateStr) return;
+
+                // Calendar date is the admission-date filter. It works
+                // independently of the vaccination-status filter.
+                currentAdmissionDate = dateStr;
+                currentPage = 1;
+                renderTable();
             },
             monthSelectorType: 'dropdown',
             yearSelectorType: 'dropdown'
@@ -4038,86 +4496,207 @@ if ($action) {
     }
 
     async function viewPatient(caseId) {
+        const modalElement = document.getElementById('viewModal');
+        const body = document.getElementById('viewModalBody');
+        if (!modalElement || !body) return;
+
+        const modal = bootstrap.Modal.getOrCreateInstance(modalElement);
+
+        body.innerHTML = `
+            <div class="patient-view-loading">
+                <div class="spinner-border text-primary mb-3" role="status"></div>
+                <div>Loading patient information...</div>
+            </div>
+        `;
+        modal.show();
+
         try {
-            const res = await fetch(`${apiBase}?action=view&case_id=${caseId}`);
-            if (!res.ok) throw new Error('Not found');
-            const data = await res.json();
-
-            const fields = [
-                ['Case No.', data.case_no || ''],
-                ['Patient Name', data.patient_name || ''],
-                ['Address', data.address || ''],
-                ['Date of Birth', data.dob || ''],
-                ['Age', data.age ?? ''],
-                ['Gender', data.gender || ''],
-                ['PhilHealth', data.has_philhealth || 'No'],
-                ['PhilHealth Type', data.philhealth_membership || ''],
-                ['Contact', data.contact_number || ''],
-                ['Admission Date', data.admission_date || ''],
-                ['Date of Bite', data.date_of_bite || ''],
-                ['Site of Bite', data.site_of_bite || ''],
-                ['Biting Animal', data.biting_animal || ''],
-                ['Animal Status', data.animal_status || ''],
-                ['Active Regimen', data.active_regimen || ''],
-                ['Vaccination Category', data.vacc_category || ''],
-                ['Vaccination Status', data.vaccination_status || 'Pending'],
-                ['Record Status', data.has_philhealth === 'Yes' ? (data.status || 'For Writing') : 'Not Applicable'],
-                ['Remarks', data.remarks || '']
-            ];
-
-            let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;">';
-            fields.forEach((f, index) => {
-                html += `
-                    <div class="view-detail-row" style="${index % 2 === 0 ? '' : 'border-bottom:none;'}">
-                        <span class="view-detail-label">${escapeHtml(f[0])}</span>
-                        <span class="view-detail-value">${escapeHtml(f[1])}</span>
-                    </div>
-                `;
+            const res = await fetch(`${apiBase}?action=view&case_id=${encodeURIComponent(caseId)}`, {
+                headers: { 'X-Requested-With': 'XMLHttpRequest' }
             });
-            html += '</div>';
+            if (!res.ok) throw new Error('Unable to retrieve the patient record.');
 
-            if (data.vaccination_doses && Object.keys(data.vaccination_doses).length > 0) {
-                html += `
-                    <hr>
-                    <h6 class="fw-bold" style="color:var(--primary);">Vaccination Schedule</h6>
-                    <div class="table-responsive">
-                        <table class="table table-sm align-middle">
-                            <thead>
-                                <tr>
-                                    <th>Dose Stage</th>
-                                    <th>Scheduled Date</th>
-                                    <th>Administered Date</th>
-                                    <th>Status</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                `;
-
-                DOSE_CONFIG.forEach(d => {
-                    const stage = data.vaccination_doses[d.key];
-                    if (!stage) return;
-
-                    html += `
-                        <tr>
-                            <td>${escapeHtml(d.label)}</td>
-                            <td>${escapeHtml(stage.scheduled_date || '—')}</td>
-                            <td>${escapeHtml(stage.administered_date || '—')}</td>
-                            <td>${scheduleStatusBadge(stage.status || 'Scheduled')}</td>
-                        </tr>
-                    `;
-                });
-
-                html += `
-                            </tbody>
-                        </table>
-                    </div>
-                `;
+            const data = await res.json();
+            if (data.error || data.success === false) {
+                throw new Error(data.error || data.message || 'Unable to retrieve the patient record.');
             }
 
-            document.getElementById('viewModalBody').innerHTML = html;
-            new bootstrap.Modal(document.getElementById('viewModal')).show();
+            const value = (field, fallback = 'N/A') => escapeHtml(
+                field === null || field === undefined || field === '' ? fallback : field
+            );
+
+            const displayDate = (field, fallback = 'N/A') => {
+                if (!field) return fallback;
+                return value(field);
+            };
+
+            const vaccinationStatus = data.vaccination_status || 'Pending';
+            const statusClass = vaccinationStatus === 'Completed'
+                ? 'completed'
+                : (vaccinationStatus === 'In Progress' ? 'in-progress' : 'pending');
+
+            const recordStatus = data.has_philhealth === 'Yes'
+                ? (data.status || 'For Writing')
+                : 'Not Applicable';
+
+            body.innerHTML = `
+                <section class="patient-view-section">
+                    <div class="patient-view-section-header">
+                        <i class="bi bi-person-vcard-fill"></i>
+                        Patient Information
+                    </div>
+                    <div class="patient-view-grid">
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Patient Name</span>
+                            <span class="patient-view-value strong">${value(data.patient_name)}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Case No.</span>
+                            <span class="patient-view-value strong">${value(data.case_no)}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Date of Birth</span>
+                            <span class="patient-view-value">${displayDate(data.dob)}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Age</span>
+                            <span class="patient-view-value">${value(data.age)}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Gender</span>
+                            <span class="patient-view-value">${value(data.gender)}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Contact</span>
+                            <span class="patient-view-value">${value(data.contact_number)}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">PhilHealth</span>
+                            <span class="patient-view-value">${value(data.has_philhealth, 'No')}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">PhilHealth Type</span>
+                            <span class="patient-view-value">${value(data.philhealth_membership)}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Address</span>
+                            <span class="patient-view-value address">${value(data.address)}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Admission Date</span>
+                            <span class="patient-view-value">${displayDate(data.admission_date)}</span>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="patient-view-section">
+                    <div class="patient-view-section-header">
+                        <i class="bi bi-shield-exclamation"></i>
+                        Bite Information
+                    </div>
+                    <div class="patient-view-grid">
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Date of Bite</span>
+                            <span class="patient-view-value">${displayDate(data.date_of_bite)}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Site of Bite</span>
+                            <span class="patient-view-value">${value(data.site_of_bite)}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Biting Animal</span>
+                            <span class="patient-view-value">${value(data.biting_animal)}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Animal Status</span>
+                            <span class="patient-view-value">${value(data.animal_status)}</span>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="patient-view-section">
+                    <div class="patient-view-section-header">
+                        <i class="bi bi-capsule-pill"></i>
+                        Vaccination Information
+                    </div>
+                    <div class="patient-view-grid">
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Active Regimen</span>
+                            <span class="patient-view-value">${value(data.active_regimen)}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Vaccination Category</span>
+                            <span class="patient-view-value">${value(data.vacc_category)}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Vaccination Status</span>
+                            <span class="patient-view-value"><span class="patient-view-status ${statusClass}">${value(vaccinationStatus)}</span></span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Record Status</span>
+                            <span class="patient-view-value">${value(recordStatus)}</span>
+                        </div>
+                    </div>
+                </section>
+
+                ${data.vaccination_doses && Object.keys(data.vaccination_doses).length > 0 ? `
+                    <section class="patient-view-section">
+                        <div class="patient-view-section-header">
+                            <i class="bi bi-calendar2-check-fill"></i>
+                            Vaccination Schedule
+                        </div>
+                        <div class="patient-view-schedule-wrap">
+                            <table class="patient-view-schedule">
+                                <thead>
+                                    <tr>
+                                        <th>Dose Stage</th>
+                                        <th>Scheduled Date</th>
+                                        <th>Administered Date</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${DOSE_CONFIG.map(d => {
+                                        const stage = data.vaccination_doses[d.key];
+                                        if (!stage) return '';
+                                        return `
+                                            <tr>
+                                                <td class="patient-view-dose">${escapeHtml(d.label)}</td>
+                                                <td>${displayDate(stage.scheduled_date, '—')}</td>
+                                                <td>${displayDate(stage.administered_date, 'Not administered')}</td>
+                                                <td>${scheduleStatusBadge(stage.status || 'Scheduled')}</td>
+                                            </tr>
+                                        `;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                ` : ''}
+
+                ${(data.remarks || '').trim() ? `
+                    <section class="patient-view-section">
+                        <div class="patient-view-section-header">
+                            <i class="bi bi-chat-left-text-fill"></i>
+                            Remarks
+                        </div>
+                        <div class="patient-view-remarks">${value(data.remarks)}</div>
+                    </section>
+                ` : ''}
+            `;
+
+            const subtitle = document.getElementById('patientModalSubtitle');
+            if (subtitle) {
+                subtitle.textContent = `${data.patient_name || 'Patient'} • Case ${data.case_no || 'N/A'}`;
+            }
         } catch (e) {
-            showToast('Error viewing patient', e.message, true);
+            console.error('Error viewing patient:', e);
+            body.innerHTML = `
+                <div class="alert alert-danger m-0">
+                    <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                    ${escapeHtml(e.message || 'Unable to load patient information.')}
+                </div>
+            `;
         }
     }
 

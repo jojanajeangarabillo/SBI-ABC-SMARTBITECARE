@@ -73,7 +73,8 @@ $flash=workflowTakeFlash();
         .profile-role{margin-left:4px;color:#adb5bd;font-size:12px}
         .page-content{padding:30px 35px}
         .stats-container{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px;margin-bottom:25px}
-        .stat-card{position:relative;overflow:hidden;min-height:150px;padding:22px;background:#fff;border-left:5px solid var(--primary);border-radius:14px;box-shadow:0 4px 16px rgba(43,58,140,.08)}
+        .stat-card{position:relative;overflow:hidden;min-height:150px;padding:22px;background:#fff;border-left:5px solid var(--primary);transition: transform .2s ease, box-shadow .2s ease; border-radius:14px;box-shadow:0 4px 16px rgba(43,58,140,.08)}
+        .stat-card:hover {transform: translateY(-6px); box-shadow: 0 10px 24px rgba(43, 58, 140, 0.14);}
         .stat-card.warning{border-left-color:var(--warning)}.stat-card.info{border-left-color:var(--info)}.stat-card.success{border-left-color:var(--success)}
         .stat-card h6{margin:0 0 8px;color:#697386;font-size:13px;font-weight:700;letter-spacing:.3px;text-transform:uppercase}
         .stat-card h2{margin:0;color:#25324b;font-size:32px;font-weight:750}.stat-card p{margin:8px 0 0;color:#98a2b3;font-size:12px}
