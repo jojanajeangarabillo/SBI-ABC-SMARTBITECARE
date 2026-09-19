@@ -524,6 +524,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         workflowVerifyCsrf();
 
         $action = (string)($_POST['action'] ?? '');
+
+        /*
+         * Defensive fallback for the one-time/non-ARV Administer button.
+         * A disabled submit button is not included in the browser's POST
+         * payload. If the client-side loading state disables that button
+         * before serialization, recover the intended action from the
+         * non-ARV fields instead of falling through to "Unknown action".
+         */
+        if (
+            $action === ''
+            && (string)($_POST['not_anti_rabies'] ?? '') === '1'
+            && (int)($_POST['non_rabies_item_id'] ?? 0) > 0
+            && (float)($_POST['non_rabies_quantity_base'] ?? 0) > 0
+        ) {
+            $action = 'administer_non_rabies';
+        }
+
         $visitId = (int)($_POST['visit_id'] ?? 0);
 
         if ($visitId <= 0) {
@@ -4763,6 +4780,35 @@ document.addEventListener('DOMContentLoaded', function () {
 
                         return;
                     }
+
+                    /*
+                     * IMPORTANT:
+                     * Once a submit button is disabled it is no longer a
+                     * "successful control", so its name/value pair is omitted
+                     * from the POST payload. The Administer button itself owns
+                     * name="action" value="administer_non_rabies".
+                     *
+                     * Preserve that action in a hidden input BEFORE disabling
+                     * the button for the loading state.
+                     */
+                    let administerAction =
+                        assessmentForm.querySelector(
+                            'input[data-administer-action="1"]'
+                        );
+
+                    if (!administerAction) {
+                        administerAction =
+                            document.createElement('input');
+
+                        administerAction.type = 'hidden';
+                        administerAction.name = 'action';
+                        administerAction.dataset.administerAction = '1';
+
+                        assessmentForm.appendChild(administerAction);
+                    }
+
+                    administerAction.value =
+                        'administer_non_rabies';
 
                     submitter.disabled = true;
                     submitter.innerHTML =
