@@ -224,6 +224,10 @@ function getNextDoseNumber($conn, $patient_id, $case_id) {
     $stages = getCompletedDoseStages($conn, $patient_id, $case_id);
     $required = getRequiredDoseNumbers($conn, $case_id);
 
+    if (!$required) {
+        return 0;
+    }
+
     foreach ($required as $dose) {
         if (empty($stages[$dose])) {
             return $dose;
@@ -234,9 +238,15 @@ function getNextDoseNumber($conn, $patient_id, $case_id) {
 }
 
 function isVaccinationComplete($conn, $patient_id, $case_id) {
+    $required = getRequiredDoseNumbers($conn, $case_id);
+
+    if (!$required) {
+        return true;
+    }
+
     $stages = getCompletedDoseStages($conn, $patient_id, $case_id);
 
-    foreach (getRequiredDoseNumbers($conn, $case_id) as $dose) {
+    foreach ($required as $dose) {
         if (empty($stages[$dose])) {
             return false;
         }
@@ -257,13 +267,19 @@ function getRequiredDoseNumbers($conn, $case_id) {
     $stmt->close();
 
     if ($row && !empty($row['treatment_profile'])) {
-        $configured = array_keys(workflowScheduleStages((string)$row['treatment_profile']));
+        $profile = (string)$row['treatment_profile'];
+
+        if ($profile === 'OTHER') {
+            return [];
+        }
+
+        $configured = array_keys(workflowScheduleStages($profile));
         if ($configured) {
             return array_map('intval', $configured);
         }
     }
 
-    // Legacy cases created before the workflow migration used all six stages.
+    // Legacy anti-rabies cases created before the workflow migration.
     return [1, 2, 3, 4, 5, 6];
 }
 
@@ -295,18 +311,8 @@ function inventoryIsMlBased(array $item): bool {
     return in_array($base, ['ml', 'milliliter', 'milliliters', 'millilitre', 'millilitres'], true);
 }
 
-function inventoryRequiresMlConfiguration(array $item): bool
-{
-    // Site-based vial products such as Speeda are already configured.
-    // Example: Speeda = 1 Vial = 6 sites.
-    if (inventoryIsSiteBased($item)) {
-        return false;
-    }
-
-    // Other vial products that support partial-vial consumption
-    // must be configured using mL as their inventory base unit.
-    return inventoryIsVialProduct($item)
-        && !inventoryIsMlBased($item);
+function inventoryRequiresMlConfiguration(array $item): bool {
+    return inventoryIsVialProduct($item) && !inventoryIsMlBased($item);
 }
 
 // Get a Medical Supplies inventory item. Unit is loaded from the database
@@ -496,6 +502,16 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_patient_cases') {
             WHERE p.patient_id = ?
               AND p.branch_id = ?
               AND p.is_archived = 0
+              AND COALESCE(
+                    (
+                        SELECT ca_filter.treatment_profile
+                        FROM clinical_assessments ca_filter
+                        WHERE ca_filter.case_id = a.case_id
+                        ORDER BY ca_filter.updated_at DESC, ca_filter.assessment_id DESC
+                        LIMIT 1
+                    ),
+                    ''
+                  ) <> 'OTHER'
               AND (
                     SELECT COUNT(DISTINCT vr_done.dose_number)
                     FROM vaccination_records vr_done
@@ -608,6 +624,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_scheduled_doses') {
             LEFT JOIN users u2 ON vr.nurse_id = u2.user_id
             WHERE vr.is_archived = 0
             AND vr.branch_id = ?
+            AND vr.dose_number BETWEEN 1 AND 6
             AND COALESCE(vr.vaccine_name, i.item_name, '') NOT LIKE '%Default%'";
     
     $params = [$branch_id];
@@ -776,6 +793,16 @@ if (isset($_POST['submit_vaccination'])) {
                                   AND a.branch_id = ?
                                   AND a.is_archived = 0
                                   AND a.case_status != 'Completed'
+                                  AND COALESCE(
+                                        (
+                                            SELECT ca_filter.treatment_profile
+                                            FROM clinical_assessments ca_filter
+                                            WHERE ca_filter.case_id = a.case_id
+                                            ORDER BY ca_filter.updated_at DESC, ca_filter.assessment_id DESC
+                                            LIMIT 1
+                                        ),
+                                        ''
+                                      ) <> 'OTHER'
                                 LIMIT 1");
     $caseCheck->bind_param("isis", $patient_id, $branch_id, $case_id, $branch_id);
     $caseCheck->execute();
@@ -1324,6 +1351,16 @@ $sql_patients = "SELECT DISTINCT
                    AND a.case_status != 'Completed'
                  WHERE p.branch_id = ?
                    AND p.is_archived = 0
+                   AND COALESCE(
+                        (
+                            SELECT ca_filter.treatment_profile
+                            FROM clinical_assessments ca_filter
+                            WHERE ca_filter.case_id = a.case_id
+                            ORDER BY ca_filter.updated_at DESC, ca_filter.assessment_id DESC
+                            LIMIT 1
+                        ),
+                        ''
+                       ) <> 'OTHER'
                    AND (
                         SELECT COUNT(DISTINCT vr_done.dose_number)
                         FROM vaccination_records vr_done
@@ -1392,6 +1429,16 @@ $count_sql = "SELECT COUNT(*) AS total
                       AND a.branch_id = p.branch_id
                       AND a.is_archived = 0
                       AND a.case_status != 'Completed'
+                      AND COALESCE(
+                            (
+                                SELECT ca_filter.treatment_profile
+                                FROM clinical_assessments ca_filter
+                                WHERE ca_filter.case_id = a.case_id
+                                ORDER BY ca_filter.updated_at DESC, ca_filter.assessment_id DESC
+                                LIMIT 1
+                            ),
+                            ''
+                          ) <> 'OTHER'
                       AND (
                             SELECT COUNT(DISTINCT vr_done.dose_number)
                             FROM vaccination_records vr_done
@@ -1478,6 +1525,16 @@ $patient_list_sql = "SELECT
                          FROM animal_bite_cases abc
                          WHERE abc.is_archived = 0
                            AND abc.case_status != 'Completed'
+                           AND COALESCE(
+                                (
+                                    SELECT ca_filter.treatment_profile
+                                    FROM clinical_assessments ca_filter
+                                    WHERE ca_filter.case_id = abc.case_id
+                                    ORDER BY ca_filter.updated_at DESC, ca_filter.assessment_id DESC
+                                    LIMIT 1
+                                ),
+                                ''
+                              ) <> 'OTHER'
                            AND (
                                 SELECT COUNT(DISTINCT vr_done.dose_number)
                                 FROM vaccination_records vr_done
