@@ -3,6 +3,7 @@ session_start();
 require_once __DIR__ . '/sources/db_connect.php';
 require_once __DIR__ . '/sources/app_config.php';
 require_once __DIR__ . '/sources/mailer.php';
+require_once __DIR__ . '/sources/notification_helper.php';
 
 // Check if user is logged in and is branch admin
 if (
@@ -15,12 +16,9 @@ if (
 }
 
 // Get user branch information
-$user_id = $_SESSION['user_id'];
+$user_id = (int)$_SESSION['user_id'];
 $notification_count = getUnreadNotificationCount($conn, $user_id);
-$branch_id = null;
-$branch_name = '';
 
-$user_id = $_SESSION['user_id'];
 $branch_id = null;
 $branch_name = '';
 $username = '';
@@ -916,12 +914,15 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
                 <li><a href="BranchAdmin_Forecasting.php"><i class="bi bi-graph-up-arrow"></i><span>Supply Forecasting</span></a></li>
                 <li><a href="BranchAdmin_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
                 <li><a href="BranchAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
-                <li><a href="BranchAdmin_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
-                <li><a href="BranchAdmin_Notifications.php" class="notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
-                <?php if ($notification_count > 0): ?>
-                    <span class="notification-badge"><?php echo $notification_count; ?></span>
-                <?php endif; ?>
-            </a></li>
+                <li>
+                    <a href="BranchAdmin_Notifications.php" class="notification-link">
+                        <i class="bi bi-bell-fill"></i>
+                        <span>Notifications</span>
+                        <?php if ($notification_count > 0): ?>
+                            <span class="notification-badge"><?php echo $notification_count; ?></span>
+                        <?php endif; ?>
+                    </a>
+                </li>
                 <li><a href="BranchAdmin_Settings.php"><i class="bi bi-gear-fill"></i><span>Settings</span></a></li>
             </ul>
     </div>
