@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/notification_helper.php';
 
 // Check if user is logged in and is an admin staff
 if (
@@ -38,6 +39,8 @@ if ($userResult->num_rows > 0) {
 if (!$branch_id) {
     $branch_name = 'No Branch Assigned';
 }
+// Admin Staff notification badge count for this branch.
+$notification_count = getAdminStaffNotificationCount($conn, $branch_id);
 
 // ----------------------------------------------------------------------
 // FETCH DASHBOARD STATISTICS
@@ -408,6 +411,12 @@ while ($row = $trendResult->fetch_assoc()) {
             height: 100%;
         }
 
+
+.nav-menu a.active .notification-badge {
+    background: var(--accent);
+    color: #fff;
+} 
+
 /* =========================================================
    GLOBAL LOGOUT CONFIRMATION MODAL 
    ========================================================= */
@@ -568,6 +577,7 @@ while ($row = $trendResult->fetch_assoc()) {
         font-size: 15px !important;
     }
 }
+
         /* Statistics */
         .stats-container {
             display: grid;
@@ -1275,7 +1285,18 @@ while ($row = $trendResult->fetch_assoc()) {
                 <li><a href="AdminStaff_Registry.php"><i class="bi bi-journal-check"></i><span>Registry Queue</span></a></li>
                 <li><a href="AdminStaff_PhilhealthWorkflow.php"><i class="bi bi-check2-all"></i><span>PhilHealth Workflow</span></a></li>
                 <li><a href="AdminStaff_MedicalDocuments.php"><i class="bi bi-file-earmark-ruled"></i><span>Medical Documents</span></a></li>
-                <li><a href="AdminStaff_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+                <li>
+                    <a href="AdminStaff_Notifications.php">
+                        <i class="bi bi-bell-fill"></i>
+                        <span>Notifications</span>
+
+                        <?php if ($notification_count > 0): ?>
+                            <span class="notification-badge">
+                                <?php echo $notification_count; ?>
+                            </span>
+                        <?php endif; ?>
+                    </a>
+            </li>
             </ul>
         </nav>
 
@@ -1285,7 +1306,7 @@ while ($row = $trendResult->fetch_assoc()) {
     <div class="main">
         <!-- TOP BAR -->
     <div class="topbar">
-        <h3>Dashnboard</h3>
+        <h3>Dashboard</h3>
        <div class="dropdown">
             <button
                 class="profile profile-button dropdown-toggle"

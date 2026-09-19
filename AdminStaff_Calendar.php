@@ -108,6 +108,7 @@ $allFollowUpsQuery = "
             WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 'Overdue'
             WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 'Today'
             WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 'Pending'
+            WHEN v.vaccination_status = 'Missed' THEN 'Missing'
             ELSE v.vaccination_status
         END as display_status,
         CASE 
@@ -118,9 +119,24 @@ $allFollowUpsQuery = "
             ELSE 5
         END as status_order
     FROM animal_bite_cases c
-    INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
+    /* Collapse accidental duplicate vaccination rows that share the same case, dose, and scheduled date.
+       The smallest vaccination_id is retained as the canonical row; distinct doses/dates remain separate. */
+    INNER JOIN (
+                    SELECT MIN(vr.vaccination_id) AS vaccination_id
+                    FROM vaccination_records vr
+                    WHERE vr.scheduled_date IS NOT NULL
+                    GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
+                ) vd ON 1 = 1
+                INNER JOIN vaccination_records v
+                    ON v.vaccination_id = vd.vaccination_id
+                    AND c.case_id = v.case_id
+                    AND c.branch_id = v.branch_id
     INNER JOIN patients p ON c.patient_id = p.patient_id
-    LEFT JOIN registry_records r ON c.case_id = r.case_id
+    LEFT JOIN (
+                    SELECT case_id, MAX(registry_number) AS registry_number
+                    FROM registry_records
+                    GROUP BY case_id
+                ) r ON c.case_id = r.case_id
     WHERE c.branch_id = ?
     AND v.scheduled_date IS NOT NULL
 ";
@@ -157,6 +173,8 @@ if ($filterStatus != 'all') {
         $whereConditions[] = "v.scheduled_date = CURDATE() AND v.vaccination_status = 'Scheduled'";
     } elseif ($filterStatus == 'pending') {
         $whereConditions[] = "v.scheduled_date > CURDATE() AND v.vaccination_status = 'Scheduled'";
+    } elseif ($filterStatus == 'missing') {
+        $whereConditions[] = "v.vaccination_status = 'Missed'";
     }
 }
 
@@ -199,9 +217,19 @@ $statsQuery = "
         SUM(CASE WHEN v.vaccination_status = 'Completed' THEN 1 ELSE 0 END) as completed,
         SUM(CASE WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue,
         SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 1 ELSE 0 END) as today,
-        SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 1 ELSE 0 END) as pending
+        SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 1 ELSE 0 END) as pending,
+        SUM(CASE WHEN v.vaccination_status = 'Missed' THEN 1 ELSE 0 END) as missing
     FROM animal_bite_cases c
-    INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
+    INNER JOIN (
+                    SELECT MIN(vr.vaccination_id) AS vaccination_id
+                    FROM vaccination_records vr
+                    WHERE vr.scheduled_date IS NOT NULL
+                    GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
+                ) vd ON 1 = 1
+                INNER JOIN vaccination_records v
+                    ON v.vaccination_id = vd.vaccination_id
+                    AND c.case_id = v.case_id
+                    AND c.branch_id = v.branch_id
     WHERE c.branch_id = ?
     AND v.scheduled_date IS NOT NULL
 ";
@@ -216,6 +244,7 @@ $completedCount = $stats['completed'] ?? 0;
 $overdueCount = $stats['overdue'] ?? 0;
 $todayCount = $stats['today'] ?? 0;
 $pendingCount = $stats['pending'] ?? 0;
+$missingCount = $stats['missing'] ?? 0;
 
 // ----------------------------------------------------------------------
 // GET CALENDAR DATA FOR CURRENT MONTH
@@ -227,7 +256,16 @@ $calQuery = "
         SUM(CASE WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue_count,
         SUM(CASE WHEN v.vaccination_status = 'Completed' THEN 1 ELSE 0 END) as completed_count
     FROM animal_bite_cases c
-    INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
+    INNER JOIN (
+                    SELECT MIN(vr.vaccination_id) AS vaccination_id
+                    FROM vaccination_records vr
+                    WHERE vr.scheduled_date IS NOT NULL
+                    GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
+                ) vd ON 1 = 1
+                INNER JOIN vaccination_records v
+                    ON v.vaccination_id = vd.vaccination_id
+                    AND c.case_id = v.case_id
+                    AND c.branch_id = v.branch_id
     WHERE c.branch_id = ?
     AND v.scheduled_date IS NOT NULL
     AND YEAR(v.scheduled_date) = ?
@@ -241,14 +279,12 @@ $stmt->execute();
 $calResult = $stmt->get_result();
 
 $calendarData = [];
-$totalEvents = 0;
 while ($row = $calResult->fetch_assoc()) {
     $calendarData[$row['schedule_date']] = [
         'count' => (int)$row['count'],
         'overdue_count' => (int)$row['overdue_count'],
         'completed_count' => (int)$row['completed_count']
     ];
-    $totalEvents += (int)$row['count'];
 }
 
 // ----------------------------------------------------------------------
@@ -259,7 +295,16 @@ $upcomingQuery = "
         DATE(v.scheduled_date) as schedule_date,
         COUNT(DISTINCT c.case_id) as count
     FROM animal_bite_cases c
-    INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
+    INNER JOIN (
+                    SELECT MIN(vr.vaccination_id) AS vaccination_id
+                    FROM vaccination_records vr
+                    WHERE vr.scheduled_date IS NOT NULL
+                    GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
+                ) vd ON 1 = 1
+                INNER JOIN vaccination_records v
+                    ON v.vaccination_id = vd.vaccination_id
+                    AND c.case_id = v.case_id
+                    AND c.branch_id = v.branch_id
     WHERE c.branch_id = ?
     AND v.scheduled_date IS NOT NULL
     AND v.vaccination_status = 'Scheduled'
@@ -304,12 +349,26 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
                 WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 'Overdue'
                 WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 'Today'
                 WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 'Pending'
+                WHEN v.vaccination_status = 'Missed' THEN 'Missing'
                 ELSE v.vaccination_status
             END as display_status
         FROM animal_bite_cases c
-        INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
+        INNER JOIN (
+                    SELECT MIN(vr.vaccination_id) AS vaccination_id
+                    FROM vaccination_records vr
+                    WHERE vr.scheduled_date IS NOT NULL
+                    GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
+                ) vd ON 1 = 1
+                INNER JOIN vaccination_records v
+                    ON v.vaccination_id = vd.vaccination_id
+                    AND c.case_id = v.case_id
+                    AND c.branch_id = v.branch_id
         INNER JOIN patients p ON c.patient_id = p.patient_id
-        LEFT JOIN registry_records r ON c.case_id = r.case_id
+        LEFT JOIN (
+                    SELECT case_id, MAX(registry_number) AS registry_number
+                    FROM registry_records
+                    GROUP BY case_id
+                ) r ON c.case_id = r.case_id
         WHERE c.branch_id = ?
         AND v.scheduled_date IS NOT NULL
     ";
@@ -332,6 +391,8 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
             $exportQuery .= " AND v.scheduled_date = CURDATE() AND v.vaccination_status = 'Scheduled'";
         } elseif ($exportStatus == 'pending') {
             $exportQuery .= " AND v.scheduled_date > CURDATE() AND v.vaccination_status = 'Scheduled'";
+        } elseif ($exportStatus == 'missing') {
+            $exportQuery .= " AND v.vaccination_status = 'Missed'";
         }
     }
     
@@ -390,9 +451,19 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     SUM(CASE WHEN v.vaccination_status = 'Completed' THEN 1 ELSE 0 END) as completed,
                     SUM(CASE WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue,
                     SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 1 ELSE 0 END) as today,
-                    SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 1 ELSE 0 END) as pending
+                    SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 1 ELSE 0 END) as pending,
+                    SUM(CASE WHEN v.vaccination_status = 'Missed' THEN 1 ELSE 0 END) as missing
                 FROM animal_bite_cases c
-                INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
+                INNER JOIN (
+                    SELECT MIN(vr.vaccination_id) AS vaccination_id
+                    FROM vaccination_records vr
+                    WHERE vr.scheduled_date IS NOT NULL
+                    GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
+                ) vd ON 1 = 1
+                INNER JOIN vaccination_records v
+                    ON v.vaccination_id = vd.vaccination_id
+                    AND c.case_id = v.case_id
+                    AND c.branch_id = v.branch_id
                 WHERE c.branch_id = ?
                 AND v.scheduled_date IS NOT NULL
             ";
@@ -408,7 +479,8 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 'completed' => $stats['completed'] ?? 0,
                 'overdue' => $stats['overdue'] ?? 0,
                 'today' => $stats['today'] ?? 0,
-                'pending' => $stats['pending'] ?? 0
+                'pending' => $stats['pending'] ?? 0,
+                'missing' => $stats['missing'] ?? 0
             ]);
             break;
             
@@ -423,7 +495,16 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     SUM(CASE WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue_count,
                     SUM(CASE WHEN v.vaccination_status = 'Completed' THEN 1 ELSE 0 END) as completed_count
                 FROM animal_bite_cases c
-                INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
+                INNER JOIN (
+                    SELECT MIN(vr.vaccination_id) AS vaccination_id
+                    FROM vaccination_records vr
+                    WHERE vr.scheduled_date IS NOT NULL
+                    GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
+                ) vd ON 1 = 1
+                INNER JOIN vaccination_records v
+                    ON v.vaccination_id = vd.vaccination_id
+                    AND c.case_id = v.case_id
+                    AND c.branch_id = v.branch_id
                 WHERE c.branch_id = ?
                 AND v.scheduled_date IS NOT NULL
                 AND YEAR(v.scheduled_date) = ?
@@ -491,6 +572,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                         WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 'Overdue'
                         WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 'Today'
                         WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 'Pending'
+                        WHEN v.vaccination_status = 'Missed' THEN 'Missing'
                         ELSE v.vaccination_status
                     END as display_status,
                     CASE 
@@ -501,9 +583,22 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                         ELSE 5
                     END as status_order
                 FROM animal_bite_cases c
-                INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
+                INNER JOIN (
+                    SELECT MIN(vr.vaccination_id) AS vaccination_id
+                    FROM vaccination_records vr
+                    WHERE vr.scheduled_date IS NOT NULL
+                    GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
+                ) vd ON 1 = 1
+                INNER JOIN vaccination_records v
+                    ON v.vaccination_id = vd.vaccination_id
+                    AND c.case_id = v.case_id
+                    AND c.branch_id = v.branch_id
                 INNER JOIN patients p ON c.patient_id = p.patient_id
-                LEFT JOIN registry_records r ON c.case_id = r.case_id
+                LEFT JOIN (
+                    SELECT case_id, MAX(registry_number) AS registry_number
+                    FROM registry_records
+                    GROUP BY case_id
+                ) r ON c.case_id = r.case_id
                 WHERE c.branch_id = ?
                 AND v.scheduled_date IS NOT NULL
             ";
@@ -531,6 +626,8 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     $query .= " AND v.scheduled_date = CURDATE() AND v.vaccination_status = 'Scheduled'";
                 } elseif ($status == 'pending') {
                     $query .= " AND v.scheduled_date > CURDATE() AND v.vaccination_status = 'Scheduled'";
+                } elseif ($status == 'missing') {
+                    $query .= " AND v.vaccination_status = 'Missed'";
                 }
             }
             
@@ -563,6 +660,151 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             ]);
             break;
             
+        case 'get_calendar_followups':
+            $date = isset($_GET['date']) ? trim($_GET['date']) : '';
+
+            if (empty($date)) {
+                echo json_encode(['success' => true, 'records' => [], 'count' => 0, 'date' => '']);
+                break;
+            }
+
+            $dateObject = DateTime::createFromFormat('Y-m-d', $date);
+            if (!$dateObject || $dateObject->format('Y-m-d') !== $date) {
+                echo json_encode(['success' => false, 'error' => 'Invalid calendar date.']);
+                break;
+            }
+
+            $query = "
+                SELECT DISTINCT
+                    c.case_id,
+                    c.case_number,
+                    r.registry_number as case_no,
+                    p.full_name as patient_name,
+                    p.gender,
+                    p.birthday,
+                    v.vaccination_id,
+                    v.vaccine_name,
+                    v.dose_number,
+                    v.scheduled_date,
+                    v.date_administered,
+                    v.vaccination_status
+                FROM animal_bite_cases c
+                INNER JOIN (
+                    SELECT MIN(vr.vaccination_id) AS vaccination_id
+                    FROM vaccination_records vr
+                    WHERE vr.scheduled_date IS NOT NULL
+                    GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
+                ) vd ON 1 = 1
+                INNER JOIN vaccination_records v
+                    ON v.vaccination_id = vd.vaccination_id
+                    AND c.case_id = v.case_id
+                    AND c.branch_id = v.branch_id
+                INNER JOIN patients p ON c.patient_id = p.patient_id
+                LEFT JOIN (
+                    SELECT case_id, MAX(registry_number) AS registry_number
+                    FROM registry_records
+                    GROUP BY case_id
+                ) r ON c.case_id = r.case_id
+                WHERE c.branch_id = ?
+                  AND v.scheduled_date IS NOT NULL
+                  AND DATE(v.scheduled_date) = ?
+                ORDER BY p.full_name ASC, v.dose_number ASC
+            ";
+
+            $stmt = $conn->prepare($query);
+            $stmt->bind_param("ss", $branch_id, $date);
+            $stmt->execute();
+            $result = $stmt->get_result();
+
+            $records = [];
+            while ($row = $result->fetch_assoc()) {
+                $records[] = $row;
+            }
+
+            echo json_encode([
+                'success' => true,
+                'records' => $records,
+                'count' => count($records),
+                'date' => $date
+            ]);
+            break;
+
+        case 'get_patient_details':
+            $case_id = isset($_GET['case_id']) ? (int)$_GET['case_id'] : 0;
+            $vaccination_id = isset($_GET['vaccination_id']) ? (int)$_GET['vaccination_id'] : 0;
+
+            if (!$case_id || !$vaccination_id) {
+                echo json_encode(['success' => false, 'error' => 'Missing patient or vaccination information.']);
+                break;
+            }
+
+            $query = "
+                SELECT
+                    c.case_id,
+                    c.case_number,
+                    c.animal_type,
+                    c.bite_location,
+                    c.bite_category,
+                    c.animal_status,
+                    c.date_of_bite,
+                    c.case_status,
+                    c.remarks as case_remarks,
+                    p.patient_id,
+                    p.full_name as patient_name,
+                    p.address,
+                    p.birthday,
+                    p.gender,
+                    p.contact_number,
+                    p.email,
+                    v.vaccination_id,
+                    v.vaccine_name,
+                    v.dose_number,
+                    v.treatment_profile,
+                    v.date_administered,
+                    v.scheduled_date,
+                    v.next_schedule,
+                    v.vaccination_status,
+                    v.is_final_dose,
+                    v.remarks as vaccination_remarks,
+                    r.registry_number as case_no,
+                    TIMESTAMPDIFF(YEAR, p.birthday, CURDATE()) as age
+                FROM animal_bite_cases c
+                INNER JOIN (
+                    SELECT MIN(vr.vaccination_id) AS vaccination_id
+                    FROM vaccination_records vr
+                    WHERE vr.scheduled_date IS NOT NULL
+                    GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
+                ) vd ON 1 = 1
+                INNER JOIN vaccination_records v
+                    ON v.vaccination_id = vd.vaccination_id
+                    AND c.case_id = v.case_id
+                    AND c.branch_id = v.branch_id
+                INNER JOIN patients p ON c.patient_id = p.patient_id
+                LEFT JOIN (
+                    SELECT case_id, MAX(registry_number) AS registry_number
+                    FROM registry_records
+                    GROUP BY case_id
+                ) r ON c.case_id = r.case_id
+                WHERE c.case_id = ?
+                  AND v.vaccination_id = ?
+                  AND c.branch_id = ?
+                LIMIT 1
+            ";
+
+            $stmt = $conn->prepare($query);
+            $stmt->bind_param("iis", $case_id, $vaccination_id, $branch_id);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $record = $result->fetch_assoc();
+
+            if (!$record) {
+                echo json_encode(['success' => false, 'error' => 'Patient record not found.']);
+                break;
+            }
+
+            echo json_encode(['success' => true, 'record' => $record]);
+            break;
+
         case 'mark_completed':
             if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
                 echo json_encode(['success' => false, 'error' => 'Invalid request method']);
@@ -828,16 +1070,25 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
 
         .dashboard-grid {
             display: grid;
-            grid-template-columns: 1fr 320px;
+            grid-template-columns: minmax(0, 1fr) 320px;
             gap: 24px;
             margin-bottom: 30px;
+            align-items: start;
         }
 
+        /* Keep the calendar independent from the amount of content in the
+           follow-up patient panel. The calendar always occupies the same
+           vertical space on desktop/tablet layouts. */
         .calendar-wrapper {
             background: white;
             border-radius: 16px;
             padding: 20px 24px 24px;
             box-shadow: var(--shadow);
+            height: 400px;
+            min-height: 400px;
+            max-height: 400px;
+            box-sizing: border-box;
+            overflow: hidden;
         }
 
         .calendar-wrapper .cal-header {
@@ -960,6 +1211,14 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         .calendar-wrapper table td .day-cell.has-event.today::after {
             background: white;
         }
+        .calendar-wrapper table td .day-cell.selected-date {
+            box-shadow: 0 0 0 3px rgba(43, 58, 140, 0.18);
+        }
+
+        .calendar-wrapper table td .day-cell.selected-date.today {
+            box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.75), 0 0 0 5px rgba(43, 58, 140, 0.18);
+        }
+
 
         .calendar-wrapper table td .day-cell.has-event.overdue::after {
             background: var(--accent);
@@ -969,18 +1228,282 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             color: #ced4da;
         }
 
-        .calendar-wrapper .cal-footer {
-            margin-top: 12px;
+        .calendar-patient-header {
             display: flex;
+            align-items: flex-start;
             justify-content: space-between;
-            font-size: 13px;
-            color: #6c757d;
-            border-top: 1px solid #f1f3f5;
-            padding-top: 12px;
+            gap: 10px;
+            margin-bottom: 14px;
         }
 
-        .calendar-wrapper .cal-footer span i {
-            margin-right: 4px;
+        .calendar-patient-header h5 {
+            margin: 0;
+            font-weight: 700;
+            color: var(--primary);
+            font-size: 16px;
+        }
+
+        .calendar-selected-label {
+            margin-top: 4px;
+            color: #6c757d;
+            font-size: 12px;
+        }
+
+        .calendar-selected-count {
+            min-width: 30px;
+            padding: 4px 9px;
+            border-radius: 20px;
+            background: #eef2ff;
+            color: var(--primary);
+            font-size: 12px;
+            font-weight: 700;
+            text-align: center;
+        }
+
+        /* The patient panel has its own fixed viewport. Patient cards scroll
+           inside this area instead of changing the calendar height. */
+        .calendar-patient-panel {
+            height: 400px;
+            min-height: 400px;
+            max-height: 400px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .calendar-patient-list {
+            flex: 1 1 auto;
+            min-height: 0;
+            max-height: none;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding-right: 5px;
+        }
+
+        .calendar-patient-list::-webkit-scrollbar {
+            width: 7px;
+        }
+
+        .calendar-patient-list::-webkit-scrollbar-track {
+            background: #f5f6fa;
+            border-radius: 10px;
+        }
+
+        .calendar-patient-list::-webkit-scrollbar-thumb {
+            background: #c9cfe1;
+            border-radius: 10px;
+        }
+
+        .calendar-patient-list::-webkit-scrollbar-thumb:hover {
+            background: #aeb6d0;
+        }
+
+        .calendar-patient-card {
+            border: 1px solid #edf0f5;
+            border-radius: 10px;
+            padding: 11px 12px;
+            margin-bottom: 9px;
+            background: #fff;
+            transition: var(--transition);
+        }
+
+        .calendar-patient-card:hover {
+            border-color: #dfe5f3;
+            box-shadow: 0 3px 10px rgba(43, 58, 140, 0.06);
+        }
+
+        .calendar-patient-name {
+            color: var(--gray-900);
+            font-size: 14px;
+            font-weight: 700;
+            margin-bottom: 2px;
+        }
+
+        .calendar-patient-case {
+            color: #6c757d;
+            font-size: 11px;
+            margin-bottom: 7px;
+        }
+
+        .calendar-patient-meta {
+            display: grid;
+            gap: 3px;
+            color: #495057;
+            font-size: 12px;
+        }
+
+        .calendar-patient-meta strong {
+            color: #212529;
+        }
+
+        .calendar-patient-empty {
+            text-align: center;
+            padding: 42px 12px;
+            color: #adb5bd;
+        }
+
+        .calendar-patient-empty i {
+            display: block;
+            margin-bottom: 10px;
+            font-size: 34px;
+            opacity: .55;
+        }
+
+        .calendar-patient-empty p {
+            margin: 0 0 4px;
+            color: #6c757d;
+            font-weight: 600;
+        }
+
+        .calendar-patient-empty small {
+            display: block;
+            line-height: 1.45;
+        }
+
+        .calendar-patient-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 9px;
+        }
+
+        .calendar-patient-actions .btn-action {
+            margin: 0;
+            padding: 4px 11px;
+            font-size: 11px;
+        }
+
+        /* View button inside the calendar follow-up patient panel */
+        .calendar-patient-actions .view-patient-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            min-width: 78px;
+            padding: 7px 13px !important;
+            margin: 0 !important;
+            border: 1px solid var(--primary) !important;
+            border-radius: 7px !important;
+            background: var(--primary) !important;
+            color: #fff !important;
+            font-size: 12px !important;
+            font-weight: 600;
+            line-height: 1.2;
+            box-shadow: 0 2px 5px rgba(43, 58, 140, .12);
+            transition: all .2s ease;
+        }
+
+        .calendar-patient-actions .view-patient-btn i {
+            font-size: 13px;
+        }
+
+        .calendar-patient-actions .view-patient-btn:hover {
+            background: #1f2d6b !important;
+            border-color: #1f2d6b !important;
+            color: #fff !important;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 9px rgba(43, 58, 140, .18);
+        }
+
+        .calendar-patient-actions .view-patient-btn:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 4px rgba(43, 58, 140, .12);
+        }
+        /* Remove event/status dots underneath calendar dates */
+.calendar-wrapper table td .day-cell.has-event::after,
+.calendar-wrapper table td .day-cell.has-event.today::after,
+.calendar-wrapper table td .day-cell.has-event.overdue::after {
+    display: none !important;
+}
+
+        .patient-details-modal .modal-dialog {
+            max-width: 820px;
+        }
+
+        .patient-details-modal .modal-content {
+            border: 0;
+            border-radius: 18px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(31,45,110,.18);
+        }
+
+        .patient-details-modal .modal-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid #edf0f5;
+        }
+
+        .patient-details-modal .modal-title {
+            color: var(--primary);
+            font-weight: 700;
+        }
+
+        .patient-details-modal .modal-body {
+            padding: 24px;
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+
+        .patient-detail-section {
+            margin-bottom: 22px;
+        }
+
+        .patient-detail-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .patient-detail-section-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+            color: var(--primary);
+            font-size: 14px;
+            font-weight: 700;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #edf0f5;
+        }
+
+        .patient-detail-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px 18px;
+        }
+
+        .patient-detail-item {
+            min-width: 0;
+        }
+
+        .patient-detail-label {
+            display: block;
+            margin-bottom: 3px;
+            color: #7a879e;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .3px;
+        }
+
+        .patient-detail-value {
+            color: #26324d;
+            font-size: 13px;
+            font-weight: 600;
+            word-break: break-word;
+        }
+
+        .patient-detail-loading {
+            padding: 45px 15px;
+            text-align: center;
+            color: #6c757d;
+        }
+
+        @media (max-width: 576px) {
+            .patient-detail-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .patient-details-modal .modal-body {
+                padding: 18px;
+            }
         }
 
         .legend-wrapper {
@@ -1286,6 +1809,10 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             background: #d4edda;
             color: #155724;
         }
+        .status-badge.missing-badge {
+            background: #e2e3e5;
+            color: #343a40;
+        }
 
         .table-wrapper table tbody td .btn-action {
             background: var(--primary);
@@ -1314,6 +1841,9 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         .table-wrapper table tbody td .btn-action.btn-success:hover {
             background: #1e7e34;
         }
+        
+
+        
 
         .no-records {
             text-align: center;
@@ -1536,6 +2066,16 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             .dashboard-grid {
                 grid-template-columns: 1fr;
             }
+            .calendar-wrapper {
+                height: 400px;
+                min-height: 400px;
+                max-height: 400px;
+            }
+            .calendar-patient-panel {
+                height: 400px;
+                min-height: 400px;
+                max-height: 400px;
+            }
         }
 
         @media (max-width: 768px) {
@@ -1591,6 +2131,14 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             }
             .calendar-wrapper {
                 padding: 16px;
+                height: 360px;
+                min-height: 360px;
+                max-height: 360px;
+            }
+            .calendar-patient-panel {
+                height: 360px;
+                min-height: 360px;
+                max-height: 360px;
             }
             .legend-wrapper {
                 padding: 16px;
@@ -2032,64 +2580,26 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                         <tbody id="calendarBody"></tbody>
                     </table>
 
-                    <div class="cal-footer">
-                        <span><i class="bi bi-calendar-event"></i> <span id="eventsCount"><?php echo $totalEvents; ?></span> events this month</span>
-                        <span><i class="bi bi-circle-fill" style="color:var(--primary);font-size:10px;"></i> Today</span>
-                    </div>
                 </div>
 
-                <!-- Legend -->
-                <div class="legend-wrapper" id="legendWrapper">
-                    <h5>Quick Filters</h5>
-
-                    <div class="legend-item" onclick="applyStatusFilter('all')" style="cursor:pointer;">
-                        <span class="dot" style="background:var(--info);"></span>
-                        All Records (<span id="legendTotal"><?php echo $totalCount; ?></span>)
-                    </div>
-                    <div class="legend-item" onclick="applyStatusFilter('today')" style="cursor:pointer;">
-                        <span class="dot today-dot"></span>
-                        Today (<span id="legendToday"><?php echo $todayCount; ?></span>)
-                    </div>
-                    <div class="legend-item" onclick="applyStatusFilter('overdue')" style="cursor:pointer;">
-                        <span class="dot overdue-dot"></span>
-                        Overdue (<span id="legendOverdue"><?php echo $overdueCount; ?></span>)
-                    </div>
-                    <div class="legend-item" onclick="applyStatusFilter('pending')" style="cursor:pointer;">
-                        <span class="dot pending-dot"></span>
-                        Pending (<span id="legendPending"><?php echo $pendingCount; ?></span>)
-                    </div>
-                    <div class="legend-item" onclick="applyStatusFilter('completed')" style="cursor:pointer;">
-                        <span class="dot completed-dot"></span>
-                        Completed (<span id="legendCompleted"><?php echo $completedCount; ?></span>)
+                <!-- FOLLOW-UP PATIENTS FOR SELECTED CALENDAR DATE -->
+                <div class="legend-wrapper calendar-patient-panel" id="calendarPatientPanel">
+                    <div class="calendar-patient-header">
+                        <div>
+                            <h5><i class="bi bi-people-fill me-1"></i> Follow-up Patients</h5>
+                            <div class="calendar-selected-label" id="calendarSelectedLabel">
+                                Select a date on the calendar
+                            </div>
+                        </div>
+                        <span class="calendar-selected-count" id="calendarSelectedCount">0</span>
                     </div>
 
-                    <hr class="legend-divider">
-                    <div style="font-size:13px;color:#6c757d;">
-                        <i class="bi bi-info-circle"></i> Click a stat card or legend item to filter
-                    </div>
-
-                    <hr class="legend-divider">
-                    <div class="legend-upcoming" id="upcomingList">
-                        <div style="font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:6px;">
-                            <i class="bi bi-clock"></i> Upcoming (30 days)
+                    <div class="calendar-patient-list" id="calendarPatientList">
+                        <div class="calendar-patient-empty">
+                            <i class="bi bi-calendar2-event"></i>
+                            <p>Select a calendar date</p>
+                            <small>Follow-up patients scheduled for the selected date will appear here.</small>
                         </div>
-                        <?php if (empty($upcomingData)): ?>
-                        <div class="no-upcoming">No upcoming follow-ups</div>
-                        <?php else: ?>
-                        <?php $displayCount = 0; ?>
-                        <?php foreach ($upcomingData as $date => $count): ?>
-                        <?php if ($displayCount++ >= 8) break; ?>
-                        <div class="upcoming-item">
-                            <span class="date-label"><?php echo date('M d', strtotime($date)); ?></span>
-                            <span class="count-badge"><?php echo $count; ?> patient<?php echo $count > 1 ? 's' : ''; ?></span>
-                        </div>
-                        <?php endforeach; ?>
-                        <?php if (count($upcomingData) > 8): ?>
-                        <div style="text-align:center;font-size:12px;color:#adb5bd;padding-top:4px;">
-                            +<?php echo count($upcomingData) - 8; ?> more days
-                        </div>
-                        <?php endif; ?>
-                        <?php endif; ?>
                     </div>
                 </div>
             </div>
@@ -2172,6 +2682,9 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                         <button class="tab-btn <?php echo $filterStatus == 'completed' ? 'active' : ''; ?>" data-filter="completed" onclick="applyStatusFilter('completed')">
                             Completed <span class="badge-count" style="background:var(--success);" id="filterCompletedCount"><?php echo $completedCount; ?></span>
                         </button>
+                        <button class="tab-btn <?php echo $filterStatus == 'missing' ? 'active' : ''; ?>" data-filter="missing" onclick="applyStatusFilter('missing')">
+                            Missing <span class="badge-count" style="background:#6c757d;" id="filterMissingCount"><?php echo $missingCount; ?></span>
+                        </button>
                     </div>
                     <div class="record-info">
                         <strong id="recordCountDisplay"><?php echo count($followUpRecords); ?></strong> records found
@@ -2212,6 +2725,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                                 $statusClass = 'pending-badge';
                                 $statusLabel = $record['display_status'] ?? 'Pending';
                                 if ($statusLabel == 'Completed') $statusClass = 'completed-badge';
+                                elseif ($statusLabel == 'Missing') $statusClass = 'missing-badge';
                                 elseif ($statusLabel == 'Overdue') $statusClass = 'overdue-badge';
                                 elseif ($statusLabel == 'Today') $statusClass = 'today-badge';
                                 
@@ -2230,9 +2744,13 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                                 <td><?php echo $record['date_administered'] ? date('M d, Y', strtotime($record['date_administered'])) : '—'; ?></td>
                                 <td><span class="status-badge <?php echo $statusClass; ?>"><?php echo htmlspecialchars($statusLabel); ?></span></td>
                                 <td>
-                                    <a href="AdminStaff_PatientRecord.php?action=view&case_id=<?php echo $record['case_id']; ?>" class="btn-action" title="View patient record">
+                                    <button type="button"
+                                            class="btn-action view-patient-btn"
+                                            data-case-id="<?php echo $record['case_id']; ?>"
+                                            data-vaccination-id="<?php echo $record['vaccination_id']; ?>"
+                                            title="View patient details">
                                         <i class="bi bi-eye"></i> View
-                                    </a>
+                                    </button>
                                     <?php if ($statusLabel != 'Completed' && $statusLabel != 'Overdue'): ?>
                                     <button class="btn-action btn-success mark-complete-btn" 
                                             data-vaccination-id="<?php echo $record['vaccination_id']; ?>"
@@ -2290,6 +2808,32 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
 
     <!-- Toast Container -->
     <div class="toast-container-custom" id="toastContainer"></div>
+
+    <!-- PATIENT VIEW MODAL -->
+    <div class="modal fade patient-details-modal" id="patientDetailsModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 class="modal-title"><i class="bi bi-person-vcard-fill me-2"></i>Patient Follow-up Details</h5>
+                        <small class="text-muted" id="patientModalSubtitle">Patient information</small>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="patientDetailsBody">
+                    <div class="patient-detail-loading">
+                        <div class="spinner-border text-primary mb-3" role="status"></div>
+                        <div>Loading patient information...</div>
+                    </div>
+                </div>
+                <div class="modal-footer border-top-0 pt-0 px-4 pb-4">
+                    <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">
+                        <i class="bi bi-x-lg me-1"></i> Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Complete Modal -->
     <div class="modal fade modal-custom" id="completeModal" tabindex="-1" aria-hidden="true">
@@ -2383,6 +2927,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
     let currentStatus = '<?php echo $filterStatus; ?>';
     let currentDate = '<?php echo $selectedDate; ?>';
     let currentSearch = '<?php echo htmlspecialchars($searchQuery); ?>';
+    let currentCalendarDate = '';
     
     const calendarData = <?php echo json_encode($calendarData); ?>;
 
@@ -2442,7 +2987,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
 
         let html = '';
         let date = 1;
-        let totalEvents = 0;
 
         for (let i = 0; i < 6; i++) {
             html += '<tr>';
@@ -2477,13 +3021,16 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     const todayClass = isToday ? 'today' : '';
                     const eventClass = hasEvent ? 'has-event' : '';
                     const overdueClass = isOverdue ? 'overdue' : '';
-                    const clickable = hasEvent ? `style="cursor:pointer;" onclick="goToDate('${dateStr}')"` : '';
-                    
-                    html += `<td><span class="day-cell ${todayClass} ${eventClass} ${overdueClass}" ${clickable}>${date}</span></td>`;
-                    
-                    if (hasEvent) {
-                        totalEvents += calData[dateStr].count || 1;
-                    }
+                    const selectedClass = currentCalendarDate === dateStr ? 'selected-date' : '';
+
+                    html += `<td>
+                        <span class="day-cell ${todayClass} ${eventClass} ${overdueClass} ${selectedClass}"
+                              role="button"
+                              tabindex="0"
+                              onclick="goToDate('${dateStr}')"
+                              onkeydown="if(event.key==='Enter' || event.key===' ') { event.preventDefault(); goToDate('${dateStr}'); }">${date}</span>
+                    </td>`;
+
                     date++;
                 }
             }
@@ -2492,54 +3039,100 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         }
 
         document.getElementById('calendarBody').innerHTML = html;
-        document.getElementById('eventsCount').textContent = totalEvents;
     }
 
     // ----------------------------------------------------------------
     // GO TO DATE
     // ----------------------------------------------------------------
     function goToDate(dateStr) {
-        document.getElementById('filterDate').value = dateStr;
-        applyFilters();
+        currentCalendarDate = dateStr;
+        renderCalendar(currentMonth, currentYear);
+        loadCalendarFollowUps(dateStr);
     }
 
     // ----------------------------------------------------------------
     // APPLY STATUS FILTER
     // ----------------------------------------------------------------
-    function applyStatusFilter(status) {
-        currentStatus = status;
-        const url = new URL(window.location.href);
-        url.searchParams.set('status', status);
-        if (status == 'all') {
-            url.searchParams.delete('status');
-        }
-        window.location.href = url.toString();
+   function applyStatusFilter(status) {
+    currentStatus = status;
+
+    // Update active tab
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+
+    const activeBtn = document.querySelector(
+        `.tab-btn[data-filter="${status}"]`
+    );
+
+    if (activeBtn) {
+        activeBtn.classList.add('active');
     }
+
+    // Update URL without reloading
+    const url = new URL(window.location.href);
+
+    if (status === 'all') {
+        url.searchParams.delete('status');
+    } else {
+        url.searchParams.set('status', status);
+    }
+
+    window.history.replaceState({}, '', url.toString());
+
+    // Refresh only the table
+    fetchRecords();
+
+    // Update filter badges
+    updateActiveFilters();
+}
 
     // ----------------------------------------------------------------
     // APPLY FILTERS
     // ----------------------------------------------------------------
     function applyFilters() {
-        showLoading();
-        const month = document.getElementById('filterMonth').value;
-        const year = document.getElementById('filterYear').value;
-        const date = document.getElementById('filterDate').value;
-        const search = document.getElementById('filterSearch').value;
-        const status = currentStatus;
+    const month = document.getElementById('filterMonth').value;
+    const year = document.getElementById('filterYear').value;
+    const date = document.getElementById('filterDate').value;
+    const search = document.getElementById('filterSearch').value;
 
-        const url = new URL(window.location.href);
-        url.searchParams.set('month', month);
-        url.searchParams.set('year', year);
-        if (date) url.searchParams.set('date', date);
-        else url.searchParams.delete('date');
-        if (search) url.searchParams.set('search', search);
-        else url.searchParams.delete('search');
-        if (status && status != 'all') url.searchParams.set('status', status);
-        else url.searchParams.delete('status');
-        
-        window.location.href = url.toString();
+    currentMonth = parseInt(month);
+    currentYear = parseInt(year);
+    currentDate = date;
+    currentSearch = search;
+
+    // Update URL WITHOUT reloading the page
+    const url = new URL(window.location.href);
+
+    url.searchParams.set('month', month);
+    url.searchParams.set('year', year);
+
+    if (date) {
+        url.searchParams.set('date', date);
+    } else {
+        url.searchParams.delete('date');
     }
 
+    if (search) {
+        url.searchParams.set('search', search);
+    } else {
+        url.searchParams.delete('search');
+    }
+
+    if (currentStatus && currentStatus !== 'all') {
+        url.searchParams.set('status', currentStatus);
+    } else {
+        url.searchParams.delete('status');
+    }
+
+    window.history.replaceState({}, '', url.toString());
+
+    // Refresh only the necessary parts
+    fetchRecords();
+
+    // Calendar selection is independent from the patient-table filters.
+    updateActiveFilters();
+}
     // ----------------------------------------------------------------
     // REMOVE FILTER
     // ----------------------------------------------------------------
@@ -2659,8 +3252,8 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
     function fetchRecords() {
         showLoading();
         
-        const month = document.getElementById('filterMonth')?.value || currentMonth;
-        const year = document.getElementById('filterYear')?.value || currentYear;
+        const month = currentMonth;
+        const year = currentYear;
         const date = document.getElementById('filterDate')?.value || '';
         const search = document.getElementById('filterSearch')?.value || '';
         const status = currentStatus;
@@ -2721,6 +3314,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
 
         records.forEach(record => {
             const statusClass = record.display_status === 'Completed' ? 'completed-badge' :
+                               record.display_status === 'Missing' ? 'missing-badge' :
                                record.display_status === 'Overdue' ? 'overdue-badge' :
                                record.display_status === 'Today' ? 'today-badge' : 'pending-badge';
             
@@ -2740,9 +3334,13 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     <td>${record.date_administered ? new Date(record.date_administered).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td>
                     <td><span class="status-badge ${statusClass}">${record.display_status}</span></td>
                     <td>
-                        <a href="AdminStaff_PatientRecord.php?action=view&case_id=${record.case_id}" class="btn-action" title="View patient record">
+                        <button type="button"
+                                class="btn-action view-patient-btn"
+                                data-case-id="${record.case_id}"
+                                data-vaccination-id="${record.vaccination_id}"
+                                title="View patient details">
                             <i class="bi bi-eye"></i> View
-                        </a>
+                        </button>
                         ${record.display_status !== 'Completed' && record.display_status !== 'Overdue' ? `
                         <button class="btn-action btn-success mark-complete-btn" 
                                 data-vaccination-id="${record.vaccination_id}"
@@ -2759,6 +3357,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         });
 
         tbody.innerHTML = html;
+        bindViewPatientButtons();
         bindMarkCompleteButtons();
         paginateCalendarRows(true);
     }
@@ -2833,6 +3432,58 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         });
     }
 
+    function updateActiveFilters() {
+    const container = document.getElementById('activeFilters');
+
+    if (!container) return;
+
+    let html = '';
+
+    const date = document.getElementById('filterDate')?.value || '';
+    const search = document.getElementById('filterSearch')?.value || '';
+
+    if (date) {
+        const formattedDate = new Date(date + 'T00:00:00').toLocaleDateString(
+            'en-US',
+            {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric'
+            }
+        );
+
+        html += `
+            <span class="filter-badge">
+                <i class="bi bi-calendar-day"></i>
+                ${formattedDate}
+                <span class="remove-filter" onclick="removeFilter('date')">&times;</span>
+            </span>
+        `;
+    }
+
+    if (currentStatus !== 'all') {
+        html += `
+            <span class="filter-badge">
+                <i class="bi bi-funnel"></i>
+                ${currentStatus.charAt(0).toUpperCase() + currentStatus.slice(1)}
+                <span class="remove-filter" onclick="removeFilter('status')">&times;</span>
+            </span>
+        `;
+    }
+
+    if (search) {
+        html += `
+            <span class="filter-badge">
+                <i class="bi bi-search"></i>
+                "${search}"
+                <span class="remove-filter" onclick="removeFilter('search')">&times;</span>
+            </span>
+        `;
+    }
+
+    container.innerHTML = html;
+}
+
     // ----------------------------------------------------------------
     // REFRESH STATS
     // ----------------------------------------------------------------
@@ -2851,16 +3502,15 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 document.getElementById('pendingCount').textContent = data.pending || 0;
                 document.getElementById('completedCount').textContent = data.completed || 0;
                 
-                document.getElementById('legendTotal').textContent = data.total || 0;
-                document.getElementById('legendToday').textContent = data.today || 0;
-                document.getElementById('legendOverdue').textContent = data.overdue || 0;
-                document.getElementById('legendPending').textContent = data.pending || 0;
-                document.getElementById('legendCompleted').textContent = data.completed || 0;
                 
                 document.getElementById('filterTodayCount').textContent = data.today || 0;
                 document.getElementById('filterPendingCount').textContent = data.pending || 0;
                 document.getElementById('filterOverdueCount').textContent = data.overdue || 0;
                 document.getElementById('filterCompletedCount').textContent = data.completed || 0;
+                const missingCountElement = document.getElementById('filterMissingCount');
+                if (missingCountElement) {
+                    missingCountElement.textContent = data.missing || 0;
+                }
                 document.getElementById('totalRecordCount').textContent = data.total || 0;
             }
         })
@@ -2871,8 +3521,11 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
     // REFRESH CALENDAR
     // ----------------------------------------------------------------
     function refreshCalendar() {
-        const month = document.getElementById('filterMonth')?.value || currentMonth;
-        const year = document.getElementById('filterYear')?.value || currentYear;
+        // The calendar has its own month state. Do not read the table
+        // filter controls here, otherwise changing the calendar month
+        // gets immediately overwritten by the table's selected month.
+        const month = currentMonth;
+        const year = currentYear;
         
         fetch(window.location.pathname + '?ajax_action=get_calendar&month=' + month + '&year=' + year, {
             headers: {
@@ -2882,53 +3535,376 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         .then(response => response.json())
         .then(data => {
             if (data.success) {
+                // Remove cached dates from the month being rendered so
+                // stale event markers cannot carry over between months.
+                const monthPrefix = year + '-' + String(month).padStart(2, '0') + '-';
+                Object.keys(calendarData).forEach(date => {
+                    if (date.indexOf(monthPrefix) === 0) {
+                        delete calendarData[date];
+                    }
+                });
+
                 Object.keys(data.data).forEach(date => {
                     calendarData[date] = data.data[date];
                 });
-                renderCalendar(parseInt(month), parseInt(year));
+
+                renderCalendar(month, year);
             }
         })
         .catch(error => console.error('Calendar refresh error:', error));
     }
 
     // ----------------------------------------------------------------
+    // CALENDAR FOLLOW-UP PATIENT LIST
+    // ----------------------------------------------------------------
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    function formatDisplayDate(dateString) {
+        if (!dateString) return 'N/A';
+        const date = new Date(dateString + 'T00:00:00');
+        if (Number.isNaN(date.getTime())) return dateString;
+        return date.toLocaleDateString('en-US', {
+            month: 'long',
+            day: 'numeric',
+            year: 'numeric'
+        });
+    }
+
+    function loadCalendarFollowUps(dateStr) {
+        const label = document.getElementById('calendarSelectedLabel');
+        const count = document.getElementById('calendarSelectedCount');
+        const list = document.getElementById('calendarPatientList');
+
+        if (!label || !count || !list) return;
+
+        label.textContent = formatDisplayDate(dateStr);
+        count.textContent = '…';
+        list.innerHTML = `
+            <div class="calendar-patient-empty">
+                <div class="spinner-border spinner-border-sm text-primary mb-3" role="status"></div>
+                <p>Loading follow-up patients...</p>
+            </div>
+        `;
+
+        fetch(window.location.pathname + '?ajax_action=get_calendar_followups&date=' + encodeURIComponent(dateStr), {
+            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (!data.success) {
+                count.textContent = '0';
+                list.innerHTML = `
+                    <div class="calendar-patient-empty">
+                        <i class="bi bi-exclamation-circle"></i>
+                        <p>Unable to load follow-up patients.</p>
+                        <small>${escapeHtml(data.error || 'Please try again.')}</small>
+                    </div>
+                `;
+                return;
+            }
+
+            count.textContent = data.count || 0;
+
+            if (!data.records || data.records.length === 0) {
+                list.innerHTML = `
+                    <div class="calendar-patient-empty">
+                        <i class="bi bi-calendar-x"></i>
+                        <p>No follow-up patients for this date.</p>
+                        <small>No vaccination schedule is recorded for ${escapeHtml(formatDisplayDate(dateStr))}.</small>
+                    </div>
+                `;
+                return;
+            }
+
+            list.innerHTML = data.records.map(record => {
+                const caseNo = record.case_no || record.case_number || 'N/A';
+                const dose = record.dose_number ? 'Dose ' + record.dose_number : 'Dose';
+                const status = record.vaccination_status || 'Scheduled';
+
+                return `
+                    <div class="calendar-patient-card">
+                        <div class="calendar-patient-name">${escapeHtml(record.patient_name || 'Unnamed Patient')}</div>
+                        <div class="calendar-patient-case">Case No. ${escapeHtml(caseNo)}</div>
+                        <div class="calendar-patient-meta">
+                            <div><strong>Vaccine:</strong> ${escapeHtml(record.vaccine_name || 'N/A')}</div>
+                            <div><strong>Dose:</strong> ${escapeHtml(dose)}</div>
+                            <div><strong>Scheduled:</strong> ${escapeHtml(formatDisplayDate(record.scheduled_date))}</div>
+                            <div><strong>Status:</strong> ${escapeHtml(status)}</div>
+                        </div>
+                        <div class="calendar-patient-actions">
+                            <button type="button"
+                                    class="btn-action view-patient-btn"
+                                    data-case-id="${escapeHtml(record.case_id)}"
+                                    data-vaccination-id="${escapeHtml(record.vaccination_id)}">
+                                <i class="bi bi-eye"></i> View
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            bindViewPatientButtons();
+        })
+        .catch(error => {
+            console.error('Calendar follow-up error:', error);
+            count.textContent = '0';
+            list.innerHTML = `
+                <div class="calendar-patient-empty">
+                    <i class="bi bi-wifi-off"></i>
+                    <p>Unable to load follow-up patients.</p>
+                    <small>Please check your connection and try again.</small>
+                </div>
+            `;
+        });
+    }
+
+    // ----------------------------------------------------------------
+    // PATIENT VIEW MODAL
+    // ----------------------------------------------------------------
+    function renderPatientDetails(record) {
+        const body = document.getElementById('patientDetailsBody');
+        const subtitle = document.getElementById('patientModalSubtitle');
+        if (!body) return;
+
+        subtitle.textContent = (record.patient_name || 'Patient') + ' • ' + (record.case_no || record.case_number || 'No Case No.');
+
+        const value = (field, fallback = 'N/A') => escapeHtml(
+            field === null || field === undefined || field === '' ? fallback : field
+        );
+
+        body.innerHTML = `
+            <div class="patient-detail-section">
+                <div class="patient-detail-section-title">
+                    <i class="bi bi-person-fill"></i> Patient Information
+                </div>
+                <div class="patient-detail-grid">
+                    <div class="patient-detail-item"><span class="patient-detail-label">Patient Name</span><span class="patient-detail-value">${value(record.patient_name)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Patient ID</span><span class="patient-detail-value">${value(record.patient_id)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Date of Birth</span><span class="patient-detail-value">${value(record.birthday ? formatDisplayDate(record.birthday) : null)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Age</span><span class="patient-detail-value">${value(record.age)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Gender</span><span class="patient-detail-value">${value(record.gender)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Contact Number</span><span class="patient-detail-value">${value(record.contact_number)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Email</span><span class="patient-detail-value">${value(record.email)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Address</span><span class="patient-detail-value">${value(record.address)}</span></div>
+                </div>
+            </div>
+
+            <div class="patient-detail-section">
+                <div class="patient-detail-section-title">
+                    <i class="bi bi-file-medical-fill"></i> Case Information
+                </div>
+                <div class="patient-detail-grid">
+                    <div class="patient-detail-item"><span class="patient-detail-label">Case No.</span><span class="patient-detail-value">${value(record.case_no || record.case_number)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Case ID</span><span class="patient-detail-value">${value(record.case_id)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Date of Bite</span><span class="patient-detail-value">${value(record.date_of_bite ? formatDisplayDate(record.date_of_bite) : null)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Site of Bite</span><span class="patient-detail-value">${value(record.bite_location)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Biting Animal</span><span class="patient-detail-value">${value(record.animal_type)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Animal Status</span><span class="patient-detail-value">${value(record.animal_status)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Bite Category</span><span class="patient-detail-value">${value(record.bite_category)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Case Status</span><span class="patient-detail-value">${value(record.case_status)}</span></div>
+                </div>
+            </div>
+
+            <div class="patient-detail-section">
+                <div class="patient-detail-section-title">
+                    <i class="bi bi-shield-plus"></i> Vaccination / Follow-up
+                </div>
+                <div class="patient-detail-grid">
+                    <div class="patient-detail-item"><span class="patient-detail-label">Vaccine</span><span class="patient-detail-value">${value(record.vaccine_name)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Vaccination Category / Profile</span><span class="patient-detail-value">${value(record.treatment_profile)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Dose</span><span class="patient-detail-value">${value(record.dose_number)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Scheduled Date</span><span class="patient-detail-value">${value(record.scheduled_date ? formatDisplayDate(record.scheduled_date) : null)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Administered Date</span><span class="patient-detail-value">${value(record.date_administered ? formatDisplayDate(record.date_administered) : null, 'Not administered')}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Next Schedule</span><span class="patient-detail-value">${value(record.next_schedule ? formatDisplayDate(record.next_schedule) : null)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Vaccination Status</span><span class="patient-detail-value">${value(record.vaccination_status)}</span></div>
+                    <div class="patient-detail-item"><span class="patient-detail-label">Final Dose</span><span class="patient-detail-value">${record.is_final_dose == 1 ? 'Yes' : 'No'}</span></div>
+                </div>
+            </div>
+
+            ${(record.vaccination_remarks || record.case_remarks) ? `
+            <div class="patient-detail-section">
+                <div class="patient-detail-section-title">
+                    <i class="bi bi-chat-left-text-fill"></i> Remarks
+                </div>
+                <div class="patient-detail-grid">
+                    ${record.case_remarks ? `<div class="patient-detail-item"><span class="patient-detail-label">Case Remarks</span><span class="patient-detail-value">${value(record.case_remarks)}</span></div>` : ''}
+                    ${record.vaccination_remarks ? `<div class="patient-detail-item"><span class="patient-detail-label">Vaccination Remarks</span><span class="patient-detail-value">${value(record.vaccination_remarks)}</span></div>` : ''}
+                </div>
+            </div>` : ''}
+        `;
+    }
+
+    function bindViewPatientButtons() {
+        document.querySelectorAll('.view-patient-btn').forEach(btn => {
+            if (btn.dataset.viewBound === '1') return;
+            btn.dataset.viewBound = '1';
+
+            btn.addEventListener('click', function () {
+                const caseId = this.dataset.caseId;
+                const vaccinationId = this.dataset.vaccinationId;
+                const modalElement = document.getElementById('patientDetailsModal');
+                const modal = bootstrap.Modal.getOrCreateInstance(modalElement);
+                const body = document.getElementById('patientDetailsBody');
+
+                body.innerHTML = `
+                    <div class="patient-detail-loading">
+                        <div class="spinner-border text-primary mb-3" role="status"></div>
+                        <div>Loading patient information...</div>
+                    </div>
+                `;
+
+                modal.show();
+
+                fetch(window.location.pathname
+                    + '?ajax_action=get_patient_details'
+                    + '&case_id=' + encodeURIComponent(caseId)
+                    + '&vaccination_id=' + encodeURIComponent(vaccinationId), {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.success) {
+                        body.innerHTML = `
+                            <div class="patient-detail-loading text-danger">
+                                <i class="bi bi-exclamation-circle fs-3 d-block mb-2"></i>
+                                ${escapeHtml(data.error || 'Unable to retrieve patient information.')}
+                            </div>
+                        `;
+                        return;
+                    }
+
+                    renderPatientDetails(data.record);
+                })
+                .catch(error => {
+                    console.error('Patient details error:', error);
+                    body.innerHTML = `
+                        <div class="patient-detail-loading text-danger">
+                            <i class="bi bi-wifi-off fs-3 d-block mb-2"></i>
+                            Unable to retrieve patient information.
+                        </div>
+                    `;
+                });
+            });
+        });
+    }
+
+    // ----------------------------------------------------------------
     // EVENT LISTENERS
     // ----------------------------------------------------------------
     document.getElementById('applyFiltersBtn').addEventListener('click', applyFilters);
-    document.getElementById('clearFiltersBtn').addEventListener('click', function() {
-        document.getElementById('filterDate').value = '';
-        document.getElementById('filterSearch').value = '';
-        currentStatus = 'all';
-        const url = new URL(window.location.href);
-        url.searchParams.delete('date');
-        url.searchParams.delete('search');
-        url.searchParams.delete('status');
-        window.location.href = url.toString();
+    
+document.getElementById('clearFiltersBtn').addEventListener('click', function() {
+
+    // Reset Month and Year to current month/year
+    const today = new Date();
+
+    const defaultMonth = today.getMonth() + 1;
+    const defaultYear = today.getFullYear();
+
+    document.getElementById('filterMonth').value = defaultMonth;
+    document.getElementById('filterYear').value = defaultYear;
+
+    // Clear date and search
+    document.getElementById('filterDate').value = '';
+    document.getElementById('filterSearch').value = '';
+
+    // Reset status
+    currentStatus = 'all';
+
+    currentDate = '';
+    currentSearch = '';
+
+    // Update active tab
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
     });
 
+    const allBtn = document.querySelector('.tab-btn[data-filter="all"]');
+    if (allBtn) {
+        allBtn.classList.add('active');
+    }
+
+    // Update URL without reloading
+    const url = new URL(window.location.href);
+
+    url.searchParams.set('month', defaultMonth);
+    url.searchParams.set('year', defaultYear);
+    url.searchParams.delete('date');
+    url.searchParams.delete('search');
+    url.searchParams.delete('status');
+
+    window.history.replaceState({}, '', url.toString());
+
+    // Refresh only the patient table.
+    fetchRecords();
+
+    // Remove active filter badges
+    updateActiveFilters();
+});
+
     document.getElementById('prevMonthBtn').addEventListener('click', function() {
-        let month = parseInt(document.getElementById('filterMonth').value);
-        let year = parseInt(document.getElementById('filterYear').value);
-        if (month === 1) { month = 12; year--; }
-        else { month--; }
-        document.getElementById('filterMonth').value = month;
-        document.getElementById('filterYear').value = year;
-        applyFilters();
+        if (currentMonth === 1) {
+            currentMonth = 12;
+            currentYear--;
+        } else {
+            currentMonth--;
+        }
+
+        currentCalendarDate = '';
+        renderCalendar(currentMonth, currentYear);
+        refreshCalendar();
+
+        document.getElementById('calendarSelectedLabel').textContent = 'Select a date on the calendar';
+        document.getElementById('calendarSelectedCount').textContent = '0';
+        document.getElementById('calendarPatientList').innerHTML = `
+            <div class="calendar-patient-empty">
+                <i class="bi bi-calendar2-event"></i>
+                <p>Select a calendar date</p>
+                <small>Follow-up patients scheduled for the selected date will appear here.</small>
+            </div>
+        `;
     });
 
     document.getElementById('nextMonthBtn').addEventListener('click', function() {
-        let month = parseInt(document.getElementById('filterMonth').value);
-        let year = parseInt(document.getElementById('filterYear').value);
-        if (month === 12) { month = 1; year++; }
-        else { month++; }
-        document.getElementById('filterMonth').value = month;
-        document.getElementById('filterYear').value = year;
-        applyFilters();
+        if (currentMonth === 12) {
+            currentMonth = 1;
+            currentYear++;
+        } else {
+            currentMonth++;
+        }
+
+        currentCalendarDate = '';
+        renderCalendar(currentMonth, currentYear);
+        refreshCalendar();
+
+        document.getElementById('calendarSelectedLabel').textContent = 'Select a date on the calendar';
+        document.getElementById('calendarSelectedCount').textContent = '0';
+        document.getElementById('calendarPatientList').innerHTML = `
+            <div class="calendar-patient-empty">
+                <i class="bi bi-calendar2-event"></i>
+                <p>Select a calendar date</p>
+                <small>Follow-up patients scheduled for the selected date will appear here.</small>
+            </div>
+        `;
     });
 
     document.getElementById('todayBtn').addEventListener('click', function() {
-        document.getElementById('filterDate').value = TODAY_DATE;
-        applyFilters();
+        const today = new Date();
+        currentMonth = today.getMonth() + 1;
+        currentYear = today.getFullYear();
+        currentCalendarDate = TODAY_DATE;
+
+        renderCalendar(currentMonth, currentYear);
+        refreshCalendar();
+        loadCalendarFollowUps(TODAY_DATE);
+
     });
 
     document.getElementById('exportBtn').addEventListener('click', function() {
@@ -2956,6 +3932,9 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         if (!document.hidden) {
             refreshStats();
             refreshCalendar();
+            if (currentCalendarDate) {
+                loadCalendarFollowUps(currentCalendarDate);
+            }
         }
     }, 60000);
 
@@ -2963,6 +3942,9 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         if (!document.hidden) {
             refreshStats();
             refreshCalendar();
+            if (currentCalendarDate) {
+                loadCalendarFollowUps(currentCalendarDate);
+            }
         }
     });
 
@@ -2970,6 +3952,10 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
     // INITIAL RENDER
     // ----------------------------------------------------------------
     renderCalendar(currentMonth, currentYear);
+    if (currentCalendarDate) {
+        loadCalendarFollowUps(currentCalendarDate);
+    }
+    bindViewPatientButtons();
     bindMarkCompleteButtons();
     paginateCalendarRows(true);
 

@@ -2386,18 +2386,6 @@ $flash = workflowTakeFlash();
 
                         <div class="content-card-body">
 
-                            <div class="alert alert-warning small">
-
-                                <i class="bi bi-info-circle-fill me-1"></i>
-
-                                Schedule profiles must be approved by the clinic
-                                supervisor before production use.
-
-                                D0 is the actual first-dose date, not
-                                automatically the exposure date.
-
-                            </div>
-
                             <form method="post" class="row g-3">
 
                                 <input
