@@ -581,9 +581,9 @@ while ($row = $trendResult->fetch_assoc()) {
         /* Statistics */
         .stats-container {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 25px;
-            margin-bottom: 35px;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
         }
 
         .stat-card {
@@ -591,14 +591,15 @@ while ($row = $trendResult->fetch_assoc()) {
             display: block;
             overflow: hidden;
             background: #fff;
-            border-radius: 16px;
-            padding: 22px 24px;
-            border-left: 5px solid var(--primary);
-            box-shadow: 0 2px 8px rgba(0,0,0,.08);
+            border-radius: 14px;
+            padding: 16px 20px;
+            border-left: 4px solid var(--primary);
+            box-shadow: 0 2px 8px rgba(0,0,0,.07);
             transition: all .25s ease;
             text-align: left;
             color: inherit;
             text-decoration: none;
+            min-height: 138px;
         }
 
         .stat-card:hover {
@@ -633,10 +634,10 @@ while ($row = $trendResult->fetch_assoc()) {
 
         .stat-icon {
             position: absolute;
-            top: 18px;
-            right: 22px;
+            top: 15px;
+            right: 18px;
             color: rgba(43,58,140,.13);
-            font-size: 35px;
+            font-size: 28px;
         }
 
         .stat-card.follow-up .stat-icon { color: rgba(242,29,47,.16); }
@@ -647,36 +648,37 @@ while ($row = $trendResult->fetch_assoc()) {
         .stat-card.returned-records .stat-icon { color: rgba(220,53,69,.16); }
 
         .stat-card h6 {
-            margin: 0;
-            margin-bottom: 8px;
-            font-size: 14px;
-            font-weight: 600;
+            margin: 0 0 5px;
+            padding-right: 38px;
+            font-size: 12px;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: .5px;
+            letter-spacing: .35px;
             color: #6c757d;
         }
 
         .stat-card h1 {
             margin: 0;
-            font-size: 42px;
+            font-size: 34px;
             font-weight: 700;
             color: var(--primary);
             line-height: 1;
         }
 
         .stat-card .stat-trend {
-            font-size: 13px;
+            font-size: 12px;
             color: #6c757d;
-            margin-top: 8px;
+            margin-top: 5px;
+            line-height: 1.35;
         }
 
         .card-link-label {
             display: inline-flex;
             align-items: center;
             gap: 5px;
-            margin-top: 13px;
+            margin-top: 8px;
             color: var(--primary);
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 700;
         }
 
@@ -695,9 +697,19 @@ while ($row = $trendResult->fetch_assoc()) {
             color: var(--danger);
         }
 
-        @media (max-width:992px) {
+        @media (max-width: 1100px) {
+            .stats-container {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        @media (max-width: 700px) {
             .stats-container {
                 grid-template-columns: 1fr;
+            }
+
+            .stat-card {
+                min-height: 0;
             }
         }
         
@@ -1311,16 +1323,16 @@ while ($row = $trendResult->fetch_assoc()) {
             <button
                 class="profile profile-button dropdown-toggle"
                 type="button"
-                id="superAdminProfileMenu"
+                id="adminStaffProfileMenu"
                 data-bs-toggle="dropdown"
                 aria-expanded="false"
             >
                 <i class="bi bi-person-circle"></i>
-                <span><?php echo htmlspecialchars($_SESSION['username'] ?? 'SUPER ADMIN', ENT_QUOTES, 'UTF-8'); ?></span>
-                <span class="profile-role">| Super Admin</span>
+                <span><?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?></span>
+                <span class="profile-role">| Admin Staff</span>
             </button>
 
-            <ul class="dropdown-menu dropdown-menu-end profile-menu" aria-labelledby="superAdminProfileMenu">
+            <ul class="dropdown-menu dropdown-menu-end profile-menu" aria-labelledby="adminStaffProfileMenu">
                 <li>
                     <div class="dropdown-header">Account options</div>
                 </li>
@@ -1601,27 +1613,6 @@ while ($row = $trendResult->fetch_assoc()) {
             </div>
         </div>
     </div>
-
-    <div class="modal fade confirm-modal" id="logoutConfirmModal" tabindex="-1"
-     aria-labelledby="logoutConfirmModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header">
-                <div class="modal-icon"><i class="bi bi-box-arrow-right"></i></div>
-                <h2 class="modal-title" id="logoutConfirmModalLabel">Log out of Smart Bite Care?</h2>
-            </div>
-            <div class="modal-body">
-                <p class="mb-0">You will need to enter your account credentials again to access Super Admin controls.</p>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-light border" data-bs-dismiss="modal">Cancel</button>
-                <a href="logout.php" class="btn btn-danger d-flex align-items-center justify-content-center">
-                    <i class="bi bi-box-arrow-right me-1"></i>Yes, Log Out
-                </a>
-            </div>
-        </div>
-    </div>
-</div>
 
     <div class="modal fade confirm-modal" id="logoutConfirmModal" tabindex="-1"
      aria-labelledby="logoutConfirmModalLabel" aria-hidden="true">
