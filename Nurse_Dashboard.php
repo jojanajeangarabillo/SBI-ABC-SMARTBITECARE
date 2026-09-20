@@ -1,45 +1,82 @@
 <?php
 session_start();
+
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
 
-// Get logged-in Nurse
-$user_id = (int)$_SESSION['user_id'];
-// Get unread notification count
-$notification_count = getUnreadNotificationCount($conn, $user_id);
-
-// Check if user is logged in and is a nurse
-if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 3) {
-    header("Location: login.php");
+// ============================================================
+// NURSE ACCESS CONTROL
+// Validate session values BEFORE reading $_SESSION['user_id'].
+// This prevents undefined-session warnings after Railway restarts
+// or when a browser session has expired.
+// ============================================================
+if (
+    !isset($_SESSION['user_id'], $_SESSION['role_id'])
+    || (int)$_SESSION['role_id'] !== 3
+) {
+    header('Location: login.php');
     exit();
 }
 
 $user_id = (int)$_SESSION['user_id'];
 $branch_id = null;
-$branch_name = '';
-$username = '';
+$branch_name = 'No Branch Assigned';
+$username = 'Nurse';
 
-// Get user's branch info
-$userQuery = "SELECT u.branch_id, u.username, b.branch_name
+// ============================================================
+// LOAD ACTIVE NURSE ACCOUNT + BRANCH
+// ============================================================
+$userQuery = "SELECT
+                  u.user_id,
+                  u.branch_id,
+                  u.username,
+                  b.branch_name
               FROM users u
-              LEFT JOIN branches b ON u.branch_id = b.branch_id
-              WHERE u.user_id = ?";
-$stmt = $conn->prepare($userQuery);
-$stmt->bind_param("i", $user_id);
-$stmt->execute();
-$userResult = $stmt->get_result();
+              LEFT JOIN branches b
+                  ON b.branch_id = u.branch_id
+              WHERE u.user_id = ?
+                AND u.role_id = 3
+                AND u.status = 'Active'
+              LIMIT 1";
 
-if ($userResult->num_rows > 0) {
-    $userData = $userResult->fetch_assoc();
-    $branch_id = $userData['branch_id'];
-    $branch_name = $userData['branch_name'] ?? 'Unknown Branch';
-    $username = $userData['username'] ?? 'Nurse';
+$stmt = $conn->prepare($userQuery);
+
+if (!$stmt) {
+    http_response_code(500);
+    die('Database error: unable to prepare nurse account query.');
 }
+
+$stmt->bind_param('i', $user_id);
+
+if (!$stmt->execute()) {
+    $stmt->close();
+    http_response_code(500);
+    die('Database error: unable to retrieve nurse account.');
+}
+
+$userData = $stmt->get_result()->fetch_assoc();
 $stmt->close();
 
-if (!$branch_id) {
-    $branch_name = 'No Branch Assigned';
+// Session points to an account that no longer exists, is inactive,
+// or is no longer a Nurse. End the session cleanly.
+if (!$userData) {
+    session_unset();
+    session_destroy();
+    header('Location: login.php');
+    exit();
 }
+
+$branch_id = $userData['branch_id'] ?? null;
+$branch_name = $userData['branch_name'] ?? 'No Branch Assigned';
+$username = $userData['username'] ?? 'Nurse';
+
+if ($branch_id === null || $branch_id === '') {
+    http_response_code(403);
+    die('Your nurse account is not assigned to a branch.');
+}
+
+// Only query notifications after authentication and account validation.
+$notification_count = getUnreadNotificationCount($conn, $user_id);
 
 function dashboardDoseLabel($dose_number) {
     $doseMap = [
