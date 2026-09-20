@@ -359,15 +359,6 @@ function inventoryIsMlBased(array $item): bool {
     );
 }
 
-function inventoryIsSiteBased(array $item): bool {
-    $base = strtolower(trim(inventoryBaseUnitLabel($item)));
-
-    return in_array(
-        $base,
-        ['site', 'sites'],
-        true
-    );
-}
 
 function inventoryIsSiteArvProduct(array $item): bool {
     $name = strtoupper(trim((string)($item['item_name'] ?? '')));
