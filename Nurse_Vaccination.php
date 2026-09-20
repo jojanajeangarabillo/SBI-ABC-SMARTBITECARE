@@ -322,10 +322,22 @@ function validYmdDate($date) {
 
 
 /**
- * A product purchased/displayed as a vial must use mL as its inventory
- * base unit before partial-vial vaccination usage can be recorded safely.
- * The exact mL-per-vial conversion is product-specific and must come from
- * the clinic/product label; this code deliberately does not guess it.
+ * Unit helpers for vaccination inventory.
+ *
+ * Clinic-configured site-based ARV products:
+ *   - Speeda
+ *   - ABHAYRAB
+ *   - VAXIRAB
+ *   - CHIRORAB
+ *
+ * For these four products:
+ *   base unit            = site
+ *   display unit         = Vial
+ *   conversion_to_base   = 6
+ *   1 Vial               = 6 sites
+ *
+ * The nurse records the ACTUAL number of sites administered.
+ * The system never decides whether the patient receives 1 or 2 sites.
  */
 function inventoryIsVialProduct(array $item): bool {
     $labels = [
@@ -339,26 +351,78 @@ function inventoryIsVialProduct(array $item): bool {
 
 function inventoryIsMlBased(array $item): bool {
     $base = strtolower(trim(inventoryBaseUnitLabel($item)));
-    return in_array($base, ['ml', 'milliliter', 'milliliters', 'millilitre', 'millilitres'], true);
+
+    return in_array(
+        $base,
+        ['ml', 'milliliter', 'milliliters', 'millilitre', 'millilitres'],
+        true
+    );
 }
 
-function inventoryRequiresMlConfiguration(array $item): bool {
-    return inventoryIsVialProduct($item) && !inventoryIsMlBased($item);
+function inventoryIsSiteBased(array $item): bool {
+    $base = strtolower(trim(inventoryBaseUnitLabel($item)));
+
+    return in_array(
+        $base,
+        ['site', 'sites'],
+        true
+    );
+}
+
+function inventoryIsSiteArvProduct(array $item): bool {
+    $name = strtoupper(trim((string)($item['item_name'] ?? '')));
+
+    return in_array(
+        $name,
+        ['SPEEDA', 'ABHAYRAB', 'VAXIRAB', 'CHIRORAB'],
+        true
+    );
+}
+
+function inventoryHasValidSiteArvConfiguration(array $item): bool {
+    if (!inventoryIsSiteArvProduct($item)) {
+        return false;
+    }
+
+    $display = strtolower(
+        trim(inventoryDisplayUnitLabel($item))
+    );
+
+    $conversion = inventoryConversionToBase($item);
+
+    return inventoryIsSiteBased($item)
+        && in_array($display, ['vial', 'vials'], true)
+        && abs($conversion - 6.0) <= 0.00005;
 }
 
 /**
- * Stock display for the vaccination page.
+ * Other vial-based products that are intended to be partially consumed
+ * must still be configured with mL as their inventory base unit.
  *
- * The shared inventory helper's legacy breakdown was designed for
- * conversion_to_base values greater than 1. Speeda is now correctly
- * configured as:
+ * The four site-based ARV products above are intentionally exempt.
+ */
+function inventoryRequiresMlConfiguration(array $item): bool {
+    if (inventoryIsSiteArvProduct($item)) {
+        return false;
+    }
+
+    return inventoryIsVialProduct($item)
+        && !inventoryIsMlBased($item);
+}
+
+function inventoryRequiresSiteArvConfiguration(array $item): bool {
+    return inventoryIsSiteArvProduct($item)
+        && !inventoryHasValidSiteArvConfiguration($item);
+}
+
+/**
+ * Human-friendly stock display for the vaccination selector.
  *
- *   base unit    = mL
- *   display unit = Vial
- *   1 Vial       = 0.5 mL
+ * Site-based ARV example:
+ *   602 sites -> 100 Vial + 2 sites (602 sites total)
  *
- * so conversion_to_base can legitimately be below 1. This helper shows
- * both the physical display-unit equivalent and the stored base quantity.
+ * Other convertible products continue to show their display-unit
+ * equivalent plus the stored base-unit total.
  */
 function vaccinationStockDisplay(float $baseQuantity, array $item): string {
     $baseQuantity = max(0, $baseQuantity);
@@ -366,6 +430,42 @@ function vaccinationStockDisplay(float $baseQuantity, array $item): string {
     $baseUnit = inventoryBaseUnitLabel($item);
     $displayUnit = inventoryDisplayUnitLabel($item);
     $conversion = inventoryConversionToBase($item);
+
+    if (
+        inventoryHasValidSiteArvConfiguration($item)
+        && $conversion > 0
+    ) {
+        $wholeVials = (int)floor(
+            ($baseQuantity + 0.00005) / $conversion
+        );
+
+        $remainingSites = round(
+            $baseQuantity - ($wholeVials * $conversion),
+            4
+        );
+
+        if ($remainingSites < 0.00005) {
+            $remainingSites = 0.0;
+        }
+
+        $text =
+            inventoryFormatNumber($wholeVials)
+            . ' '
+            . $displayUnit;
+
+        if ($remainingSites > 0) {
+            $text .=
+                ' + '
+                . inventoryFormatNumber($remainingSites)
+                . ' '
+                . ($remainingSites == 1.0 ? 'site' : 'sites');
+        }
+
+        return $text
+            . ' ('
+            . inventoryFormatNumber($baseQuantity)
+            . ' sites total)';
+    }
 
     if (
         $conversion > 0
@@ -381,7 +481,6 @@ function vaccinationStockDisplay(float $baseQuantity, array $item): string {
             . ' '
             . $displayUnit;
 
-        // A fractional physical-unit equivalent can exist after partial use.
         if (
             abs($displayQuantity - round($displayQuantity))
             > 0.00005
@@ -552,7 +651,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_vaccines') {
         $vaccine['quantity_step'] = inventoryInputStep($vaccine);
         $vaccine['requires_ml_configuration'] =
             inventoryRequiresMlConfiguration($vaccine);
-        $vaccine['is_available'] = (float)$vaccine['quantity_available'] > 0;
+        $vaccine['is_site_arv'] =
+            inventoryIsSiteArvProduct($vaccine);
+        $vaccine['requires_site_configuration'] =
+            inventoryRequiresSiteArvConfiguration($vaccine);
+        $vaccine['is_available'] =
+            (float)$vaccine['quantity_available'] > 0;
     }
     unset($vaccine);
 
@@ -923,6 +1027,7 @@ if (isset($_POST['submit_vaccination'])) {
                 ? trim($item['vaccine_status'])
                 : 'Completed';
             $remarks = !empty($item['remarks']) ? trim($item['remarks']) : '';
+            $site_count = (int)($item['site_count'] ?? 0);
 
             if ($item_id <= 0) {
                 throw new Exception('Please select a valid vaccine.');
@@ -958,29 +1063,79 @@ if (isset($_POST['submit_vaccination'])) {
             $display_unit_label = inventoryDisplayUnitLabel($vaccine);
             $conversion_to_base = inventoryConversionToBase($vaccine);
 
-            // Do not allow vial-count subtraction for partial-vial products.
-            // Configure the exact product-specific mL per vial in inventory_items
-            // first, then the existing base-unit workflow will deduct mL.
-            if ($vaccination_status === 'Completed' && inventoryRequiresMlConfiguration($vaccine)) {
+            /*
+             * Non-site vial products that allow partial-vial use must be
+             * configured in mL before they can be deducted safely.
+             */
+            if (
+                $vaccination_status === 'Completed'
+                && inventoryRequiresMlConfiguration($vaccine)
+            ) {
                 throw new Exception(
                     $vaccine_name .
                     ' is still configured as a Vial-based inventory item. ' .
-                    'Set its base unit to mL and its verified mL-per-vial conversion before recording vaccination usage.'
+                    'Set its base unit to mL and configure its verified mL-per-vial conversion before recording usage.'
                 );
             }
 
-            if ($vaccination_status === 'Completed' && $quantity <= 0) {
-                throw new Exception("Actual {$base_unit_label} used must be greater than zero for {$vaccine_name}.");
+            $isSiteArv =
+                inventoryIsSiteArvProduct($vaccine);
+
+            /*
+             * Clinic-configured ARV site workflow.
+             *
+             * Speeda / ABHAYRAB / VAXIRAB / CHIRORAB are stored in SITE
+             * base units. Nurse confirms whether 1 or 2 sites were actually
+             * administered. That exact site count is the inventory deduction.
+             */
+            if (
+                $vaccination_status === 'Completed'
+                && $isSiteArv
+            ) {
+                if (
+                    !inventoryHasValidSiteArvConfiguration($vaccine)
+                ) {
+                    throw new Exception(
+                        $vaccine_name .
+                        ' must be configured as base unit site, display unit Vial, and 1 Vial = 6 sites before recording this administration.'
+                    );
+                }
+
+                if (!in_array($site_count, [1, 2], true)) {
+                    throw new Exception(
+                        'Select either Regular - 2 Sites or Booster - 1 Site for ' .
+                        $vaccine_name . '.'
+                    );
+                }
+
+                $quantity = (float)$site_count;
+
+                $siteNote =
+                    'ARV administration: '
+                    . $site_count
+                    . ' '
+                    . ($site_count === 1 ? 'site' : 'sites');
+
+                $remarks = $remarks !== ''
+                    ? $siteNote . ' | ' . $remarks
+                    : $siteNote;
             }
+
+            if ($vaccination_status === 'Completed' && $quantity <= 0) {
+                throw new Exception(
+                    "Actual {$base_unit_label} used must be greater than zero for {$vaccine_name}."
+                );
+            }
+
             if ($vaccination_status === 'Missed') {
                 $quantity = 0.0;
+                $site_count = 0;
             }
 
             /*
-             * Usage is recorded directly in the item's configured base unit.
-             * Speeda is now mL-based in inventory, so the nurse records the
-             * actual mL documented for the administration. The system does not
-             * infer a dose from the product name or treatment profile.
+             * Usage is stored in the item's configured base unit.
+             * The four configured ARV products use SITE as the base unit.
+             * Other products continue to use their own configured base unit.
              */
             $requiredDoses = getRequiredDoseNumbers(
                 $conn,
@@ -1244,7 +1399,18 @@ if (isset($_POST['submit_vaccination'])) {
                 );
                 $batch_summary = vaccineBatchSummary($used_batches, $vaccine);
 
-                $usageDescription = inventoryUsageDescription($quantity, $vaccine);
+                $usageDescription =
+                    $isSiteArv && $site_count > 0
+                    ? (
+                        $site_count
+                        . ' '
+                        . ($site_count === 1 ? 'site' : 'sites')
+                    )
+                    : inventoryUsageDescription(
+                        $quantity,
+                        $vaccine
+                    );
+
                 $transactionRemarks = "Vaccination | Patient ID: {$patient_id}" .
                                       " | Case ID: {$case_id}" .
                                       " | Vaccine: {$vaccine_name}" .
@@ -1364,7 +1530,17 @@ if (isset($_POST['submit_vaccination'])) {
                 'vaccine_name' => $vaccine_name,
                 'dose_number' => $dose_number,
                 'quantity' => $quantity,
-                'quantity_display' => inventoryUsageDescription($quantity, $vaccine),
+                'quantity_display' =>
+                    $isSiteArv && $site_count > 0
+                    ? (
+                        $site_count
+                        . ' '
+                        . ($site_count === 1 ? 'site' : 'sites')
+                    )
+                    : inventoryUsageDescription(
+                        $quantity,
+                        $vaccine
+                    ),
                 'status' => $vaccination_status
             ];
 
@@ -1770,6 +1946,53 @@ function getStatusBadge($status)
             color: var(--primary);
         }
         .content { padding: 35px 35px 40px; }
+
+        .arv-site-control {
+            display: none;
+            margin-top: 9px;
+            padding: 10px 12px;
+            border: 1px solid #dfe5f3;
+            border-radius: 10px;
+            background: #f8faff;
+        }
+
+        .arv-site-label {
+            display: block;
+            margin-bottom: 7px;
+            color: #44527c;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .arv-site-buttons {
+            display: flex;
+            gap: 7px;
+            flex-wrap: wrap;
+        }
+
+        .arv-site-btn {
+            min-width: 78px;
+            border: 1px solid #aab7df;
+            border-radius: 8px;
+            background: #fff;
+            color: var(--primary);
+            padding: 6px 11px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .arv-site-btn:hover,
+        .arv-site-btn.active {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: #fff;
+        }
+
+        .arv-site-summary {
+            margin-top: 7px;
+            color: #6c757d;
+            font-size: 11px;
+        }
 
 
 
@@ -2681,14 +2904,49 @@ function formatRecordedUsage(dose) {
     const quantity = Number(dose.quantity_used || 0);
     if (quantity <= 0) return 'No stock used';
 
+    const vaccineName = String(
+        dose.vaccine_name
+        || dose.inventory_item_name
+        || ''
+    ).trim();
+
+    const remarks = String(dose.remarks || '');
+
+    const arvNames = [
+        'speeda',
+        'abhayrab',
+        'vaxirab',
+        'chirorab'
+    ];
+
+    if (arvNames.includes(vaccineName.toLowerCase())) {
+        const match =
+            remarks.match(
+                /ARV administration:\s*(\d+)\s*sites?/i
+            );
+
+        if (match) {
+            const sites =
+                Number(match[1] || 0);
+
+            if (sites > 0) {
+                return `${sites} ${sites === 1 ? 'site' : 'sites'}`;
+            }
+        }
+    }
+
     const baseUnit = dose.quantity_unit_label || dose.unit_name || 'unit';
     const displayUnit = dose.display_unit_label || baseUnit;
     const conversion = Number(dose.conversion_to_base || 1);
     let text = `${formatInventoryNumber(quantity)} ${escapeHtml(baseUnit)}`;
 
-    if (conversion > 1 && String(baseUnit).toLowerCase() !== String(displayUnit).toLowerCase()) {
+    if (
+        conversion > 0
+        && String(baseUnit).toLowerCase() !== String(displayUnit).toLowerCase()
+    ) {
         text += ` (${formatInventoryNumber(quantity / conversion)} ${escapeHtml(displayUnit)} equivalent)`;
     }
+
     return text;
 }
 
@@ -2994,16 +3252,36 @@ function addVaccineEntry(autoSuggest = false) {
     var entryId = 'entry_' + doseCounter;
     
     var vaccineOptions = availableVaccines.map(v => {
-        const hasStock = Number(v.quantity_available || 0) > 0;
-        const needsMlConfig = Boolean(v.requires_ml_configuration);
-        const availabilityLabel = needsMlConfig
-            ? 'CONFIGURE mL PER VIAL FIRST'
-            : (hasStock
-                ? (v.quantity_available_display || (v.quantity_available + ' available'))
-                : 'OUT OF STOCK');
+        const hasStock =
+            Number(v.quantity_available || 0) > 0;
+
+        const needsMlConfig =
+            Boolean(v.requires_ml_configuration);
+
+        const isSiteArv =
+            Boolean(v.is_site_arv);
+
+        const needsSiteConfig =
+            Boolean(v.requires_site_configuration);
+
+        let availabilityLabel = 'OUT OF STOCK';
+
+        if (needsSiteConfig) {
+            availabilityLabel =
+                'CONFIGURE 6 SITES PER VIAL FIRST';
+        } else if (needsMlConfig) {
+            availabilityLabel =
+                'CONFIGURE mL PER VIAL FIRST';
+        } else if (hasStock) {
+            availabilityLabel =
+                v.quantity_available_display
+                || (v.quantity_available + ' available');
+        }
 
         return `<option value="${Number(v.item_id)}"
                  data-unit-id="${Number(v.unit_id)}"
+                 data-item-name="${escapeHtml(v.item_name || '')}"
+                 data-site-arv="${isSiteArv ? '1' : '0'}"
                  data-base-unit="${escapeHtml(v.base_unit_label || v.unit_name || 'unit')}"
                  data-display-unit="${escapeHtml(v.display_unit_label || v.unit_name || 'unit')}"
                  data-conversion="${Number(v.conversion_to_base || 1)}"
@@ -3011,7 +3289,8 @@ function addVaccineEntry(autoSuggest = false) {
                  data-stock-display="${escapeHtml(v.quantity_available_display || '')}"
                  data-step="${escapeHtml(v.quantity_step || '0.0001')}"
                  data-requires-ml-config="${needsMlConfig ? '1' : '0'}"
-                 ${hasStock && !needsMlConfig ? '' : 'disabled'}>
+                 data-requires-site-config="${needsSiteConfig ? '1' : '0'}"
+                 ${hasStock && !needsMlConfig && !needsSiteConfig ? '' : 'disabled'}>
              ${escapeHtml(v.item_name)} - ${escapeHtml(availabilityLabel)}
          </option>`;
     }).join('');
@@ -3039,7 +3318,24 @@ function addVaccineEntry(autoSuggest = false) {
             <div class="col-lg-5"><label class="form-label fw-semibold">Vaccine / Product <span class="text-danger">*</span></label><select class="form-select vaccine-select" onchange="updateVaccineUnit(this)" required><option value="">-- Select Vaccine --</option>${vaccineOptions}</select></div>
             <div class="col-lg-4"><label class="form-label fw-semibold">Available stock</label><input type="text" class="form-control stock-display" readonly value="Select vaccine"></div>
             <div class="col-lg-3"><label class="form-label fw-semibold">Dose stage <span class="text-danger">*</span></label><input type="number" class="form-control dose-number" min="1" max="6" value="${suggestedDose}" required><small class="text-muted dose-label-text">Dose ${getDoseLabel(suggestedDose)}</small></div>
-            <div class="col-lg-4"><label class="form-label fw-semibold usage-label">Actual amount used <span class="text-danger">*</span></label><div class="input-group"><input type="number" class="form-control quantity-input" min="0.0001" step="0.0001" value="" placeholder="Enter actual usage" required><span class="input-group-text quantity-unit">unit</span></div><small class="text-muted conversion-help d-block mt-1"></small></div>
+            <div class="col-lg-4">
+                <label class="form-label fw-semibold usage-label">Actual amount used <span class="text-danger">*</span></label>
+                <div class="input-group">
+                    <input type="number" class="form-control quantity-input" min="0.0001" step="0.0001" value="" placeholder="Enter actual usage" required>
+                    <span class="input-group-text quantity-unit">unit</span>
+                </div>
+                <small class="text-muted conversion-help d-block mt-1"></small>
+
+                <div class="arv-site-control">
+                    <span class="arv-site-label">ARV administration sites</span>
+                    <div class="arv-site-buttons">
+                        <button type="button" class="arv-site-btn" data-sites="2">Regular - 2 Sites</button>
+                        <button type="button" class="arv-site-btn" data-sites="1">Booster - 1 Site</button>
+                    </div>
+                    <div class="arv-site-summary">Select the actual number of sites administered to the patient.</div>
+                    <input type="hidden" class="arv-site-count" value="0">
+                </div>
+            </div>
             <div class="col-md-6"><label class="form-label fw-semibold">Date Administered</label><input type="date" class="form-control date-administered" value="${new Date().toISOString().split('T')[0]}"></div>
             <div class="col-md-2"><label class="form-label fw-semibold">Status</label><select class="form-select status-select" onchange="updateUsageForStatus(this)"><option value="Completed" selected>Completed</option><option value="Missed">Missed</option></select></div>
             <div class="col-md-12"><label class="form-label fw-semibold">Remarks</label><input type="text" class="form-control remarks-input" maxlength="500" placeholder="Optional clinical/inventory note"></div>
@@ -3065,29 +3361,108 @@ function removeVaccineEntry(entryId) {
 function updateVaccineUnit(select) {
     var entry = select.closest('.vaccine-entry');
     if (!entry) return;
-    var opt = select.options[select.selectedIndex];
-    var baseUnit = opt.getAttribute('data-base-unit') || 'unit';
-    var displayUnit = opt.getAttribute('data-display-unit') || baseUnit;
-    var conversion = Number(opt.getAttribute('data-conversion') || 1);
-    var stock = Number(opt.getAttribute('data-stock') || 0);
-    var quantity = entry.querySelector('.quantity-input');
 
-    entry.querySelector('.stock-display').value = opt.getAttribute('data-stock-display') || `${formatInventoryNumber(stock)} ${baseUnit}`;
-    entry.querySelector('.quantity-unit').textContent = baseUnit;
-    entry.querySelector('.usage-label').innerHTML = `Actual ${escapeHtml(baseUnit)} used <span class="text-danger">*</span>`;
-    quantity.step = opt.getAttribute('data-step') || '0.0001';
+    var opt = select.options[select.selectedIndex];
+    var baseUnit =
+        opt.getAttribute('data-base-unit') || 'unit';
+    var displayUnit =
+        opt.getAttribute('data-display-unit') || baseUnit;
+    var conversion =
+        Number(opt.getAttribute('data-conversion') || 1);
+    var stock =
+        Number(opt.getAttribute('data-stock') || 0);
+
+    var quantity =
+        entry.querySelector('.quantity-input');
+
+    entry.querySelector('.stock-display').value =
+        opt.getAttribute('data-stock-display')
+        || `${formatInventoryNumber(stock)} ${baseUnit}`;
+
+    entry.querySelector('.quantity-unit').textContent =
+        baseUnit;
+
+    entry.querySelector('.usage-label').innerHTML =
+        `Actual ${escapeHtml(baseUnit)} used <span class="text-danger">*</span>`;
+
+    quantity.step =
+        opt.getAttribute('data-step') || '0.0001';
     quantity.min = quantity.step;
     quantity.max = String(stock);
 
-    var needsMlConfig =
+    const needsMlConfig =
         opt.getAttribute('data-requires-ml-config') === '1';
 
-    if (needsMlConfig) {
-        entry.querySelector('.conversion-help').textContent =
-            'This vial product is not yet configured for mL-based inventory. Configure its verified mL-per-vial conversion before recording usage.';
+    const needsSiteConfig =
+        opt.getAttribute('data-requires-site-config') === '1';
+
+    const isSiteArv =
+        opt.getAttribute('data-site-arv') === '1';
+
+    const siteControl =
+        entry.querySelector('.arv-site-control');
+
+    const siteCountInput =
+        entry.querySelector('.arv-site-count');
+
+    if (siteControl) {
+        siteControl.style.display =
+            isSiteArv ? 'block' : 'none';
+    }
+
+    if (siteCountInput) {
+        siteCountInput.value = '0';
+    }
+
+    entry.querySelectorAll('.arv-site-btn').forEach(btn => {
+        btn.classList.remove('active');
+        btn.disabled = false;
+    });
+
+    if (needsSiteConfig) {
+        quantity.value = '';
         quantity.disabled = true;
         quantity.required = false;
+        quantity.readOnly = true;
+
+        entry.querySelector('.conversion-help').textContent =
+            'This ARV product must be configured as base unit site, display unit Vial, and 1 Vial = 6 sites.';
+    } else if (needsMlConfig) {
+        quantity.value = '';
+        quantity.disabled = true;
+        quantity.required = false;
+        quantity.readOnly = false;
+
+        entry.querySelector('.conversion-help').textContent =
+            'This vial product must be configured with mL as its base unit and its verified mL-per-vial conversion before recording usage.';
+    } else if (isSiteArv) {
+        const siteConfigValid =
+            baseUnit.toLowerCase() === 'site'
+            && displayUnit.toLowerCase() === 'vial'
+            && Math.abs(conversion - 6) < 0.00005;
+
+        quantity.value = '';
+        quantity.readOnly = true;
+        quantity.required = true;
+        quantity.disabled = !siteConfigValid;
+        quantity.step = '1';
+        quantity.min = '1';
+
+        entry.querySelector('.usage-label').innerHTML =
+            'Sites administered <span class="text-danger">*</span>';
+
+        entry.querySelector('.quantity-unit').textContent =
+            'site';
+
+        if (siteConfigValid) {
+            entry.querySelector('.conversion-help').textContent =
+                'Clinic inventory rule: 1 Vial = 6 sites. Select Regular - 2 Sites or Booster - 1 Site based on the actual administration.';
+        } else {
+            entry.querySelector('.conversion-help').textContent =
+                'This ARV product must be configured as base unit site, display unit Vial, and 1 Vial = 6 sites.';
+        }
     } else {
+        quantity.readOnly = false;
         quantity.disabled = false;
         quantity.required = true;
 
@@ -3100,24 +3475,156 @@ function updateVaccineUnit(select) {
                 ? `Inventory reference: 1 ${displayUnit} = ${formatInventoryNumber(conversion)} ${baseUnit}. Enter the actual ${baseUnit} documented as administered.`
                 : `Enter the actual ${baseUnit} documented as administered.`;
     }
-    entry.querySelector('.vaccine-item-id').value = opt.value;
-    entry.querySelector('.vaccine-unit-id').value = opt.getAttribute('data-unit-id') || '';
+
+    entry.querySelector('.vaccine-item-id').value =
+        opt.value;
+
+    entry.querySelector('.vaccine-unit-id').value =
+        opt.getAttribute('data-unit-id') || '';
 }
 
+document.addEventListener('click', function(event) {
+    const button =
+        event.target.closest('.arv-site-btn');
+
+    if (!button) return;
+
+    const entry =
+        button.closest('.vaccine-entry');
+
+    if (!entry) return;
+
+    const vaccineSelect =
+        entry.querySelector('.vaccine-select');
+
+    const selectedOption =
+        vaccineSelect
+            ? vaccineSelect.options[vaccineSelect.selectedIndex]
+            : null;
+
+    if (
+        !selectedOption
+        || selectedOption.getAttribute('data-site-arv') !== '1'
+    ) {
+        return;
+    }
+
+    const sites =
+        Number(button.getAttribute('data-sites') || 0);
+
+    if (![1, 2].includes(sites)) {
+        return;
+    }
+
+    const quantity =
+        entry.querySelector('.quantity-input');
+
+    const siteCountInput =
+        entry.querySelector('.arv-site-count');
+
+    const summary =
+        entry.querySelector('.arv-site-summary');
+
+    const stock =
+        Number(
+            selectedOption.getAttribute('data-stock')
+            || 0
+        );
+
+    if (sites > stock + 0.00005) {
+        showAlert(
+            `Insufficient stock for ${sites} ${sites === 1 ? 'site' : 'sites'}.`,
+            'warning'
+        );
+        return;
+    }
+
+    entry.querySelectorAll('.arv-site-btn').forEach(btn => {
+        btn.classList.toggle(
+            'active',
+            btn === button
+        );
+    });
+
+    if (siteCountInput) {
+        siteCountInput.value = String(sites);
+    }
+
+    if (quantity) {
+        quantity.value = String(sites);
+    }
+
+    if (summary) {
+        summary.textContent =
+            `${sites} ${sites === 1 ? 'site' : 'sites'} selected. Inventory deduction: ${sites} ${sites === 1 ? 'site' : 'sites'}.`;
+    }
+});
+
 function updateUsageForStatus(select) {
-    var entry = select.closest('.vaccine-entry');
-    var quantity = entry?.querySelector('.quantity-input');
+    var entry =
+        select.closest('.vaccine-entry');
+
+    var quantity =
+        entry?.querySelector('.quantity-input');
+
     if (!quantity) return;
 
+    const vaccineSelect =
+        entry?.querySelector('.vaccine-select');
+
+    const selectedOption =
+        vaccineSelect
+            ? vaccineSelect.options[vaccineSelect.selectedIndex]
+            : null;
+
+    const isSiteArv =
+        selectedOption
+        && selectedOption.getAttribute('data-site-arv') === '1';
+
     if (select.value === 'Missed') {
-        quantity.dataset.previousValue = quantity.value;
+        quantity.dataset.previousValue =
+            quantity.value;
+
         quantity.value = '0';
         quantity.disabled = true;
         quantity.required = false;
+
+        entry?.querySelectorAll('.arv-site-btn').forEach(btn => {
+            btn.disabled = true;
+        });
     } else {
-        quantity.disabled = false;
         quantity.required = true;
-        quantity.value = quantity.dataset.previousValue || '';
+
+        if (isSiteArv) {
+            const conversion =
+                Number(
+                    selectedOption.getAttribute('data-conversion')
+                    || 0
+                );
+
+            const baseUnit =
+                (
+                    selectedOption.getAttribute('data-base-unit')
+                    || ''
+                ).toLowerCase();
+
+            quantity.disabled =
+                !(
+                    baseUnit === 'site'
+                    && Math.abs(conversion - 6) < 0.00005
+                );
+
+            quantity.readOnly = true;
+        } else {
+            quantity.disabled = false;
+            quantity.readOnly = false;
+            quantity.value =
+                quantity.dataset.previousValue || '';
+        }
+
+        entry?.querySelectorAll('.arv-site-btn').forEach(btn => {
+            btn.disabled = false;
+        });
     }
 }
 
@@ -3150,17 +3657,73 @@ function submitVaccination() {
         var itemId = entry.querySelector('.vaccine-item-id');
         var unitId = entry.querySelector('.vaccine-unit-id');
         var remarks = entry.querySelector('.remarks-input');
+        var siteCountInput = entry.querySelector('.arv-site-count');
         var isMissed = statusSel && statusSel.value === 'Missed';
-        
-        if (!vSelect || !vSelect.value) { showAlert('Please select a vaccine for all entries.', 'warning'); hasError = true; return; }
-        if (!dNum || !dNum.value || parseInt(dNum.value) < 1 || parseInt(dNum.value) > 6) { showAlert('Please enter a valid dose number (1-6).', 'warning'); hasError = true; return; }
-        if (!isMissed && (!qty || !qty.value || Number(qty.value) <= 0)) { showAlert('Please enter the actual amount used.', 'warning'); hasError = true; return; }
-        
+
+        var selectedOption = vSelect
+            ? vSelect.options[vSelect.selectedIndex]
+            : null;
+
+        var isSiteArv =
+            selectedOption
+            && selectedOption.getAttribute('data-site-arv') === '1';
+
+        var siteCount =
+            siteCountInput
+                ? Number(siteCountInput.value || 0)
+                : 0;
+
+        if (!vSelect || !vSelect.value) {
+            showAlert('Please select a vaccine for all entries.', 'warning');
+            hasError = true;
+            return;
+        }
+
+        if (
+            !dNum
+            || !dNum.value
+            || parseInt(dNum.value) < 1
+            || parseInt(dNum.value) > 6
+        ) {
+            showAlert(
+                'Please enter a valid dose number (1-6).',
+                'warning'
+            );
+            hasError = true;
+            return;
+        }
+
+        if (
+            !isMissed
+            && isSiteArv
+            && ![1, 2].includes(siteCount)
+        ) {
+            showAlert(
+                'For the selected ARV vaccine, choose Regular - 2 Sites or Booster - 1 Site.',
+                'warning'
+            );
+            hasError = true;
+            return;
+        }
+
+        if (
+            !isMissed
+            && (!qty || !qty.value || Number(qty.value) <= 0)
+        ) {
+            showAlert(
+                'Please enter or select the actual amount used.',
+                'warning'
+            );
+            hasError = true;
+            return;
+        }
+
         vaccineItems.push({
             item_id: itemId.value,
             unit_id: unitId.value,
             dose_number: dNum.value,
             quantity_base: isMissed ? 0 : Number(qty.value),
+            site_count: isMissed ? 0 : siteCount,
             date_administered: dAdmin.value || new Date().toISOString().split('T')[0],
             vaccine_status: statusSel.value || 'Completed',
             remarks: remarks ? remarks.value.trim() : ''
