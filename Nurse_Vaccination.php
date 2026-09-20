@@ -10,9 +10,23 @@ require_once 'sources/workflow_helpers.php';
 require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/notification_helper.php';
 
-// Get logged-in Nurse
+// ============================================================
+// NURSE ACCESS CONTROL
+// Validate the session before reading user_id so Railway/container
+// restarts or expired sessions redirect cleanly instead of showing
+// "Undefined array key user_id".
+// ============================================================
+if (
+    !isset($_SESSION['user_id'], $_SESSION['role_id'])
+    || (int)$_SESSION['role_id'] !== 3
+) {
+    header('Location: login.php');
+    exit();
+}
+
 $user_id = (int)$_SESSION['user_id'];
-// Get unread notification count
+
+// Get unread notification count only after authentication succeeds.
 $notification_count = getUnreadNotificationCount($conn, $user_id);
 
 // CSRF protection for vaccination submissions
@@ -23,40 +37,57 @@ if (empty($_SESSION['csrf_token'])) {
 // Global Exception Handler: Catch all errors and output them as JSON
 set_exception_handler(function($e) {
     header('Content-Type: application/json');
-    echo json_encode(['success' => false, 'message' => 'System Error: ' . $e->getMessage()]);
+    echo json_encode([
+        'success' => false,
+        'message' => 'System Error: ' . $e->getMessage()
+    ]);
     exit;
 });
 
-// Check if user is logged in and is a nurse
-if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || $_SESSION['role_id'] != 3) {
-    header("Location: login.php");
+$branch_id = null;
+$branch_name = 'No Branch Assigned';
+$username = 'Nurse';
+
+// Get authenticated nurse + branch info.
+$userQuery = "SELECT
+                  u.branch_id,
+                  u.username,
+                  b.branch_name
+              FROM users u
+              LEFT JOIN branches b
+                  ON u.branch_id = b.branch_id
+              WHERE u.user_id = ?
+                AND u.status = 'Active'
+              LIMIT 1";
+
+$stmt = $conn->prepare($userQuery);
+
+if (!$stmt) {
+    throw new RuntimeException(
+        'Unable to prepare the nurse account query.'
+    );
+}
+
+$stmt->bind_param('i', $user_id);
+$stmt->execute();
+
+$userData = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+
+if (!$userData) {
+    session_unset();
+    session_destroy();
+    header('Location: login.php');
     exit();
 }
 
-$user_id = $_SESSION['user_id'];
-$branch_id = null;
-$branch_name = '';
-$username = '';
+$branch_id = $userData['branch_id'] ?? null;
+$branch_name = $userData['branch_name'] ?? 'No Branch Assigned';
+$username = $userData['username'] ?? 'Nurse';
 
-// Get user's branch info
-$userQuery = "SELECT u.branch_id, u.username, b.branch_name 
-              FROM users u 
-              LEFT JOIN branches b ON u.branch_id = b.branch_id 
-              WHERE u.user_id = ?";
-$stmt = $conn->prepare($userQuery);
-$stmt->bind_param("i", $user_id);
-$stmt->execute();
-$userResult = $stmt->get_result();
-
-if ($userResult->num_rows > 0) {
-    $userData = $userResult->fetch_assoc();
-    $branch_id = $userData['branch_id'];
-    $branch_name = $userData['branch_name'] ?? 'Unknown Branch';
-    $username = $userData['username'] ?? 'Nurse';
-}
-
-if (!$branch_id) {
-    $branch_name = 'No Branch Assigned';
+if ($branch_id === null || $branch_id === '') {
+    http_response_code(403);
+    die('Your nurse account is not assigned to a branch.');
 }
 
 // Function to create notification
@@ -315,6 +346,62 @@ function inventoryRequiresMlConfiguration(array $item): bool {
     return inventoryIsVialProduct($item) && !inventoryIsMlBased($item);
 }
 
+/**
+ * Stock display for the vaccination page.
+ *
+ * The shared inventory helper's legacy breakdown was designed for
+ * conversion_to_base values greater than 1. Speeda is now correctly
+ * configured as:
+ *
+ *   base unit    = mL
+ *   display unit = Vial
+ *   1 Vial       = 0.5 mL
+ *
+ * so conversion_to_base can legitimately be below 1. This helper shows
+ * both the physical display-unit equivalent and the stored base quantity.
+ */
+function vaccinationStockDisplay(float $baseQuantity, array $item): string {
+    $baseQuantity = max(0, $baseQuantity);
+
+    $baseUnit = inventoryBaseUnitLabel($item);
+    $displayUnit = inventoryDisplayUnitLabel($item);
+    $conversion = inventoryConversionToBase($item);
+
+    if (
+        $conversion > 0
+        && strcasecmp($baseUnit, $displayUnit) !== 0
+    ) {
+        $displayQuantity = inventoryBaseToDisplay(
+            $baseQuantity,
+            $item
+        );
+
+        $displayText =
+            inventoryFormatNumber($displayQuantity)
+            . ' '
+            . $displayUnit;
+
+        // A fractional physical-unit equivalent can exist after partial use.
+        if (
+            abs($displayQuantity - round($displayQuantity))
+            > 0.00005
+        ) {
+            $displayText .= ' equivalent';
+        }
+
+        return $displayText
+            . ' ('
+            . inventoryFormatNumber($baseQuantity)
+            . ' '
+            . $baseUnit
+            . ' total)';
+    }
+
+    return inventoryFormatNumber($baseQuantity)
+        . ' '
+        . $baseUnit;
+}
+
 // Get a Medical Supplies inventory item. Unit is loaded from the database
 // rather than trusted from browser-submitted data.
 function getMedicalSupplyItem($conn, $item_id) {
@@ -458,13 +545,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_vaccines') {
     $stmt->close();
 
     foreach ($vaccines as &$vaccine) {
-        $vaccine['quantity_available_display'] = inventoryStockBreakdown(
+        $vaccine['quantity_available_display'] = vaccinationStockDisplay(
             (float)$vaccine['quantity_available'],
             $vaccine
         );
         $vaccine['quantity_step'] = inventoryInputStep($vaccine);
-        $vaccine['is_site_based'] = inventoryIsSiteBased($vaccine);
-        $vaccine['requires_ml_configuration'] = inventoryRequiresMlConfiguration($vaccine);
+        $vaccine['requires_ml_configuration'] =
+            inventoryRequiresMlConfiguration($vaccine);
         $vaccine['is_available'] = (float)$vaccine['quantity_available'] > 0;
     }
     unset($vaccine);
@@ -888,13 +975,22 @@ if (isset($_POST['submit_vaccination'])) {
             if ($vaccination_status === 'Missed') {
                 $quantity = 0.0;
             }
-            if ($vaccination_status === 'Completed'
-                && inventoryIsSiteBased($vaccine)
-                && abs($quantity - round($quantity)) > 0.00001) {
-                throw new Exception("{$vaccine_name} usage must be entered as a whole number of sites.");
-            }
-            $requiredDoses = getRequiredDoseNumbers($conn, $case_id);
-            $is_final_dose = ($dose_number === (int)end($requiredDoses)) ? 1 : 0;
+
+            /*
+             * Usage is recorded directly in the item's configured base unit.
+             * Speeda is now mL-based in inventory, so the nurse records the
+             * actual mL documented for the administration. The system does not
+             * infer a dose from the product name or treatment profile.
+             */
+            $requiredDoses = getRequiredDoseNumbers(
+                $conn,
+                $case_id
+            );
+
+            $is_final_dose = (
+                !empty($requiredDoses)
+                && $dose_number === (int)end($requiredDoses)
+            ) ? 1 : 0;
 
             // Different products may be administered under the same dose stage
             // (for example Rabies Vaccine + ERIG + ATS on D0). What we prevent is
@@ -2914,7 +3010,6 @@ function addVaccineEntry(autoSuggest = false) {
                  data-stock="${Number(v.quantity_available || 0)}"
                  data-stock-display="${escapeHtml(v.quantity_available_display || '')}"
                  data-step="${escapeHtml(v.quantity_step || '0.0001')}"
-                 data-site-based="${v.is_site_based ? '1' : '0'}"
                  data-requires-ml-config="${needsMlConfig ? '1' : '0'}"
                  ${hasStock && !needsMlConfig ? '' : 'disabled'}>
              ${escapeHtml(v.item_name)} - ${escapeHtml(availabilityLabel)}
@@ -2944,7 +3039,7 @@ function addVaccineEntry(autoSuggest = false) {
             <div class="col-lg-5"><label class="form-label fw-semibold">Vaccine / Product <span class="text-danger">*</span></label><select class="form-select vaccine-select" onchange="updateVaccineUnit(this)" required><option value="">-- Select Vaccine --</option>${vaccineOptions}</select></div>
             <div class="col-lg-4"><label class="form-label fw-semibold">Available stock</label><input type="text" class="form-control stock-display" readonly value="Select vaccine"></div>
             <div class="col-lg-3"><label class="form-label fw-semibold">Dose stage <span class="text-danger">*</span></label><input type="number" class="form-control dose-number" min="1" max="6" value="${suggestedDose}" required><small class="text-muted dose-label-text">Dose ${getDoseLabel(suggestedDose)}</small></div>
-            <div class="col-lg-4"><label class="form-label fw-semibold usage-label">Actual amount used <span class="text-danger">*</span></label><div class="input-group"><input type="number" class="form-control quantity-input" min="0.0001" step="0.0001" value="" placeholder="Enter actual usage" required><span class="input-group-text quantity-unit">unit</span></div><div class="site-presets mt-2" style="display:none"><button type="button" class="btn btn-outline-primary btn-sm me-1" onclick="setSiteQuantity(this,2)">Regular: 2 sites</button><button type="button" class="btn btn-outline-primary btn-sm" onclick="setSiteQuantity(this,1)">Booster: 1 site</button></div><small class="text-muted conversion-help d-block mt-1"></small></div>
+            <div class="col-lg-4"><label class="form-label fw-semibold usage-label">Actual amount used <span class="text-danger">*</span></label><div class="input-group"><input type="number" class="form-control quantity-input" min="0.0001" step="0.0001" value="" placeholder="Enter actual usage" required><span class="input-group-text quantity-unit">unit</span></div><small class="text-muted conversion-help d-block mt-1"></small></div>
             <div class="col-md-6"><label class="form-label fw-semibold">Date Administered</label><input type="date" class="form-control date-administered" value="${new Date().toISOString().split('T')[0]}"></div>
             <div class="col-md-2"><label class="form-label fw-semibold">Status</label><select class="form-select status-select" onchange="updateUsageForStatus(this)"><option value="Completed" selected>Completed</option><option value="Missed">Missed</option></select></div>
             <div class="col-md-12"><label class="form-label fw-semibold">Remarks</label><input type="text" class="form-control remarks-input" maxlength="500" placeholder="Optional clinical/inventory note"></div>
@@ -2954,8 +3049,8 @@ function addVaccineEntry(autoSuggest = false) {
     
     container.appendChild(entry);
     
-    // Do not assume one vial/unit per patient. The nurse must explicitly
-    // select the product and confirm the actual sites or mL administered.
+    // Do not assume one vial/unit per patient. The nurse explicitly
+    // selects the product and records the actual configured base-unit amount.
 }
 
 function removeVaccineEntry(entryId) {
@@ -2984,30 +3079,29 @@ function updateVaccineUnit(select) {
     quantity.min = quantity.step;
     quantity.max = String(stock);
 
-    var isSiteBased = opt.getAttribute('data-site-based') === '1';
-    var needsMlConfig = opt.getAttribute('data-requires-ml-config') === '1';
-    entry.querySelector('.site-presets').style.display = isSiteBased ? 'block' : 'none';
+    var needsMlConfig =
+        opt.getAttribute('data-requires-ml-config') === '1';
 
     if (needsMlConfig) {
         entry.querySelector('.conversion-help').textContent =
-            'This vial product is not yet configured for mL-based inventory. Configure its verified mL per vial before recording vaccination usage.';
+            'This vial product is not yet configured for mL-based inventory. Configure its verified mL-per-vial conversion before recording usage.';
         quantity.disabled = true;
         quantity.required = false;
     } else {
         quantity.disabled = false;
         quantity.required = true;
-        entry.querySelector('.conversion-help').textContent = conversion > 1
-            ? `Inventory rule: 1 ${displayUnit} = ${formatInventoryNumber(conversion)} ${baseUnit}. Enter the actual ${baseUnit} administered.`
-            : `Enter the actual ${baseUnit} administered.`;
+
+        const hasDisplayConversion =
+            displayUnit.toLowerCase() !== baseUnit.toLowerCase()
+            && conversion > 0;
+
+        entry.querySelector('.conversion-help').textContent =
+            hasDisplayConversion
+                ? `Inventory reference: 1 ${displayUnit} = ${formatInventoryNumber(conversion)} ${baseUnit}. Enter the actual ${baseUnit} documented as administered.`
+                : `Enter the actual ${baseUnit} documented as administered.`;
     }
     entry.querySelector('.vaccine-item-id').value = opt.value;
     entry.querySelector('.vaccine-unit-id').value = opt.getAttribute('data-unit-id') || '';
-}
-
-function setSiteQuantity(button, sites) {
-    var entry = button.closest('.vaccine-entry');
-    var quantity = entry?.querySelector('.quantity-input');
-    if (quantity && !quantity.disabled) quantity.value = String(sites);
 }
 
 function updateUsageForStatus(select) {

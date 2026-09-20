@@ -729,6 +729,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             ]);
             break;
 
+        // Vaccination completion is intentionally handled only in the Nurse Vaccination workflow.
         case 'get_patient_details':
             $case_id = isset($_GET['case_id']) ? (int)$_GET['case_id'] : 0;
             $vaccination_id = isset($_GET['vaccination_id']) ? (int)$_GET['vaccination_id'] : 0;
@@ -805,101 +806,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             echo json_encode(['success' => true, 'record' => $record]);
             break;
 
-        case 'mark_completed':
-            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-                echo json_encode(['success' => false, 'error' => 'Invalid request method']);
-                break;
-            }
-            
-            $vaccination_id = isset($_POST['vaccination_id']) ? (int)$_POST['vaccination_id'] : 0;
-            $case_id = isset($_POST['case_id']) ? (int)$_POST['case_id'] : 0;
-            $administered_date = isset($_POST['administered_date']) ? $_POST['administered_date'] : date('Y-m-d');
-            $remarks = isset($_POST['remarks']) ? $_POST['remarks'] : '';
-            
-            if (!$vaccination_id || !$case_id) {
-                echo json_encode(['success' => false, 'error' => 'Missing required parameters']);
-                break;
-            }
-            
-            $conn->begin_transaction();
-            
-            try {
-                $getVaccineQuery = "SELECT item_id, branch_id, dose_number, patient_id FROM vaccination_records WHERE vaccination_id = ?";
-                $stmt = $conn->prepare($getVaccineQuery);
-                $stmt->bind_param("i", $vaccination_id);
-                $stmt->execute();
-                $vaccineResult = $stmt->get_result();
-                $vaccineData = $vaccineResult->fetch_assoc();
-                
-                if (!$vaccineData) {
-                    throw new Exception('Vaccination record not found');
-                }
-                
-                $updateVaccination = "
-                    UPDATE vaccination_records 
-                    SET vaccination_status = 'Completed',
-                        date_administered = ?
-                    WHERE vaccination_id = ?
-                    AND case_id = ?
-                ";
-                $stmt = $conn->prepare($updateVaccination);
-                $stmt->bind_param("sii", $administered_date, $vaccination_id, $case_id);
-                $stmt->execute();
-                
-                $deductStock = "
-                    UPDATE inventory_stocks 
-                    SET quantity_available = quantity_available - 1,
-                        last_updated = NOW()
-                    WHERE item_id = ? 
-                    AND branch_id = ?
-                    AND quantity_available > 0
-                ";
-                $stmt = $conn->prepare($deductStock);
-                $stmt->bind_param("is", $vaccineData['item_id'], $vaccineData['branch_id']);
-                $stmt->execute();
-                
-                if ($stmt->affected_rows == 0) {
-                    throw new Exception('Insufficient stock available for this vaccine');
-                }
-                
-                $logTransaction = "
-                    INSERT INTO stock_transactions 
-                    (item_id, user_id, vaccination_id, branch_id, transaction_type, quantity, remarks, transaction_date)
-                    VALUES (?, ?, ?, ?, 'OUT', 1, ?, NOW())
-                ";
-                $remarkText = "Vaccination completed - Dose " . $vaccineData['dose_number'] . " administered on " . $administered_date;
-                $stmt = $conn->prepare($logTransaction);
-                $stmt->bind_param("iiiss", 
-                    $vaccineData['item_id'],
-                    $user_id,
-                    $vaccination_id,
-                    $vaccineData['branch_id'],
-                    $remarkText
-                );
-                $stmt->execute();
-                
-                $usageQuery = "
-                    INSERT INTO inventory_usage_history 
-                    (item_id, branch_id, usage_date, quantity_used, patient_count)
-                    VALUES (?, ?, ?, 1, 1)
-                ";
-                $stmt = $conn->prepare($usageQuery);
-                $stmt->bind_param("iss", 
-                    $vaccineData['item_id'],
-                    $vaccineData['branch_id'],
-                    $administered_date
-                );
-                $stmt->execute();
-                
-                $conn->commit();
-                echo json_encode(['success' => true, 'message' => 'Vaccination marked as completed']);
-                
-            } catch (Exception $e) {
-                $conn->rollback();
-                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
-            }
-            break;
-            
         default:
             echo json_encode(['success' => false, 'error' => 'Invalid action']);
             break;
@@ -2751,17 +2657,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                                             title="View patient details">
                                         <i class="bi bi-eye"></i> View
                                     </button>
-                                    <?php if ($statusLabel != 'Completed' && $statusLabel != 'Overdue'): ?>
-                                    <button class="btn-action btn-success mark-complete-btn" 
-                                            data-vaccination-id="<?php echo $record['vaccination_id']; ?>"
-                                            data-case-id="<?php echo $record['case_id']; ?>"
-                                            data-patient-name="<?php echo htmlspecialchars($record['patient_name']); ?>"
-                                            data-vaccine-name="<?php echo htmlspecialchars($record['vaccine_name'] ?? 'Vaccine'); ?>"
-                                            data-dose-label="<?php echo htmlspecialchars($record['dose_label'] ?? 'Dose ' . $record['dose_number']); ?>"
-                                            title="Mark this dose as completed">
-                                        <i class="bi bi-check-lg"></i> Complete
-                                    </button>
-                                    <?php endif; ?>
                                 </td>
                             </tr>
                             <?php endforeach; ?>
@@ -2829,39 +2724,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 <div class="modal-footer border-top-0 pt-0 px-4 pb-4">
                     <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">
                         <i class="bi bi-x-lg me-1"></i> Close
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Complete Modal -->
-    <div class="modal fade modal-custom" id="completeModal" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title"><i class="bi bi-check-circle-fill" style="color:var(--success);"></i> Mark Dose as Completed</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <p>Confirm that you have administered the vaccine dose for:</p>
-                    <div class="alert alert-info">
-                        <strong id="modalPatientName">Patient Name</strong><br>
-                        <span id="modalVaccineInfo">Vaccine: Dose</span>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Date Administered</label>
-                        <input type="date" class="form-control" id="modalAdministeredDate" value="<?php echo date('Y-m-d'); ?>">
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Remarks (Optional)</label>
-                        <input type="text" class="form-control" id="modalRemarks" placeholder="e.g., No adverse reaction observed">
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-success" id="modalConfirmComplete">
-                        <i class="bi bi-check-lg"></i> Confirm Completed
                     </button>
                 </div>
             </div>
@@ -3341,16 +3203,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                                 title="View patient details">
                             <i class="bi bi-eye"></i> View
                         </button>
-                        ${record.display_status !== 'Completed' && record.display_status !== 'Overdue' ? `
-                        <button class="btn-action btn-success mark-complete-btn" 
-                                data-vaccination-id="${record.vaccination_id}"
-                                data-case-id="${record.case_id}"
-                                data-patient-name="${record.patient_name}"
-                                data-vaccine-name="${record.vaccine_name || 'Vaccine'}"
-                                data-dose-label="${record.dose_label || 'Dose ' + record.dose_number}"
-                                title="Mark this dose as completed">
-                            <i class="bi bi-check-lg"></i> Complete
-                        </button>` : ''}
                     </td>
                 </tr>
             `;
@@ -3358,78 +3210,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
 
         tbody.innerHTML = html;
         bindViewPatientButtons();
-        bindMarkCompleteButtons();
         paginateCalendarRows(true);
-    }
-
-    // ----------------------------------------------------------------
-    // BIND MARK COMPLETE BUTTONS
-    // ----------------------------------------------------------------
-    function bindMarkCompleteButtons() {
-        const completeModal = new bootstrap.Modal(document.getElementById('completeModal'));
-        let currentVaccinationId = null;
-        let currentCaseId = null;
-
-        document.querySelectorAll('.mark-complete-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                currentVaccinationId = this.dataset.vaccinationId;
-                currentCaseId = this.dataset.caseId;
-                const patientName = this.dataset.patientName;
-                const vaccineName = this.dataset.vaccineName || 'Vaccine';
-                const doseLabel = this.dataset.doseLabel || 'Dose';
-
-                document.getElementById('modalPatientName').textContent = patientName;
-                document.getElementById('modalVaccineInfo').textContent = vaccineName + ' - ' + doseLabel;
-                document.getElementById('modalAdministeredDate').value = TODAY_DATE;
-                document.getElementById('modalRemarks').value = '';
-
-                completeModal.show();
-            });
-        });
-
-        document.getElementById('modalConfirmComplete').addEventListener('click', function() {
-            if (!currentVaccinationId || !currentCaseId) {
-                showToast('Error', 'Missing vaccination information', true);
-                return;
-            }
-
-            const administeredDate = document.getElementById('modalAdministeredDate').value;
-            const remarks = document.getElementById('modalRemarks').value;
-
-            showLoading();
-
-            const formData = new FormData();
-            formData.append('vaccination_id', currentVaccinationId);
-            formData.append('case_id', currentCaseId);
-            formData.append('administered_date', administeredDate);
-            formData.append('remarks', remarks);
-
-            fetch(window.location.pathname + '?ajax_action=mark_completed', {
-                method: 'POST',
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest'
-                },
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                hideLoading();
-                completeModal.hide();
-                
-                if (data.success) {
-                    showToast('Success', 'Vaccination marked as completed');
-                    setTimeout(() => location.reload(), 500);
-                } else {
-                    showToast('Error', data.error || 'Failed to mark as completed', true);
-                }
-            })
-            .catch(error => {
-                hideLoading();
-                completeModal.hide();
-                showToast('Error', 'Network error occurred', true);
-                console.error('Complete error:', error);
-            });
-        });
     }
 
     function updateActiveFilters() {
@@ -3956,7 +3737,6 @@ document.getElementById('clearFiltersBtn').addEventListener('click', function() 
         loadCalendarFollowUps(currentCalendarDate);
     }
     bindViewPatientButtons();
-    bindMarkCompleteButtons();
     paginateCalendarRows(true);
 
     console.log('Follow-up Records loaded successfully');
