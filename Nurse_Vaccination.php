@@ -2409,6 +2409,7 @@ function getStatusBadge($status)
        <nav class="nav-menu">
         <ul>
             <li><a href="Nurse_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
+            <li><a href="Nurse_Calendar.php" aria-current="page"><i class="bi bi-calendar3"></i><span>Calendar</span></a></li>
             <li><a href="Nurse_Patients.php"><i class="bi bi-heart-pulse-fill"></i><span>Patients</span></a></li>
             <li><a href="Nurse_Assessment.php"><i class="bi bi-clipboard2-pulse-fill"></i><span>Assessment Queue</span></a></li>
             <li><a class="active" href="Nurse_Vaccination.php"><i class="bi-shield-plus"></i><span>Vaccination</span></a></li>
