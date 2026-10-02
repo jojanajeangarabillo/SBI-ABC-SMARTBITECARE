@@ -251,6 +251,7 @@ function nurseCalendarUrl(string $range, string $search, int $page = 1): string
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link rel="stylesheet" href="sidebar.css">
+    <link rel="stylesheet" href="notif-num.css">
 
     <style>
         :root {
@@ -638,12 +639,25 @@ function nurseCalendarUrl(string $range, string $search, int $page = 1): string
 </head>
 <body>
 
-<aside class="sidebar">
+<!-- ========== SIDEBAR ========== -->
+<aside class="sidebar" id="sidebar">
+
+    <button type="button"
+            class="sidebar-toggle"
+            id="sidebarToggle"
+            aria-label="Toggle sidebar"
+            aria-expanded="true">
+        <i class="bi bi-chevron-left"></i>
+    </button>
+
     <div class="logo-area">
         <div class="logo-frame">
-            <img src="logo.png" alt="Smart Bite Care Logo" class="logo">
+            <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
         </div>
-        <div class="system-name">Smart Bite Care</div>
+
+        <div class="system-name">
+            Smart Bite Care
+        </div>
     </div>
 
     <nav class="nav-menu" aria-label="Nurse navigation">
@@ -655,18 +669,12 @@ function nurseCalendarUrl(string $range, string $search, int $page = 1): string
             <li><a href="Nurse_Vaccination.php"><i class="bi bi-shield-plus"></i><span>Vaccination</span></a></li>
             <li><a href="Nurse_DailyInventory.php"><i class="bi bi-clipboard-data-fill"></i><span>Daily Inventory</span></a></li>
             <li><a href="Nurse_MedicalSuppliesManagement.php"><i class="bi bi-calendar-check"></i><span>Medical Supplies Management</span></a></li>
-            <li><a href="Nurse_Supplyforecasting.php"><i class="bi bi-box-seam"></i><span>Supply Forecasting</span></a></li>
-            <li>
-                <a href="Nurse_Notification.php">
-                    <i class="bi bi-bell-fill"></i>
-                    <span class="notification-label">
-                        Notifications
+            <li><a href="Nurse_Supplyforecasting.php"><i class="bi bi-graph-up-arrow"></i><span>Supply Forecasting</span></a></li>
+            <li><a  href="Nurse_Notification.php" class="notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
                         <?php if ($notification_count > 0): ?>
-                            <span class="notification-badge"><?= (int)$notification_count ?></span>
+                            <span class="notification-badge"><?php echo $notification_count; ?></span>
                         <?php endif; ?>
-                    </span>
-                </a>
-            </li>
+                    </a></li>
         </ul>
     </nav>
 </aside>
@@ -922,5 +930,6 @@ function nurseCalendarUrl(string $range, string $search, int $page = 1): string
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="sources/sidebar.js"></script>
 </body>
 </html>

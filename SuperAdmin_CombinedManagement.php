@@ -3,6 +3,7 @@ session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/app_config.php';
 require_once 'sources/mailer.php';
+require_once 'sources/notification_helper.php';
 
 // Check if user is logged in and is super admin
 if (
@@ -13,6 +14,9 @@ if (
     header("Location: login.php");
     exit();
 }
+
+$user_id = (int)$_SESSION['user_id'];
+$notification_count = getUnreadNotificationCount($conn, $user_id);
 
 // ========== AUDIT LOG FUNCTION ==========
 function addAuditLog($conn, $user_id, $action, $module = 'Branch & Admin Management') {
@@ -1047,6 +1051,30 @@ if (isset($_GET['archive_id'])) {
         .action-icons .text-success {
             color: #28a745 !important;
         }
+        /* Notification sidebar badge */
+.notification-link {
+    display: flex !important;
+    align-items: center;
+    width: 100%;
+}
+
+.notification-badge {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    margin-left: auto;
+    border-radius: 999px;
+    background: #F21D2F;
+    color: #fff !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    line-height: 1;
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
 
         /* Modal Styles */
         .modal-content {
@@ -1439,13 +1467,25 @@ if (isset($_GET['archive_id'])) {
 <!-- ========== TOAST / ALERT CONTAINER ========== -->
 <div class="toast-container" id="toastContainer"></div>
 
-<!-- ========== SIDEBAR (Super Admin) ========== -->
-<div class="sidebar">
+<!-- ========== SIDEBAR ========== -->
+<div class="sidebar" id="sidebar">
+
+    <button type="button"
+            class="sidebar-toggle"
+            id="sidebarToggle"
+            aria-label="Toggle sidebar"
+            aria-expanded="true">
+        <i class="bi bi-chevron-left"></i>
+    </button>
+
     <div class="logo-area">
         <div class="logo-frame">
             <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
         </div>
-        <div class="system-name">Smart Bite Care</div>
+
+        <div class="system-name">
+            Smart Bite Care
+        </div>
     </div>
 
     <nav class="nav-menu">
@@ -1456,17 +1496,16 @@ if (isset($_GET['archive_id'])) {
             <li><a href="SuperAdmin_BranchPerformanceMonitoring.php"><i class="bi bi-graph-up-arrow"></i><span>Branch Performance Monitoring</span></a></li>
             <li><a href="SuperAdmin_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
             <li><a href="SuperAdmin_AuditLogs.php"><i class="bi bi-clock-history"></i><span>Audit Logs</span></a></li>
-            <li><a href="SuperAdmin_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
+            <li><a href="SuperAdmin_Notifications.php" class="notification-link">
+    <i class="bi bi-bell-fill"></i><span>Notifications</span>
+    <?php if (isset($notification_count) && $notification_count > 0): ?>
+        <span class="notification-badge"><?php echo $notification_count; ?></span>
+    <?php endif; ?>
+</a></li>
         </ul>
     </nav>
 
-    <div class="logout">
-        <a href="#"
-           data-bs-toggle="modal"
-           data-bs-target="#logoutConfirmModal">
-            <i class="bi bi-box-arrow-right"></i><span>Logout</span>
-        </a>
-    </div>
+   
 </div>
 
 <!-- ========== MAIN CONTENT ========== -->
@@ -2113,6 +2152,7 @@ if (isset($_GET['archive_id'])) {
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="sources/sidebar.js"></script>
 
 <script>
     // ========== BRANCH FUNCTIONS ==========

@@ -158,6 +158,7 @@ $flash = workflowTakeFlash();
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link rel="stylesheet" href="sidebar.css">
+    <link rel="stylesheet" href="notif-num.css">
 
     <style>
         :root {
@@ -735,13 +736,26 @@ $flash = workflowTakeFlash();
 </head>
 
 <body>
-    <div class="sidebar">
-        <div class="logo-area">
-            <div class="logo-frame">
-                <img src="logo.png" alt="Smart Bite Care Logo" style="max-width:50px;height:auto;">
-            </div>
-            <div class="system-name">Smart Bite Care</div>
+    <!-- ========== SIDEBAR ========== -->
+<div class="sidebar" id="sidebar">
+
+    <button type="button"
+            class="sidebar-toggle"
+            id="sidebarToggle"
+            aria-label="Toggle sidebar"
+            aria-expanded="true">
+        <i class="bi bi-chevron-left"></i>
+    </button>
+
+    <div class="logo-area">
+        <div class="logo-frame">
+            <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
         </div>
+
+        <div class="system-name">
+            Smart Bite Care
+        </div>
+    </div>
 
         <nav class="nav-menu">
             <ul>
@@ -1074,6 +1088,7 @@ $flash = workflowTakeFlash();
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="sources/sidebar.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function () {
             const modalElement = document.getElementById('registryConfirmModal');

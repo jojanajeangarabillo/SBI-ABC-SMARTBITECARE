@@ -262,6 +262,36 @@ function assessmentBatchSummary(
  * use today's date only as a technical placeholder. No vaccination schedule
  * is generated from it.
  */
+/** Validate body-map coordinates independently of the browser. */
+function assessmentBiteMarkers($raw): string {
+    if (!is_string($raw) || strlen($raw) > 12000) {
+        throw new RuntimeException('Invalid bite-location markers.');
+    }
+    $markers = json_decode($raw, true);
+    if (!is_array($markers) || !array_is_list($markers) || count($markers) > 30) {
+        throw new RuntimeException('Use no more than 30 bite-location markers.');
+    }
+    $clean = [];
+    foreach ($markers as $marker) {
+        if (!is_array($marker)
+            || !isset($marker['x'], $marker['y'], $marker['label'])
+            || !is_numeric($marker['x']) || !is_numeric($marker['y'])
+            || !is_string($marker['label'])
+            || strlen($marker['label']) > 120
+            || !is_finite((float)$marker['x']) || !is_finite((float)$marker['y'])
+            || (float)$marker['x'] < 0 || (float)$marker['x'] > 100
+            || (float)$marker['y'] < 0 || (float)$marker['y'] > 100) {
+            throw new RuntimeException('Invalid bite-location marker.');
+        }
+        $clean[] = [
+            'x' => round((float)$marker['x'], 4),
+            'y' => round((float)$marker['y'], 4),
+            'label' => trim($marker['label'])
+        ];
+    }
+    return json_encode($clean, JSON_THROW_ON_ERROR);
+}
+
 function assessmentSaveNonArvAssessment(
     mysqli $conn,
     array $visit,
@@ -273,6 +303,7 @@ function assessmentSaveNonArvAssessment(
     $history = trim((string)($payload['exposure_history'] ?? ''));
     $exposureDate = trim((string)($payload['date_of_exposure'] ?? ''));
     $site = trim((string)($payload['exposure_site'] ?? ''));
+    $biteMarkers = assessmentBiteMarkers($payload['bite_markers'] ?? '[]');
     $animal = trim((string)($payload['animal_type'] ?? ''));
     $animalStatus = trim((string)($payload['animal_status'] ?? ''));
     $category = trim((string)($payload['bite_category'] ?? ''));
@@ -387,11 +418,12 @@ function assessmentSaveNonArvAssessment(
             important_concerns,
             instructions_given,
             chart_notes,
-            d0_date
+            d0_date,
+            bite_markers
          )
          VALUES (
             ?, ?, ?, ?, ?, ?, NULLIF(?, ''),
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
          )
          ON DUPLICATE KEY UPDATE
             nurse_id = VALUES(nurse_id),
@@ -408,6 +440,7 @@ function assessmentSaveNonArvAssessment(
             instructions_given = VALUES(instructions_given),
             chart_notes = VALUES(chart_notes),
             d0_date = VALUES(d0_date),
+            bite_markers = VALUES(bite_markers),
             updated_at = NOW()"
     );
 
@@ -418,7 +451,7 @@ function assessmentSaveNonArvAssessment(
     }
 
     $assessment->bind_param(
-        'iiisisssssssssssss',
+        'iiisissssssssssssss',
         $visitId,
         $patientId,
         $caseId,
@@ -436,7 +469,8 @@ function assessmentSaveNonArvAssessment(
         $concerns,
         $instructions,
         $notes,
-        $d0Date
+        $d0Date,
+        $biteMarkers
     );
 
     if (!$assessment->execute()) {
@@ -607,6 +641,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $history = trim((string)($_POST['exposure_history'] ?? ''));
             $exposureDate = (string)($_POST['date_of_exposure'] ?? '');
             $site = trim((string)($_POST['exposure_site'] ?? ''));
+            $biteMarkers = assessmentBiteMarkers($_POST['bite_markers'] ?? '[]');
             $animal = trim((string)($_POST['animal_type'] ?? ''));
             $animalStatus = trim((string)($_POST['animal_status'] ?? ''));
             $category = trim((string)($_POST['bite_category'] ?? ''));
@@ -860,11 +895,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     important_concerns,
                     instructions_given,
                     chart_notes,
-                    d0_date
+                    d0_date,
+                    bite_markers
                  )
                  VALUES (
                     ?, ?, ?, ?, ?, ?, NULLIF(?, ''),
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                  )
                  ON DUPLICATE KEY UPDATE
                     nurse_id = VALUES(nurse_id),
@@ -881,11 +917,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     instructions_given = VALUES(instructions_given),
                     chart_notes = VALUES(chart_notes),
                     d0_date = VALUES(d0_date),
+                    bite_markers = VALUES(bite_markers),
                     updated_at = NOW()"
             );
 
             $assessment->bind_param(
-                'iiisisssssssssssss',
+                'iiisissssssssssssss',
                 $visitId,
                 $patientId,
                 $caseId,
@@ -903,7 +940,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $concerns,
                 $instructions,
                 $notes,
-                $d0Date
+                $d0Date,
+                $biteMarkers
             );
 
             $assessment->execute();
@@ -1941,6 +1979,7 @@ $flash = workflowTakeFlash();
         href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
         rel="stylesheet"
     >
+    <link rel="stylesheet" href="notif-num.css">
 
     <link
         href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
@@ -2821,23 +2860,34 @@ $flash = workflowTakeFlash();
                 width: 100%;
             }
         }
+    
+        .bite-map-panel { border: 1px solid #d6e1e8; border-radius: 12px; padding: 18px; background: #f8fafc; }
+        .bite-map-stage { position: relative; width: min(100%, 340px); margin: 12px auto; background: #526778; border-radius: 10px; overflow: hidden; }
+        .bite-map-stage img { display: block; width: 100%; height: auto; cursor: crosshair; user-select: none; }
+        .bite-map-marker { position: absolute; transform: translate(-50%, -50%); width: 28px; height: 28px; padding: 0; border: 2px solid white; border-radius: 50%; background: #b91c1c; color: white; font-size: 12px; font-weight: bold; box-shadow: 0 1px 4px #0008; cursor: pointer; }
+        .bite-map-marker:focus-visible { outline: 3px solid #facc15; outline-offset: 2px; }
+        .bite-map-list { max-height: 250px; overflow-y: auto; padding-left: 24px; }
+        .bite-map-list li { margin-bottom: 8px; }
+
     </style>
 </head>
 
 <body>
 
-<!-- ============================================================
-     SIDEBAR
-     ============================================================ -->
-<aside class="sidebar">
+<!-- ========== SIDEBAR ========== -->
+<aside class="sidebar" id="sidebar">
+
+    <button type="button"
+            class="sidebar-toggle"
+            id="sidebarToggle"
+            aria-label="Toggle sidebar"
+            aria-expanded="true">
+        <i class="bi bi-chevron-left"></i>
+    </button>
 
     <div class="logo-area">
         <div class="logo-frame">
-            <img
-                src="logo.png"
-                alt="Smart Bite Care Logo"
-                class="logo"
-            >
+            <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
         </div>
 
         <div class="system-name">
@@ -2902,26 +2952,16 @@ $flash = workflowTakeFlash();
 
             <li>
                 <a href="Nurse_Supplyforecasting.php">
-                    <i class="bi bi-box-seam"></i>
+                    <i class="bi bi-graph-up-arrow"></i>
                     <span>Supply Forecasting</span>
                 </a>
             </li>
 
-            <li>
-                <a href="Nurse_Notification.php">
-                    <i class="bi bi-bell-fill"></i>
-
-                    <span class="notification-label">
-                        Notifications
-
+            <li><a  href="Nurse_Notification.php" class="notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
                         <?php if ($notification_count > 0): ?>
-                            <span class="notification-badge">
-                                <?php echo $notification_count; ?>
-                            </span>
+                            <span class="notification-badge"><?php echo $notification_count; ?></span>
                         <?php endif; ?>
-                    </span>
-                </a>
-            </li>
+                    </a></li>
         </ul>
     </nav>
 
@@ -3651,6 +3691,31 @@ $flash = workflowTakeFlash();
                                         ) ?>"
                                     >
 
+                                </div>
+
+
+                                <div class="col-12">
+                                    <div class="bite-map-panel" id="biteMapPanel">
+                                        <h6 class="mb-2">Bite Location Diagram</h6>
+                                        <p class="small text-muted mb-3">Enter a location label, then click the body to mark a bite. Repeat for multiple bites. Click a numbered marker or its Remove button to delete it. Keep clinical details in Exposure Site.</p>
+                                        <input type="hidden" id="bite_markers" name="bite_markers" value="<?= workflowH((string)($selected['bite_markers'] ?? '[]')) ?>">
+                                        <div class="row g-3">
+                                            <div class="col-md-6">
+                                                <div class="bite-map-stage" id="biteMapStage">
+                                                    <img id="biteMapImage" src="images/human-figure.png" alt="Human silhouette for marking bite locations" draggable="false">
+                                                </div>
+                                                <p class="small text-muted text-center">Diagram shows the supplied view only. Include left/right and front/back in your location label.</p>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label for="biteMarkerLabel" class="form-label">Location label for the next marker</label>
+                                                <input id="biteMarkerLabel" class="form-control" maxlength="100" placeholder="e.g. Left forearm, front" autocomplete="off">
+                                                <p class="small text-muted mt-2">Labels are entered by the nurse; the image does not identify body regions automatically.</p>
+                                                <div id="biteMapStatus" role="status" aria-live="polite" class="small mb-2"></div>
+                                                <ol id="biteMapList" class="bite-map-list"></ol>
+                                                <button type="button" id="biteMapClear" class="btn btn-outline-danger btn-sm">Clear all markers</button>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
 
                                 <div class="col-md-4">
@@ -4457,6 +4522,7 @@ $flash = workflowTakeFlash();
     src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
 ></script>
 
+<script src="sources/sidebar.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
 
@@ -4784,6 +4850,131 @@ document.addEventListener('DOMContentLoaded', function () {
                 + 'aria-hidden="true"></span>Sending...';
 
         });
+    }
+});
+</script>
+
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const field = document.getElementById('bite_markers');
+    if (!field) return;
+    const stage = document.getElementById('biteMapStage');
+    const image = document.getElementById('biteMapImage');
+    const list = document.getElementById('biteMapList');
+    const label = document.getElementById('biteMarkerLabel');
+    const status = document.getElementById('biteMapStatus');
+    const clear = document.getElementById('biteMapClear');
+    let markers;
+    try {
+        markers = JSON.parse(field.value || '[]');
+        if (!Array.isArray(markers) || markers.length > 30 || markers.some(m =>
+            !m || typeof m.x !== 'number' || typeof m.y !== 'number' ||
+            !Number.isFinite(m.x) || !Number.isFinite(m.y) ||
+            m.x < 0 || m.x > 100 || m.y < 0 || m.y > 100 || typeof m.label !== 'string'
+        )) throw new Error('Invalid saved markers');
+    } catch (_) {
+        status.textContent = 'Saved markers could not be read. Reload before saving this assessment.';
+        field.form.querySelectorAll('button[type="submit"]').forEach(b => b.disabled = true);
+        return;
+    }
+    let pixels = null;
+    let ready = false;
+    function render(message) {
+        field.value = JSON.stringify(markers);
+        stage.querySelectorAll('.bite-map-marker').forEach(el => el.remove());
+        list.replaceChildren();
+        markers.forEach((marker, index) => {
+            const pin = document.createElement('button');
+            pin.type = 'button';
+            pin.className = 'bite-map-marker';
+            pin.style.left = marker.x + '%';
+            pin.style.top = marker.y + '%';
+            pin.textContent = String(index + 1);
+            pin.setAttribute('aria-label', 'Remove bite marker ' + (index + 1) + ': ' + marker.label);
+            pin.title = pin.getAttribute('aria-label');
+            const remove = () => {
+                markers.splice(index, 1);
+                render('Marker removed.');
+            };
+            pin.addEventListener('click', remove);
+            stage.appendChild(pin);
+            const item = document.createElement('li');
+            const text = document.createElement('span');
+            text.textContent = marker.label + ' ';
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn btn-outline-danger btn-sm ms-2';
+            button.textContent = 'Remove';
+            button.setAttribute('aria-label', pin.getAttribute('aria-label'));
+            button.addEventListener('click', remove);
+            item.append(text, button);
+            list.appendChild(item);
+        });
+        clear.disabled = markers.length === 0;
+        status.textContent = (message ? message + ' ' : '') + markers.length + ' bite marker(s). Save the assessment to keep changes.';
+    }
+    function loadImage() {
+        if (!image.naturalWidth) return;
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = image.naturalWidth;
+            canvas.height = image.naturalHeight;
+            const context = canvas.getContext('2d', { willReadFrequently: true });
+            context.drawImage(image, 0, 0);
+            pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+            ready = true;
+            render();
+        } catch (_) {
+            status.textContent = 'The body image could not be read. Use images/human-figure.png from this project.';
+        }
+    }
+    image.addEventListener('load', loadImage);
+    image.addEventListener('error', () => {
+        ready = false;
+        status.textContent = 'Body image missing. Place the transparent PNG at images/human-figure.png. Existing markers are preserved.';
+    });
+    image.addEventListener('click', event => {
+        if (!ready) return;
+        if (markers.length >= 30) {
+            status.textContent = 'Maximum 30 markers. Remove a marker before adding another.';
+            return;
+        }
+        const name = label.value.trim();
+        if (!name) {
+            status.textContent = 'Enter a location label before placing a marker.';
+            label.focus();
+            return;
+        }
+        const rect = image.getBoundingClientRect();
+        const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+        const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+        const px = Math.min(pixels.width - 1, Math.floor(x * pixels.width));
+        const py = Math.min(pixels.height - 1, Math.floor(y * pixels.height));
+        if (pixels.data[(py * pixels.width + px) * 4 + 3] < 128) {
+            status.textContent = 'Click on the human silhouette to place the marker.';
+            return;
+        }
+        // Server validates the UTF-8 byte length as well as coordinate bounds.
+        if (new TextEncoder().encode(name).length > 120) {
+            status.textContent = 'Please use a shorter location label.';
+            return;
+        }
+        markers.push({ x: Number((x * 100).toFixed(4)), y: Number((y * 100).toFixed(4)), label: name });
+        render('Marker added.');
+    });
+    clear.addEventListener('click', () => {
+        markers = [];
+        render('All markers cleared.');
+    });
+    // A label is an auxiliary control; Enter must not submit the assessment.
+    label.addEventListener('keydown', event => {
+        if (event.key === 'Enter') event.preventDefault();
+    });
+    render();
+    if (image.complete) {
+        if (image.naturalWidth) loadImage();
+        else status.textContent = 'Body image missing. Place the transparent PNG at images/human-figure.png.';
     }
 });
 </script>

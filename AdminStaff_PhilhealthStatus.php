@@ -329,6 +329,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link rel="stylesheet" href="sidebar.css">
+    <link rel="stylesheet" href="notif-num.css">
 
     <style>
         :root {
@@ -963,14 +964,26 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
 </head>
 
 <body>
-    <!-- SIDEBAR -->
-    <div class="sidebar">
-        <div class="logo-area">
-            <div class="logo-frame">
-                <img src="logo.png" alt="Smart Bite Care Logo" class="logo">
-            </div>
-            <div class="system-name">Smart Bite Care</div>
+ <!-- ========== SIDEBAR ========== -->
+<div class="sidebar" id="sidebar">
+
+    <button type="button"
+            class="sidebar-toggle"
+            id="sidebarToggle"
+            aria-label="Toggle sidebar"
+            aria-expanded="true">
+        <i class="bi bi-chevron-left"></i>
+    </button>
+
+    <div class="logo-area">
+        <div class="logo-frame">
+            <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
         </div>
+
+        <div class="system-name">
+            Smart Bite Care
+        </div>
+    </div>
 
         <nav class="nav-menu">
             <ul>
@@ -1162,6 +1175,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
     <div class="toast-container-custom" id="toastContainer"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src= "sources/sidebar.js"></script>
 
     <script>
         // ----------------------------------------------------------------

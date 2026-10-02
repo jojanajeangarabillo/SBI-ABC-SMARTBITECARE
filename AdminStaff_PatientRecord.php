@@ -1735,6 +1735,7 @@ if ($action) {
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
     <!-- Sidebar CSS -->
     <link rel="stylesheet" href="sidebar.css">
+    <link rel="stylesheet" href="notif-num.css">
 
     <style>
         :root {
@@ -1814,6 +1815,101 @@ if ($action) {
             .topbar { padding: 0 16px; height: 64px; }
             .topbar h3 { font-size: 20px; margin-left: 100px; }
         }
+
+        /* When sidebar is collapsed, move topbar to the left */
+body.sidebar-collapsed .topbar {
+    left: 90px !important;
+    width: calc(100% - 90px) !important;
+}
+
+/* For tablets */
+@media (max-width: 991px) {
+    .topbar {
+        left: 90px !important;
+        width: calc(100% - 90px) !important;
+    }
+}
+
+/* For mobile */
+@media (max-width: 576px) {
+    .topbar {
+        left: 0 !important;
+        width: 100% !important;
+    }
+}
+
+/* Ensure modal sits above sidebar and topbar */
+.modal {
+    z-index: 3000 !important;
+}
+
+.modal-backdrop {
+    z-index: 2990 !important;
+}
+
+/* Ensure modal content is responsive */
+.modal-dialog {
+    max-width: 90% !important;
+    margin: 1.75rem auto !important;
+}
+
+/* Fix for the modal body scrolling */
+.modal-body {
+    max-height: calc(100vh - 200px);
+    overflow-y: auto;
+}
+
+/* Fix for the specific modal in Screenshot 2 */
+#patientModal .modal-dialog {
+    max-width: 1140px !important; /* Adjust as needed */
+    width: calc(100% - 40px) !important;
+}
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 15px 25px;
+    background: #f8f9fa;
+    border-top: 1px solid #dee2e6;
+}
+/* When sidebar is collapsed, expand the main content area */
+body.sidebar-collapsed .main {
+    margin-left: 90px !important;
+    width: calc(100% - 90px) !important;
+    transition: margin-left 0.3s ease, width 0.3s ease;
+}
+
+/* Ensure the table panel itself expands to fill the new space */
+.table-panel {
+    width: 100%;
+    min-width: 0;
+}
+
+/* Ensure the record container allows the table to grow */
+.record-container {
+    display: grid;
+    grid-template-columns: 300px minmax(0, 1fr);
+    gap: 20px;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    transition: grid-template-columns 0.3s ease;
+}
+
+/* On smaller screens, stack the calendar and table */
+@media (max-width: 900px) {
+    .record-container {
+        grid-template-columns: 1fr;
+    }
+}
+
+
+        body > .modal {
+    /* Ensure modal escapes any body-level containing block quirks */
+    transform: none !important;
+    filter: none !important;
+    will-change: auto !important;
+}
 
 /* =========================================================
    GLOBAL LOGOUT CONFIRMATION MODAL 
@@ -2998,10 +3094,12 @@ if ($action) {
             bottom: 30px;
             right: 30px;
             z-index: 9999;
-            max-width: 380px;
+            max-width: min(380px, calc(100vw - 32px));
+            pointer-events: none;
         }
 
         .toast-custom {
+            pointer-events: auto;
             background: white;
             border-radius: 12px;
             padding: 16px 20px;
@@ -3404,6 +3502,34 @@ if ($action) {
             margin-left: 0 !important;
         }
 
+
+        /* =========================================================
+   ARCHIVE MODAL RESPONSIVE FIX
+   ========================================================= */
+#archiveModal .modal-dialog {
+    max-width: 450px !important; /* Keeps it compact and centered */
+    width: calc(100% - 30px);    /* Adds padding on small mobile screens */
+    margin: 1.75rem auto;
+}
+
+#archiveModal .modal-content {
+    border: none;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+}
+
+#archiveModal .modal-header {
+    padding: 18px 24px;
+}
+
+#archiveModal .modal-body {
+    padding: 20px 24px;
+}
+
+#archiveModal .modal-footer {
+    padding: 16px 24px;
+}
+
         /* Keep page content below the fixed top bar. */
         .main {
             padding-top: 104px;
@@ -3439,17 +3565,60 @@ if ($action) {
                 padding-top: 88px;
             }
         }
+
+
+        .toolbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .archived-patients-btn {
+            background: #fff !important;
+            color: var(--primary) !important;
+            border: 1px solid var(--primary) !important;
+            text-decoration: none !important;
+        }
+
+        .archived-patients-btn:hover {
+            background: #eef2ff !important;
+            color: var(--primary) !important;
+        }
+
+        @media (max-width: 768px) {
+            .toolbar-actions {
+                width: 100%;
+            }
+
+            .toolbar-actions .btn {
+                flex: 1;
+            }
+        }
 </style>
 </head>
 <body>
-    <!-- Sidebar -->
-    <div class="sidebar">
-        <div class="logo-area">
-            <div class="logo-frame">
-                <img src="logo.png" alt="Smart Bite Care Logo" class="logo">
-            </div>
-            <div class="system-name">Smart Bite Care</div>
+    <!-- ========== SIDEBAR ========== -->
+<div class="sidebar" id="sidebar">
+
+    <button type="button"
+            class="sidebar-toggle"
+            id="sidebarToggle"
+            aria-label="Toggle sidebar"
+            aria-expanded="true">
+        <i class="bi bi-chevron-left"></i>
+    </button>
+
+    <div class="logo-area">
+        <div class="logo-frame">
+            <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
         </div>
+
+        <div class="system-name">
+            Smart Bite Care
+        </div>
+    </div>
+
         <nav class="nav-menu">
             <ul>
                 <li><a href="AdminStaff_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
@@ -3538,9 +3707,14 @@ if ($action) {
                     </div>
                 </div>
             </div>
-            <button class="btn" id="addPatientBtn">
-                <i class="bi bi-plus-circle"></i> Add New Patient
-            </button>
+            <div class="toolbar-actions">
+                <a class="btn archived-patients-btn" href="AdminStaff_ArchivedPatients.php">
+                    <i class="bi bi-archive-fill"></i> Archived Patients
+                </a>
+                <button class="btn" id="addPatientBtn">
+                    <i class="bi bi-plus-circle"></i> Add New Patient
+                </button>
+            </div>
         </div>
 
         <div class="record-container">
@@ -3868,27 +4042,37 @@ if ($action) {
 
     <!-- Archive Confirmation Modal -->
     <div class="modal fade" id="archiveModal" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-sm">
+    <div class="modal-dialog modal-dialog-centered"> 
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title">Confirm Archive</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
-                    <p>Are you sure you want to archive this record?</p>
-                    <p class="text-danger" id="archivePatientName"></p>
-                    <div class="mb-3">
-                        <label class="form-label">Archive Reason</label>
-                        <input type="text" class="form-control" id="archiveReason" placeholder="Optional reason for archiving" value="Archived by user">
-                    </div>
-                    <p class="text-warning"><small>This record will be moved to archive and can be restored later if needed.</small></p>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-warning" id="confirmArchiveBtn">Archive</button>
-                </div>
-            </div>
-        </div>
+    <p class="mb-3">Are you sure you want to archive this record?</p>
+    
+    <div class="alert alert-danger py-2 mb-3">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+        <span id="archivePatientName" class="fw-bold"></span>
+    </div>
+
+    <div class="mb-0">
+        <label class="form-label fw-semibold">Archive Reason</label>
+        <input type="text" class="form-control" id="archiveReason" 
+               placeholder="Enter reason for archiving" value="Archived by user">
+    </div>
+    
+    <p class="text-muted small mt-3 mb-0">
+        <i class="bi bi-info-circle me-1"></i>
+        This record will be moved to the archive section and can be restored later if needed.
+    </p>
+</div>
+<div class="modal-footer">
+    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+    <button type="button" class="btn btn-warning" id="confirmArchiveBtn">
+        <i class="bi bi-archive-fill me-1"></i> Archive
+    </button>
+</div>
     </div>
 
         <div class="modal fade confirm-modal" id="logoutConfirmModal" tabindex="-1"
@@ -3940,6 +4124,7 @@ if ($action) {
     <!-- JavaScript Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="sources/sidebar.js"></script>
 
     <script>
     // ----------------------------------------------------------------
@@ -4000,21 +4185,74 @@ if ($action) {
         });
     }
 
-    function showToast(msg, sub = '', isError = false) {
+    // Each message owns its timer; other notifications cannot remove it early.
+    // Keep the container under body so modal layout cannot clip the notification.
+    function showToast(msg, sub = '', isError = false, duration = 8000) {
         const container = document.getElementById('toastContainer');
+        if (!container) return;
+        if (container.parentElement !== document.body) {
+            document.body.appendChild(container);
+        }
+
         const toast = document.createElement('div');
         toast.className = 'toast-custom' + (isError ? ' error' : '');
+        toast.setAttribute('role', isError ? 'alert' : 'status');
+        toast.setAttribute('aria-live', isError ? 'assertive' : 'polite');
+        toast.setAttribute('aria-atomic', 'true');
         const icon = isError ? 'bi-exclamation-circle-fill' : 'bi-check-circle-fill';
         toast.innerHTML = `
             <span class="toast-icon"><i class="bi ${icon}"></i></span>
-            <div class="toast-msg">${msg} ${sub ? '<small>' + sub + '</small>' : ''}</div>
+            <div class="toast-msg">${escapeHtml(msg)}${sub ? '<small class="d-block">' + escapeHtml(sub) + '</small>' : ''}</div>
+            <button type="button" class="btn-close ms-auto" aria-label="Dismiss notification"></button>
         `;
         container.appendChild(toast);
-        requestAnimationFrame(() => toast.classList.add('show'));
-        setTimeout(() => {
+        void toast.offsetWidth;
+        toast.classList.add('show');
+
+        let remaining = Math.max(1000, Number(duration) || 8000);
+        let startedAt;
+        let timeout;
+        let dismissed = false;
+        let paused = false;
+        function dismiss() {
+            if (dismissed) return;
+            dismissed = true;
+            clearTimeout(timeout);
             toast.classList.remove('show');
             setTimeout(() => toast.remove(), 400);
-        }, 3500);
+        }
+        function pause() {
+            if (paused || dismissed) return;
+            paused = true;
+            clearTimeout(timeout);
+            remaining = Math.max(0, remaining - (performance.now() - startedAt));
+        }
+        function resume() {
+            if (dismissed || toast.matches(':hover') || toast.contains(document.activeElement)) return;
+            clearTimeout(timeout);
+            paused = false;
+            startedAt = performance.now();
+            timeout = setTimeout(dismiss, remaining);
+        }
+        toast.addEventListener('mouseenter', pause);
+        toast.addEventListener('mouseleave', resume);
+        toast.addEventListener('focusin', pause);
+        toast.addEventListener('focusout', () => setTimeout(resume, 0));
+        toast.querySelector('button').addEventListener('click', dismiss);
+        resume();
+    }
+
+    function showSuccessAfterModal(modalId, message, detail = '') {
+        const modalEl = document.getElementById(modalId);
+        const modalInstance = modalEl ? bootstrap.Modal.getInstance(modalEl) : null;
+        if (modalInstance && modalEl.classList.contains('show')) {
+            modalEl.addEventListener('hidden.bs.modal', () => {
+                showToast(message, detail, false, 10000);
+            }, { once: true });
+            modalInstance.hide();
+        } else {
+            showToast(message, detail, false, 10000);
+        }
     }
 
     function frontToApi(dateStr) {
@@ -4353,7 +4591,14 @@ if ($action) {
             // Search and vaccination-status filters remain independent.
             const dateApi = frontToApi(currentAdmissionDate);
 
-            allPatients = await fetchPatients(dateApi, searchTerm.trim());
+            const result = await fetchPatients(dateApi, searchTerm.trim());
+
+            // Guard: keep previous data if the response isn't an array
+            if (Array.isArray(result)) {
+                allPatients = result;
+            } else {
+                allPatients = [];
+            }
 
             const total = allPatients.length;
             const totalPages = Math.ceil(total / pageSize) || 1;
@@ -4466,7 +4711,7 @@ if ($action) {
             });
         } catch (err) {
             console.error(err);
-            showToast('Error loading records', err.message, true);
+            // Silent — do not pop a toast here, it can hide the real toast
         }
     }
 
@@ -4798,7 +5043,9 @@ if ($action) {
 
     function confirmArchive(caseId) {
         archiveTargetCaseId = caseId;
-        const patient = allPatients.find(p => p.case_id === caseId);
+        const patient = Array.isArray(allPatients)
+            ? allPatients.find(p => p.case_id === caseId)
+            : null;
         document.getElementById('archivePatientName').textContent = patient ? 
             `Patient: ${patient.patient_name} (Case: ${patient.case_no})` : 
             `Case ID: ${caseId}`;
@@ -4807,10 +5054,18 @@ if ($action) {
     }
 
     document.getElementById('confirmArchiveBtn').addEventListener('click', async function() {
-        if (!archiveTargetCaseId) return;
-        
+        if (!archiveTargetCaseId) {
+            showToast('Error', 'No record selected for archiving.', true);
+            return;
+        }
+
+        const btn = this;
+        const originalText = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Archiving...';
+
         const reason = document.getElementById('archiveReason').value.trim() || 'Archived by user';
-        
+
         try {
             const res = await fetch(`${apiBase}?action=archive`, {
                 method: 'POST',
@@ -4821,10 +5076,11 @@ if ($action) {
                     reason: reason
                 })
             });
+
             const data = await res.json();
+
             if (data.success) {
-                bootstrap.Modal.getInstance(document.getElementById('archiveModal')).hide();
-                showToast('Record archived successfully');
+                showSuccessAfterModal('archiveModal', 'Record archived successfully');
                 renderTable();
             } else {
                 throw new Error(data.error || 'Archive failed');
@@ -4832,6 +5088,8 @@ if ($action) {
         } catch (e) {
             showToast('Error archiving record', e.message, true);
         } finally {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
             archiveTargetCaseId = null;
         }
     });
@@ -4937,8 +5195,11 @@ if ($action) {
             });
             const data = await res.json();
             if (data.success) {
-                bootstrap.Modal.getInstance(document.getElementById('patientModal')).hide();
-                showToast('Record saved successfully', `Case #${data.case_no}`);
+                showSuccessAfterModal(
+                    'patientModal',
+                    formData.case_id ? 'Patient updated successfully' : 'Patient saved successfully',
+                    `Case #${data.case_no || caseNo}`
+                );
                 renderTable();
             } else {
                 throw new Error(data.error || 'Save failed');
@@ -5019,7 +5280,6 @@ if ($action) {
             filterBadge.textContent = filterText;
             
             currentFilter = filterValue;
-
 
             // All/Pending/Completed filters apply across ALL admission dates.
             // The calendar restricts the list only after a date is selected.

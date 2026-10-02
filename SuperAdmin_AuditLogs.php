@@ -1538,13 +1538,25 @@ $pdf_url = '?' . http_build_query($filter_params);
 </head>
 <body>
 
-<!-- SIDEBAR -->
-<div class="sidebar">
+<!-- ========== SIDEBAR ========== -->
+<div class="sidebar" id="sidebar">
+
+    <button type="button"
+            class="sidebar-toggle"
+            id="sidebarToggle"
+            aria-label="Toggle sidebar"
+            aria-expanded="true">
+        <i class="bi bi-chevron-left"></i>
+    </button>
+
     <div class="logo-area">
         <div class="logo-frame">
             <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
         </div>
-        <div class="system-name">Smart Bite Care</div>
+
+        <div class="system-name">
+            Smart Bite Care
+        </div>
     </div>
 
     <nav class="nav-menu">
@@ -1674,19 +1686,7 @@ $pdf_url = '?' . http_build_query($filter_params);
 
 </div>
 
-        <!-- Module Breakdown -->
-        <?php if ($module_breakdown_result && $module_breakdown_result->num_rows > 0): ?>
-        <div class="module-breakdown">
-            <span style="font-weight:600;color:var(--primary);font-size:12px;margin-right:8px;">Modules:</span>
-            <?php while ($row = $module_breakdown_result->fetch_assoc()): ?>
-                <span class="module-pill">
-                    <?php echo htmlspecialchars($row['module']); ?>
-                    <span class="count"><?php echo $row['count']; ?></span>
-                </span>
-            <?php endwhile; ?>
-        </div>
-        <?php endif; ?>
-
+       
         <!-- Filters -->
         <div class="filter-section">
             <form method="GET" action="<?php echo $_SERVER['PHP_SELF']; ?>" id="filterForm">
@@ -2063,6 +2063,7 @@ $pdf_url = '?' . http_build_query($filter_params);
 
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="sources/sidebar.js"></script>
 <script>
 document.querySelectorAll('.filter-group select, .filter-group input[type="date"]').forEach(function(element) {
     element.addEventListener('change', function() {
