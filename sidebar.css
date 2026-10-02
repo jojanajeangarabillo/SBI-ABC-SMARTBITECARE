@@ -1,242 +1,706 @@
-:root{
-    --primary:#2B3A8C;
-    --accent:#F21D2F;
-    --bg:#F2F2F2;
-    --white:#fff;
+/* =========================================================
+   SMART BITE CARE - RESPONSIVE SIDEBAR
+   ========================================================= */
+
+:root {
+    --primary: #2B3A8C;
+    --accent: #F21D2F;
+    --bg: #F2F2F2;
+    --white: #ffffff;
+
+    --sidebar-width: 260px;
+    --sidebar-collapsed-width: 90px;
+    --sidebar-transition: 0.3s ease;
 }
 
-.sidebar{
-    width:260px;
-    height:100vh;
-    height:100dvh;
-    min-height:0;
-    background:var(--primary);
-    display:flex;
-    flex-direction:column;
-    color:white;
-    position:fixed;
-    left:0;
-    top:0;
-    overflow:hidden;
-    z-index:1000;
-    box-sizing:border-box;
+/* =========================================================
+   GLOBAL RESET
+   ========================================================= */
+
+* {
+    box-sizing: border-box;
 }
 
-.sidebar *{
-    box-sizing:border-box;
+html,
+body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
 }
 
-.logo-area{
-    padding:25px 20px;
-    border-bottom:1px solid rgba(255,255,255,.15);
-    text-align:center;
-    flex-shrink:0;
+/* =========================================================
+   SIDEBAR
+   ========================================================= */
+
+.sidebar {
+    width: var(--sidebar-width);
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+
+    background: var(--primary);
+    color: var(--white);
+
+    display: flex;
+    flex-direction: column;
+
+    position: fixed;
+    left: 0;
+    top: 0;
+
+    overflow: hidden;
+
+    z-index: 2000;
+
+    box-sizing: border-box;
+
+    transition:
+        width var(--sidebar-transition),
+        transform var(--sidebar-transition);
 }
 
-.logo {
-    width: 90px;
-    height: 90px;
-    display: block;
-    object-fit: contain;
+.sidebar * {
+    box-sizing: border-box;
+}
+
+/* =========================================================
+   LOGO AREA
+   ========================================================= */
+
+.logo-area {
+    padding: 25px 20px;
+
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+
+    text-align: center;
+
+    flex-shrink: 0;
+
+    transition: padding var(--sidebar-transition);
 }
 
 .logo-frame {
     width: 100px;
     height: 100px;
+
     margin: 0 auto;
+
     border-radius: 50%;
-    background: #fff;
+
+    background: #ffffff;
+
     display: flex;
     align-items: center;
     justify-content: center;
+
     overflow: hidden;
-    box-shadow: 0 4px 12px rgba(0,0,0,.2);
-    border: 3px solid rgba(255,255,255,.3);
+
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+
+    border: 3px solid rgba(255, 255, 255, 0.3);
+
+    transition:
+        width var(--sidebar-transition),
+        height var(--sidebar-transition);
 }
 
-.system-name{
-    margin-top:15px;
-    font-size:22px;
-    font-weight:700;
+.logo {
+    width: 90px;
+    height: 90px;
+
+    display: block;
+
+    object-fit: contain;
+
+    transition:
+        width var(--sidebar-transition),
+        height var(--sidebar-transition);
 }
 
-.nav-menu{
-    margin-top:20px;
-    flex:1;
-    min-height:0;
-    padding-bottom:10px;
-    overflow-x:hidden;
-    overflow-y:auto;
-    overscroll-behavior:contain;
-    scrollbar-width:thin;
-    scrollbar-color:rgba(255,255,255,.45) transparent;
-    -webkit-overflow-scrolling:touch;
+.system-name {
+    margin-top: 15px;
+
+    font-size: 22px;
+    font-weight: 700;
+
+    white-space: nowrap;
+
+    transition:
+        opacity var(--sidebar-transition),
+        visibility var(--sidebar-transition);
 }
 
-.nav-menu::-webkit-scrollbar{
-    width:6px;
+/* =========================================================
+   NAVIGATION
+   ========================================================= */
+
+.nav-menu {
+    margin-top: 20px;
+
+    flex: 1;
+    min-height: 0;
+
+    padding-bottom: 10px;
+
+    overflow-x: hidden;
+    overflow-y: auto;
+
+    overscroll-behavior: contain;
+
+    scrollbar-width: thin;
+
+    scrollbar-color:
+        rgba(255, 255, 255, 0.45)
+        transparent;
+
+    -webkit-overflow-scrolling: touch;
 }
 
-.nav-menu::-webkit-scrollbar-track{
-    background:transparent;
+.nav-menu::-webkit-scrollbar {
+    width: 6px;
 }
 
-.nav-menu::-webkit-scrollbar-thumb{
-    background:rgba(255,255,255,.38);
-    border-radius:10px;
+.nav-menu::-webkit-scrollbar-track {
+    background: transparent;
 }
 
-.nav-menu::-webkit-scrollbar-thumb:hover{
-    background:rgba(255,255,255,.58);
+.nav-menu::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.38);
+    border-radius: 10px;
 }
 
-.nav-menu ul{
-    list-style:none;
-    padding:0;
-    margin:0;
+.nav-menu::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.58);
 }
 
-.nav-menu li{
-    margin:6px 12px;
+.nav-menu ul {
+    list-style: none;
+
+    padding: 0;
+    margin: 0;
 }
 
-.nav-menu a{
-    color:white;
-    text-decoration:none;
-    display:flex;
-    align-items:center;
-    gap:12px;
-    padding:12px 15px;
-    border-radius:10px;
-    transition:.25s;
-    font-size:15px;
+.nav-menu li {
+    margin: 6px 12px;
 }
 
-.nav-menu a:hover{
-    background:rgba(255,255,255,.12);
+.nav-menu a {
+    color: #ffffff;
+
+    text-decoration: none;
+
+    display: flex;
+    align-items: center;
+
+    gap: 12px;
+
+    min-height: 46px;
+
+    padding: 12px 15px;
+
+    border-radius: 10px;
+
+    transition:
+        background 0.2s ease,
+        color 0.2s ease;
+
+    font-size: 15px;
+
+    white-space: nowrap;
 }
 
-.nav-menu a.active{
-    background:white;
-    color:var(--primary);
-    font-weight:600;
+.nav-menu a:hover {
+    background: rgba(255, 255, 255, 0.12);
 }
 
-.logout{
-    padding:20px;
-    flex-shrink:0;
-    border-top:1px solid rgba(255,255,255,.12);
-    background:var(--primary);
+.nav-menu a.active {
+    background: #ffffff;
+    color: var(--primary);
+
+    font-weight: 600;
 }
 
-.logout a{
-    color:#ffb0b0;
-    text-decoration:none;
-    display:flex;
-    align-items:center;
-    gap:12px;
-    font-weight:600;
+.nav-menu a i {
+    flex-shrink: 0;
+
+    font-size: 18px;
+
+    width: 20px;
+
+    text-align: center;
 }
 
-.logout a:hover{
-    color:white;
-    
-}
+/* =========================================================
+   NOTIFICATION ITEM
+   ========================================================= */
 
-@media (max-width: 991px) {
-  
-  .sidebar {
-        width: 90px;
-        padding: 16px 10px;
-    }
-
-    .logo-area {
-        padding: 18px 10px;
-        text-align: center;
-    }
-
-    .logo-frame {
-        width: 60px;
-        height: 60px;
-    }
-
-    .logo {
-        width: 52px;
-        height: 52px;
-    }
-
-    .system-name {
-        display: none;
-    }
-
-    .nav-menu span {
-        display: none;
-    }
-
-    .nav-menu a {
-        justify-content: center;
-        padding: 12px 8px;
-    }
-
-    .nav-menu li {
-        margin: 6px 0;
-    }
-
-    .nav-menu a i {
-        font-size: 18px;
-        margin: 0;
-    }
-
-    .logout {
-        padding: 15px 10px;
-    }
-
-    .logout a {
-        justify-content: center;
-    }
-
-    .logout span {
-        display: none;
-    }
-}
-/* Notification menu item */
 .notification-link {
     display: flex !important;
+
     align-items: center;
+
     justify-content: flex-start !important;
+
     width: 100%;
 }
 
-/* Notification badge */
 .notification-badge {
     display: inline-flex;
+
     align-items: center;
     justify-content: center;
 
     min-width: 20px;
     height: 20px;
+
     padding: 0 6px;
 
-    margin-left: 6px;   /* keeps badge close to text */
+    margin-left: 6px;
 
     background: #dc3545;
+
     color: #ffffff;
 
     border-radius: 999px;
 
     font-size: 11px;
     font-weight: 700;
+
     line-height: 1;
+
     white-space: nowrap;
+
+    flex-shrink: 0;
 }
+
 /* =========================================================
-   GLOBAL FIXED/STICKY TOP BAR
-   Applies to all pages using sidebar.css
+   SIDEBAR LOGOUT
+   ---------------------------------------------------------
+   Logout is now in the profile dropdown.
+   This prevents an old sidebar Logout from appearing.
    ========================================================= */
 
-.topbar {
-    position: sticky !important;
-    top: 0 !important;
-    z-index: 1000 !important;
-    background: #ffffff !important;
+.sidebar .logout {
+    display: none !important;
+}
+
+/* =========================================================
+   MAIN CONTENT WHEN SIDEBAR IS COLLAPSED
+   ========================================================= */
+
+body.sidebar-collapsed .main {
+    margin-left: 90px;
+    transition: margin-left 0.3s ease;
+}
+
+.main {
+    margin-left: 260px;
+    transition: margin-left 0.3s ease;
+}
+
+/* =========================================================
+   SIDEBAR TOGGLE BUTTON
+   ========================================================= */
+
+.sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+
+    width: 260px;
+    height: 100vh;
+    height: 100dvh;
+
+    background: var(--primary);
+
+    display: flex;
+    flex-direction: column;
+
+    color: white;
+
+    z-index: 2000;
+
+    /*
+     * IMPORTANT:
+     * Must be visible so the toggle can sit
+     * slightly outside the sidebar.
+     */
+    overflow: visible;
+
+    transition: width 0.3s ease;
+}
+
+/* =========================================================
+   TOGGLE
+   ========================================================= */
+
+.sidebar-toggle {
+    position: absolute;
+
+    /*
+     * Put it exactly in the vertical middle
+     */
+    top: 50%;
+    right: -18px;
+
+    transform: translateY(-50%);
+
+    width: 32px;
+    height: 64px;
+
+    padding: 0;
+
+    border: none;
+
+    border-radius: 50px;
+
+    background: linear-gradient(180deg, #ffffff 0%, #f0f2f9 100%);
+    color: var(--primary);
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    cursor: pointer;
+
+    z-index: 3000;
+
+    box-shadow: 
+        0 4px 12px rgba(0, 0, 0, 0.15),
+        0 1px 3px rgba(0, 0, 0, 0.1);
+
+    transition:
+        background 0.25s ease,
+        color 0.25s ease,
+        box-shadow 0.25s ease,
+        transform 0.25s ease;
+}
+
+.sidebar-toggle:hover {
+    background: linear-gradient(180deg, #f8f9ff 0%, #e4e8f5 100%);
+    color: #1f2d73;
+
+    box-shadow: 
+        0 6px 16px rgba(0, 0, 0, 0.2),
+        0 2px 4px rgba(0, 0, 0, 0.1);
+
+    transform: translateY(-50%) scale(1.05);
+}
+
+.sidebar-toggle:active {
+    transform: translateY(-50%) scale(0.95);
+
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.sidebar-toggle:focus-visible {
+    outline: 3px solid rgba(43, 58, 140, 0.4);
+    outline-offset: 2px;
+}
+
+.sidebar-toggle i {
+    font-size: 18px;
+    font-weight: 700;
+
+    line-height: 1;
+
+    pointer-events: none;
+
+    transition: transform 0.3s ease;
+}
+
+/* =========================================================
+   NAVIGATION
+   ========================================================= */
+
+.nav-menu {
+    margin-top: 20px;
+
+    flex: 1;
+    min-height: 0;
+
+    padding-bottom: 10px;
+
+    /*
+     * The nav itself handles scrolling.
+     * The sidebar stays overflow:visible
+     * so the toggle isn't clipped.
+     */
+    overflow-x: hidden;
+    overflow-y: auto;
+
+    overscroll-behavior: contain;
+
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,.45) transparent;
+
+    -webkit-overflow-scrolling: touch;
+}
+
+/* =========================================================
+   NAV LINKS
+   ========================================================= */
+
+.nav-menu li {
+    margin: 6px 12px;
+}
+
+.nav-menu a {
+    width: 100%;
+    min-width: 0;
+
+    color: white;
+    text-decoration: none;
+
+    display: flex;
+    align-items: center;
+
+    gap: 12px;
+
+    padding: 12px 15px;
+
+    border-radius: 10px;
+
+    transition: .25s;
+
+    font-size: 15px;
+
+    /*
+     * IMPORTANT:
+     * Allows long menu labels to wrap.
+     */
+    white-space: normal;
+}
+
+/* ICON */
+
+.nav-menu a > i {
+    flex: 0 0 22px;
+
+    width: 22px;
+
+    text-align: center;
+
+    font-size: 18px;
+}
+
+/* TEXT */
+
+.nav-menu a > span {
+    flex: 1 1 auto;
+
+    min-width: 0;
+
+    /*
+     * Allows:
+     *
+     * Branch Performance
+     * Monitoring
+     *
+     * instead of getting cut.
+     */
+    white-space: normal;
+
+    overflow-wrap: break-word;
+
+    line-height: 1.25;
+}
+
+/* HOVER */
+
+.nav-menu a:hover {
+    background: rgba(255,255,255,.12);
+}
+
+/* ACTIVE */
+
+.nav-menu a.active {
+    background: white;
+    color: var(--primary);
+    font-weight: 600;
+}
+
+/* =========================================================
+   COLLAPSED SIDEBAR
+   ========================================================= */
+
+.sidebar.collapsed {
+    width: 90px;
+}
+
+/* Hide text */
+
+.sidebar.collapsed .system-name,
+.sidebar.collapsed .nav-menu a > span {
+    display: none;
+}
+
+/* Center nav icons */
+
+.sidebar.collapsed .nav-menu li {
+    margin: 6px 10px;
+}
+
+.sidebar.collapsed .nav-menu a {
+    justify-content: center;
+
+    padding: 12px 8px;
+
+    gap: 0;
+}
+
+.sidebar.collapsed .nav-menu a > i {
+    flex: 0 0 auto;
+
+    width: auto;
+
+    font-size: 19px;
+}
+
+/* Logo */
+
+.sidebar.collapsed .logo-area {
+    padding: 18px 10px;
+}
+
+.sidebar.collapsed .logo-frame {
+    width: 60px;
+    height: 60px;
+}
+
+.sidebar.collapsed .logo {
+    width: 52px;
+    height: 52px;
+}
+
+/* =========================================================
+   COLLAPSED TOGGLE
+   ========================================================= */
+
+.sidebar.collapsed .sidebar-toggle {
+    /*
+     * Same vertical center.
+     * It stays attached to the new 90px edge.
+     */
+    top: 50%;
+    right: -18px;
+
+    transform: translateY(-50%);
+}
+
+/* =========================================================
+   LOGOUT
+   ========================================================= */
+
+.logout {
+    padding: 20px;
+
+    flex-shrink: 0;
+
+    border-top: 1px solid rgba(255,255,255,.12);
+
+    background: var(--primary);
+}
+
+.logout a {
+    color: #ffb0b0;
+
+    text-decoration: none;
+
+    display: flex;
+    align-items: center;
+
+    gap: 12px;
+
+    font-weight: 600;
+}
+/* Add this to your existing CSS */
+.notification-details-modal .modal-body {
+    padding: 26px;
+    padding-bottom: 40px; /* Increase bottom padding to push content up */
+    background: #f8fafc;
+}
+
+/* Or add specific margin to the ID row */
+.notification-id-row {
+    /* ... existing styles ... */
+    margin-bottom: 20px; /* Add this to create a gap before the footer */
+}
+
+/* =========================================================
+   TABLET
+   ========================================================= */
+
+@media (max-width: 991px) {
+
+    .sidebar {
+        width: 90px;
+    }
+
+    .sidebar .system-name,
+    .sidebar .nav-menu a > span {
+        display: none;
+    }
+
+    .sidebar .nav-menu li {
+        margin: 6px 10px;
+    }
+
+    .sidebar .nav-menu a {
+        justify-content: center;
+        padding: 12px 8px;
+        gap: 0;
+    }
+
+    .sidebar .nav-menu a > i {
+        flex: 0 0 auto;
+        width: auto;
+        font-size: 19px;
+    }
+
+    .sidebar .logo-area {
+        padding: 18px 10px;
+    }
+
+    .sidebar .logo-frame {
+        width: 60px;
+        height: 60px;
+    }
+
+    .sidebar .logo {
+        width: 52px;
+        height: 52px;
+    }
+
+    .sidebar-toggle {
+        top: 50%;
+        right: -18px;
+
+        width: 32px;
+        height: 64px;
+
+        transform: translateY(-50%);
+    }
+}
+
+/* =========================================================
+   VERY SMALL SCREENS
+   ========================================================= */
+
+@media (max-width: 575px) {
+
+    .sidebar {
+        width: 80px;
+    }
+
+    .sidebar-toggle {
+        right: -16px;
+
+        width: 28px;
+        height: 56px;
+    }
+    
+    .sidebar-toggle i {
+        font-size: 16px;
+    }
 }

@@ -533,6 +533,31 @@ while ($row = $items_result->fetch_assoc()) {
             padding: 35px 35px 40px;
         }
 
+        /* Notification sidebar badge */
+.notification-link {
+    display: flex !important;
+    align-items: center;
+    width: 100%;
+}
+
+.notification-badge {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    margin-left: auto;
+    border-radius: 999px;
+    background: #F21D2F;
+    color: #fff !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    line-height: 1;
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+
   /* =========================================================
    SYSTEM TOAST / PAGE ALERT
    ========================================================= */
@@ -1266,12 +1291,24 @@ while ($row = $items_result->fetch_assoc()) {
 <body>
 
 <!-- ========== SIDEBAR ========== -->
-<div class="sidebar">
+<div class="sidebar" id="sidebar">
+
+    <button type="button"
+            class="sidebar-toggle"
+            id="sidebarToggle"
+            aria-label="Toggle sidebar"
+            aria-expanded="true">
+        <i class="bi bi-chevron-left"></i>
+    </button>
+
     <div class="logo-area">
         <div class="logo-frame">
-            <img src="logo.png" alt="Smart Bite Care Logo" class="logo">
+            <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
         </div>
-        <div class="system-name">Smart Bite Care</div>
+
+        <div class="system-name">
+            Smart Bite Care
+        </div>
     </div>
 
     <nav class="nav-menu">
@@ -1771,6 +1808,7 @@ while ($row = $items_result->fetch_assoc()) {
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="sources/sidebar.js"></script>
 <script>
 // ============================================
 // FORECAST VISUALIZATION + FILTER + PAGINATION

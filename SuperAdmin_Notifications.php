@@ -980,13 +980,25 @@ $flash = workflowTakeFlash();
 </head>
 <body>
 
-<!-- ========== SIDEBAR (Super Admin) ========== -->
-<div class="sidebar">
+<!-- ========== SIDEBAR ========== -->
+<div class="sidebar" id="sidebar">
+
+    <button type="button"
+            class="sidebar-toggle"
+            id="sidebarToggle"
+            aria-label="Toggle sidebar"
+            aria-expanded="true">
+        <i class="bi bi-chevron-left"></i>
+    </button>
+
     <div class="logo-area">
         <div class="logo-frame">
             <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
         </div>
-        <div class="system-name">Smart Bite Care</div>
+
+        <div class="system-name">
+            Smart Bite Care
+        </div>
     </div>
 
     <nav class="nav-menu">
@@ -1261,6 +1273,7 @@ $flash = workflowTakeFlash();
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="sources/sidebar.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.view-more-btn').forEach(function (button) {

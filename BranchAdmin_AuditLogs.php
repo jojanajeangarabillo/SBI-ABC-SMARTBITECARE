@@ -814,6 +814,30 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
         .content-wrapper {
             padding: 28px 35px 40px 35px;
         }
+        /* Notification sidebar badge */
+.notification-link {
+    display: flex !important;
+    align-items: center;
+    width: 100%;
+}
+
+.notification-badge {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    margin-left: auto;
+    border-radius: 999px;
+    background: #F21D2F;
+    color: #fff !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    line-height: 1;
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
 
         /* =====================================================
    SUMMARY CARDS
@@ -1538,16 +1562,26 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
     </style>
 </head>
 <body>
-    <!-- SIDEBAR -->
-    <div class="sidebar">
-        <div class="logo-area">
-            <div class="logo-frame">
-                <img src="logo.png" alt="Smart Bite Care Logo" class="logo">
-            </div>
-            <div class="system-name">
-                Smart Bite Care
-            </div>
+    <!-- ========== SIDEBAR ========== -->
+<div class="sidebar" id="sidebar">
+
+    <button type="button"
+            class="sidebar-toggle"
+            id="sidebarToggle"
+            aria-label="Toggle sidebar"
+            aria-expanded="true">
+        <i class="bi bi-chevron-left"></i>
+    </button>
+
+    <div class="logo-area">
+        <div class="logo-frame">
+            <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
         </div>
+
+        <div class="system-name">
+            Smart Bite Care
+        </div>
+    </div>
 
         <nav class="nav-menu">
             <ul>
@@ -1944,6 +1978,7 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
 </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="sources/sidebar.js"></script>
     <script>
         function toggleFilters() {
             const filterSection = document.getElementById('filterSection');

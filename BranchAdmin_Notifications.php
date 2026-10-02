@@ -146,6 +146,7 @@ $flash = workflowTakeFlash();
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
     <link rel="stylesheet" href="sidebar.css">
+    <link rel="stylesheet" href="notif-num.css">
     <style>
         :root{--primary:#2B3A8C;--primary-dark:#1f2d6e;--bg:#f4f6fb;--text:#1f2a44;--muted:#6b7280;--border:#e2e7f0}
         *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:"Segoe UI",Arial,sans-serif}
@@ -291,8 +292,26 @@ $flash = workflowTakeFlash();
     </style>
 </head>
 <body>
-<aside class="sidebar">
-    <div class="logo-area"><div class="logo-frame"><img src="logo.png" alt="Smart Bite Care Logo" class="logo"></div><div class="system-name">Smart Bite Care</div></div>
+<!-- ========== SIDEBAR ========== -->
+<aside class="sidebar" id="sidebar">
+
+    <button type="button"
+            class="sidebar-toggle"
+            id="sidebarToggle"
+            aria-label="Toggle sidebar"
+            aria-expanded="true">
+        <i class="bi bi-chevron-left"></i>
+    </button>
+
+    <div class="logo-area">
+        <div class="logo-frame">
+            <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
+        </div>
+
+        <div class="system-name">
+            Smart Bite Care
+        </div>
+    </div>
     <nav class="nav-menu" aria-label="Branch Admin navigation"><ul>
          <li><a href="BranchAdmin_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
                 <li><a href="BranchAdmin_UserManagement.php"><i class="bi bi-people-fill"></i><span>User Management</span></a></li>
@@ -441,6 +460,7 @@ $flash = workflowTakeFlash();
 
 </main>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="sources/sidebar.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.view-more-btn').forEach(function (button) {

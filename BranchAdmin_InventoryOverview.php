@@ -271,6 +271,31 @@ $recentStmt->close();
             font-weight: 400;
         }
 
+        /* Notification sidebar badge */
+.notification-link {
+    display: flex !important;
+    align-items: center;
+    width: 100%;
+}
+
+.notification-badge {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    margin-left: auto;
+    border-radius: 999px;
+    background: #F21D2F;
+    color: #fff !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    line-height: 1;
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+
 /* =========================================================
    GLOBAL LOGOUT CONFIRMATION MODAL 
    ========================================================= */
@@ -873,11 +898,26 @@ $recentStmt->close();
 </head>
 
 <body>
-    <div class="sidebar">
-        <div class="logo-area">
-            <div class="logo-frame"><img src="logo.png" alt="Smart Bite Care Logo" class="logo"></div>
-            <div class="system-name">Smart Bite Care</div>
+    <!-- ========== SIDEBAR ========== -->
+<div class="sidebar" id="sidebar">
+
+    <button type="button"
+            class="sidebar-toggle"
+            id="sidebarToggle"
+            aria-label="Toggle sidebar"
+            aria-expanded="true">
+        <i class="bi bi-chevron-left"></i>
+    </button>
+
+    <div class="logo-area">
+        <div class="logo-frame">
+            <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
         </div>
+
+        <div class="system-name">
+            Smart Bite Care
+        </div>
+    </div>
 
         <nav class="nav-menu">
             <ul>
@@ -1110,6 +1150,7 @@ $recentStmt->close();
 </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="sources/sidebar.js"></script>
     <script>
         const tabs = document.querySelectorAll('.category-tab');
         const rows = Array.from(document.querySelectorAll('.inventory-row'));

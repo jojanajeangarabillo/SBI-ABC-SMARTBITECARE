@@ -605,7 +605,7 @@
                         <span class="tag"><i class="bi bi-capsule"></i> Vaccine Tracking</span>
                         <span class="tag"><i class="bi bi-shield-lock"></i> Secure & Reliable</span>
                         <span class="tag"><i class="bi bi-box-seam"></i> Inventory Management</span>
-                        <span class="tag"><i class="bi bi-graph-up"></i> AI Predictions</span>
+                        <span class="tag"><i class="bi bi-graph-up"></i> Medical Supply Forecasting</span>
                     </div>
                 </div>
             </div>
@@ -672,8 +672,8 @@
                     <div class="feature-grid-card">
                         <span class="fg-paw"><i class="bi bi- paw"></i></span>
                         <div class="fg-icon"><i class="bi bi-cpu"></i></div>
-                        <div class="fg-title">AI-Powered Predictions</div>
-                        <div class="fg-desc">AI forecasting for supply optimization.</div>
+                        <div class="fg-title">Machine Learning Powered Forecasting</div>
+                        <div class="fg-desc">Machine learning-based forecasting for supply optimization.</div>
                     </div>
                 </div>
                 <div class="col-md-3 col-sm-6">

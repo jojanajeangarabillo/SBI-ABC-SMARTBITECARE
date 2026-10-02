@@ -1844,6 +1844,8 @@ function itemStatusClass($status)
     rel="stylesheet"
     href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
 >
+<link rel="stylesheet" href="notif-num.css">
+
 
 <link
     rel="stylesheet"
@@ -2570,29 +2572,25 @@ body {
 <body>
 
 
-<!-- =====================================================
-     SIDEBAR
-     ===================================================== -->
+<!-- ========== SIDEBAR ========== -->
+<div class="sidebar" id="sidebar">
 
-<div class="sidebar">
+    <button type="button"
+            class="sidebar-toggle"
+            id="sidebarToggle"
+            aria-label="Toggle sidebar"
+            aria-expanded="true">
+        <i class="bi bi-chevron-left"></i>
+    </button>
 
     <div class="logo-area">
-
         <div class="logo-frame">
-
-            <img
-                src="logo.png"
-                alt="Smart Bite Care Logo"
-                class="logo"
-            >
-
+            <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
         </div>
-
 
         <div class="system-name">
             Smart Bite Care
         </div>
-
     </div>
 
 
@@ -4296,6 +4294,7 @@ body {
     src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
 ></script>
 
+<script src="sources/sidebar.js"></script>
 
 <script>
 

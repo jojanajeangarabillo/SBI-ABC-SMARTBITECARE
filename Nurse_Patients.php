@@ -1471,6 +1471,7 @@ function getStatusBadge($status)
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
     <!-- Reusable Sidebar CSS (simulated) -->
     <link rel="stylesheet" href="sidebar.css" />
+    <link rel="stylesheet" href="notif-num.css">
     <style>
         /* =========================================
            INTERNAL CSS – matches image style
@@ -1504,39 +1505,48 @@ function getStatusBadge($status)
         }
 
         .topbar {
-            background: white;
             height: 80px;
+            padding: 0 35px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 35px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            background: #fff;
             border-bottom: 1px solid #e9edf5;
+            box-shadow: 0 2px 8px rgba(0,0,0,.05);
         }
+
         .topbar h3 {
+            margin: 0;
+            color: var(--primary);
             font-size: 28px;
             font-weight: 700;
-            color: var(--primary);
-            margin: 0;
-            letter-spacing: -0.3px;
+            letter-spacing: -.3px;
         }
+
         .topbar h3 small {
-            font-size: 16px;
-            font-weight: 400;
-            color: #666;
             margin-left: 10px;
+            color: #6c757d;
+            font-size: 15px;
+            font-weight: 400;
         }
+
         .profile {
-            font-weight: 600;
-            color: var(--primary);
-            cursor: default;
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 7px;
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .profile-role {
+            margin-left: 3px;
+            color: #adb5bd;
+            font-size: 12px;
+            font-weight: 400;
         }
 
         .content {
-            padding: 35px 35px 40px;
+            padding: 30px 35px 42px;
         }
 
         /* ---- page header ---- */
@@ -1942,11 +1952,11 @@ function getStatusBadge($status)
                 width: 90px;
                 padding: 16px 10px;
             }
-            .system-name,
-            .nav-menu span,
-            .logout span {
-                display: none;
-            }
+                .system-name,
+    .nav-menu span:not(.notification-badge),
+    .logout span {
+        display: none;
+    }
             .logo-area {
                 justify-content: center;
             }
@@ -2046,13 +2056,25 @@ function getStatusBadge($status)
 </div>
 <?php endif; ?>
 
-<!-- ========== SIDEBAR (Nurse) ========== -->
-<div class="sidebar">
+<!-- ========== SIDEBAR ========== -->
+<div class="sidebar" id="sidebar">
+
+    <button type="button"
+            class="sidebar-toggle"
+            id="sidebarToggle"
+            aria-label="Toggle sidebar"
+            aria-expanded="true">
+        <i class="bi bi-chevron-left"></i>
+    </button>
+
     <div class="logo-area">
         <div class="logo-frame">
             <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
         </div>
-        <div class="system-name">Smart Bite Care</div>
+
+        <div class="system-name">
+            Smart Bite Care
+        </div>
     </div>
 
        <nav class="nav-menu">
@@ -2064,22 +2086,12 @@ function getStatusBadge($status)
             <li><a href="Nurse_Vaccination.php"><i class="bi bi-shield-plus"></i><span>Vaccination</span></a></li>
             <li><a href="Nurse_DailyInventory.php"><i class="bi bi-clipboard-data-fill"></i><span>Daily Inventory</span></a></li>
             <li><a href="Nurse_MedicalSuppliesManagement.php"><i class="bi bi-calendar-check"></i><span>Medical Supplies Management</span></a></li>
-            <li><a href="Nurse_Supplyforecasting.php"><i class="bi bi-box-seam"></i><span>Supply Forecasting</span></a></li>
-            <li>
-                <a href="Nurse_Notification.php">
-                    <i class="bi bi-bell-fill"></i>
-
-                    <span class="notification-label">
-                        Notifications
-
+            <li><a href="Nurse_Supplyforecasting.php"><i class="bi bi-graph-up-arrow"></i><span>Supply Forecasting</span></a></li>
+            <li><a  href="Nurse_Notification.php" class="notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
                         <?php if ($notification_count > 0): ?>
-                            <span class="notification-badge">
-                                <?php echo $notification_count; ?>
-                            </span>
+                            <span class="notification-badge"><?php echo $notification_count; ?></span>
                         <?php endif; ?>
-                    </span>
-                </a>
-            </li>
+                    </a></li>
         </ul>
     </nav>
 
@@ -2332,6 +2344,7 @@ function getStatusBadge($status)
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="sources/sidebar.js"></script>
 <script>
 function escapeHtml(value) {
     return String(value ?? '')
