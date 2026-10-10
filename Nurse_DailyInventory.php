@@ -2,6 +2,7 @@
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
+require_once 'sources/forecast_training_helper.php';
 require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/notification_helper.php';
 require_once __DIR__ . '/fpdf/fpdf.php';
@@ -344,6 +345,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
+        forecastTrainingAssertDate($conn, $inventoryDate);
+        $conn->begin_transaction();
+        forecastTrainingRevision($conn, $branchId, true);
+
         $usageStmt = $conn->prepare(
             'SELECT COALESCE(SUM(quantity_used),0) AS consumed FROM inventory_usage_history
              WHERE item_id=? AND branch_id=? AND usage_date=?'
@@ -355,7 +360,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $computed = $beginning + $delivery - $consumed - $pullOut;
         $variance = $actual - $computed;
 
-        $conn->begin_transaction();
         $stmt = $conn->prepare(
             "INSERT INTO daily_inventory_closings
              (branch_id,item_id,inventory_date,beginning_stock,delivery,consumed,pull_out,
@@ -364,11 +368,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
              ON DUPLICATE KEY UPDATE beginning_stock=VALUES(beginning_stock),delivery=VALUES(delivery),
               consumed=VALUES(consumed),pull_out=VALUES(pull_out),computed_ending=VALUES(computed_ending),
               actual_count=VALUES(actual_count),variance=VALUES(variance),remarks=VALUES(remarks),
-              status='Submitted',submitted_by=VALUES(submitted_by),submitted_at=NOW()"
+              status='Submitted',submitted_by=VALUES(submitted_by),submitted_at=NOW(),
+              reviewed_by=NULL,reviewed_at=NULL"
         );
         $stmt->bind_param('sisdddddddsi', $branchId,$itemId,$inventoryDate,$beginning,$delivery,$consumed,$pullOut,$computed,$actual,$variance,$remarks,$userId);
         $stmt->execute();
         $stmt->close();
+        $trainingSynced = forecastTrainingSyncClosing($conn, $branchId, $itemId, $inventoryDate);
         workflowAudit(
             $conn,
             $userId,
@@ -382,7 +388,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'Daily Inventory'
         );
         $conn->commit();
-        workflowFlash('success','Daily inventory submitted. Consumed quantity was calculated from completed treatment records.');
+        workflowFlash('success', 'Daily inventory submitted. Consumed quantity was calculated from completed treatment records.'
+            . ($trainingSynced ? ' The forecasting dataset was updated; forecasts will refresh when the Branch Administrator opens Supply Forecasting.' : ' This item is not enabled for forecasting.'));
     } catch (Throwable $e) {
         try { $conn->rollback(); } catch (Throwable $ignored) {}
         workflowFlash('danger',$e->getMessage());
@@ -996,10 +1003,15 @@ $flash=workflowTakeFlash();
                                     <td><?= workflowH(inventoryStockBreakdown((float)$closing['actual_count'],$closing)) ?></td>
                                     <td><span class="variance-badge <?= $hasVariance ? 'difference' : 'match' ?>"><?= workflowH(inventoryUsageDescription((float)$closing['variance'],$closing)) ?></span></td>
                                     <td>
+                                        <?php if ($closing['status'] === 'Draft'): ?>
+                                            <span class="result-badge variance">Resubmission required</span>
+                                            <div class="small text-danger mt-1">Usage changed after closing. Select this item and date above and submit updated counts.</div>
+                                        <?php else: ?>
                                         <span class="result-badge <?= $hasVariance ? 'variance' : 'tallied' ?>">
                                             <i class="bi <?= $hasVariance ? 'bi-exclamation-triangle-fill' : 'bi-check-circle-fill' ?>"></i>
                                             <?= $hasVariance ? 'Needs review' : 'Tallied' ?>
                                         </span>
+                                        <?php endif; ?>
                                         <?php if ($hasVariance && trim((string)($closing['remarks'] ?? '')) !== ''): ?>
                                             <div class="small text-muted mt-1" title="<?= workflowH((string)$closing['remarks']) ?>">Adjustment note recorded</div>
                                         <?php endif; ?>
@@ -1196,8 +1208,8 @@ document.getElementById('item_id')?.addEventListener('change', function () {
         label.textContent = `(${baseUnit})`;
     });
     document.querySelectorAll('.inventory-number').forEach(input => {
-        input.step = step;
-    });
+    input.step = '0.0001';
+});
 
     if (selected.dataset.stock !== undefined && beginning && beginning.value === '') {
         beginning.value = String(Number(selected.dataset.stock));

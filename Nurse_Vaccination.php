@@ -6,6 +6,7 @@ error_reporting(E_ALL);
 ini_set('display_errors', 0); 
 
 require_once 'sources/db_connect.php';
+require_once 'sources/forecast_training_helper.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/notification_helper.php';
@@ -1001,6 +1002,8 @@ if (isset($_POST['submit_vaccination'])) {
     $conn->begin_transaction();
 
     try {
+        forecastTrainingRevision($conn, $branch_id, true);
+        $reopened_closings = 0;
         $success_count = 0;
         $vaccination_details = [];
 
@@ -1459,6 +1462,7 @@ if (isset($_POST['submit_vaccination'])) {
                     throw new Exception('Failed to save usage history.');
                 }
                 $stmt->close();
+                $reopened_closings += forecastTrainingUsageChanged($conn, $branch_id, $item_id, $date_administered);
 
                 // Registry dose flags represent completed doses only.
                 $updateReg = $conn->prepare("
@@ -1581,10 +1585,15 @@ if (isset($_POST['submit_vaccination'])) {
             );
         }
 
+        if ($reopened_closings > 0) {
+            createNotification($conn, $user_id, 'Daily Inventory Resubmission Required',
+                'Vaccination usage changed after ' . $reopened_closings . ' daily inventory closing(s). Resubmit the affected item/date with updated physical counts to restore its forecasting training record.', 'inventory');
+        }
         $conn->commit();
         echo json_encode([
             'success' => true,
             'message' => 'Successfully saved ' . $success_count . ' vaccination entr' . ($success_count === 1 ? 'y' : 'ies') . '.'
+                . ($reopened_closings > 0 ? ' Resubmit ' . $reopened_closings . ' affected daily inventory closing(s) because usage changed after closing.' : '')
         ]);
         exit;
 
