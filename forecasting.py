@@ -346,6 +346,7 @@ def load_training_data(branch_id):
                 ON c.category_id = i.category_id
             WHERE t.branch_id = %s
               AND i.is_forecastable = 1
+              AND t.record_date <= CURDATE()
             ORDER BY t.record_date, t.item_id
         """
 
@@ -1203,6 +1204,13 @@ def forecast_inventory(branch_id, forecast_days):
             "No historical training records were found "
             f"for branch {branch_id}."
         )
+
+    # Exclude future-dated data before evaluation and final model training,
+    # not only while building each item's forecast history.
+    raw_dates = pd.to_datetime(raw_training_data['record_date'], errors='coerce')
+    raw_training_data = raw_training_data.loc[
+        raw_dates.dt.normalize() <= pd.Timestamp(database_today).normalize()
+    ].copy()
 
     clean_history, model_data = prepare_training_data(
         raw_training_data

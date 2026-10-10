@@ -6,6 +6,7 @@ session_start();
 // ============================================
 
 require_once 'sources/db_connect.php';
+require_once 'sources/forecast_training_helper.php';
 require_once 'sources/notification_helper.php';
 
 // Check if user is logged in and is Branch Admin (role_id = 2)
@@ -148,6 +149,7 @@ $eligible_sql = "SELECT COUNT(*) AS eligible_count
                      JOIN inventory_items i ON i.item_id = td.item_id
                      WHERE td.branch_id = ?
                        AND i.is_forecastable = 1
+                       AND td.record_date <= CURDATE()
                      GROUP BY td.item_id
                      HAVING COUNT(*) >= ?
                  ) AS eligible_items";
@@ -186,7 +188,8 @@ $today_forecast_count = (int)($latest_forecast_data['today_forecast_count'] ?? 0
 $stale_forecast_count = (int)($latest_forecast_data['stale_forecast_count'] ?? 0);
 $latest_forecast_stmt->close();
 
-$forecast_is_due = $eligible_item_count > 0 && $today_forecast_count === 0;
+$forecast_is_due = $eligible_item_count > 0
+    && ($today_forecast_count === 0 || $stale_forecast_count > 0);
 
 if ($forecast_is_due) {
     $python_script = __DIR__ . '/forecasting.py';
@@ -206,12 +209,17 @@ if ($forecast_is_due) {
             . ' ' . escapeshellarg((string)$forecast_days)
             . ' 2>&1';
 
+        $training_revision_before = forecastTrainingRevision($conn, $branch_id);
         $output = shell_exec($python_command);
         $result = is_string($output) ? json_decode(trim($output), true) : null;
 
         if ($result && !empty($result['success']) && !empty($result['forecasts']) && is_array($result['forecasts'])) {
             try {
                 $conn->begin_transaction();
+                $training_revision_after = forecastTrainingRevision($conn, $branch_id, true);
+                if ($training_revision_after !== $training_revision_before) {
+                    throw new RuntimeException('Clinic usage or daily inventory changed while forecasting was running. Reload this page to generate a fresh forecast.');
+                }
 
                 // Keep other forecast horizons. Replace only the currently selected horizon.
                 $delete_forecasts_stmt = $conn->prepare(
@@ -418,7 +426,7 @@ $stats_sql = "SELECT
                 MAX(record_date) as latest_date,
                 AVG(quantity_used) as avg_usage
              FROM training_dataset 
-             WHERE branch_id = ?";
+             WHERE branch_id = ? AND record_date <= CURDATE()";
 $stats_stmt = $conn->prepare($stats_sql);
 $stats_stmt->bind_param("s", $branch_id);
 $stats_stmt->execute();

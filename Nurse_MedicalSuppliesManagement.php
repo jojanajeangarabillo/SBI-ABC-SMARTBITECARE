@@ -4,22 +4,22 @@ session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/inventory_unit_helpers.php';
+require_once 'sources/forecast_training_helper.php';
 require_once 'sources/notification_helper.php';
 
 /* ============================================================
- * NURSE - MEDICAL SUPPLY MONITORING
+ * NURSE - MEDICAL SUPPLY MANAGEMENT
  * ------------------------------------------------------------
  * Purpose of this page:
- *   - Read-only monitoring of branch medical supplies
+ *   - Branch medical supply monitoring and consumption recording
  *   - Low/out-of-stock and expiration monitoring
- *   - Read-only medical-supply usage history
+ *   - Medical-supply usage history and batch stock deductions
  *   - Restock requests to the branch Inventory Officer
  *
  * IMPORTANT:
- *   This page DOES NOT deduct stock and DOES NOT record vaccine
- *   administration. Vaccination usage is handled by
- *   Nurse_Vaccination.php and daily closing is handled by
- *   Nurse_DailyInventory.php.
+ *   Only Record Supply Usage deducts stock here. Never re-enter consumption
+ *   already recorded in Vaccination or Assessment. This page does not create
+ *   clinical administration records. Daily closing remains a separate step.
  * ============================================================ */
 
 $user = workflowRequireUser($conn, 3); // Nurse only
@@ -104,7 +104,7 @@ function restockRecipientIds(mysqli $conn, string $branchId): array
 function fetchMedicalSupply(mysqli $conn, int $itemId): ?array
 {
     $stmt = $conn->prepare(
-        "SELECT i.item_id,i.item_name,i.minimum_stock,u.unit_name,
+        "SELECT i.item_id,i.item_name,i.minimum_stock,i.is_consumable,u.unit_name,
                 COALESCE(NULLIF(i.base_unit_label,''),u.unit_name) AS base_unit_label,
                 COALESCE(NULLIF(i.display_unit_label,''),u.unit_name) AS display_unit_label,
                 COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base
@@ -139,14 +139,204 @@ function currentUsableStock(mysqli $conn, int $itemId, string $branchId): float
     return $total;
 }
 
+function supplyStatement(mysqli $conn, string $sql): mysqli_stmt
+{
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) throw new RuntimeException('Unable to prepare medical-supply records.');
+    return $stmt;
+}
+
+function supplyExecute(mysqli_stmt $stmt): void
+{
+    if (!$stmt->execute()) throw new RuntimeException('Unable to save medical-supply records.');
+}
+
+function supplyTextLength(string $text): int
+{
+    return function_exists('mb_strlen') ? mb_strlen($text, 'UTF-8')
+        : (preg_match_all('/./us', $text, $matches) ?: strlen($text));
+}
+
+/** One form token represents one stock movement, including browser retries. */
+function supplyUsageFormToken(): string
+{
+    $tokens = $_SESSION['supply_usage_tokens'] ?? [];
+    if (!is_array($tokens)) $tokens = [];
+    foreach ($tokens as $token => $issuedAt) {
+        if ((int)$issuedAt < time() - 86400) unset($tokens[$token]);
+    }
+    // Keep separate forms in different tabs usable without growing the session.
+    $tokens = array_slice($tokens, -63, null, true);
+    $token = bin2hex(random_bytes(32));
+    $tokens[$token] = time();
+    $_SESSION['supply_usage_tokens'] = $tokens;
+    return $token;
+}
+
+/** All stock, usage, audit, and forecast changes succeed or roll back together. */
+function recordSupplyUsage(mysqli $conn, int $userId, string $branchId): string
+{
+    $token = trim((string)($_POST['usage_token'] ?? ''));
+    $issuedAt = $_SESSION['supply_usage_tokens'][$token] ?? 0;
+    if (!preg_match('/^[a-f0-9]{64}$/D', $token) || (int)$issuedAt < time() - 86400) {
+        throw new RuntimeException('This usage form expired. Refresh the page and try again.');
+    }
+    if (($_POST['usage_not_previously_recorded'] ?? '') !== '1') {
+        throw new RuntimeException('Confirm that this consumption has not already been recorded.');
+    }
+    $itemId = filter_var($_POST['item_id'] ?? '', FILTER_VALIDATE_INT,
+        ['options' => ['min_range' => 1, 'max_range' => 2147483647]]);
+    $quantityText = trim((string)($_POST['quantity_used'] ?? ''));
+    // Match DECIMAL(12,4), reject exponent notation and silently truncated input.
+    if (!$itemId || !preg_match('/^\d{1,8}(?:\.\d{1,4})?$/D', $quantityText)) {
+        throw new RuntimeException('Select a supply and enter a quantity with at most four decimal places.');
+    }
+    $quantity = (float)$quantityText;
+    if ($quantity <= 0 || !is_finite($quantity)) {
+        throw new RuntimeException('Quantity used must be greater than zero.');
+    }
+    $date = trim((string)($_POST['usage_date'] ?? ''));
+    if (!validInventoryDate($date)) throw new RuntimeException('Enter a valid usage date.');
+    forecastTrainingAssertDate($conn, $date);
+    $remarks = trim((string)($_POST['usage_remarks'] ?? ''));
+    if (supplyTextLength($remarks) > 500) throw new RuntimeException('Usage remarks must not exceed 500 characters.');
+    $patientText = trim((string)($_POST['patient_id'] ?? ''));
+    $patientId = $patientText === '' ? 0 : filter_var($patientText, FILTER_VALIDATE_INT,
+        ['options' => ['min_range' => 1, 'max_range' => 2147483647]]);
+    if ($patientId === false) throw new RuntimeException('Enter a valid patient ID or leave it blank.');
+
+    $conn->begin_transaction();
+    try {
+        // The same branch lock is used by patched Vaccination and Daily Inventory.
+        forecastTrainingRevision($conn, $branchId, true);
+        $marker = 'Supply usage #' . $token . ' | ';
+        $markerPattern = $marker . '%';
+        $duplicate = supplyStatement($conn,
+            "SELECT transaction_id FROM stock_transactions
+             WHERE branch_id=? AND user_id=? AND transaction_type='OUT'
+               AND vaccination_id IS NULL AND remarks LIKE ? LIMIT 1");
+        $duplicate->bind_param('sis', $branchId, $userId, $markerPattern);
+        supplyExecute($duplicate);
+        $alreadyRecorded = $duplicate->get_result()->fetch_assoc();
+        $duplicate->close();
+        if ($alreadyRecorded) {
+            $conn->commit();
+            return 'This supply usage was already saved. Stock was not deducted again.';
+        }
+
+        $item = fetchMedicalSupply($conn, (int)$itemId);
+        if (!$item || !(bool)$item['is_consumable']) {
+            throw new RuntimeException('Select a consumable medical supply, not reusable equipment.');
+        }
+        if (inventoryIsSiteBased($item) && abs($quantity - round($quantity)) > 0.00001) {
+            throw new RuntimeException('Site-based consumption must be entered in whole sites.');
+        }
+        $patientLabel = '';
+        if ($patientId > 0) {
+            $patient = supplyStatement($conn,
+                'SELECT patient_id FROM patients WHERE patient_id=? AND branch_id=? LIMIT 1');
+            $patient->bind_param('is', $patientId, $branchId);
+            supplyExecute($patient);
+            $foundPatient = $patient->get_result()->fetch_assoc();
+            $patient->close();
+            if (!$foundPatient) throw new RuntimeException('The patient was not found in your branch.');
+            $patientLabel = ' | Patient ID: ' . $patientId;
+        }
+
+        $stock = supplyStatement($conn,
+            "SELECT stock_id,batch_lot_no,quantity_available,expiration_date
+             FROM inventory_stocks
+             WHERE item_id=? AND branch_id=? AND quantity_available>0
+               AND (expiration_date IS NULL OR expiration_date>=CURDATE())
+             ORDER BY CASE WHEN expiration_date IS NULL THEN 1 ELSE 0 END,
+                      expiration_date,stock_id FOR UPDATE");
+        $stock->bind_param('is', $itemId, $branchId);
+        supplyExecute($stock);
+        $batches = $stock->get_result()->fetch_all(MYSQLI_ASSOC);
+        $stock->close();
+        $available = round(array_sum(array_map(fn($batch) => (float)$batch['quantity_available'], $batches)), 4);
+        if ($available + 0.00005 < $quantity) {
+            throw new RuntimeException('Insufficient usable stock. Available: '
+                . inventoryUsageDescription($available, $item) . '.');
+        }
+        $remaining = $quantity;
+        $batchDetails = [];
+        foreach ($batches as $batch) {
+            if ($remaining <= 0.00005) break;
+            $take = round(min((float)$batch['quantity_available'], $remaining), 4);
+            $stockId = (int)$batch['stock_id'];
+            $update = supplyStatement($conn,
+                'UPDATE inventory_stocks SET quantity_available=quantity_available-?,
+                 last_updated=CURRENT_TIMESTAMP WHERE stock_id=? AND item_id=? AND branch_id=?
+                 AND quantity_available>=?');
+            $update->bind_param('diisd', $take, $stockId, $itemId, $branchId, $take);
+            supplyExecute($update);
+            if ($update->affected_rows !== 1) throw new RuntimeException('Stock changed. Refresh and try again.');
+            $update->close();
+            $batchDetails[] = 'Stock #' . $stockId . ' / Lot '
+                . (trim((string)$batch['batch_lot_no']) ?: 'N/A') . ': '
+                . inventoryUsageDescription($take, $item);
+            $remaining = round($remaining - $take, 4);
+        }
+        if ($remaining > 0.00005) throw new RuntimeException('Unable to allocate the complete supply quantity.');
+
+        $patientsServed = $patientId > 0 ? 1 : 0;
+        $usage = supplyStatement($conn,
+            'INSERT INTO inventory_usage_history
+             (item_id,branch_id,usage_date,quantity_used,patient_count) VALUES (?,?,?,?,?)');
+        $usage->bind_param('issdi', $itemId, $branchId, $date, $quantity, $patientsServed);
+        supplyExecute($usage);
+        $usageId = (int)$conn->insert_id;
+        $usage->close();
+        $description = inventoryUsageDescription($quantity, $item);
+        $movementRemarks = $marker . 'Usage ID: ' . $usageId
+            . ' | Used: ' . $description . ' | Usage date: ' . $date . $patientLabel
+            . ' | Batches: ' . implode('; ', $batchDetails)
+            . ($remarks !== '' ? ' | Note: ' . $remarks : '');
+        $movement = supplyStatement($conn,
+            "INSERT INTO stock_transactions
+             (item_id,user_id,vaccination_id,branch_id,transaction_type,quantity,remarks,transaction_date)
+             VALUES (?,?,NULL,?,'OUT',?,?,CONCAT(?, ' ', TIME(NOW())))");
+        $movement->bind_param('iisdss', $itemId, $userId, $branchId, $quantity, $movementRemarks, $date);
+        supplyExecute($movement);
+        $movement->close();
+        $reopened = forecastTrainingUsageChanged($conn, $branchId, (int)$itemId, $date);
+        $staleReason = 'Actual medical-supply usage changed for ' . $date . '.';
+        $stale = supplyStatement($conn, 'UPDATE forecast_results SET stale_reason=? WHERE branch_id=?');
+        $stale->bind_param('ss', $staleReason, $branchId);
+        supplyExecute($stale);
+        $stale->close();
+        $auditText = 'Recorded supply usage: ' . $item['item_name'] . ' | ' . $description
+            . ' | Date: ' . $date . $patientLabel . ' | Usage ID: ' . $usageId;
+        $audit = supplyStatement($conn,
+            "INSERT INTO audit_logs(user_id,branch_id,action,module) VALUES (?,?,?,'Medical Supplies')");
+        $audit->bind_param('iss', $userId, $branchId, $auditText);
+        supplyExecute($audit);
+        $audit->close();
+        $conn->commit();
+        return 'Supply usage recorded: ' . $item['item_name'] . ' — ' . $description
+            . '. Branch stock was deducted and Daily Inventory consumption was updated.'
+            . ($reopened > 0 ? ' Resubmit the Daily Inventory closing for this item/date.'
+                : ' Submit the Daily Inventory closing to include this usage in forecasting.');
+    } catch (Throwable $error) {
+        $conn->rollback();
+        throw $error;
+    }
+}
+
 /* ============================================================
- * RESTOCK REQUEST ONLY
+ * RECORD CONSUMPTION OR REQUEST RESTOCK
  * ============================================================ */
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         workflowVerifyCsrf();
 
         $action = trim((string)($_POST['action'] ?? ''));
+        if ($action === 'record_usage') {
+            workflowFlash('success', recordSupplyUsage($conn, $userId, $branchId));
+            header('Location: Nurse_MedicalSuppliesManagement.php');
+            exit;
+        }
         if ($action !== 'request_restock') {
             throw new RuntimeException('Unsupported medical-supply action.');
         }
@@ -158,7 +348,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($itemId < 1 || $requestedDisplayQty <= 0) {
             throw new RuntimeException('Select a medical supply and enter a valid requested quantity.');
         }
-        if (mb_strlen($reason) > 500) {
+        if (supplyTextLength($reason) > 500) {
             throw new RuntimeException('Restock reason must not exceed 500 characters.');
         }
 
@@ -253,6 +443,7 @@ $stmt = $conn->prepare(
     "SELECT
         i.item_id,
         i.item_name,
+        i.is_consumable,
         i.minimum_stock,
         u.unit_name,
         COALESCE(NULLIF(i.base_unit_label,''),u.unit_name) AS base_unit_label,
@@ -299,7 +490,7 @@ $stmt = $conn->prepare(
          GROUP BY item_id
      ) ut ON ut.item_id=i.item_id
      WHERE c.category_name='Medical Supplies'
-     GROUP BY i.item_id,i.item_name,i.minimum_stock,u.unit_name,
+     GROUP BY i.item_id,i.item_name,i.is_consumable,i.minimum_stock,u.unit_name,
               i.base_unit_label,i.display_unit_label,i.conversion_to_base,ut.today_used
      ORDER BY i.item_name"
 );
@@ -318,6 +509,8 @@ foreach ($allItems as &$item) {
     $item['request_step'] = inventoryIsSiteBased($item) ? '1' : '0.0001';
 }
 unset($item);
+$usageItems = array_values(array_filter($allItems, fn(array $item): bool => (bool)$item['is_consumable']));
+$usageToken = supplyUsageFormToken();
 
 $stats = [
     'total' => count($allItems),
@@ -402,6 +595,26 @@ $usageStmt->execute();
 $usageRows = $usageStmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $usageStmt->close();
 
+// Manual usage details retain patient references, notes, nurse, and batch allocations.
+$movementStmt = supplyStatement($conn,
+    "SELECT t.transaction_date,t.quantity,t.remarks,i.item_name,u.unit_name,
+            COALESCE(NULLIF(i.base_unit_label,''),u.unit_name) AS base_unit_label,
+            COALESCE(NULLIF(i.display_unit_label,''),u.unit_name) AS display_unit_label,
+            COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base,
+            nurse.username
+     FROM stock_transactions t
+     JOIN inventory_items i ON i.item_id=t.item_id
+     JOIN units u ON u.unit_id=i.unit_id
+     JOIN users nurse ON nurse.user_id=t.user_id
+     WHERE t.branch_id=? AND t.transaction_type='OUT' AND t.vaccination_id IS NULL
+       AND t.remarks LIKE 'Supply usage #%'
+       AND DATE(t.transaction_date) BETWEEN ? AND ?
+     ORDER BY t.transaction_date DESC,t.transaction_id DESC LIMIT 100");
+$movementStmt->bind_param('sss', $branchId, $usageFrom, $usageTo);
+supplyExecute($movementStmt);
+$manualMovements = $movementStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$movementStmt->close();
+
 $flash = workflowTakeFlash();
 ?>
 <!DOCTYPE html>
@@ -409,7 +622,7 @@ $flash = workflowTakeFlash();
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Medical Supply Monitoring - Smart Bite Care</title>
+    <title>Medical Supply Management - Smart Bite Care</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
     <link rel="stylesheet" href="sidebar.css">
@@ -540,7 +753,7 @@ $flash = workflowTakeFlash();
 
 <main class="main">
     <div class="topbar">
-        <h3>Medical Supply Monitoring <small><?= workflowH($branchName) ?></small></h3>
+        <h3>Medical Supply Management <small><?= workflowH($branchName) ?></small></h3>
         <div class="dropdown">
             <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
                     type="button" id="nurseProfileMenu" data-bs-toggle="dropdown" aria-expanded="false">
@@ -568,8 +781,8 @@ $flash = workflowTakeFlash();
         <div class="page-intro">
             <i class="bi bi-info-circle-fill"></i>
             <div>
-                <strong>Monitoring only — no manual vaccine stock deduction on this page</strong>
-                <p>Vaccination usage is recorded in the Vaccination module and daily consumption is reconciled in Daily Inventory. This page is for stock visibility, expiration/shortage monitoring, usage review, and restock requests.</p>
+                <strong>Record supplies used during treatment or daily clinic work</strong>
+                <p>Record Supply Usage deducts branch stock and updates daily consumption. Enter only usage that has not already been recorded in Vaccination or Assessment. Submit Daily Inventory separately after counting the remaining stock.</p>
             </div>
         </div>
 
@@ -580,6 +793,69 @@ $flash = workflowTakeFlash();
             <div class="col-xl-3 col-md-6"><div class="stat-card expiring"><div class="stat-icon"><i class="bi bi-calendar2-exclamation-fill"></i></div><div><div class="stat-label">Expiring Within 30 Days</div><div class="stat-value"><?= (int)$stats['expiring'] ?></div></div></div></div>
         </div>
 
+        <section class="content-card" id="recordSupplyUsage">
+            <div class="card-head">
+                <div><h2><span class="section-icon"><i class="bi bi-box-arrow-up"></i></span>Record Supply Usage</h2>
+                    <p>Enter actual consumption that has not already been recorded. Stock is deducted when you save.</p></div>
+            </div>
+            <div class="p-3 p-md-4">
+                <form method="post" id="supplyUsageForm" class="row g-3">
+                    <input type="hidden" name="csrf_token" value="<?= workflowH($csrf) ?>">
+                    <input type="hidden" name="action" value="record_usage">
+                    <input type="hidden" name="usage_token" value="<?= workflowH($usageToken) ?>">
+                    <div class="col-lg-6">
+                        <label class="form-label fw-semibold" for="usageItem">Medical Supply</label>
+                        <select class="form-select" name="item_id" id="usageItem" required>
+                            <option value="">Select a consumable item</option>
+                            <?php foreach ($usageItems as $item): ?>
+                                <option value="<?= (int)$item['item_id'] ?>"
+                                        data-base-unit="<?= workflowH((string)$item['base_unit_label']) ?>"
+                                        data-display-unit="<?= workflowH((string)$item['display_unit_label']) ?>"
+                                        data-conversion="<?= workflowH((string)$item['conversion_to_base']) ?>"
+                                        data-step="<?= workflowH(inventoryInputStep($item)) ?>"
+                                        data-stock="<?= workflowH((string)$item['current_stock']) ?>"
+                                        data-stock-display="<?= workflowH((string)$item['stock_display']) ?>">
+                                    <?= workflowH((string)$item['item_name']) ?> — <?= workflowH((string)$item['stock_display']) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="col-lg-3 col-md-6">
+                        <label class="form-label fw-semibold" for="usageQuantity">Quantity Used <span id="usageUnitLabel"></span></label>
+                        <input type="number" class="form-control" name="quantity_used" id="usageQuantity"
+                               min="0.0001" step="0.0001" required>
+                    </div>
+                    <div class="col-lg-3 col-md-6">
+                        <label class="form-label fw-semibold" for="usageDate">Usage Date</label>
+                        <input type="date" class="form-control" name="usage_date" id="usageDate"
+                               value="<?= workflowH($today) ?>" max="<?= workflowH($today) ?>" required>
+                    </div>
+                    <div class="col-12"><div class="request-info" id="usageUnitHelp">Select an item to see its stock and counting unit.</div></div>
+                    <div class="col-lg-3 col-md-4">
+                        <label class="form-label fw-semibold" for="usagePatient">Patient ID (optional)</label>
+                        <input type="number" class="form-control" name="patient_id" id="usagePatient" min="1" step="1" max="2147483647">
+                        <div class="form-text">Leave blank for general clinic consumption.</div>
+                    </div>
+                    <div class="col-lg-9 col-md-8">
+                        <label class="form-label fw-semibold" for="usageRemarks">Purpose / Note (optional)</label>
+                        <textarea class="form-control" name="usage_remarks" id="usageRemarks" rows="2" maxlength="500"
+                                  placeholder="Example: Supplies consumed during wound care."></textarea>
+                    </div>
+                    <div class="col-12">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="usage_not_previously_recorded" value="1"
+                                   id="usageNotPreviouslyRecorded" required>
+                            <label class="form-check-label" for="usageNotPreviouslyRecorded">This consumption has not already been recorded in Vaccination, Assessment, or another supply usage entry.</label>
+                        </div>
+                    </div>
+                    <div class="col-12 d-flex align-items-center gap-3 flex-wrap">
+                        <button class="btn btn-primary" type="submit" id="saveSupplyUsage"><i class="bi bi-check2-circle me-1"></i>Save Usage and Deduct Stock</button>
+                        <span class="small text-muted">Daily Inventory will show this under Consumed automatically.</span>
+                    </div>
+                </form>
+            </div>
+        </section>
+
         <section class="content-card">
             <div class="card-head">
                 <div>
@@ -587,6 +863,7 @@ $flash = workflowTakeFlash();
                     <p>Usable stock is branch-specific and excludes expired batches.</p>
                 </div>
                 <div class="quick-actions">
+                    <a href="#recordSupplyUsage" class="btn btn-primary"><i class="bi bi-box-arrow-up me-1"></i>Record Supply Usage</a>
                     <a href="Nurse_Vaccination.php" class="btn btn-outline-primary"><i class="bi bi-shield-plus me-1"></i>Vaccination</a>
                     <a href="Nurse_DailyInventory.php" class="btn btn-outline-primary"><i class="bi bi-clipboard-data me-1"></i>Daily Inventory</a>
                     <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#restockModal"><i class="bi bi-send-plus me-1"></i>Request Restock</button>
@@ -665,6 +942,11 @@ $flash = workflowTakeFlash();
                             <td><?= workflowH((string)$item['today_usage_display']) ?></td>
                             <td><span class="status-badge <?= workflowH((string)$item['status_key']) ?>"><?= workflowH((string)$item['status_label']) ?></span></td>
                             <td>
+                                <?php if ((bool)$item['is_consumable']): ?>
+                                    <a href="#recordSupplyUsage" class="btn-icon record-supply-usage"
+                                       title="Record supply usage" aria-label="Record supply usage"
+                                       data-item-id="<?= (int)$item['item_id'] ?>"><i class="bi bi-box-arrow-up"></i></a>
+                                <?php endif; ?>
                                 <button type="button" class="btn-icon request-restock"
                                         title="Request restock"
                                         data-bs-toggle="modal" data-bs-target="#restockModal"
@@ -734,7 +1016,31 @@ $flash = workflowTakeFlash();
                 </table>
             </div>
             <div class="p-3 pt-0">
-                <div class="note-box"><i class="bi bi-shield-check me-1"></i>This section is view-only. It does not subtract stock. Vaccine deductions remain controlled by Nurse Vaccination, while Daily Inventory handles end-of-day reconciliation.</div>
+                <div class="note-box"><i class="bi bi-shield-check me-1"></i>Usage history includes entries from Supply Usage, Vaccination, and Assessment. Viewing this history does not deduct stock. Patient Count is the sum of patient references on usage entries, not a distinct clinic patient count.</div>
+            </div>
+        </section>
+        <section class="content-card">
+            <div class="card-head"><div><h2><span class="section-icon"><i class="bi bi-journal-text"></i></span>Recorded Supply Usage Details</h2>
+                <p>The latest 100 manual supply entries within the usage-history dates selected above.</p></div></div>
+            <div class="table-responsive">
+                <table class="table inventory-table align-middle" style="min-width:900px">
+                    <thead><tr><th>Usage Date</th><th>Item</th><th>Quantity Used</th><th>Recorded By</th><th>Details</th></tr></thead>
+                    <tbody>
+                    <?php if (!$manualMovements): ?>
+                        <tr><td colspan="5" class="empty">No manual supply usage entries for the selected dates.</td></tr>
+                    <?php endif; ?>
+                    <?php foreach ($manualMovements as $movement): ?>
+                        <?php $visibleRemarks = preg_replace('/^Supply usage #[a-f0-9]{64} \| /', '', (string)$movement['remarks']); ?>
+                        <tr>
+                            <td class="usage-date"><?= workflowH(date('M d, Y', strtotime((string)$movement['transaction_date']))) ?></td>
+                            <td class="item-name"><?= workflowH((string)$movement['item_name']) ?></td>
+                            <td><?= workflowH(inventoryUsageDescription((float)$movement['quantity'], $movement)) ?></td>
+                            <td><?= workflowH((string)$movement['username']) ?></td>
+                            <td class="small" style="min-width:320px;white-space:normal"><?= workflowH((string)$visibleRemarks) ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
             </div>
         </section>
     </div>
@@ -830,7 +1136,7 @@ function updateRestockDetails() {
 
     requestUnitLabel.textContent = `(${displayUnit})`;
     requestedQuantity.step = option.dataset.step || '0.0001';
-    restockInfo.innerHTML = `<strong>${itemName}</strong><br>Current usable branch stock: ${stockDisplay}`;
+    restockInfo.textContent = `${itemName}. Current usable branch stock: ${stockDisplay}`;
 
     if (conversion > 1 && displayUnit.toLowerCase() !== baseUnit.toLowerCase()) {
         requestConversionHelp.textContent = `Request is entered in ${displayUnit}. Inventory base unit: ${baseUnit}. 1 ${displayUnit} = ${conversion} ${baseUnit}.`;
@@ -851,6 +1157,58 @@ for (const button of document.querySelectorAll('.request-restock')) {
 }
 
 updateRestockDetails();
+
+const usageItem = document.getElementById('usageItem');
+const usageQuantity = document.getElementById('usageQuantity');
+const usageUnitLabel = document.getElementById('usageUnitLabel');
+const usageUnitHelp = document.getElementById('usageUnitHelp');
+
+function updateUsageDetails() {
+    const option = usageItem?.options[usageItem.selectedIndex];
+    if (!option || !option.value) {
+        usageUnitLabel.textContent = '';
+        usageUnitHelp.textContent = 'Select an item to see its stock and counting unit.';
+        usageQuantity.removeAttribute('max');
+        return;
+    }
+    const baseUnit = option.dataset.baseUnit || 'unit';
+    const displayUnit = option.dataset.displayUnit || baseUnit;
+    const conversion = Number(option.dataset.conversion || 1);
+    const available = Number(option.dataset.stock || 0);
+    const step = option.dataset.step || '0.0001';
+    usageUnitLabel.textContent = `(${baseUnit})`;
+    usageQuantity.step = step;
+    usageQuantity.min = step;
+    usageQuantity.max = String(available);
+    let help = `Usable stock: ${option.dataset.stockDisplay || '0'}. Enter quantity actually used in ${baseUnit}.`;
+    if (conversion > 1 && baseUnit.toLowerCase() !== displayUnit.toLowerCase()) {
+        help += ` 1 ${displayUnit} = ${conversion} ${baseUnit}.`;
+    } else if (/pack|box/i.test(baseUnit)) {
+        help += ` This item is currently counted in ${baseUnit}, so individual pieces must be converted using the verified package contents.`;
+    }
+    usageUnitHelp.textContent = help;
+}
+
+usageItem?.addEventListener('change', () => {
+    usageQuantity.value = '';
+    updateUsageDetails();
+});
+for (const button of document.querySelectorAll('.record-supply-usage')) {
+    button.addEventListener('click', () => {
+        usageItem.value = button.dataset.itemId || '';
+        usageQuantity.value = '';
+        updateUsageDetails();
+        setTimeout(() => usageQuantity.focus(), 250);
+    });
+}
+document.getElementById('supplyUsageForm')?.addEventListener('submit', () => {
+    const button = document.getElementById('saveSupplyUsage');
+    if (button) {
+        button.disabled = true;
+        button.textContent = 'Saving usage...';
+    }
+});
+updateUsageDetails();
 </script>
 </body>
 </html>
