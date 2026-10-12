@@ -22,11 +22,16 @@ Example:
 """
 
 import json
+import hashlib
+import xgboost
 import math
+import re
+from decimal import Decimal, ROUND_HALF_UP
 import os
 import sys
 import warnings
 from datetime import timedelta
+from pathlib import Path
 
 import mysql.connector
 import numpy as np
@@ -63,13 +68,25 @@ DEFAULT_FORECAST_DAYS = 30
 ALLOWED_FORECAST_DAYS = {7, 14, 30}
 MINIMUM_HISTORY_RECORDS = 15
 
-RESTOCKING_LEAD_DAYS = int(
-    os.getenv("SMARTBITECARE_RESTOCK_LEAD_DAYS", "7")
-)
+def load_status_policy():
+    path = Path(__file__).resolve().parent / "sources" / "forecast_status_rules.json"
+    policy = json.loads(path.read_text(encoding="utf-8"))
+    if policy.get("version") != "sbc-status-v2":
+        raise ValueError("Install the matching Step 8 forecasting rule file.")
+    for field, variable in [("restocking_lead_days", "SMARTBITECARE_RESTOCK_LEAD_DAYS"),
+                            ("safety_buffer_days", "SMARTBITECARE_SAFETY_BUFFER_DAYS")]:
+        value = os.getenv(variable) or policy[field]
+        text = str(value).strip()
+        if not re.fullmatch(r"0|[1-9][0-9]*", text) or int(text) > 3650:
+            raise ValueError("Lead time and safety buffer must be whole days from 0 to 3650.")
+        policy[field] = int(text)
+    return policy
 
-SAFETY_BUFFER_DAYS = int(
-    os.getenv("SMARTBITECARE_SAFETY_BUFFER_DAYS", "3")
-)
+
+STATUS_POLICY = load_status_policy()
+STATUS_RULE_VERSION = STATUS_POLICY["version"]
+RESTOCKING_LEAD_DAYS = STATUS_POLICY["restocking_lead_days"]
+SAFETY_BUFFER_DAYS = STATUS_POLICY["safety_buffer_days"]
 
 
 # ============================================================
@@ -185,7 +202,13 @@ ITEM_SUPPLY_TYPE = {
 
 def get_db_connection():
     """Create a MariaDB/MySQL connection."""
-    return mysql.connector.connect(**DB_CONFIG)
+    connection = mysql.connector.connect(**DB_CONFIG)
+    cursor = connection.cursor()
+    try:
+        cursor.execute("SET time_zone = '+08:00'")
+    finally:
+        cursor.close()
+    return connection
 
 
 def clean_float(value, default=0.0):
@@ -235,34 +258,31 @@ def get_supply_type(item_name):
     )
 
 
-def determine_risk_status(
-    days_of_supply,
-    estimated_ending_stock
-):
-    """
-    Classify actual shortage/stockout risk separately from low-stock status.
+def forecast_quantity_ticks(value):
+    number = Decimal(str(value))
+    if not number.is_finite() or number < 0 or number > Decimal("99999999.9999"):
+        raise ValueError("Invalid nonnegative forecast quantity.")
+    return int((number * 10000).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
-    Minimum stock is a replenishment target, not proof that the item will
-    actually run out. A shortage risk exists when the expected stock reaches
-    zero during the selected horizon or the estimated days of supply is below
-    the configured lead-time + safety-buffer window.
-    """
-    required_supply_days = (
-        RESTOCKING_LEAD_DAYS
-        + SAFETY_BUFFER_DAYS
-    )
 
-    insufficient_supply_days = (
-        days_of_supply is not None
-        and days_of_supply < required_supply_days
-    )
-
-    expected_stockout = estimated_ending_stock <= 0
-
-    if insufficient_supply_days or expected_stockout:
-        return "Shortage Risk"
-
-    return "Sufficient"
+def classify_forecast_status(stock, minimum, demand, days, lead=None, buffer=None):
+    lead = RESTOCKING_LEAD_DAYS if lead is None else lead
+    buffer = SAFETY_BUFFER_DAYS if buffer is None else buffer
+    if days not in ALLOWED_FORECAST_DAYS or not isinstance(lead, int) or not isinstance(buffer, int) or not 0 <= lead <= 3650 or not 0 <= buffer <= 3650:
+        raise ValueError("Invalid forecast horizon or replenishment window.")
+    s, m, d = map(forecast_quantity_ticks, (stock, minimum, demand))
+    shortage = s == 0 or (d > 0 and (d >= s or s * days < d * (lead + buffer)))
+    difference = max(0, d + m - s)
+    return {
+        "stock_status": "OUT OF STOCK" if s == 0 else ("LOW STOCK" if s <= m else "SUFFICIENT STOCK"),
+        "forecast_status": "Shortage Risk" if shortage else ("Reorder Needed" if difference > 0 else "Sufficient"),
+        "recommended_reorder": (difference + 9999) // 10000,
+        "estimated_ending_stock": max(0, s - d) / 10000,
+        "days_of_supply_remaining": s * days / d if d > 0 else None,
+        "restocking_lead_days": lead,
+        "safety_buffer_days": buffer,
+        "status_rule_version": STATUS_RULE_VERSION,
+    }
 
 
 # ============================================================
@@ -299,8 +319,10 @@ def load_forecastable_items():
                 i.item_id,
                 i.item_name,
                 i.minimum_stock,
+                COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name, 'unit') AS base_unit,
                 c.category_name
             FROM inventory_items AS i
+            LEFT JOIN units AS u ON u.unit_id = i.unit_id
             LEFT JOIN inventory_categories AS c
                 ON c.category_id = i.category_id
             WHERE i.is_forecastable = 1
@@ -371,23 +393,18 @@ def load_current_stocks(branch_id):
     cursor = connection.cursor(dictionary=True)
 
     try:
-        query = """
-            SELECT
-                item_id,
-                COALESCE(
-                    SUM(
-                        CASE
-                            WHEN expiration_date IS NULL
-                                 OR expiration_date >= CURDATE()
-                            THEN quantity_available
-                            ELSE 0
-                        END
-                    ),
-                    0
-                ) AS total_stock
-            FROM inventory_stocks
+        # PHP and Python read exactly the same aggregation definition.
+        definition = json.loads(
+            (Path(__file__).resolve().parent / "sources" / "inventory_stock_query.json")
+            .read_text(encoding="utf-8")
+        )
+        if definition.get("version") != 1 or not isinstance(definition.get("query"), str):
+            raise ValueError("Invalid shared inventory stock query definition.")
+        cursor.execute("SET time_zone = '+08:00'")
+        query = f"""
+            SELECT item_id, usable_stock AS total_stock
+            FROM ({definition['query']}) stock_totals
             WHERE branch_id = %s
-            GROUP BY item_id
         """
 
         cursor.execute(query, (branch_id,))
@@ -601,7 +618,7 @@ def calculate_smape(actual_values, forecasted_values):
         dtype=float
     )
 
-    valid_mask = denominator > 0.000001
+    valid_mask = denominator > 0
 
     individual_errors[valid_mask] = (
         2.0
@@ -614,161 +631,147 @@ def calculate_smape(actual_values, forecasted_values):
     )
 
 
-def evaluate_xgboost_model(model_data):
-    """
-    Evaluate XGBoost using an 80/20 chronological split.
+EVALUATION_VERSION = 'sbc-evaluation-v1'
 
-    Earlier dates are used for training.
-    Later dates are used for testing.
-    """
-    unique_dates = sorted(
-        model_data["record_date"]
-        .dt.normalize()
-        .unique()
-    )
 
-    if len(unique_dates) < 10:
-        raise ValueError(
-            "Not enough unique dates for an 80/20 "
-            "chronological evaluation."
-        )
-
-    split_position = int(
-        len(unique_dates) * 0.80
-    )
-
-    split_position = max(
-        1,
-        min(
-            split_position,
-            len(unique_dates) - 1
-        )
-    )
-
-    testing_start_date = pd.Timestamp(
-        unique_dates[split_position]
-    )
-
-    training_part = model_data[
-        model_data["record_date"]
-        < testing_start_date
-    ].copy()
-
-    testing_part = model_data[
-        model_data["record_date"]
-        >= testing_start_date
-    ].copy()
-
-    if training_part.empty or testing_part.empty:
-        raise ValueError(
-            "The 80/20 split produced an empty "
-            "training or testing dataset."
-        )
-
-    x_training = training_part[
-        FEATURE_COLUMNS
-    ].astype(float)
-
-    y_training = training_part[
-        TARGET_COLUMN
-    ].astype(float)
-
-    x_testing = testing_part[
-        FEATURE_COLUMNS
-    ].astype(float)
-
-    y_testing = testing_part[
-        TARGET_COLUMN
-    ].astype(float)
-
-    evaluation_model = create_xgboost_model()
-
-    evaluation_model.fit(
-        x_training,
-        y_training,
-        eval_set=[(x_testing, y_testing)],
-        verbose=False
-    )
-
-    # predict() is the required XGBoost method name.
-    testing_forecasts = evaluation_model.predict(
-        x_testing
-    )
-
-    testing_forecasts = np.maximum(
-        testing_forecasts,
-        0
-    )
-
-    mae = mean_absolute_error(
-        y_testing,
-        testing_forecasts
-    )
-
-    rmse = math.sqrt(
-        mean_squared_error(
-            y_testing,
-            testing_forecasts
-        )
-    )
-
-    smape = calculate_smape(
-        y_testing,
-        testing_forecasts
-    )
-
-    # Calculate validation MAE for each item.
-    testing_results = testing_part[
-        ["item_id"]
-    ].copy()
-
-    testing_results["actual"] = (
-        y_testing.to_numpy()
-    )
-
-    testing_results["forecast"] = (
-        testing_forecasts
-    )
-
-    testing_results["absolute_error"] = np.abs(
-        testing_results["actual"]
-        - testing_results["forecast"]
-    )
-
-    item_mae = (
-        testing_results
-        .groupby("item_id")["absolute_error"]
-        .mean()
-        .to_dict()
-    )
-
-    metrics = {
-        "training_records": int(
-            len(training_part)
-        ),
-        "testing_records": int(
-            len(testing_part)
-        ),
-        "training_percentage": 80,
-        "testing_percentage": 20,
-        "testing_start_date": (
-            testing_start_date.strftime("%Y-%m-%d")
-        ),
-        "mae": round(
-            clean_float(mae),
-            4
-        ),
-        "rmse": round(
-            clean_float(rmse),
-            4
-        ),
-        "smape_percent": round(
-            clean_float(smape),
-            4
-        ),
+def forecast_error_scores(actual, predicted):
+    actual = np.asarray(actual, dtype=float)
+    predicted = np.asarray(predicted, dtype=float)
+    if not len(actual) or actual.shape != predicted.shape:
+        raise ValueError('Evaluation needs matching, nonempty actual and forecast values.')
+    if not np.isfinite(actual).all() or not np.isfinite(predicted).all():
+        raise ValueError('Evaluation values must be finite.')
+    return {
+        'mae': round(float(mean_absolute_error(actual, predicted)), 8),
+        'rmse': round(math.sqrt(float(mean_squared_error(actual, predicted))), 8),
+        'smape_percent': round(calculate_smape(actual, predicted), 4),
+        'actual_total': round(float(actual.sum()), 4),
+        'forecast_total': round(float(predicted.sum()), 4),
+        'total_absolute_error': round(abs(float(actual.sum() - predicted.sum())), 4),
     }
 
-    return metrics, item_mae
+
+def evaluate_xgboost_model(model_data, clean_history, item_catalog):
+    """One chronological 80/20 holdout plus production-recursive backtests.
+
+    One-step validation uses earlier observed consumption and that day's known
+    patient count. Recursive backtests use ONLY pre-cutoff histories and their
+    estimated patient volume, exactly as generate_item_forecast does in production.
+    Missing holdout dates never become zero actual consumption.
+    """
+    dates = sorted(model_data['record_date'].dt.normalize().unique())
+    split = max(1, min(int(len(dates) * .8), len(dates) - 1)) if len(dates) >= 10 else None
+    test_start = pd.Timestamp(dates[split]) if split is not None else None
+    training = model_data[model_data['record_date'] < test_start].copy() if test_start is not None else model_data.iloc[:0].copy()
+    testing = model_data[model_data['record_date'] >= test_start].copy() if test_start is not None else model_data.iloc[:0].copy()
+    ready = test_start is not None and not training.empty and not testing.empty
+    def date_text(value):
+        return pd.Timestamp(value).strftime('%Y-%m-%d') if pd.notna(value) else None
+
+    source_columns = ['branch_id', 'item_id', 'record_date', 'patient_count', 'quantity_used', 'item_name']
+    source_json = clean_history.sort_values(['item_id', 'record_date'])[source_columns].to_json(
+        orient='records', date_format='iso', double_precision=15)
+    params = create_xgboost_model().get_params()
+    # Store only JSON-safe model parameters; None records explicit defaults.
+    params = {k: v for k, v in params.items() if v is None or isinstance(v, (str, int, float, bool))}
+    params = {k: str(v) if isinstance(v, float) and not math.isfinite(v) else v for k, v in params.items()}
+    accuracy = {
+        'version': EVALUATION_VERSION,
+        'source_hash': hashlib.sha256(source_json.encode('utf-8')).hexdigest(),
+        'model_version': str(xgboost.__version__),
+        'model_parameters': params,
+        'feature_columns': FEATURE_COLUMNS,
+        'training_records': int(len(training)),
+        'testing_records': int(len(testing)),
+        'training_start': date_text(training['record_date'].min()),
+        'training_end': date_text(training['record_date'].max()),
+        'testing_start': date_text(testing['record_date'].min()),
+        'testing_end': date_text(testing['record_date'].max()),
+        'overall_smape_percent': None,
+        'rows': [],
+    }
+    model_metrics = {'training_records': len(training), 'testing_records': len(testing),
+        'training_percentage': 80, 'testing_percentage': 20,
+        'testing_start_date': accuracy['testing_start'], 'mae': 0.0, 'rmse': 0.0,
+        'smape_percent': None, 'evaluation_status': 'Insufficient History'}
+    item_mae = {}
+    evaluation_model = None
+    if ready:
+        evaluation_model = create_xgboost_model()
+        evaluation_model.fit(training[FEATURE_COLUMNS].astype(float), training[TARGET_COLUMN].astype(float))
+        predictions = np.maximum(evaluation_model.predict(testing[FEATURE_COLUMNS].astype(float)), 0)
+        testing = testing.copy()
+        testing['evaluation_forecast'] = np.round(predictions, 4)
+        scores = forecast_error_scores(testing[TARGET_COLUMN], testing['evaluation_forecast'])
+        model_metrics.update({k: scores[k] for k in ['mae', 'rmse', 'smape_percent']})
+        model_metrics['evaluation_status'] = 'Available'
+        accuracy['overall_smape_percent'] = scores['smape_percent']
+
+    catalog = {int(row['item_id']): row for row in item_catalog}
+    for item_id in sorted(clean_history['item_id'].astype(int).unique()):
+        item = catalog.get(int(item_id))
+        if not item:
+            continue
+        item_training = training[training['item_id'] == item_id]
+        item_testing = testing[testing['item_id'] == item_id]
+        history = clean_history[clean_history['item_id'] == item_id]
+        common = {
+            'item_id': int(item_id), 'item_name': str(item['item_name']).strip(),
+            'base_unit': str(item.get('base_unit') or 'unit').strip(),
+            'training_records': int(len(item_training)),
+            'training_start': date_text(item_training['record_date'].min()),
+            'training_end': date_text(item_training['record_date'].max()),
+        }
+        one = dict(common, method='one_step', horizon_days=1,
+            testing_records=int(len(item_testing)),
+            testing_start=date_text(item_testing['record_date'].min()),
+            testing_end=date_text(item_testing['record_date'].max()),
+            status='Insufficient History', reason='Not enough dates for a chronological 80/20 evaluation.')
+        if ready and not item_testing.empty:
+            scores = forecast_error_scores(item_testing[TARGET_COLUMN], item_testing['evaluation_forecast'])
+            one.update(scores, status='Available', reason=None)
+            item_mae[int(item_id)] = scores['mae']
+        elif ready:
+            one['reason'] = 'This item has no observed testing records after the shared chronological cutoff.'
+        accuracy['rows'].append(one)
+
+        for horizon in sorted(ALLOWED_FORECAST_DAYS):
+            origin = test_start - timedelta(days=1) if ready else None
+            start = origin + timedelta(days=1) if ready else None
+            end = origin + timedelta(days=horizon) if ready else None
+            row = dict(common, method='recursive', horizon_days=int(horizon),
+                testing_records=0, testing_start=date_text(start), testing_end=date_text(end),
+                status='Insufficient History', reason='Not enough dates for a chronological 80/20 evaluation.')
+            if ready:
+                # Raw actual observations are used for scoring, never future lag features.
+                actual = history[(history['record_date'] >= start) & (history['record_date'] <= end)]
+                row['testing_records'] = int(len(actual))
+                prefix = history[history['record_date'] <= origin].copy()
+                expected_dates = pd.date_range(start, end, freq='D')
+                if len(prefix) < MINIMUM_HISTORY_RECORDS:
+                    row['reason'] = f'Only {len(prefix)} pre-cutoff observations; {MINIMUM_HISTORY_RECORDS} are required.'
+                elif len(actual) != horizon or set(actual['record_date'].dt.normalize()) != set(expected_dates):
+                    row['reason'] = f'Holdout contains {len(actual)} of {horizon} required daily observations. Missing dates are not treated as zero.'
+                else:
+                    forecast, reason = generate_item_forecast(evaluation_model, prefix,
+                        0.0, 0.0, 0.0, 0.0, int(horizon), origin)
+                    if forecast is None:
+                        row['reason'] = reason
+                    else:
+                        predicted = {pd.Timestamp(d['date']): d['forecasted_consumption']
+                            for d in forecast['daily_forecasts']}
+                        if set(predicted) != set(expected_dates):
+                            raise ValueError('Recursive evaluation returned an incomplete horizon.')
+                        actual_by_date = actual.set_index('record_date')[TARGET_COLUMN]
+                        scores = forecast_error_scores([actual_by_date.loc[d] for d in expected_dates],
+                            [predicted[d] for d in expected_dates])
+                        # Preserve the production horizon total (raw daily predictions summed
+                        # before four-decimal rounding), rather than summing rounded daily rows.
+                        scores['forecast_total'] = forecast['forecasted_consumption']
+                        scores['total_absolute_error'] = round(abs(scores['actual_total'] - scores['forecast_total']), 4)
+                        row.update(scores, status='Available', reason=None)
+            accuracy['rows'].append(row)
+    return model_metrics, item_mae, accuracy
 
 
 def train_final_model(model_data):
@@ -1008,7 +1011,7 @@ def generate_item_forecast(
             ),
             "forecasted_consumption": round(
                 daily_consumption,
-                2
+            4
             ),
             "estimated_remaining_stock": round(
                 max(
@@ -1019,6 +1022,9 @@ def generate_item_forecast(
             ),
             "is_weekend": is_weekend,
         })
+
+    # Classify and publish the same four-decimal demand total.
+    total_forecasted_consumption = forecast_quantity_ticks(total_forecasted_consumption) / 10000
 
     average_daily_consumption = (
         total_forecasted_consumption
@@ -1062,26 +1068,12 @@ def generate_item_forecast(
     # target: enough stock to cover the selected forecast horizon and finish at
     # the configured minimum-stock level. Being below minimum no longer forces
     # an artificial 100% shortage probability.
-    recommended_reorder = max(
-        0,
-        math.ceil(
-            total_forecasted_consumption
-            + minimum_stock
-            - current_stock
-        )
+    decision = classify_forecast_status(
+        current_stock, minimum_stock, total_forecasted_consumption, forecast_days
     )
-
-    if current_stock <= 0:
-        stock_status = "OUT OF STOCK"
-    elif current_stock <= minimum_stock:
-        stock_status = "LOW STOCK"
-    else:
-        stock_status = "SUFFICIENT STOCK"
-
-    forecast_status = determine_risk_status(
-        days_of_supply=days_of_supply,
-        estimated_ending_stock=estimated_ending_stock
-    )
+    recommended_reorder = decision["recommended_reorder"]
+    stock_status = decision["stock_status"]
+    forecast_status = decision["forecast_status"]
 
     # Approximate probability that demand over the selected horizon exceeds
     # current usable stock (stockout), rather than probability of merely going
@@ -1117,28 +1109,28 @@ def generate_item_forecast(
         "supply_type": supply_type_name,
         "current_stock": round(
             current_stock,
-            2
+            4
         ),
         "minimum_stock": round(
             minimum_stock,
-            2
+            4
         ),
         "stock_status": stock_status,
         "forecasted_daily_consumption": round(
             average_daily_consumption,
-            2
+            4
         ),
         "forecasted_consumption": round(
             total_forecasted_consumption,
-            2
+            4
         ),
         "conservative_consumption": round(
             conservative_consumption,
-            2
+            4
         ),
         "estimated_ending_stock": round(
             estimated_ending_stock,
-            2
+            4
         ),
         "days_of_supply_remaining": (
             round(days_of_supply, 2)
@@ -1151,6 +1143,7 @@ def generate_item_forecast(
         "safety_buffer_days": (
             SAFETY_BUFFER_DAYS
         ),
+        "status_rule_version": STATUS_RULE_VERSION,
         "forecast_status": forecast_status,
         "shortage_probability": round(
             shortage_probability,
@@ -1222,8 +1215,8 @@ def forecast_inventory(branch_id, forecast_days):
             "feature engineering."
         )
 
-    model_metrics, item_validation_errors = (
-        evaluate_xgboost_model(model_data)
+    model_metrics, item_validation_errors, accuracy = evaluate_xgboost_model(
+        model_data, clean_history, forecastable_items
     )
 
     final_model = train_final_model(
@@ -1322,8 +1315,7 @@ def forecast_inventory(branch_id, forecast_days):
 
     forecasts.sort(
         key=lambda result: (
-            result["forecast_status"]
-            == "Shortage Risk",
+            {"Shortage Risk": 3, "Reorder Needed": 2, "Sufficient": 1}.get(result["forecast_status"], 0),
             result["shortage_probability"],
             result["recommended_reorder"],
         ),
@@ -1337,6 +1329,7 @@ def forecast_inventory(branch_id, forecast_days):
 
     return {
         "model_metrics": model_metrics,
+        "accuracy": accuracy,
         "forecasts": forecasts,
         "skipped_items": skipped_items,
         "skipped_item_ids": skipped_item_ids,
@@ -1464,6 +1457,7 @@ def main():
                 "SMAPE"
             ],
             "feature_columns": FEATURE_COLUMNS,
+            "accuracy": result["accuracy"],
             "model_metrics": (
                 result["model_metrics"]
             ),

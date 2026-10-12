@@ -1,6 +1,8 @@
 <?php
 session_start();
 require_once __DIR__ . '/sources/db_connect.php';
+require_once 'sources/inventory_stock_helpers.php';
+$stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
 
 // Check if user is Super Admin
@@ -102,10 +104,8 @@ $inventory_result = $conn->query($inventory_sql);
 $inventory_data = $inventory_result->fetch_assoc();
 
 // 7. Total Inventory Stocks by Branch
-$stock_sql = "SELECT 
-                COUNT(*) as total_stocks,
-                SUM(quantity_available) as total_quantity_available
-              FROM inventory_stocks";
+$stock_sql = "SELECT COALESCE(SUM(s.total_batches),0) AS total_stocks,
+    COALESCE(SUM(s.usable_batches),0) AS total_usable_batches FROM ($stockTotalsSql) s";
 $stock_result = $conn->query($stock_sql);
 $stock_data = $stock_result->fetch_assoc();
 
@@ -128,18 +128,11 @@ while ($row = $activities_result->fetch_assoc()) {
 }
 
 // 9. System Alerts (Inventory alerts)
-$alerts_sql = "SELECT 
-                i.item_name,
-                s.quantity_available,
-                i.minimum_stock,
-                b.branch_name,
-                'Low Stock' as alert_type
-              FROM inventory_stocks s
-              JOIN inventory_items i ON s.item_id = i.item_id
-              JOIN branches b ON s.branch_id = b.branch_id
-              WHERE s.quantity_available <= i.minimum_stock
-              ORDER BY s.quantity_available ASC
-              LIMIT 4";
+$alerts_sql = "SELECT i.item_name,s.usable_stock AS quantity_available,i.minimum_stock,b.branch_name,
+    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,'Low Stock' AS alert_type
+FROM ($stockTotalsSql) s JOIN inventory_items i ON i.item_id=s.item_id
+JOIN branches b ON b.branch_id=s.branch_id JOIN units u ON u.unit_id=i.unit_id
+WHERE s.usable_stock<=i.minimum_stock ORDER BY s.usable_stock,i.item_name,b.branch_id LIMIT 4";
 $alerts_result = $conn->query($alerts_sql);
 $alerts = [];
 while ($row = $alerts_result->fetch_assoc()) {
@@ -932,8 +925,8 @@ $today_data = $today_result->fetch_assoc();
             </div>
 
             <div class="stat-sub">
-                <?php echo number_format($stock_data['total_quantity_available'] ?? 0); ?>
-                Total Stock Available
+                <?php echo number_format($stock_data['total_usable_batches'] ?? 0); ?>
+                Batches With Usable Stock
             </div>
         </div>
     </div>
@@ -1001,7 +994,7 @@ $today_data = $today_result->fetch_assoc();
                                     </strong>
                                     <br />
                                     Low stock in <strong><?php echo htmlspecialchars($alert['branch_name']); ?></strong> 
-                                    (<?php echo htmlspecialchars($alert['quantity_available']); ?> / <?php echo htmlspecialchars($alert['minimum_stock']); ?> minimum)
+                                    (<?php echo htmlspecialchars($alert['quantity_available']); ?> <?php echo htmlspecialchars($alert['unit_name']); ?> / <?php echo htmlspecialchars($alert['minimum_stock']); ?> minimum)
                                     <br />
                                     <small>Action required: Replenish stock immediately</small>
                                 </div>

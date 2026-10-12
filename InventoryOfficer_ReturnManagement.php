@@ -3,6 +3,8 @@ session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/inventory_officer_activity_helper.php';
+require_once 'sources/return_management_helper.php';
+require_once 'sources/return_stock_out_helper.php';
 
 /* -------------------------------------------------------------
  * Inventory Officer access
@@ -25,7 +27,7 @@ $username = 'Inventory Officer';
  * Authenticated user + branch
  * ----------------------------------------------------------- */
 $userQuery = "
-    SELECT u.branch_id, u.username, b.branch_name
+    SELECT u.branch_id, u.username, u.role_id, b.branch_name
     FROM users u
     LEFT JOIN branches b ON u.branch_id = b.branch_id
     WHERE u.user_id = ?
@@ -58,6 +60,7 @@ if ($userResult->num_rows === 0) {
 }
 
 $userData = $userResult->fetch_assoc();
+if ((int)$userData['role_id'] !== 5) { http_response_code(403); die('Inventory Officer access is required.'); }
 $branch_id = $userData['branch_id'];
 $username = $userData['username'] ?: 'Inventory Officer';
 $branch_name = $userData['branch_name'] ?: 'No Branch Assigned';
@@ -101,138 +104,6 @@ function validReturnDate($date)
     return $d !== false && $d->format('Y-m-d') === $date;
 }
 
-function safeDecimal($value)
-{
-    return is_numeric($value) ? (float)$value : 0.0;
-}
-
-/* -------------------------------------------------------------
- * Return Management table
- *
- * IMPORTANT CHANGE:
- * Return Management is now a delivery-return workflow.
- * The item is entered as text because the returned item may not
- * yet exist in inventory_items/inventory_stocks.
- * ----------------------------------------------------------- */
-function ensureReturnManagementTable($conn)
-{
-    /*
-     * Return Management is a simple branch-to-branch return transfer.
-     *
-     * When the sending branch records the return, it is automatically
-     * marked "In Transit". The receiving branch only confirms receipt,
-     * which changes the record to "Received".
-     *
-     * Route is derived from branch_id -> destination_branch_id.
-     * No separate route column is stored because that would duplicate
-     * the branch relationship.
-     *
-     * Transportation Details are optional and may contain a Lalamove
-     * transaction link or another delivery reference.
-     *
-     * No Batch/Lot field is stored in this workflow.
-     */
-    $sql = "CREATE TABLE IF NOT EXISTS inventory_returns (
-        return_id INT(11) NOT NULL AUTO_INCREMENT,
-        return_number VARCHAR(30) DEFAULT NULL,
-        branch_id VARCHAR(10) NOT NULL,
-        destination_branch_id VARCHAR(10) NOT NULL,
-        item_name VARCHAR(255) NOT NULL,
-        unit_id INT(11) NOT NULL,
-        quantity DECIMAL(12,2) NOT NULL,
-        return_reason VARCHAR(100) NOT NULL,
-        remarks TEXT DEFAULT NULL,
-        transportation_details TEXT DEFAULT NULL,
-        status ENUM('In Transit','Received') NOT NULL DEFAULT 'In Transit',
-        created_by INT(11) NOT NULL,
-        sent_at DATETIME DEFAULT NULL,
-        received_at DATETIME DEFAULT NULL,
-        processed_by INT(11) DEFAULT NULL,
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        PRIMARY KEY (return_id),
-        UNIQUE KEY uq_inventory_returns_number (return_number),
-        KEY idx_returns_branch_status (branch_id, status),
-        KEY idx_returns_unit (unit_id),
-        KEY idx_returns_destination (destination_branch_id),
-        KEY idx_returns_created_by (created_by),
-        KEY idx_returns_processed_by (processed_by),
-        CONSTRAINT fk_return_branch FOREIGN KEY (branch_id) REFERENCES branches (branch_id),
-        CONSTRAINT fk_return_unit FOREIGN KEY (unit_id) REFERENCES units (unit_id),
-        CONSTRAINT fk_return_destination FOREIGN KEY (destination_branch_id) REFERENCES branches (branch_id),
-        CONSTRAINT fk_return_created_by FOREIGN KEY (created_by) REFERENCES users (user_id),
-        CONSTRAINT fk_return_processed_by FOREIGN KEY (processed_by) REFERENCES users (user_id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci";
-
-    if (!$conn->query($sql)) {
-        throw new Exception('Unable to prepare Return Management database table: ' . $conn->error);
-    }
-
-    /* Add optional Transportation Details to an existing table. */
-    $transportCheck = $conn->query("SHOW COLUMNS FROM inventory_returns LIKE 'transportation_details'");
-    if ($transportCheck && $transportCheck->num_rows === 0) {
-        if (!$conn->query("ALTER TABLE inventory_returns ADD COLUMN transportation_details TEXT DEFAULT NULL AFTER remarks")) {
-            throw new Exception('Unable to add Transportation Details to Return Management: ' . $conn->error);
-        }
-    }
-
-    /* Remove legacy Batch/Lot field if an older version still has it. */
-    $columnCheck = $conn->query("SHOW COLUMNS FROM inventory_returns LIKE 'batch_lot_no'");
-    if ($columnCheck && $columnCheck->num_rows > 0) {
-        if (!$conn->query("ALTER TABLE inventory_returns DROP COLUMN batch_lot_no")) {
-            throw new Exception('Unable to remove the legacy Batch/Lot field from Return Management: ' . $conn->error);
-        }
-    }
-
-    /*
-     * Migrate older status values into the new two-stage workflow.
-     * Pending / Ready to Send / Sent / Transferred -> In Transit
-     * Received / Resolved / Complete -> Received
-     */
-    $statusCheck = $conn->query("SHOW COLUMNS FROM inventory_returns LIKE 'status'");
-    if ($statusCheck && ($statusColumn = $statusCheck->fetch_assoc())) {
-        $type = (string)($statusColumn['Type'] ?? '');
-
-        if (
-            strpos($type, "'In Transit'") === false ||
-            strpos($type, "'Received'") === false
-        ) {
-            if (!$conn->query("ALTER TABLE inventory_returns MODIFY status ENUM('Pending','Ready to Send','Sent to Main Branch','Transferred','Received','Resolved','Complete','In Transit') NOT NULL DEFAULT 'In Transit'")) {
-                throw new Exception('Unable to prepare Return Management status migration: ' . $conn->error);
-            }
-        }
-
-        if (!$conn->query("UPDATE inventory_returns
-                           SET status = 'In Transit',
-                               sent_at = COALESCE(sent_at, created_at)
-                           WHERE status IN ('Pending','Ready to Send','Sent to Main Branch','Transferred')")) {
-            throw new Exception('Unable to migrate old in-transit return statuses: ' . $conn->error);
-        }
-
-        if (!$conn->query("UPDATE inventory_returns
-                           SET status = 'Received',
-                               received_at = COALESCE(received_at, created_at)
-                           WHERE status IN ('Received','Resolved','Complete')")) {
-            throw new Exception('Unable to migrate old received return statuses: ' . $conn->error);
-        }
-
-        if (!$conn->query("ALTER TABLE inventory_returns MODIFY status ENUM('In Transit','Received') NOT NULL DEFAULT 'In Transit'")) {
-            throw new Exception('Unable to finalize Return Management status migration: ' . $conn->error);
-        }
-    }
-
-    /* Remove legacy resolution-only columns; they are no longer part of this workflow. */
-    foreach (['resolved_at', 'resolution', 'resolution_remarks'] as $legacyColumn) {
-        $legacyCheck = $conn->query("SHOW COLUMNS FROM inventory_returns LIKE '" . $conn->real_escape_string($legacyColumn) . "'");
-        if ($legacyCheck && $legacyCheck->num_rows > 0) {
-            if (!$conn->query("ALTER TABLE inventory_returns DROP COLUMN `{$legacyColumn}`")) {
-                throw new Exception('Unable to remove legacy Return Management field ' . $legacyColumn . ': ' . $conn->error);
-            }
-        }
-    }
-}
-
-
 $allowedReturnReasons = [
     'Wrong Item',
     'Incorrect Quantity',
@@ -246,22 +117,13 @@ $allowedStatuses = [
     'Received'
 ];
 
-/* -------------------------------------------------------------
- * Units for Return Form
- * ----------------------------------------------------------- */
-$units = [];
-$unitSql = "SELECT unit_id, unit_name FROM units ORDER BY unit_name ASC";
-$unitResult = $conn->query($unitSql);
-if ($unitResult) {
-    while ($row = $unitResult->fetch_assoc()) {
-        $units[] = $row;
-    }
-}
-
+/* Read-only setup check; run the separate CLI migration once. */
 try {
-    ensureReturnManagementTable($conn);
+    stockReceiptSourceAssertSchema($conn);
+    returnManagementAssertSchema($conn);
+    returnStockOutAssertSchema($conn);
 } catch (Throwable $e) {
-    http_response_code(500);
+    http_response_code(503);
     die(h($e->getMessage()));
 }
 
@@ -286,23 +148,7 @@ if ($branchesResult) {
     $activeBranches = $branchesResult->fetch_all(MYSQLI_ASSOC);
 }
 
-$mainBranchDefault = '';
-foreach ($activeBranches as $branch) {
-    $name = strtolower((string)$branch['branch_name']);
-    if (strpos($name, 'main') !== false && (string)$branch['branch_id'] !== (string)$branch_id) {
-        $mainBranchDefault = $branch['branch_id'];
-        break;
-    }
-}
-
-if ($mainBranchDefault === '') {
-    foreach ($activeBranches as $branch) {
-        if ((string)$branch['branch_id'] !== (string)$branch_id) {
-            $mainBranchDefault = $branch['branch_id'];
-            break;
-        }
-    }
-}
+$mainBranchDefault = ''; // No guessed return destination.
 
 /* -------------------------------------------------------------
  * CSRF
@@ -312,244 +158,193 @@ if (empty($_SESSION['return_management_csrf'])) {
 }
 $returnCsrf = $_SESSION['return_management_csrf'];
 
-/* -------------------------------------------------------------
- * POST actions
- * ----------------------------------------------------------- */
+/* POST actions preserve the delivery-only workflow. Inventory links are optional. */
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $postedToken = $_POST['csrf_token'] ?? '';
-
-    if (!hash_equals($returnCsrf, (string)$postedToken)) {
+    if (!is_string($_POST['csrf_token'] ?? null) || !hash_equals($returnCsrf, $_POST['csrf_token'])) {
         returnFlash('danger', 'Security validation failed. Please try again.');
         redirectReturnPage();
     }
-
     $action = $_POST['action'] ?? '';
-
-    /* -------------------------- RECORD RETURN ------------------------- */
-    if ($action === 'save_return') {
-        $itemName = trim((string)($_POST['item_name'] ?? ''));
-        $unitId = filter_input(INPUT_POST, 'unit_id', FILTER_VALIDATE_INT);
-        $destinationBranchId = trim((string)($_POST['destination_branch_id'] ?? ''));
-        $quantityRaw = trim((string)($_POST['quantity'] ?? ''));
-        $returnReason = trim((string)($_POST['return_reason'] ?? ''));
-        $remarks = trim((string)($_POST['remarks'] ?? ''));
-        $transportationDetails = trim((string)($_POST['transportation_details'] ?? ''));
-        $quantity = safeDecimal($quantityRaw);
-
-       if (
-            $itemName === '' ||
-            !$unitId ||
-            $destinationBranchId === '' ||
-            $quantity <= 0 ||
-            !in_array($returnReason, $allowedReturnReasons, true)
-        ) {
-            returnFlash('danger', 'Please complete all required return details with valid values.');
-            redirectReturnPage();
-        }
-
-        if ($destinationBranchId === (string)$branch_id) {
-            returnFlash('danger', 'The return destination must be different from your current clinic branch.');
-            redirectReturnPage();
-        }
-
+    if ($action === 'return_stock_out') {
         try {
-            $conn->begin_transaction();
+            $returnId=returnManagementOptionalId($_POST['return_id'] ?? null);
+            $stockId=returnManagementOptionalId($_POST['stock_out_stock_id'] ?? null);
+            $transactionId=returnManagementOptionalId($_POST['outgoing_transaction_id'] ?? null);
+            $mode=returnManagementPostedText($_POST['stock_out_mode'] ?? '',10,'Stock Out mode');
+            $date=returnManagementPostedText($_POST['stock_out_date'] ?? date('Y-m-d'),10,'Stock Out date');
+            if (!$returnId) throw new RuntimeException('Select a valid return.');
+        } catch (Throwable $e) { returnFlash('danger',$e->getMessage()); redirectReturnPage(); }
+        $conn->begin_transaction();
+        try {
+            $result=returnStockOutRecord($conn,['user_id'=>$user_id,'branch_id'=>$branch_id,
+                'branch_name'=>$branch_name,'username'=>$username],$returnId,$mode,$stockId,$transactionId,$date);
+            $conn->commit();
+            $message=$result['already_recorded'] ? 'Stock Out was already recorded for this return; the existing movement was retained.'
+                : ($mode==='record' ? ($result['usable_out']
+                    ? 'Stock Out recorded once for this return. Include this outgoing quantity in the Daily Inventory Pull Out total for '.$result['date'].'.'
+                    : 'Expired-stock quantity was removed once from its recorded batch. The return Stock Out is saved.')
+                    : 'Existing Stock Out linked. No additional stock was deducted.');
+            returnFlash('success',$message); redirectReturnPage();
+        } catch (Throwable $e) {
+            $conn->rollback(); returnFlash('danger',$e instanceof mysqli_sql_exception
+                ? 'Unable to save Stock Out. The transaction may already be linked to another return. No Stock Out changes were saved.' : $e->getMessage());
+            redirectReturnPage();
+        }
+    }
 
-            /* Verify selected destination branch. */
-            $destinationStmt = $conn->prepare("SELECT branch_id, branch_name FROM branches WHERE branch_id = ? AND status = 'Active' LIMIT 1");
-            if (!$destinationStmt) {
-                throw new Exception('Unable to verify destination branch.');
-            }
-            $destinationStmt->bind_param('s', $destinationBranchId);
-            $destinationStmt->execute();
-            $destination = $destinationStmt->get_result()->fetch_assoc();
-            $destinationStmt->close();
-
-            if (!$destination) {
-                throw new Exception('The selected destination branch is not active.');
-            }
-
-            /* Verify the selected unit exists. */
-            $unitStmt = $conn->prepare("SELECT unit_id FROM units WHERE unit_id = ? LIMIT 1");
-            if (!$unitStmt) {
-                throw new Exception('Unable to verify the selected unit.');
-            }
-            $unitStmt->bind_param('i', $unitId);
-            $unitStmt->execute();
-            $unitExists = $unitStmt->get_result()->num_rows > 0;
-            $unitStmt->close();
-
-            if (!$unitExists) {
-                throw new Exception('The selected unit does not exist.');
-            }
-
-            /*
-             * Recording the return is the transfer event.
-             * The record is automatically In Transit.
-             */
+    if ($action === 'save_return') {
+        try {
+            $itemName = returnManagementPostedText($_POST['item_name'] ?? '', 255, 'item name');
+            $unitId = returnManagementOptionalId($_POST['unit_id'] ?? null);
+            $destinationBranchId = returnManagementPostedText($_POST['destination_branch_id'] ?? '', 10, 'destination branch');
+            $quantity = returnManagementQuantity(returnManagementPostedText($_POST['quantity'] ?? '', 32, 'quantity'));
+            $returnReason = returnManagementPostedText($_POST['return_reason'] ?? '', 100, 'return reason');
+            $remarks = returnManagementPostedText($_POST['remarks'] ?? '', 2000, 'remarks');
+            $transportationDetails = returnManagementPostedText($_POST['transportation_details'] ?? '', 500, 'transportation details');
+            $itemId = returnManagementOptionalId($_POST['inventory_item_id'] ?? null);
+            $stockId = returnManagementOptionalId($_POST['source_stock_id'] ?? null);
+            $sourceReceiptId=returnManagementOptionalId($_POST['source_receipt_transaction_id'] ?? null);
+            $destinationReason=returnManagementPostedText($_POST['destination_reason'] ?? '',500,'destination explanation');
+            if ($itemName === '' || !$unitId || $destinationBranchId === ''
+                || !in_array($returnReason, $allowedReturnReasons, true)) throw new RuntimeException('Complete all required return details.');
+            if ($destinationBranchId === (string)$branch_id) throw new RuntimeException('The destination must differ from your current branch.');
+        } catch (Throwable $e) {
+            returnFlash('danger', $e->getMessage());
+            redirectReturnPage();
+        }
+        $conn->begin_transaction();
+        try {
+            returnManagementRequireActor($conn, $user_id, $branch_id);
+            $stmt = returnManagementStatement($conn,
+                "SELECT branch_id,branch_name FROM branches WHERE branch_id = ? AND status = 'Active' FOR UPDATE");
+            $stmt->bind_param('s', $destinationBranchId);
+            returnManagementExecute($stmt);
+            $destination = $stmt->get_result()->fetch_assoc();
+            $stmt->close();
+            if (!$destination) throw new RuntimeException('The selected destination branch is not active.');
+            $destinationBranchId=(string)$destination['branch_id'];
+            if ($destinationBranchId===(string)$branch_id) throw new RuntimeException('The destination must differ from your current branch.');
+            $stmt = returnManagementStatement($conn, 'SELECT unit_id FROM units WHERE unit_id = ?');
+            $stmt->bind_param('i', $unitId);
+            returnManagementExecute($stmt);
+            $unitExists = $stmt->get_result()->num_rows === 1;
+            $stmt->close();
+            if (!$unitExists) throw new RuntimeException('The selected unit does not exist.');
+            $reference = returnManagementSourceReference($conn, $branch_id, $itemName, $unitId, $quantity, $itemId, $stockId);
+            $route=stockReceiptSourceReturnRoute($conn,$branch_id,$destinationBranchId,$reference,$sourceReceiptId,$destinationReason);
+            $sourceReceiptId=$route['receipt_id']; $destinationReason=$route['reason'];
+            $itemId = $reference['item_id'];
+            $stockId = $reference['stock_id'];
+            $baseQuantity = $reference['base_quantity'];
+            $baseUnit = $reference['base_unit'];
+            $batch = $reference['batch'];
             $now = date('Y-m-d H:i:s');
-            $insert = $conn->prepare("INSERT INTO inventory_returns
-                (return_number, branch_id, destination_branch_id, item_name, unit_id, quantity, return_reason, remarks, transportation_details, status, created_by, sent_at, processed_by, created_at)
-                VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'In Transit', ?, ?, NULL, ?)");
-
-            if (!$insert) {
-                throw new Exception('Unable to prepare return record.');
+            $stmt = returnManagementStatement($conn, "INSERT INTO inventory_returns
+                (return_number, branch_id, destination_branch_id, item_name, unit_id, quantity,
+                 return_reason, remarks, transportation_details, status, created_by, sent_at, created_at,
+                 item_id, stock_id, inventory_quantity_snapshot, inventory_base_unit_snapshot, source_batch_snapshot,
+                 source_receipt_transaction_id,destination_reason)
+                VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'In Transit', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param('sssissssissiisssis', $branch_id, $destinationBranchId, $itemName, $unitId,
+                $quantity, $returnReason, $remarks, $transportationDetails, $user_id, $now, $now,
+                $itemId, $stockId, $baseQuantity, $baseUnit, $batch,$sourceReceiptId,$destinationReason);
+            returnManagementExecute($stmt);
+            $returnId = (int)$conn->insert_id;
+            $stmt->close();
+            $returnNumber = 'RET-' . date('Y') . '-' . str_pad((string)$returnId, 6, '0', STR_PAD_LEFT);
+            $stmt = returnManagementStatement($conn, 'UPDATE inventory_returns SET return_number = ? WHERE return_id = ?');
+            $stmt->bind_param('si', $returnNumber, $returnId);
+            returnManagementExecute($stmt);
+            $stmt->close();
+            $actionText = 'Recorded return shipment ' . $returnNumber . ' for ' . $itemName . ' (' . $quantity . ') to branch ' . $destinationBranchId;
+            $message = 'Return ' . $returnNumber . ' was recorded for delivery to ' . $destination['branch_name']
+                . '. Item: ' . $itemName . '. Quantity: ' . $quantity . '. Reason: ' . $returnReason . '.';
+            if (!inventoryOfficerRecordReturnActivity($conn, $user_id, $branch_id, $branch_name, $username,
+                $returnId, $returnNumber, $actionText, $message, 'sent')) {
+                throw new RuntimeException('Unable to save the return audit and Branch Admin notification.');
             }
-
-            $insert->bind_param(
-                'sssidsssiss',
-                $branch_id,
-                $destinationBranchId,
-                $itemName,
-                $unitId,
-                $quantity,
-                $returnReason,
-                $remarks,
-                $transportationDetails,
-                $user_id,
-                $now,
-                $now
-            );
-
-            if (!$insert->execute()) {
-                throw new Exception('Unable to save return record: ' . $insert->error);
-            }
-
-            $newReturnId = (int)$conn->insert_id;
-            $insert->close();
-
-            $returnNumber = 'RET-' . date('Y') . '-' . str_pad((string)$newReturnId, 6, '0', STR_PAD_LEFT);
-            $numberUpdate = $conn->prepare("UPDATE inventory_returns SET return_number = ? WHERE return_id = ?");
-            if (!$numberUpdate) {
-                throw new Exception('Unable to assign return number.');
-            }
-            $numberUpdate->bind_param('si', $returnNumber, $newReturnId);
-            if (!$numberUpdate->execute()) {
-                throw new Exception('Unable to assign return number: ' . $numberUpdate->error);
-            }
-            $numberUpdate->close();
-
-            $returnAction = 'Recorded and automatically transferred return '
-                . $returnNumber . ' for ' . $itemName . ' (' . $quantity . ') to branch '
-                . $destinationBranchId;
-
-            $returnMessage = 'Return ' . $returnNumber . ' was sent to '
-                . ($destination['branch_name'] ?? $destinationBranchId)
-                . '. Item: ' . $itemName
-                . '. Quantity: ' . $quantity
-                . '. Reason: ' . $returnReason . '.';
-
-            if (!inventoryOfficerRecordReturnActivity(
-                $conn,
-                $user_id,
-                $branch_id,
-                $branch_name,
-                $username,
-                $newReturnId,
-                $returnNumber,
-                $returnAction,
-                $returnMessage,
-                'sent'
-            )) {
-                throw new Exception('The return was recorded, but its audit log or Branch Admin notification could not be saved.');
-            }
-
+            if (!inventoryOfficerNotifyIncomingReturn($conn,$returnId)) throw new RuntimeException('Unable to save the receiving Inventory Officer notification.');
             $conn->commit();
             returnFlash('success', 'Return ' . $returnNumber . ' was recorded and is now In Transit.');
             redirectReturnPage();
         } catch (Throwable $e) {
             $conn->rollback();
-            returnFlash('danger', $e->getMessage());
+            returnFlash('danger', $e instanceof mysqli_sql_exception ? 'Unable to save this return. No return changes were saved.' : $e->getMessage());
             redirectReturnPage();
         }
     }
-
-    /* -------------------------- CONFIRM RECEIPT ------------------------- */
-    if ($action === 'confirm_receipt') {
-        $returnId = filter_input(INPUT_POST, 'return_id', FILTER_VALIDATE_INT);
-
-        if (!$returnId) {
-            returnFlash('danger', 'Invalid return record.');
+    if ($action === 'confirm_receipt' || $action === 'link_stock_receipt') {
+        try {
+            $returnId = returnManagementOptionalId($_POST['return_id'] ?? null);
+            $transactionId = returnManagementOptionalId($_POST['receipt_transaction_id'] ?? null);
+            if (!$returnId) throw new RuntimeException('Select a valid return record.');
+            if ($action === 'link_stock_receipt' && !$transactionId) throw new RuntimeException('Select the stock receipt to link.');
+        } catch (Throwable $e) {
+            returnFlash('danger', $e->getMessage());
             redirectReturnPage();
         }
-
+        $conn->begin_transaction();
         try {
-            $conn->begin_transaction();
-
-            /* Only the destination branch can confirm receipt. */
-            $returnStmt = $conn->prepare("SELECT ir.*, b1.branch_name AS source_name, b2.branch_name AS destination_name
-                                          FROM inventory_returns ir
-                                          LEFT JOIN branches b1 ON b1.branch_id = ir.branch_id
-                                          LEFT JOIN branches b2 ON b2.branch_id = ir.destination_branch_id
-                                          WHERE ir.return_id = ?
-                                            AND ir.destination_branch_id = ?
-                                          LIMIT 1 FOR UPDATE");
-            if (!$returnStmt) {
-                throw new Exception('Unable to load return record.');
+            returnManagementRequireActor($conn, $user_id, $branch_id);
+            $stmt = returnManagementStatement($conn, "SELECT ir.*, b.branch_name AS source_name
+                FROM inventory_returns ir LEFT JOIN branches b ON b.branch_id = ir.branch_id
+                WHERE ir.return_id = ? AND ir.destination_branch_id = ? FOR UPDATE");
+            $stmt->bind_param('is', $returnId, $branch_id);
+            returnManagementExecute($stmt);
+            $return = $stmt->get_result()->fetch_assoc();
+            $stmt->close();
+            if (!$return) throw new RuntimeException('Return not found or you are not the receiving branch.');
+            if (!in_array($return['status'], ['In Transit','Received'], true)) throw new RuntimeException('This legacy return status needs review.');
+            if ($action === 'link_stock_receipt' && $return['status'] !== 'Received') throw new RuntimeException('Confirm delivery receipt before linking a stock receipt.');
+            $existingTransaction = $return['stock_transaction_id'] === null ? null : (int)$return['stock_transaction_id'];
+            if ($existingTransaction !== null && $transactionId !== null && $existingTransaction !== $transactionId) {
+                throw new RuntimeException('This return already has a stock receipt reference. It cannot be replaced here.');
             }
-
-            $returnStmt->bind_param('is', $returnId, $branch_id);
-            $returnStmt->execute();
-            $returnData = $returnStmt->get_result()->fetch_assoc();
-            $returnStmt->close();
-
-            if (!$returnData) {
-                throw new Exception('Return record not found or you are not the destination branch.');
+            $newLink = $transactionId !== null && $existingTransaction === null;
+            if ($newLink) returnManagementValidateReceipt($conn, $return, $branch_id, $transactionId);
+            $firstReceipt = $return['status'] === 'In Transit';
+            if (!$firstReceipt && !$newLink) {
+                $conn->commit();
+                returnFlash('success', 'This return has already been received. Its existing record was retained.');
+                redirectReturnPage();
             }
-
-            if ($returnData['status'] !== 'In Transit') {
-                throw new Exception('This return has already been received.');
+            if ($firstReceipt) {
+                $now = date('Y-m-d H:i:s');
+                $stmt = returnManagementStatement($conn, "UPDATE inventory_returns SET status = 'Received',
+                    received_at = ?, processed_by = ?, stock_transaction_id = COALESCE(?, stock_transaction_id)
+                    WHERE return_id = ? AND destination_branch_id = ? AND status = 'In Transit'");
+                $stmt->bind_param('siiis', $now, $user_id, $transactionId, $returnId, $branch_id);
+            } else {
+                $stmt = returnManagementStatement($conn, "UPDATE inventory_returns SET stock_transaction_id = ?
+                    WHERE return_id = ? AND destination_branch_id = ? AND status = 'Received' AND stock_transaction_id IS NULL");
+                $stmt->bind_param('iis', $transactionId, $returnId, $branch_id);
             }
-
-            $receivedAt = date('Y-m-d H:i:s');
-            $update = $conn->prepare("UPDATE inventory_returns
-                                      SET status = 'Received',
-                                          received_at = ?,
-                                          processed_by = ?
-                                      WHERE return_id = ?
-                                        AND destination_branch_id = ?
-                                        AND status = 'In Transit'");
-            if (!$update) {
-                throw new Exception('Unable to prepare receipt confirmation.');
+            returnManagementExecute($stmt);
+            if ($stmt->affected_rows !== 1) throw new RuntimeException('The return changed. Refresh the page and try again.');
+            $stmt->close();
+            $number = $return['return_number'] ?: ('RET-' . $returnId);
+            $actionText = $firstReceipt ? 'Confirmed receipt of return ' . $number : 'Linked existing stock receipt to return ' . $number;
+            if ($newLink) $actionText .= ' | Stock receipt #' . $transactionId;
+            $message = $firstReceipt ? 'Return ' . $number . ' from ' . ($return['source_name'] ?: $return['branch_id']) . ' was confirmed as received.'
+                : 'Return ' . $number . ' was linked to an existing stock receipt.';
+            if ($newLink) $message .= ' Stock transaction ID: ' . $transactionId . '.';
+            if (!inventoryOfficerRecordReturnActivity($conn, $user_id, $branch_id, $branch_name, $username,
+                $returnId, $number, $actionText, $message, $firstReceipt ? 'received' : 'stock_receipt')) {
+                throw new RuntimeException('Unable to save the return audit and Branch Admin notification.');
             }
-
-            $update->bind_param('siis', $receivedAt, $user_id, $returnId, $branch_id);
-            if (!$update->execute()) {
-                throw new Exception('Unable to confirm receipt: ' . $update->error);
-            }
-            $update->close();
-
-            $receivedReturnNumber = $returnData['return_number'] ?? ('RET-' . $returnId);
-            $returnAction = 'Confirmed receipt of return ' . $receivedReturnNumber;
-            $returnMessage = 'Return ' . $receivedReturnNumber
-                . ' from ' . ($returnData['source_name'] ?? $returnData['branch_id'])
-                . ' was confirmed as received. Item: ' . $returnData['item_name']
-                . '. Quantity: ' . $returnData['quantity'] . '.';
-
-            if (!inventoryOfficerRecordReturnActivity(
-                $conn,
-                $user_id,
-                $branch_id,
-                $branch_name,
-                $username,
-                $returnId,
-                $receivedReturnNumber,
-                $returnAction,
-                $returnMessage,
-                'received'
-            )) {
-                throw new Exception('The return receipt was confirmed, but its audit log or Branch Admin notification could not be saved.');
-            }
-
+            if ($firstReceipt && !inventoryOfficerNotifyIncomingReturn($conn,$returnId)) throw new RuntimeException('Unable to update the receiving Inventory Officer notification.');
+            if ($firstReceipt && !inventoryOfficerNotifyReturnSenderReceived($conn,$returnId)) throw new RuntimeException('Unable to notify the sending Inventory Officers. Receipt confirmation was not saved.');
             $conn->commit();
-            returnFlash('success', 'Return ' . ($returnData['return_number'] ?? ('RET-' . $returnId)) . ' was received and marked Received.');
+            returnFlash('success', $firstReceipt ? 'Return ' . $number . ' was marked Received.' : 'Stock receipt linked. The existing stock movement was retained.');
             redirectReturnPage();
         } catch (Throwable $e) {
             $conn->rollback();
-            returnFlash('danger', $e->getMessage());
+            returnFlash('danger', $e instanceof mysqli_sql_exception ? 'Unable to save this receipt reference. It may already be linked to another return. No return changes were saved.' : $e->getMessage());
             redirectReturnPage();
         }
     }
+    returnFlash('danger', 'Unsupported return action.');
+    redirectReturnPage();
 }
 
 /* -------------------------------------------------------------
@@ -609,12 +404,34 @@ $returnListSql = "SELECT
                     ir.sent_at,
                     ir.received_at,
                     ir.processed_by,
+                    ir.item_id, ir.stock_id, ir.stock_transaction_id,
+                    ir.inventory_quantity_snapshot, ir.inventory_base_unit_snapshot,
+                    ir.source_batch_snapshot, ir.legacy_status,
+                    ir.source_receipt_transaction_id,ir.destination_reason,
+                    ir.sent_stock_transaction_id,ir.stock_out_stock_id,ir.stock_out_batch_snapshot,
+                    outbound.transaction_id AS outbound_transaction_id,outbound.quantity AS outbound_quantity,
+                    outbound.transaction_date AS outbound_date,outbound_actor.username AS outbound_actor,
+                    origin.source_name_snapshot AS original_source_name,origin.receipt_source_type AS original_source_type,
+                    ci.item_id AS catalog_item_id, ci.item_name AS catalog_item_name,
+                    COALESCE(NULLIF(TRIM(ci.base_unit_label), ''), cu.unit_name) AS current_base_unit,
+                    ss.stock_id AS source_stock_id, ss.item_id AS source_stock_item_id, ss.branch_id AS source_stock_branch_id,
+                    st.transaction_id AS receipt_transaction_id, st.item_id AS receipt_item_id,
+                    st.branch_id AS receipt_branch_id, st.quantity AS receipt_quantity, st.transaction_type AS receipt_type,
+                    st.receipt_source_type,st.source_branch_id AS receipt_source_branch,
                     sb.branch_name AS source_name,
                     db.branch_name AS destination_name,
                     creator.username AS creator_username,
                     processor.username AS processor_username
                 FROM inventory_returns ir
                 LEFT JOIN units un ON un.unit_id = ir.unit_id
+                LEFT JOIN stock_transactions outbound ON outbound.transaction_id=ir.sent_stock_transaction_id
+                    AND outbound.branch_id=ir.branch_id AND outbound.item_id=ir.item_id AND outbound.transaction_type IN ('OUT','TRANSFER_OUT')
+                LEFT JOIN users outbound_actor ON outbound_actor.user_id=outbound.user_id
+                LEFT JOIN stock_transactions origin ON origin.transaction_id=ir.source_receipt_transaction_id AND origin.branch_id=ir.branch_id AND origin.item_id=ir.item_id
+                LEFT JOIN inventory_items ci ON ci.item_id = ir.item_id
+                LEFT JOIN units cu ON cu.unit_id = ci.unit_id
+                LEFT JOIN inventory_stocks ss ON ss.stock_id = ir.stock_id AND ss.branch_id = ir.branch_id AND ss.item_id = ir.item_id
+                LEFT JOIN stock_transactions st ON st.transaction_id = ir.stock_transaction_id AND st.branch_id = ir.destination_branch_id AND st.item_id = ir.item_id
                 LEFT JOIN branches sb ON sb.branch_id = ir.branch_id
                 LEFT JOIN branches db ON db.branch_id = ir.destination_branch_id
                 LEFT JOIN users creator ON creator.user_id = ir.created_by
@@ -629,12 +446,49 @@ if ($returnListStmt) {
     while ($row = $result->fetch_assoc()) {
         $row['view_type'] = ((string)$row['branch_id'] === (string)$branch_id) ? 'Sent' : 'Received';
         $row['route'] = ($row['source_name'] ?: $row['branch_id']) . ' → ' . ($row['destination_name'] ?: $row['destination_branch_id']);
+        $row['inventory_reference_label'] = returnManagementReferenceLabel($row);
         $returns[] = $row;
     }
     $returnListStmt->close();
 } else {
     $returnError = 'Unable to load return records.';
 }
+
+/* Optional source references and existing destination receipts. No quantity is changed. */
+$inventorySourceItems = $conn->query('SELECT i.item_id, i.item_name, i.unit_id, i.base_unit_label,
+    i.conversion_to_base, u.unit_name FROM inventory_items i JOIN units u ON u.unit_id = i.unit_id ORDER BY i.item_name')->fetch_all(MYSQLI_ASSOC);
+$stmt = returnManagementStatement($conn, 'SELECT stock_id, item_id, batch_lot_no, expiration_date, quantity_available
+    FROM inventory_stocks WHERE branch_id = ? ORDER BY stock_id');
+$stmt->bind_param('s', $branch_id);
+returnManagementExecute($stmt);
+$sourceStocks = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
+$stmt = returnManagementStatement($conn, "SELECT t.transaction_id, t.item_id, t.quantity, t.transaction_date,
+    i.item_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS base_unit
+    FROM stock_transactions t JOIN inventory_items i ON i.item_id = t.item_id JOIN units u ON u.unit_id = i.unit_id
+    WHERE t.branch_id = ? AND t.transaction_type IN ('IN','RETURN','TRANSFER_IN') AND t.quantity > 0
+      AND DATE(t.transaction_date) <= CURDATE()
+      AND NOT EXISTS (SELECT 1 FROM inventory_returns ir WHERE ir.stock_transaction_id = t.transaction_id)
+    ORDER BY t.transaction_date DESC, t.transaction_id DESC");
+$stmt->bind_param('s', $branch_id);
+returnManagementExecute($stmt);
+$stockReceipts = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
+$stmt=returnManagementStatement($conn,"SELECT transaction_id,item_id,quantity,transaction_date,source_branch_id,
+    receipt_source_type,source_name_snapshot,receipt_stock_id,receipt_batch_snapshot,receipt_base_unit_snapshot
+    FROM stock_transactions WHERE branch_id=? AND transaction_type IN ('IN','RETURN','TRANSFER_IN')
+      AND receipt_base_unit_snapshot IS NOT NULL AND quantity>0 AND DATE(transaction_date)<=CURDATE()
+    ORDER BY transaction_date DESC,transaction_id DESC");
+$stmt->bind_param('s',$branch_id); returnManagementExecute($stmt);
+$originalReceipts=$stmt->get_result()->fetch_all(MYSQLI_ASSOC); $stmt->close();
+$stmt=returnManagementStatement($conn,"SELECT t.transaction_id,t.item_id,t.quantity,t.transaction_date
+    FROM stock_transactions t WHERE t.branch_id=? AND t.transaction_type IN ('OUT','TRANSFER_OUT') AND t.quantity>0
+      AND DATE(t.transaction_date)<=CURDATE()
+      AND NOT EXISTS (SELECT 1 FROM inventory_returns ir WHERE ir.sent_stock_transaction_id=t.transaction_id)
+    ORDER BY t.transaction_date DESC,t.transaction_id DESC");
+$stmt->bind_param('s',$branch_id); returnManagementExecute($stmt);
+$returnOutgoingTransactions=$stmt->get_result()->fetch_all(MYSQLI_ASSOC); $stmt->close();
+$inventoryChoicesJson = json_encode([$inventorySourceItems, $sourceStocks, $stockReceipts,$originalReceipts], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
 
 $returnRowsJson = json_encode($returns, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
 if ($returnRowsJson === false) {
@@ -2097,7 +1951,7 @@ body {
                                 <div class="empty-state">
                                     <i class="bi bi-arrow-return-left"></i>
                                     <div class="fw-semibold">No return records yet.</div>
-                                    <div class="small">Use <strong>Record Return</strong> to record and automatically transfer an item to another branch. Use the <strong>Status</strong> filter to view returns by In Transit or Received status.</div>
+                                    <div class="small">Use <strong>Record Return</strong> to record a return shipment to another branch. Use the <strong>Status</strong> filter to view returns by In Transit or Received status.</div>
                                 </div>
                             </td>
                         </tr>
@@ -2144,6 +1998,9 @@ body {
                                 <td><?php echo h(date('M d, Y', strtotime($lastUpdated))); ?></td>
                                 <td class="text-center">
                                     <div class="d-inline-flex gap-1">
+                                        <?php if ($row['view_type']==='Sent' && $row['item_id'] && $row['inventory_quantity_snapshot']!==null && !$row['sent_stock_transaction_id']): ?>
+                                            <button class="action-btn primary-action" type="button" title="Stock Out" onclick="openReturnStockOut(<?php echo (int)$row['return_id']; ?>)"><i class="bi bi-box-arrow-up"></i></button>
+                                        <?php endif; ?>
                                         <button class="action-btn" type="button" title="View Details" onclick="openDetails(<?php echo (int)$row['return_id']; ?>)">
                                             <i class="bi bi-eye"></i>
                                         </button>
@@ -2203,6 +2060,34 @@ body {
                 
                 <div class="modal-body">
                     <div class="row g-3">
+                        <div class="col-12">
+                            <div class="field-label">Inventory Item <span class="text-muted fw-normal">(Optional)</span></div>
+                            <select name="inventory_item_id" id="inventory_item_id" class="form-select" onchange="updateSourceReference()">
+                                <option value="">Delivery item entered as text</option>
+                                <?php foreach ($inventorySourceItems as $item): ?>
+                                    <option value="<?php echo (int)$item['item_id']; ?>"><?php echo h($item['item_name']); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <div class="small text-muted mt-1">Select only when this shipment corresponds to an existing inventory item.</div>
+                        </div>
+                        <div class="col-12">
+                            <div class="field-label">Sending Branch Batch <span class="text-muted fw-normal">(Optional)</span></div>
+                            <select name="source_stock_id" id="source_stock_id" class="form-select" disabled onchange="updateOriginalReceipts()">
+                                <option value="">No batch reference</option>
+                            </select>
+                        </div>
+                        <div class="col-12">
+                            <label for="source_receipt_transaction_id" class="field-label">Original Stock Receipt</label>
+                            <select name="source_receipt_transaction_id" id="source_receipt_transaction_id" class="form-select" disabled onchange="updateReturnOrigin()">
+                                <option value="">No original receipt selected</option>
+                            </select>
+                            <div id="return_origin_hint" class="small text-muted mt-1">Older or unstocked items need a destination explanation.</div>
+                        </div>
+                        <div class="col-12">
+                            <label for="destination_reason" class="field-label">Destination Explanation</label>
+                            <input name="destination_reason" id="destination_reason" maxlength="500" class="form-control" required placeholder="Why is this branch receiving the return?">
+                            <div class="small text-muted mt-1">Required when the source is unknown/external, or the destination differs from the original source branch.</div>
+                        </div>
                         <div class="col-md-6">
                             <div class="field-label">Item Name <span class="required">*</span></div>
                             <input
@@ -2219,7 +2104,7 @@ body {
 
                         <div class="col-md-6">
                             <div class="field-label">Destination Branch <span class="required">*</span></div>
-                            <select name="destination_branch_id" id="destination_branch_id" class="form-select" required>
+                            <select name="destination_branch_id" id="destination_branch_id" class="form-select" required onchange="updateDestinationReason()">
                                 <option value="">Select destination...</option>
                                 <?php foreach ($activeBranches as $branch): ?>
                                     <?php if ((string)$branch['branch_id'] === (string)$branch_id) continue; ?>
@@ -2306,7 +2191,7 @@ body {
                     </div>
 
                     <div class="status-flow-note mt-3">
-                        <strong>Automatic transfer:</strong> Saving this record immediately marks it as <strong>In Transit</strong> to the selected branch. The receiving branch only needs to confirm receipt.
+                        <strong>Delivery tracking:</strong> Saving marks this shipment <strong>In Transit</strong>. The destination confirms physical receipt. Record any stock movement separately in Stock Management.
                     </div>
                 </div>
 
@@ -2314,7 +2199,7 @@ body {
                     <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
                     <button type="submit" class="btn btn-primary-custom">
                         <i class="bi bi-save me-1"></i>
-                        Save & Transfer
+                        Save Return
                     </button>
                 </div>
             </form>
@@ -2340,18 +2225,49 @@ body {
 
 
 
+<!-- Sending-branch return Stock Out -->
+<div class="modal fade" id="returnStockOutModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">Return Stock Out</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <form method="POST" action="InventoryOfficer_ReturnManagement.php">
+            <input type="hidden" name="csrf_token" value="<?php echo h($returnCsrf); ?>">
+            <input type="hidden" name="action" value="return_stock_out">
+            <input type="hidden" name="return_id" id="out_return_id">
+            <div class="modal-body">
+                <p id="out_return_summary"></p>
+                <label for="out_mode" class="field-label">Action</label>
+                <select name="stock_out_mode" id="out_mode" class="form-select mb-3" onchange="updateReturnOutMode()">
+                    <option value="record">Record Stock Out</option><option value="link">Link Existing Stock Out</option>
+                </select>
+                <div id="out_new_fields">
+                    <label for="out_stock" class="field-label">Sending Stock Batch</label>
+                    <select name="stock_out_stock_id" id="out_stock" class="form-select mb-3" required></select>
+                    <label for="out_date" class="field-label">Stock Out Date</label>
+                    <input type="date" name="stock_out_date" id="out_date" class="form-control" max="<?php echo h(date('Y-m-d')); ?>" required>
+                </div>
+                <div id="out_existing_fields" hidden>
+                    <label for="out_transaction" class="field-label">Recorded Stock Out</label>
+                    <select name="outgoing_transaction_id" id="out_transaction" class="form-select" disabled></select>
+                </div>
+                <p class="small text-muted mt-3 mb-0">Record Stock Out for goods included in sending-branch stock that have physically left. If already deducted in Stock Management, link that existing transaction. Delivery confirmation remains separate.</p>
+            </div>
+            <div class="modal-footer"><button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button><button type="submit" class="btn btn-primary-custom">Save Stock Out</button></div>
+        </form>
+    </div></div>
+</div>
+
 <!-- Confirm Receipt Modal -->
 <div class="modal fade" id="receiveModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-md modal-dialog-centered">
         <div class="modal-content border-0 shadow">
             <div class="modal-header modal-header-custom">
-                <h5 class="modal-title"><i class="bi bi-check2-circle me-2"></i>Confirm Receipt</h5>
+                <h5 class="modal-title"><i class="bi bi-check2-circle me-2"></i><span id="receive_modal_title">Confirm Receipt</span></h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
 
             <form method="POST" action="InventoryOfficer_ReturnManagement.php">
                 <input type="hidden" name="csrf_token" value="<?php echo h($returnCsrf); ?>">
-                <input type="hidden" name="action" value="confirm_receipt">
+                <input type="hidden" name="action" value="confirm_receipt" id="receive_action">
                 <input type="hidden" name="return_id" id="receive_return_id">
 
                 <div class="modal-body">
@@ -2361,14 +2277,21 @@ body {
                         <div class="mt-2" id="receive_return_summary">—</div>
                     </div>
 
-                    <div class="status-flow-note mt-3">
+                    <div class="mt-3" id="receipt_reference_fields">
+                        <label for="receipt_transaction_id" class="field-label">Existing Stock Receipt <span class="text-muted fw-normal">(Optional)</span></label>
+                        <select name="receipt_transaction_id" id="receipt_transaction_id" class="form-select">
+                            <option value="">Delivery confirmation only</option>
+                        </select>
+                        <div class="small text-muted mt-1">Choose a Stock In already recorded for this item and quantity. You may link it later after confirming delivery.</div>
+                    </div>
+                    <div class="status-flow-note mt-3" id="receive_note">
                         Confirm only after the returned item has physically arrived at this branch. The return will automatically change from <strong>In Transit</strong> to <strong>Received</strong>.
                     </div>
                 </div>
 
                 <div class="modal-footer">
                     <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary-custom"><i class="bi bi-check2-circle me-1"></i>Confirm Receipt</button>
+                    <button type="submit" class="btn btn-primary-custom" id="receive_submit"><i class="bi bi-check2-circle me-1"></i><span id="receive_submit_label">Confirm Receipt</span></button>
                 </div>
             </form>
         </div>
@@ -2423,12 +2346,59 @@ body {
 <script>
     
 const returnRows = <?php echo $returnRowsJson; ?>;
+const returnOutgoingTransactions = <?php echo json_encode($returnOutgoingTransactions,JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT) ?: '[]'; ?>;
+const [inventorySourceItems, sourceStocks, stockReceipts,originalReceipts] = <?php echo $inventoryChoicesJson ?: '[[],[],[],[]]'; ?>;
+
+function updateSourceReference() {
+    const itemId = document.getElementById('inventory_item_id').value;
+    const item = inventorySourceItems.find(item => String(item.item_id) === itemId);
+    const batch = document.getElementById('source_stock_id');
+    batch.replaceChildren(new Option('No batch reference', ''));
+    batch.disabled = !item;
+    if (!item) { updateOriginalReceipts(); return; }
+    document.getElementById('item_name').value = item.item_name;
+    document.getElementById('unit_id').value = String(item.unit_id);
+    sourceStocks.filter(stock => String(stock.item_id) === itemId).forEach(stock => {
+        batch.add(new Option(`#${stock.stock_id} — ${stock.batch_lot_no || 'No lot number'}${stock.expiration_date ? ' — Expires ' + stock.expiration_date : ''}`, String(stock.stock_id)));
+    });
+    updateOriginalReceipts();
+}
+
+function updateOriginalReceipts() {
+    const item=document.getElementById('inventory_item_id').value;
+    const stock=document.getElementById('source_stock_id').value;
+    const select=document.getElementById('source_receipt_transaction_id');
+    select.replaceChildren(new Option('No original receipt selected',''));
+    const choices=originalReceipts.filter(r=>String(r.item_id)===item && (!stock || String(r.receipt_stock_id)===stock));
+    choices.forEach(r=>select.add(new Option(`#${r.transaction_id} — ${r.source_name_snapshot || 'Unknown source'} — ${r.quantity} ${r.receipt_base_unit_snapshot}`,String(r.transaction_id))));
+    select.disabled=!item || !choices.length;
+    if (stock && choices.length===1) select.value=String(choices[0].transaction_id);
+    updateReturnOrigin();
+}
+function updateReturnOrigin() {
+    const id=document.getElementById('source_receipt_transaction_id').value;
+    const receipt=originalReceipts.find(r=>String(r.transaction_id)===id);
+    const destination=document.getElementById('destination_branch_id');
+    destination.value='';
+    if (receipt?.receipt_source_type==='Branch' && Array.from(destination.options).some(o=>o.value===receipt.source_branch_id)) destination.value=receipt.source_branch_id;
+    document.getElementById('return_origin_hint').textContent=receipt
+        ? 'Recorded source: '+(receipt.source_name_snapshot || 'Unknown')+'. Destination follows a known source branch; explain any different destination.'
+        : 'No verified receipt source selected. Choose the receiving branch and explain the destination.';
+    updateDestinationReason();
+}
+function updateDestinationReason() {
+    const id=document.getElementById('source_receipt_transaction_id').value;
+    const receipt=originalReceipts.find(r=>String(r.transaction_id)===id);
+    document.getElementById('destination_reason').required=!receipt || receipt.receipt_source_type!=='Branch'
+        || document.getElementById('destination_branch_id').value!==receipt.source_branch_id;
+}
 
 function prepareNewReturn() {
     const form = document.getElementById('returnForm');
     if (!form) return;
 
     form.reset();
+    updateSourceReference();
     const destination = document.getElementById('destination_branch_id');
     const defaultDestination = <?php echo json_encode($mainBranchDefault); ?>;
     if (destination && defaultDestination) {
@@ -2442,7 +2412,7 @@ function openDetails(returnId) {
     if (!row) return;
 
     const statusClass = getStatusClass(row.status);
-    const qty = Number(row.quantity || 0).toLocaleString();
+    const qty = Number(row.quantity || 0).toLocaleString(undefined, {maximumFractionDigits: 2});
     const timeline = [
         {label: 'In Transit', date: row.sent_at || row.created_at, done: true},
         {label: 'Received', date: row.received_at, done: row.status === 'Received'}
@@ -2461,6 +2431,13 @@ function openDetails(returnId) {
     const actionButton = row.view_type === 'Received' && row.status === 'In Transit'
         ? `<button type="button" class="btn btn-primary-custom btn-sm" onclick="closeDetailsAndOpenReceive(${Number(row.return_id)})"><i class="bi bi-check2-circle me-1"></i>Confirm Receipt</button>`
         : '';
+
+    const linkButton = row.view_type === 'Received' && row.status === 'Received'
+        && row.item_id && row.inventory_quantity_snapshot != null && !row.stock_transaction_id
+        ? `<button type="button" class="btn btn-primary-custom btn-sm" onclick="closeDetailsAndOpenReceive(${Number(row.return_id)})">Link Stock Receipt</button>` : '';
+
+    const outButton=row.view_type==='Sent' && row.item_id && row.inventory_quantity_snapshot!=null && !row.sent_stock_transaction_id
+        ? `<button type="button" class="btn btn-primary-custom btn-sm" onclick="closeDetailsAndOpenOut(${Number(row.return_id)})">Stock Out</button>` : '';
 
     let transportationHtml = '—';
     if (row.transportation_details) {
@@ -2533,6 +2510,20 @@ function openDetails(returnId) {
         </div>
 
         <div class="details-section">
+            <div class="details-section-title">Inventory Reference</div>
+            <div class="detail-value">${escapeHtml(row.inventory_reference_label || 'Delivery record')}</div>
+            ${row.item_id ? `<div class="small mt-2">Catalog: ${escapeHtml(row.catalog_item_name || 'Unavailable item')} (#${Number(row.item_id)})</div>` : ''}
+            ${row.inventory_quantity_snapshot != null ? `<div class="small mt-2">Inventory quantity: ${escapeHtml(row.inventory_quantity_snapshot)} ${escapeHtml(row.inventory_base_unit_snapshot || '')}</div>` : ''}
+            ${row.source_batch_snapshot ? `<div class="small mt-2">Sending batch: ${escapeHtml(row.source_batch_snapshot)}</div>` : ''}
+            ${row.source_receipt_transaction_id ? `<div class="small mt-2">Original receipt #${Number(row.source_receipt_transaction_id)}: ${escapeHtml(row.original_source_name || 'Unknown source')}</div>` : ''}
+            ${row.destination_reason ? `<div class="small mt-2">Destination explanation: ${escapeHtml(row.destination_reason)}</div>` : ''}
+            ${row.sent_stock_transaction_id ? `<div class="small mt-2">Stock Out #${Number(row.sent_stock_transaction_id)}${row.outbound_transaction_id ? ': '+escapeHtml(row.outbound_quantity)+' '+escapeHtml(row.inventory_base_unit_snapshot)+' — '+escapeHtml(row.outbound_date)+' — '+escapeHtml(row.outbound_actor || '') : ' — reference needs review'}</div>` : ''}
+            ${row.stock_out_batch_snapshot ? `<div class="small mt-2">Stock Out batch: ${escapeHtml(row.stock_out_batch_snapshot)}</div>` : ''}
+            ${row.legacy_status ? `<div class="small text-muted mt-2">Original status: ${escapeHtml(row.legacy_status)}</div>` : ''}
+            <div class="small text-muted mt-2">Stock movements are recorded separately in Stock Management.</div>
+        </div>
+
+        <div class="details-section">
             <div class="details-section-title">Transportation Details</div>
             <div class="details-remarks">${transportationHtml}</div>
         </div>
@@ -2557,20 +2548,72 @@ function openDetails(returnId) {
             </div>
         </div>
 
-        ${actionButton ? `<div class="d-flex justify-content-end mt-4">${actionButton}</div>` : ''}
+        ${(actionButton || linkButton || outButton) ? `<div class="d-flex justify-content-end gap-2 mt-4">${actionButton}${linkButton}${outButton}</div>` : ''}
     `;
 
     bootstrap.Modal.getOrCreateInstance(document.getElementById('detailsModal')).show();
 }
 
+function openReturnStockOut(returnId) {
+    const row=returnRows.find(r=>Number(r.return_id)===Number(returnId));
+    if(!row || row.view_type!=='Sent' || !row.item_id || row.inventory_quantity_snapshot==null || row.sent_stock_transaction_id) return;
+    document.getElementById('out_return_id').value=row.return_id;
+    document.getElementById('out_return_summary').textContent=(row.return_number || 'RET-'+row.return_id)+' — '+row.item_name+' — '+row.inventory_quantity_snapshot+' '+row.inventory_base_unit_snapshot;
+    document.getElementById('out_mode').value='record';
+    const origin=originalReceipts.find(r=>Number(r.transaction_id)===Number(row.source_receipt_transaction_id));
+    const expected=row.stock_id || origin?.receipt_stock_id;
+    const stock=document.getElementById('out_stock'); stock.replaceChildren(new Option('Select stock batch...',''));
+    sourceStocks.filter(s=>Number(s.item_id)===Number(row.item_id) && (!expected || Number(s.stock_id)===Number(expected))).forEach(s=>{
+        stock.add(new Option('#'+s.stock_id+' — '+(s.batch_lot_no || 'No lot number')+' — '+s.quantity_available+' '+row.inventory_base_unit_snapshot+(s.expiration_date ? ' — Expires '+s.expiration_date : ''),String(s.stock_id)));
+    });
+    if(stock.options.length===2) stock.value=stock.options[1].value;
+    const sent=String(row.sent_at || row.created_at).slice(0,10);
+    const date=document.getElementById('out_date'); date.min=sent; date.value=<?php echo json_encode(date('Y-m-d')); ?>;
+    const select=document.getElementById('out_transaction'); select.replaceChildren(new Option('Select recorded Stock Out...',''));
+    returnOutgoingTransactions.filter(t=>Number(t.item_id)===Number(row.item_id)
+        && Math.round(Number(t.quantity)*10000)===Math.round(Number(row.inventory_quantity_snapshot)*10000)
+        && String(t.transaction_date).slice(0,10)>=sent).forEach(t=>select.add(new Option('#'+t.transaction_id+' — '+t.quantity+' — '+String(t.transaction_date).slice(0,10),String(t.transaction_id))));
+    updateReturnOutMode(); bootstrap.Modal.getOrCreateInstance(document.getElementById('returnStockOutModal')).show();
+}
+function updateReturnOutMode() {
+    const record=document.getElementById('out_mode').value==='record';
+    document.getElementById('out_new_fields').hidden=!record;
+    document.getElementById('out_existing_fields').hidden=record;
+    ['out_stock','out_date'].forEach(id=>{const e=document.getElementById(id);e.disabled=!record;e.required=record;});
+    const transaction=document.getElementById('out_transaction'); transaction.disabled=record;transaction.required=!record;
+}
+function closeDetailsAndOpenOut(returnId) {
+    const modal=bootstrap.Modal.getInstance(document.getElementById('detailsModal'));if(modal)modal.hide();
+    setTimeout(()=>openReturnStockOut(returnId),250);
+}
+
 function openReceiveModal(returnId) {
     const row = returnRows.find(r => Number(r.return_id) === Number(returnId));
-    if (!row || row.view_type !== 'Received' || row.status !== 'In Transit') return;
-
+    if (!row || row.view_type !== 'Received' || !['In Transit', 'Received'].includes(row.status)) return;
+    const linking = row.status === 'Received';
+    if (linking && (!row.item_id || row.inventory_quantity_snapshot == null || row.stock_transaction_id)) return;
+    document.getElementById('receive_action').value = linking ? 'link_stock_receipt' : 'confirm_receipt';
+    document.getElementById('receive_submit_label').textContent = linking ? 'Link Stock Receipt' : 'Confirm Receipt';
+    document.getElementById('receive_modal_title').textContent = linking ? 'Link Stock Receipt' : 'Confirm Receipt';
+    document.getElementById('receive_note').textContent = linking
+        ? 'Link an existing stock receipt. The stock movement is already recorded.'
+        : 'Confirm only after the shipment physically arrives. This marks the delivery Received. Stock movements are recorded separately.';
     document.getElementById('receive_return_id').value = row.return_id;
     document.getElementById('receive_return_number').textContent = row.return_number || ('RET-' + row.return_id);
-    document.getElementById('receive_return_summary').textContent = `${row.item_name || ''} | Qty: ${Number(row.quantity || 0).toLocaleString()} ${row.unit_name || ''} | From: ${row.source_name || row.branch_id || ''}`;
-
+    document.getElementById('receive_return_summary').textContent = `${row.item_name || ''} | Qty: ${Number(row.quantity || 0).toLocaleString(undefined, {maximumFractionDigits: 2})} ${row.unit_name || ''} | From: ${row.source_name || row.branch_id || ''}`;
+    const select = document.getElementById('receipt_transaction_id');
+    select.replaceChildren(new Option(linking ? 'Select a recorded stock receipt...' : 'Delivery confirmation only', ''));
+    select.required = linking;
+    const canLink = !!row.item_id && row.inventory_quantity_snapshot != null && !row.stock_transaction_id;
+    select.disabled = !canLink;
+    document.getElementById('receipt_reference_fields').hidden = !canLink;
+    const quantity = Math.round(Number(row.inventory_quantity_snapshot) * 10000);
+    const sentDate = String(row.sent_at || row.created_at || '').slice(0, 10);
+    if (canLink) stockReceipts.filter(receipt => Number(receipt.item_id) === Number(row.item_id)
+        && Math.round(Number(receipt.quantity) * 10000) === quantity
+        && String(receipt.transaction_date).slice(0, 10) >= sentDate).forEach(receipt => {
+            select.add(new Option(`#${receipt.transaction_id} — ${receipt.quantity} ${receipt.base_unit} — ${String(receipt.transaction_date).slice(0,10)}`, String(receipt.transaction_id)));
+        });
     bootstrap.Modal.getOrCreateInstance(document.getElementById('receiveModal')).show();
 }
 
@@ -2831,5 +2874,6 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 
+<script>document.addEventListener('DOMContentLoaded',()=>{ const id=<?php echo json_encode((int)($_GET['return_id'] ?? 0)); ?>; if(id>0) openDetails(id); });</script>
 </body>
 </html>

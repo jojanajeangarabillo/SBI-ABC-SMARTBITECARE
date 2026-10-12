@@ -2,7 +2,11 @@
 session_start();
 
 require_once 'sources/db_connect.php';
+require_once 'sources/inventory_stock_helpers.php';
+require_once 'sources/forecast_status_helper.php';
+$stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
+require_once 'sources/dashboard_patient_metrics.php';
 
 // ============================================================
 // NURSE ACCESS CONTROL
@@ -93,69 +97,7 @@ function dashboardDoseLabel($dose_number) {
 // =============================================
 // FETCH ALL STATISTICS FOR NURSE DASHBOARD
 // =============================================
-$stats = [];
-
-// 1. PATIENT WAITING
-// Distinct non-archived patients who currently have an ongoing, non-archived case.
-$waitingQuery = "SELECT COUNT(DISTINCT p.patient_id) AS waiting
-                 FROM patients p
-                 INNER JOIN animal_bite_cases abc ON p.patient_id = abc.patient_id
-                 WHERE abc.branch_id = ?
-                   AND p.branch_id = ?
-                   AND p.is_archived = 0
-                   AND abc.is_archived = 0
-                   AND abc.case_status = 'Ongoing'";
-$stmt = $conn->prepare($waitingQuery);
-$stmt->bind_param("ss", $branch_id, $branch_id);
-$stmt->execute();
-$stats['patient_waiting'] = (int)($stmt->get_result()->fetch_assoc()['waiting'] ?? 0);
-$stmt->close();
-
-// 2. ONGOING CASES
-$ongoingQuery = "SELECT COUNT(*) AS ongoing
-                 FROM animal_bite_cases
-                 WHERE branch_id = ?
-                   AND is_archived = 0
-                   AND case_status = 'Ongoing'";
-$stmt = $conn->prepare($ongoingQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$stats['ongoing_cases'] = (int)($stmt->get_result()->fetch_assoc()['ongoing'] ?? 0);
-$stmt->close();
-
-// 3. COMPLETED CASES
-$completedQuery = "SELECT COUNT(*) AS completed
-                   FROM animal_bite_cases
-                   WHERE branch_id = ?
-                     AND is_archived = 0
-                     AND case_status = 'Completed'";
-$stmt = $conn->prepare($completedQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$stats['completed_cases'] = (int)($stmt->get_result()->fetch_assoc()['completed'] ?? 0);
-$stmt->close();
-
-// 4. TOTAL CASES
-$totalCasesQuery = "SELECT COUNT(*) AS total
-                    FROM animal_bite_cases
-                    WHERE branch_id = ?
-                      AND is_archived = 0";
-$stmt = $conn->prepare($totalCasesQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$stats['total_cases'] = (int)($stmt->get_result()->fetch_assoc()['total'] ?? 0);
-$stmt->close();
-
-// 5. TOTAL PATIENTS
-$totalPatientsQuery = "SELECT COUNT(*) AS total
-                       FROM patients
-                       WHERE branch_id = ?
-                         AND is_archived = 0";
-$stmt = $conn->prepare($totalPatientsQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$stats['total_patients'] = (int)($stmt->get_result()->fetch_assoc()['total'] ?? 0);
-$stmt->close();
+$stats = dashboardPatientMetrics($conn, (string)$branch_id);
 
 // Vaccination dashboard counts are DOSE-STAGE based, not product-row based.
 // Example: Rabies Vaccine + ERIG + ATS under D0 count as ONE vaccination stage.
@@ -292,30 +234,13 @@ $stmt->close();
 
 // 13. LOW STOCK MEDICAL SUPPLIES
 // Only non-expired stock is usable. Expired batches are not counted.
-$lowStockQuery = "SELECT
-                      ii.item_id,
-                      ii.item_name,
-                      COALESCE(SUM(is_.quantity_available), 0) AS quantity_available,
-                      ii.minimum_stock,
-                      u.unit_name
-                  FROM inventory_items ii
-                  INNER JOIN inventory_categories c ON ii.category_id = c.category_id
-                  INNER JOIN units u ON ii.unit_id = u.unit_id
-                  LEFT JOIN inventory_stocks is_
-                    ON is_.item_id = ii.item_id
-                   AND is_.branch_id = ?
-                   AND (is_.expiration_date IS NULL OR is_.expiration_date >= CURDATE())
-                  WHERE c.category_name = 'Medical Supplies'
-                  GROUP BY ii.item_id, ii.item_name, ii.minimum_stock, u.unit_name
-                  HAVING COALESCE(SUM(is_.quantity_available), 0) <= ii.minimum_stock
-                  ORDER BY
-                      CASE
-                          WHEN ii.minimum_stock > 0
-                          THEN COALESCE(SUM(is_.quantity_available), 0) / ii.minimum_stock
-                          ELSE 999999
-                      END ASC,
-                      ii.item_name ASC
-                  LIMIT 5";
+$lowStockQuery = "SELECT ii.item_id,ii.item_name,s.usable_stock AS quantity_available,ii.minimum_stock,
+    COALESCE(NULLIF(TRIM(ii.base_unit_label),''),u.unit_name) AS unit_name
+FROM inventory_items ii JOIN inventory_categories c ON c.category_id=ii.category_id
+JOIN units u ON u.unit_id=ii.unit_id
+JOIN ($stockTotalsSql) s ON s.item_id=ii.item_id AND s.branch_id=?
+WHERE c.category_name='Medical Supplies' AND s.usable_stock<=ii.minimum_stock
+ORDER BY s.usable_stock/NULLIF(ii.minimum_stock,0),ii.item_name LIMIT 5";
 $stmt = $conn->prepare($lowStockQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
@@ -343,6 +268,9 @@ $scheduleQuery = "SELECT
                       ) AS vaccine_names
                   FROM vaccination_records vr
                   INNER JOIN patients p ON vr.patient_id = p.patient_id
+                  INNER JOIN animal_bite_cases c ON c.case_id = vr.case_id
+                    AND c.patient_id = vr.patient_id AND c.branch_id = vr.branch_id
+                    AND c.is_archived = 0 AND c.case_status = 'Ongoing'
                   LEFT JOIN inventory_items ii ON vr.item_id = ii.item_id
                   WHERE vr.branch_id = ?
                     AND p.branch_id = ?
@@ -370,29 +298,8 @@ while ($row = $scheduleResult->fetch_assoc()) {
 }
 $stmt->close();
 
-// 15. FOLLOW-UP DUE
-$followupQuery = "SELECT abc.case_id, p.full_name, abc.date_of_bite,
-                         DATEDIFF(CURDATE(), abc.date_of_bite) AS days_since_bite,
-                         abc.remarks
-                  FROM animal_bite_cases abc
-                  INNER JOIN patients p ON abc.patient_id = p.patient_id
-                  WHERE abc.branch_id = ?
-                    AND p.branch_id = ?
-                    AND abc.is_archived = 0
-                    AND p.is_archived = 0
-                    AND abc.case_status = 'Ongoing'
-                    AND DATEDIFF(CURDATE(), abc.date_of_bite) >= 7
-                  ORDER BY abc.date_of_bite ASC
-                  LIMIT 5";
-$stmt = $conn->prepare($followupQuery);
-$stmt->bind_param("ss", $branch_id, $branch_id);
-$stmt->execute();
-$followupResult = $stmt->get_result();
-$followups = [];
-while ($row = $followupResult->fetch_assoc()) {
-    $followups[] = $row;
-}
-$stmt->close();
+// 15. FOLLOW-UP DUE: actual outstanding schedules due today or earlier.
+$followups = dashboardDueFollowupPatients($conn, (string)$branch_id);
 
 // 16. WEEKLY VACCINATION TREND (Today + previous 6 days)
 // One point = one completed dose stage, regardless of how many products were given.
@@ -478,100 +385,24 @@ while ($row = $caseStatusResult->fetch_assoc()) {
 $stmt->close();
 
 // 20. TOTAL LOW / OUT-OF-STOCK MEDICAL SUPPLIES
-$lowStockCountQuery = "SELECT COUNT(*) AS total
-                       FROM (
-                           SELECT ii.item_id
-                           FROM inventory_items ii
-                           INNER JOIN inventory_categories c ON ii.category_id = c.category_id
-                           LEFT JOIN inventory_stocks s
-                             ON s.item_id = ii.item_id
-                            AND s.branch_id = ?
-                            AND (s.expiration_date IS NULL OR s.expiration_date >= CURDATE())
-                           WHERE c.category_name = 'Medical Supplies'
-                           GROUP BY ii.item_id, ii.minimum_stock
-                           HAVING COALESCE(SUM(s.quantity_available), 0) <= ii.minimum_stock
-                       ) AS low_items";
+$lowStockCountQuery = "SELECT COUNT(*) AS total FROM inventory_items ii
+JOIN inventory_categories c ON c.category_id=ii.category_id
+JOIN ($stockTotalsSql) s ON s.item_id=ii.item_id AND s.branch_id=?
+WHERE c.category_name='Medical Supplies' AND s.usable_stock<=ii.minimum_stock";
 $stmt = $conn->prepare($lowStockCountQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
 $stats['low_stock_items'] = (int)($stmt->get_result()->fetch_assoc()['total'] ?? 0);
 $stmt->close();
 
-// 21. LATEST 7-DAY NON-STALE SUPPLY FORECAST SUMMARY
-$forecastPreview = [];
-$forecastHighRiskCount = 0;
-$forecastLatestDate = null;
-$forecastStartDate = null;
-$forecastEndDate = null;
-
-$forecastDateStmt = $conn->prepare(
-    "SELECT MAX(forecast_date) AS latest_date
-     FROM forecast_results
-     WHERE branch_id = ?
-       AND forecast_days = 7
-       AND is_stale = 0"
-);
-
-if ($forecastDateStmt) {
-    $forecastDateStmt->bind_param("s", $branch_id);
-    $forecastDateStmt->execute();
-    $forecastLatestDate = $forecastDateStmt->get_result()->fetch_assoc()['latest_date'] ?? null;
-    $forecastDateStmt->close();
-}
-
-if ($forecastLatestDate) {
-    $forecastSummaryStmt = $conn->prepare(
-        "SELECT
-            COUNT(*) AS total_items,
-            SUM(CASE WHEN shortage_probability >= 0.80 THEN 1 ELSE 0 END) AS high_risk_count,
-            MIN(forecast_start_date) AS forecast_start_date,
-            MAX(forecast_end_date) AS forecast_end_date
-         FROM forecast_results
-         WHERE branch_id = ?
-           AND forecast_days = 7
-           AND forecast_date = ?
-           AND is_stale = 0"
-    );
-
-    if ($forecastSummaryStmt) {
-        $forecastSummaryStmt->bind_param("ss", $branch_id, $forecastLatestDate);
-        $forecastSummaryStmt->execute();
-        $forecastSummary = $forecastSummaryStmt->get_result()->fetch_assoc() ?: [];
-        $forecastSummaryStmt->close();
-
-        $forecastHighRiskCount = (int)($forecastSummary['high_risk_count'] ?? 0);
-        $forecastStartDate = $forecastSummary['forecast_start_date'] ?? null;
-        $forecastEndDate = $forecastSummary['forecast_end_date'] ?? null;
-    }
-
-    $forecastPreviewStmt = $conn->prepare(
-        "SELECT
-            fr.item_id,
-            i.item_name,
-            u.unit_name,
-            fr.current_stock_snapshot,
-            fr.minimum_stock_snapshot,
-            fr.stock_status,
-            fr.shortage_probability,
-            fr.recommended_reorder
-         FROM forecast_results fr
-         INNER JOIN inventory_items i ON i.item_id = fr.item_id
-         LEFT JOIN units u ON u.unit_id = i.unit_id
-         WHERE fr.branch_id = ?
-           AND fr.forecast_days = 7
-           AND fr.forecast_date = ?
-           AND fr.is_stale = 0
-         ORDER BY fr.shortage_probability DESC, fr.recommended_reorder DESC, i.item_name ASC
-         LIMIT 5"
-    );
-
-    if ($forecastPreviewStmt) {
-        $forecastPreviewStmt->bind_param("ss", $branch_id, $forecastLatestDate);
-        $forecastPreviewStmt->execute();
-        $forecastPreview = $forecastPreviewStmt->get_result()->fetch_all(MYSQLI_ASSOC);
-        $forecastPreviewStmt->close();
-    }
-}
+// 21. CURRENT 7-DAY SUPPLY FORECAST SUMMARY
+$forecastRows = forecastStatusLatestRows($conn, $branch_id, 7);
+$forecastPreview = array_slice($forecastRows, 0, 5);
+$forecastHighRiskCount = count(array_filter($forecastRows,
+    static fn(array $row): bool => $row['forecast_status'] === 'Shortage Risk'));
+$forecastLatestDate = $forecastRows[0]['forecast_date'] ?? null;
+$forecastStartDate = $forecastRows[0]['forecast_start_date'] ?? null;
+$forecastEndDate = $forecastRows[0]['forecast_end_date'] ?? null;
 
 $todayDisplay = date('l, F j, Y');
 ?>
@@ -1404,12 +1235,12 @@ $todayDisplay = date('l, F j, Y');
         <!-- TODAY / ATTENTION -->
         <section class="dashboard-section">
             <div class="stats-grid">
-                <a class="stat-card-link" href="Nurse_Vaccination.php?tab=patients">
-                    <div class="stat-card stat-danger">
+                <a class="stat-card-link" href="Nurse_Assessment.php?tab=queue">
+                    <div class="stat-card stat-danger" data-patient-metric="patient_waiting">
                         <span class="stat-icon"><i class="bi bi-person-exclamation"></i></span>
                         <span class="stat-title">Patients Waiting</span>
                         <span class="stat-number"><?php echo number_format($stats['patient_waiting']); ?></span>
-                        <span class="stat-note">Ongoing patient cases</span>
+                        <span class="stat-note">Checked in today; awaiting assessment</span>
                     </div>
                 </a>
 
@@ -1437,6 +1268,55 @@ $todayDisplay = date('l, F j, Y');
                         <span class="stat-title">Missed Vaccinations</span>
                         <span class="stat-number"><?php echo number_format($stats['missed_vaccinations']); ?></span>
                         <span class="stat-note">Needs follow-up</span>
+                    </div>
+                </a>
+            </div>
+        </section>
+
+        <!-- PATIENT VISITS TODAY -->
+        <section class="dashboard-section">
+            <div class="section-heading">
+                <div><h2>Patient Visits Today</h2><p>Today's check-ins and clinical visit progress.</p></div>
+            </div>
+            <div class="stats-grid">
+                <a class="stat-card-link" href="Nurse_Assessment.php?tab=queue">
+                    <div class="stat-card stat-info" data-patient-metric="today_visits">
+                        <span class="stat-icon"><i class="bi bi-person-check"></i></span>
+                        <span class="stat-title">Today's Visits</span>
+                        <span class="stat-number"><?php echo number_format($stats['today_visits']); ?></span>
+                        <span class="stat-note">Non-cancelled check-ins today</span>
+                    </div>
+                </a>
+                <a class="stat-card-link" href="Nurse_Assessment.php?tab=queue">
+                    <div class="stat-card stat-info" data-patient-metric="new_patients_today">
+                        <span class="stat-icon"><i class="bi bi-person-plus"></i></span>
+                        <span class="stat-title">New Patients Today</span>
+                        <span class="stat-number"><?php echo number_format($stats['new_patients_today']); ?></span>
+                        <span class="stat-note">Patients checked in as New Patient</span>
+                    </div>
+                </a>
+                <a class="stat-card-link" href="Nurse_Assessment.php?tab=queue">
+                    <div class="stat-card stat-info" data-patient-metric="returning_patients_today">
+                        <span class="stat-icon"><i class="bi bi-arrow-repeat"></i></span>
+                        <span class="stat-title">Returning Patients Today</span>
+                        <span class="stat-number"><?php echo number_format($stats['returning_patients_today']); ?></span>
+                        <span class="stat-note">Follow-up or repeating; no new visit today</span>
+                    </div>
+                </a>
+                <a class="stat-card-link" href="Nurse_Assessment.php?tab=queue">
+                    <div class="stat-card stat-info" data-patient-metric="completed_consultations_today">
+                        <span class="stat-icon"><i class="bi bi-check-circle"></i></span>
+                        <span class="stat-title">Completed Consultations Today</span>
+                        <span class="stat-number"><?php echo number_format($stats['completed_consultations_today']); ?></span>
+                        <span class="stat-note">Today's visits with treatment finished</span>
+                    </div>
+                </a>
+                <a class="stat-card-link" href="Nurse_Vaccination.php?tab=patients">
+                    <div class="stat-card stat-warning" data-patient-metric="pending_followup_patients">
+                        <span class="stat-icon"><i class="bi bi-calendar-check"></i></span>
+                        <span class="stat-title">Pending Follow-up Patients</span>
+                        <span class="stat-number"><?php echo number_format($stats['pending_followup_patients']); ?></span>
+                        <span class="stat-note">Patients with outstanding vaccination schedules</span>
                     </div>
                 </a>
             </div>
@@ -1495,7 +1375,7 @@ $todayDisplay = date('l, F j, Y');
             <div class="section-heading">
                 <div>
                     <h2>Priority Work</h2>
-                    <p>Today's vaccination schedule and older ongoing cases that may need follow-up.</p>
+                    <p>Today's vaccination schedule and outstanding follow-ups due today or earlier.</p>
                 </div>
             </div>
 
@@ -1562,7 +1442,7 @@ $todayDisplay = date('l, F j, Y');
                                     <span class="icon-box"><i class="bi bi-clock-history"></i></span>
                                     Follow-up Due
                                 </h3>
-                                <p class="panel-subtitle">Ongoing cases seven or more days from the bite date.</p>
+                                <p class="panel-subtitle">Outstanding vaccination schedules due today or earlier.</p>
                             </div>
                             <span class="panel-badge warning"><?php echo count($followups); ?> shown</span>
                         </div>
@@ -1577,21 +1457,18 @@ $todayDisplay = date('l, F j, Y');
                                 <?php foreach ($followups as $followup): ?>
                                     <div class="followup-item">
                                         <span class="list-marker warning">
-                                            <?php echo (int)$followup['days_since_bite']; ?>d
+                                            <?php echo (int)$followup['days_overdue']; ?>d
                                         </span>
 
                                         <div class="list-main">
                                             <span class="list-title"><?php echo htmlspecialchars($followup['full_name']); ?></span>
                                             <div class="list-meta">
-                                                Bite date: <?php echo date('M d, Y', strtotime($followup['date_of_bite'])); ?>
-                                                <?php if (!empty($followup['remarks'])): ?>
-                                                    · <?php echo htmlspecialchars(mb_strimwidth($followup['remarks'], 0, 55, '…')); ?>
-                                                <?php endif; ?>
+                                                Due: <?php echo date('M d, Y', strtotime($followup['oldest_due'])); ?>
                                             </div>
                                         </div>
 
                                         <div class="list-side">
-                                            <span class="mini-badge danger">Follow-up</span>
+                                            <span class="mini-badge danger"><?php echo (int)$followup['days_overdue'] > 0 ? 'Overdue' : 'Due Today'; ?></span>
                                         </div>
                                     </div>
                                 <?php endforeach; ?>
@@ -1599,8 +1476,8 @@ $todayDisplay = date('l, F j, Y');
                         </div>
 
                         <div class="panel-footer">
-                            <a class="panel-link" href="Nurse_Patients.php">
-                                View patient records <i class="bi bi-arrow-right ms-1"></i>
+                            <a class="panel-link" href="Nurse_Vaccination.php?tab=patients">
+                                View vaccination follow-ups <i class="bi bi-arrow-right ms-1"></i>
                             </a>
                         </div>
                     </div>
@@ -1719,8 +1596,8 @@ $todayDisplay = date('l, F j, Y');
                                         <div class="list-main">
                                             <span class="list-title"><?php echo htmlspecialchars($item['item_name']); ?></span>
                                             <div class="list-meta">
-                                                <?php echo number_format($qty, 2); ?> <?php echo htmlspecialchars($unit); ?>
-                                                available · Minimum <?php echo number_format($min, 2); ?>
+                                                <?php echo inventoryFormatNumber($qty); ?> <?php echo htmlspecialchars($unit); ?>
+                                                available · Minimum <?php echo inventoryFormatNumber($min); ?>
                                             </div>
                                         </div>
 
@@ -1759,12 +1636,12 @@ $todayDisplay = date('l, F j, Y');
                                         <?php echo date('M d', strtotime($forecastStartDate)); ?>
                                         – <?php echo date('M d, Y', strtotime($forecastEndDate)); ?>
                                     <?php else: ?>
-                                        Latest non-stale Branch Admin forecast
+                                        Latest current Branch Admin forecast
                                     <?php endif; ?>
                                 </p>
                             </div>
                             <span class="panel-badge <?php echo $forecastHighRiskCount > 0 ? 'danger' : 'success'; ?>">
-                                <?php echo number_format($forecastHighRiskCount); ?> high risk
+                                <?php echo number_format($forecastHighRiskCount); ?> shortage risk
                             </span>
                         </div>
 
@@ -1779,10 +1656,11 @@ $todayDisplay = date('l, F j, Y');
                                     <?php
                                         $risk = max(0.0, min(1.0, (float)$forecast['shortage_probability']));
                                         $riskPercent = $risk * 100;
-                                        $riskClass = $risk >= .80 ? 'danger' : ($risk >= .60 ? 'warning' : 'success');
-                                        $riskLabel = $risk >= .80 ? 'High Risk' : ($risk >= .60 ? 'Moderate' : 'Low Risk');
+                                        $riskLabel = $forecast['forecast_status'];
+                                        $riskClass = forecastStatusColor($riskLabel);
                                         $reorder = max(0, (int)$forecast['recommended_reorder']);
-                                        $unit = trim((string)($forecast['unit_name'] ?? '')) ?: 'unit(s)';
+                                        $unit = trim((string)($forecast['base_unit_label'] ?? ''))
+                                            ?: (trim((string)($forecast['unit_name'] ?? '')) ?: 'unit(s)');
                                     ?>
                                     <div class="forecast-item">
                                         <span class="list-marker <?php echo $riskClass === 'danger' ? 'danger' : ($riskClass === 'warning' ? 'warning' : ''); ?>">
@@ -1792,8 +1670,8 @@ $todayDisplay = date('l, F j, Y');
                                         <div class="list-main">
                                             <span class="list-title"><?php echo htmlspecialchars($forecast['item_name']); ?></span>
                                             <div class="list-meta">
-                                                Stock <?php echo number_format((float)$forecast['current_stock_snapshot'], 2); ?>
-                                                · Min <?php echo number_format((float)$forecast['minimum_stock_snapshot'], 2); ?>
+                                                Stock <?php echo inventoryFormatNumber((float)$forecast['current_stock_snapshot']); ?>
+                                                · Min <?php echo inventoryFormatNumber((float)$forecast['minimum_stock_snapshot']); ?>
                                                 <?php if ($reorder > 0): ?>
                                                     · Reorder <?php echo number_format($reorder); ?> <?php echo htmlspecialchars($unit); ?>
                                                 <?php endif; ?>

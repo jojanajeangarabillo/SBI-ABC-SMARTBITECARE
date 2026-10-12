@@ -2,6 +2,7 @@
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/dashboard_patient_metrics.php';
 
 // Check if user is logged in and is an admin staff
 if (
@@ -22,7 +23,7 @@ $username = '';
 $userQuery = "SELECT u.branch_id, u.username, b.branch_name 
               FROM users u 
               LEFT JOIN branches b ON u.branch_id = b.branch_id 
-              WHERE u.user_id = ?";
+              WHERE u.user_id = ? AND u.role_id = 4 AND u.status = 'Active'";
 $stmt = $conn->prepare($userQuery);
 $stmt->bind_param("i", $user_id);
 $stmt->execute();
@@ -37,7 +38,8 @@ if ($userResult->num_rows > 0) {
 
 // If no branch assigned
 if (!$branch_id) {
-    $branch_name = 'No Branch Assigned';
+    http_response_code(403);
+    die('Your active account must be assigned to a branch.');
 }
 // Admin Staff notification badge count for this branch.
 $notification_count = getAdminStaffNotificationCount($conn, $branch_id);
@@ -46,91 +48,14 @@ $notification_count = getAdminStaffNotificationCount($conn, $branch_id);
 // FETCH DASHBOARD STATISTICS
 // ----------------------------------------------------------------------
 
-// 1. Get Follow-up Patients (patients with pending vaccination schedules)
-$followUpQuery = "
-    SELECT COUNT(DISTINCT c.case_id) as count
-    FROM animal_bite_cases c
-    LEFT JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id AND v.is_archived = 0
-    WHERE c.branch_id = ?
-    AND c.case_status != 'Completed'
-    AND (
-        v.vaccination_status IS NULL 
-        OR v.vaccination_status = 'Scheduled' 
-        OR v.vaccination_status = 'Missed'
-    )
-";
-$stmt = $conn->prepare($followUpQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$followUpResult = $stmt->get_result();
-$followUpCount = $followUpResult->fetch_assoc()['count'] ?? 0;
-
-// Patients who checked in today and are still waiting for the Nurse
-$visitQueueQuery = "
-    SELECT COUNT(*) AS count
-    FROM patient_visits
-    WHERE branch_id = ?
-      AND visit_date = CURDATE()
-      AND workflow_status IN ('Checked In', 'Waiting for Nurse')
-";
-$stmt = $conn->prepare($visitQueueQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$visitQueueCount = (int)($stmt->get_result()->fetch_assoc()['count'] ?? 0);
-
-// Nurse-signed charts waiting for Administrative Staff registry verification
-$registryQueueQuery = "
-    SELECT COUNT(*) AS count
-    FROM patient_visits
-    WHERE branch_id = ?
-      AND workflow_status = 'For Registry'
-";
-$stmt = $conn->prepare($registryQueueQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$registryQueueCount = (int)($stmt->get_result()->fetch_assoc()['count'] ?? 0);
-
-// Today's scheduled vaccinations
-$todayScheduleQuery = "
-    SELECT COUNT(DISTINCT case_id) AS count
-    FROM vaccination_records
-    WHERE branch_id = ?
-      AND scheduled_date = CURDATE()
-      AND vaccination_status = 'Scheduled'
-      AND is_archived = 0
-";
-$stmt = $conn->prepare($todayScheduleQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$todayScheduleCount = (int)($stmt->get_result()->fetch_assoc()['count'] ?? 0);
-
-// Overdue or explicitly missed vaccination schedules
-$overdueScheduleQuery = "
-    SELECT COUNT(DISTINCT case_id) AS count
-    FROM vaccination_records
-    WHERE branch_id = ?
-      AND scheduled_date < CURDATE()
-      AND vaccination_status IN ('Scheduled', 'Missed')
-      AND is_archived = 0
-";
-$stmt = $conn->prepare($overdueScheduleQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$overdueScheduleCount = (int)($stmt->get_result()->fetch_assoc()['count'] ?? 0);
-
-// 2. Get New Patients (patients admitted this month)
-$newPatientsQuery = "
-    SELECT COUNT(*) as count
-    FROM animal_bite_cases c
-    WHERE c.branch_id = ?
-    AND YEAR(COALESCE(c.date_of_bite, c.created_at)) = YEAR(CURDATE())
-    AND MONTH(COALESCE(c.date_of_bite, c.created_at)) = MONTH(CURDATE())
-";
-$stmt = $conn->prepare($newPatientsQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$newPatientsResult = $stmt->get_result();
-$newPatientsCount = $newPatientsResult->fetch_assoc()['count'] ?? 0;
+// Shared patient/visit counts; no stock or patient records are changed here.
+$patientMetrics = dashboardPatientMetrics($conn, (string)$branch_id);
+$followUpCount = $patientMetrics['pending_followup_patients'];
+$visitQueueCount = $patientMetrics['patient_waiting'];
+$registryQueueCount = $patientMetrics['for_registry'];
+$todayScheduleCount = $patientMetrics['followup_patients_due_today'];
+$overdueScheduleCount = $patientMetrics['overdue_followup_patients'];
+$newPatientsCount = $patientMetrics['new_patients_month'];
 
 // 3. Get PhilHealth Patients - FIXED: Use has_philhealth instead of philhealth_number
 $philhealthQuery = "
@@ -162,29 +87,8 @@ $stmt->bind_param("s", $branch_id);
 $stmt->execute();
 $returnedPhilhealthCount = (int)($stmt->get_result()->fetch_assoc()['count'] ?? 0);
 
-// 4. Get Follow-up Calendar Data (next 30 days)
-$calendarData = [];
-$followUpCalendarQuery = "
-    SELECT 
-        DATE(v.scheduled_date) as schedule_date,
-        COUNT(DISTINCT c.case_id) as count
-    FROM animal_bite_cases c
-    INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
-    WHERE c.branch_id = ?
-    AND v.scheduled_date IS NOT NULL
-    AND v.scheduled_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
-    AND v.vaccination_status = 'Scheduled'
-    AND v.is_archived = 0
-    GROUP BY DATE(v.scheduled_date)
-    ORDER BY schedule_date
-";
-$stmt = $conn->prepare($followUpCalendarQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$calendarResult = $stmt->get_result();
-while ($row = $calendarResult->fetch_assoc()) {
-    $calendarData[$row['schedule_date']] = (int)$row['count'];
-}
+// 4. Pending patients per calendar date, matching the follow-up cards.
+$calendarData = dashboardFollowupCalendar($conn, (string)$branch_id);
 
 // 5. Get PhilHealth Status Breakdown
 $philhealthStatusQuery = "
@@ -1373,7 +1277,7 @@ while ($row = $trendResult->fetch_assoc()) {
             <div class="stats-container">
                 <a href="AdminStaff_Calendar.php" class="stat-card follow-up" aria-label="Open follow-up calendar">
                     <i class="bi bi-calendar2-check-fill stat-icon"></i>
-                    <h6>Follow Up Patients</h6>
+                    <h6>Pending Follow-up Patients</h6>
                     <h1><?php echo $followUpCount; ?></h1>
                     <div class="stat-trend">Pending vaccinations &amp; follow-ups</div>
                     <span class="card-link-label">Open Calendar <i class="bi bi-arrow-right"></i></span>
@@ -1383,7 +1287,7 @@ while ($row = $trendResult->fetch_assoc()) {
                     <i class="bi bi-person-plus-fill stat-icon"></i>
                     <h6>New Patients</h6>
                     <h1><?php echo $newPatientsCount; ?></h1>
-                    <div class="stat-trend">Admitted this month</div>
+                    <div class="stat-trend">Patient records created this month</div>
                     <span class="card-link-label">View Patient Records <i class="bi bi-arrow-right"></i></span>
                 </a>
 
@@ -1420,6 +1324,37 @@ while ($row = $trendResult->fetch_assoc()) {
                 </a>
             </div>
 
+            <div class="stats-container" aria-label="Patient visits today">
+                <a href="AdminStaff_VisitQueue.php" class="stat-card visit-queue" data-patient-metric="today_visits">
+                    <i class="bi bi-person-check stat-icon"></i>
+                    <h6>Today's Visits</h6>
+                    <h1><?php echo number_format($patientMetrics['today_visits']); ?></h1>
+                    <div class="stat-trend">Non-cancelled check-ins today</div>
+                    <span class="card-link-label">Open Visit Queue <i class="bi bi-arrow-right"></i></span>
+                </a>
+                <a href="AdminStaff_VisitQueue.php" class="stat-card visit-queue" data-patient-metric="new_patients_today">
+                    <i class="bi bi-person-plus stat-icon"></i>
+                    <h6>New Patients Today</h6>
+                    <h1><?php echo number_format($patientMetrics['new_patients_today']); ?></h1>
+                    <div class="stat-trend">Patients checked in as New Patient</div>
+                    <span class="card-link-label">Open Visit Queue <i class="bi bi-arrow-right"></i></span>
+                </a>
+                <a href="AdminStaff_VisitQueue.php" class="stat-card visit-queue" data-patient-metric="returning_patients_today">
+                    <i class="bi bi-arrow-repeat stat-icon"></i>
+                    <h6>Returning Patients Today</h6>
+                    <h1><?php echo number_format($patientMetrics['returning_patients_today']); ?></h1>
+                    <div class="stat-trend">Follow-up or repeating; no new visit today</div>
+                    <span class="card-link-label">Open Visit Queue <i class="bi bi-arrow-right"></i></span>
+                </a>
+                <a href="AdminStaff_VisitQueue.php" class="stat-card visit-queue" data-patient-metric="completed_consultations_today">
+                    <i class="bi bi-check-circle stat-icon"></i>
+                    <h6>Completed Consultations Today</h6>
+                    <h1><?php echo number_format($patientMetrics['completed_consultations_today']); ?></h1>
+                    <div class="stat-trend">Today's visits with treatment finished</div>
+                    <span class="card-link-label">Open Visit Queue <i class="bi bi-arrow-right"></i></span>
+                </a>
+            </div>
+
             <div class="today-overview">
                 <div class="today-heading">
                     <strong>Today's Priorities</strong>
@@ -1427,11 +1362,11 @@ while ($row = $trendResult->fetch_assoc()) {
                 </div>
                 <a href="AdminStaff_Calendar.php" class="priority-item">
                     <span class="priority-icon"><i class="bi bi-calendar-event-fill"></i></span>
-                    <span class="priority-copy"><strong><?php echo $todayScheduleCount; ?></strong><span>Vaccinations due today</span></span>
+                    <span class="priority-copy"><strong><?php echo $todayScheduleCount; ?></strong><span>Patients with vaccination schedules due today</span></span>
                 </a>
                 <a href="AdminStaff_Calendar.php" class="priority-item <?php echo $overdueScheduleCount > 0 ? 'danger' : ''; ?>">
                     <span class="priority-icon"><i class="bi bi-calendar-x-fill"></i></span>
-                    <span class="priority-copy"><strong><?php echo $overdueScheduleCount; ?></strong><span>Overdue or missed schedules</span></span>
+                    <span class="priority-copy"><strong><?php echo $overdueScheduleCount; ?></strong><span>Patients with overdue schedules</span></span>
                 </a>
                 <a href="AdminStaff_VisitQueue.php" class="priority-item">
                     <span class="priority-icon"><i class="bi bi-person-lines-fill"></i></span>

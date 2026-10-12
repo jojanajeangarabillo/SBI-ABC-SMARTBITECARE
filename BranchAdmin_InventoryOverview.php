@@ -1,6 +1,8 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/inventory_stock_helpers.php';
+$stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
 
@@ -13,11 +15,7 @@ $notification_count = getUnreadNotificationCount($conn, $userId);
 
 function inventoryNumber($value): string
 {
-    $number = (float)$value;
-    if (abs($number - round($number)) < 0.001) {
-        return number_format((int)round($number));
-    }
-    return rtrim(rtrim(number_format($number, 2, '.', ','), '0'), '.');
+    return inventoryFormatNumber((float)$value);
 }
 
 function inventoryStockStatus(float $stock, float $minimum): array
@@ -98,42 +96,14 @@ $categoriesStmt->close();
 // Read-only branch inventory snapshot. Starting from the branch's stock rows
 // prevents global master items that were never assigned to this branch from
 // appearing as zero-stock records.
-$inventorySql = "
-    SELECT
-        i.item_id,
-        i.item_name,
-        i.description,
-        i.minimum_stock,
-        i.is_forecastable,
-        c.category_id,
-        c.category_name,
-        c.monitoring_frequency,
-        u.unit_name,
-        COALESCE(SUM(s.quantity_available), 0) AS total_stock,
-        COUNT(CASE WHEN s.quantity_available > 0 THEN 1 END) AS active_batches,
-        MIN(CASE
-                WHEN s.quantity_available > 0 AND s.expiration_date IS NOT NULL
-                THEN s.expiration_date
-            END) AS nearest_expiration,
-        MAX(s.last_updated) AS last_updated
-    FROM inventory_items i
-    INNER JOIN inventory_categories c ON c.category_id = i.category_id
-    INNER JOIN units u ON u.unit_id = i.unit_id
-    INNER JOIN inventory_stocks s
-        ON s.item_id = i.item_id
-       AND s.branch_id = ?
-    GROUP BY
-        i.item_id,
-        i.item_name,
-        i.description,
-        i.minimum_stock,
-        i.is_forecastable,
-        c.category_id,
-        c.category_name,
-        c.monitoring_frequency,
-        u.unit_name
-    ORDER BY c.category_name, i.item_name
-";
+$inventorySql = "SELECT i.item_id,i.item_name,i.description,i.minimum_stock,i.is_forecastable,
+    c.category_id,c.category_name,c.monitoring_frequency,COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+    s.usable_stock AS total_stock,s.usable_batches AS active_batches,
+    s.nearest_expiration,s.last_updated
+FROM inventory_items i JOIN inventory_categories c ON c.category_id=i.category_id
+JOIN units u ON u.unit_id=i.unit_id
+JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
+ORDER BY c.category_name,i.item_name";
 $inventoryStmt = $conn->prepare($inventorySql);
 $inventoryStmt->bind_param('s', $branchId);
 $inventoryStmt->execute();

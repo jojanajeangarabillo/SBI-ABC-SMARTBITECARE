@@ -1,6 +1,8 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/inventory_stock_helpers.php';
+$stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
 
 // Get logged-in Nurse
@@ -103,6 +105,7 @@ $notifQuery = "
             WHEN n.notification_type = 'expiring' THEN 'Expiring Vaccine Alert'
             WHEN n.notification_type = 'vaccination' THEN 'Vaccination Administered'
             WHEN n.notification_type = 'patient_record' THEN 'Patient Record Update'
+            WHEN n.notification_type = 'stock_received' THEN 'Medical Supplies Received'
             ELSE 'Notification'
         END as display_title,
         DATEDIFF(NOW(), n.created_at) as days_ago,
@@ -135,6 +138,8 @@ if ($filterType != 'all') {
         $notifQuery .= " AND n.notification_type = 'expiring'";
     } elseif ($filterType == 'vaccination') {
         $notifQuery .= " AND n.notification_type = 'vaccination'";
+    } elseif ($filterType == 'stock_received') {
+        $notifQuery .= " AND n.notification_type = 'stock_received'";
     }
 }
 
@@ -214,21 +219,12 @@ while ($row = $followUpTodayResult->fetch_assoc()) {
 // ----------------------------------------------------------------------
 // GET LOW STOCK ITEMS
 // ----------------------------------------------------------------------
-$lowStockQuery = "
-    SELECT 
-        i.item_name,
-        s.quantity_available,
-        i.minimum_stock,
-        i.item_id,
-        u.unit_name
-    FROM inventory_stocks s
-    INNER JOIN inventory_items i ON s.item_id = i.item_id
-    LEFT JOIN units u ON i.unit_id = u.unit_id
-    WHERE s.branch_id = ?
-    AND s.quantity_available <= i.minimum_stock
-    ORDER BY (s.quantity_available / i.minimum_stock) ASC
-    LIMIT 5
-";
+$lowStockQuery = "SELECT i.item_name,s.usable_stock AS quantity_available,i.minimum_stock,i.item_id,
+    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
+FROM inventory_items i JOIN units u ON u.unit_id=i.unit_id
+JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
+WHERE s.usable_stock<=i.minimum_stock
+ORDER BY s.usable_stock/NULLIF(i.minimum_stock,0),i.item_name LIMIT 5";
 $stmt = $conn->prepare($lowStockQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
@@ -247,7 +243,7 @@ $expiringQuery = "
         s.expiration_date,
         s.quantity_available,
         s.item_id,
-        u.unit_name,
+        COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
         DATEDIFF(s.expiration_date, CURDATE()) as days_until_expiry
     FROM inventory_stocks s
     INNER JOIN inventory_items i ON s.item_id = i.item_id
@@ -378,6 +374,8 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     $query .= " AND n.notification_type = 'expiring'";
                 } elseif ($filter == 'vaccination') {
                     $query .= " AND n.notification_type = 'vaccination'";
+                } elseif ($filter == 'stock_received') {
+                    $query .= " AND n.notification_type = 'stock_received'";
                 }
             }
             
@@ -1507,6 +1505,9 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                             <i class="bi bi-clock-history"></i> Expiring
                             <span class="badge-filter"><?php echo $expiringUnread; ?></span>
                         </a>
+                        <a href="?filter=stock_received<?php echo !empty($searchQuery) ? '&search=' . urlencode($searchQuery) : ''; ?>" class="<?php echo $filterType == 'stock_received' ? 'active' : ''; ?>">
+                            <i class="bi bi-box-seam"></i> Stock Received
+                        </a>
                         <a href="?filter=vaccination<?php echo !empty($searchQuery) ? '&search=' . urlencode($searchQuery) : ''; ?>">
                             <i class="bi bi-shield-check"></i> Vaccinations
                             <span class="badge-filter"><?php echo $vaccinationUnread; ?></span>
@@ -1560,6 +1561,10 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 elseif ($category == 'expiring') $statusLabel = $isRead ? 'Read' : 'Expiring';
                 elseif ($category == 'vaccination') $statusLabel = $isRead ? 'Read' : 'Vaccination';
                 elseif ($category == 'patient') $statusLabel = $isRead ? 'Read' : 'Patient Update';
+                if ($notif['notification_type'] === 'stock_received') {
+                    $icon = 'bi-box-seam';
+                    $statusLabel = $isRead ? 'Read' : 'Stock Received';
+                }
                 
                 $timeAgo = '';
                 if ($notif['days_ago'] == 0) {
@@ -1570,7 +1575,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     $timeAgo = date('M d, Y h:i A', strtotime($notif['created_at']));
                 }
             ?>
-            <div class="notif-item <?php echo $borderClass; ?> <?php echo $isRead ? '' : 'unread'; ?>" data-notif-id="<?php echo $notif['notification_id']; ?>">
+            <div class="notif-item <?php echo $borderClass; ?> <?php echo $isRead ? '' : 'unread'; ?>" data-notification-type="<?php echo htmlspecialchars($notif['notification_type'] ?? '', ENT_QUOTES, 'UTF-8'); ?>" data-notif-id="<?php echo $notif['notification_id']; ?>">
                 <div class="notif-icon-wrap">
                     <div class="notif-icon <?php echo $iconClass; ?>">
                         <i class="bi <?php echo $icon; ?>"></i>
@@ -2020,7 +2025,9 @@ document.querySelectorAll('.view-action-btn').forEach(btn => {
             return false;
         });
 
-        const visual = getNotificationVisual(category);
+        const visual = parent.dataset.notificationType === 'stock_received'
+            ? {label: 'Stock Received', icon: 'bi-box-seam', badge: 'badge-general'}
+            : getNotificationVisual(category);
 
         modalTitle.textContent = title;
         modalMessage.textContent = desc;

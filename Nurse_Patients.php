@@ -1,4 +1,11 @@
 <?php
+// Preserve the existing generated-PDF URL and use the protected file endpoint.
+if (isset($_GET['download_generated'])) {
+    $_GET['id'] = $_GET['download_generated'];
+    $_GET['download'] = '1';
+    require __DIR__ . '/download_document.php';
+    exit;
+}
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
@@ -40,100 +47,6 @@ if ($userResult->num_rows > 0) {
 // If no branch assigned
 if (!$branch_id) {
     $branch_name = 'No Branch Assigned';
-}
-
-/*
-|--------------------------------------------------------------------------
-| DOWNLOAD A GENERATED PATIENT PDF
-|--------------------------------------------------------------------------
-| This endpoint returns the exact PDF that was generated and saved in
-| uploads/documents. Using Content-Disposition: attachment makes the browser
-| perform a real PDF download instead of relying on a JavaScript <a download>
-| click, which some browsers can block after a redirect.
-*/
-if (isset($_GET['download_generated'])) {
-    $document_id = (int)($_GET['download_generated'] ?? 0);
-
-    if ($document_id < 1 || !$branch_id) {
-        http_response_code(400);
-        exit('Invalid generated document request.');
-    }
-
-    $download_stmt = $conn->prepare(
-        "SELECT document_id, file_name, file_path, file_type
-         FROM medical_documents
-         WHERE document_id = ?
-           AND branch_id = ?
-           AND uploaded_by = ?
-           AND COALESCE(status, 'Active') <> 'Archived'
-         LIMIT 1"
-    );
-
-    if (!$download_stmt) {
-        http_response_code(500);
-        exit('Unable to prepare the PDF download.');
-    }
-
-    $download_stmt->bind_param('isi', $document_id, $branch_id, $user_id);
-    $download_stmt->execute();
-    $download_document = $download_stmt->get_result()->fetch_assoc();
-    $download_stmt->close();
-
-    if (!$download_document) {
-        http_response_code(404);
-        exit('Generated PDF not found.');
-    }
-
-    $stored_path = trim((string)($download_document['file_path'] ?? ''));
-    $documents_base = realpath(
-        __DIR__ . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'documents'
-    );
-
-    $relative_path = str_replace(
-        ['/', '\\'],
-        DIRECTORY_SEPARATOR,
-        ltrim($stored_path, '/\\')
-    );
-
-    $absolute_path = realpath(__DIR__ . DIRECTORY_SEPARATOR . $relative_path);
-
-    if (
-        !$documents_base ||
-        !$absolute_path ||
-        !is_file($absolute_path) ||
-        strpos($absolute_path, $documents_base . DIRECTORY_SEPARATOR) !== 0
-    ) {
-        http_response_code(404);
-        exit('The generated PDF file could not be found.');
-    }
-
-    $download_name = basename((string)($download_document['file_name'] ?? 'patient_document.pdf'));
-    $download_name = preg_replace('/[^A-Za-z0-9._-]+/', '_', $download_name);
-
-    if ($download_name === '' || $download_name === '.' || $download_name === '..') {
-        $download_name = 'patient_document.pdf';
-    }
-
-    if (strtolower(substr($download_name, -4)) !== '.pdf') {
-        $download_name .= '.pdf';
-    }
-
-    // Remove any buffered HTML/errors before streaming the PDF bytes.
-    while (ob_get_level() > 0) {
-        @ob_end_clean();
-    }
-
-    header('Content-Type: application/pdf');
-    header('Content-Disposition: attachment; filename="' . $download_name . '"');
-    header('Content-Length: ' . filesize($absolute_path));
-    header('Cache-Control: private, no-store, no-cache, must-revalidate');
-    header('Pragma: no-cache');
-    header('Expires: 0');
-    header('X-Content-Type-Options: nosniff');
-
-    session_write_close();
-    readfile($absolute_path);
-    exit;
 }
 
 // Handle AJAX requests for patient data

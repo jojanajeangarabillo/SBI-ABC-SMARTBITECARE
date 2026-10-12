@@ -4,16 +4,11 @@ require_once __DIR__ . '/sources/db_connect.php';
 require_once __DIR__ . '/sources/app_config.php';
 require_once __DIR__ . '/sources/mailer.php';
 require_once __DIR__ . '/sources/notification_helper.php';
+require_once __DIR__ . '/sources/user_management_security.php';
 
-// Check if user is logged in and is branch admin
-if (
-    !isset($_SESSION['user_id']) ||
-    !isset($_SESSION['role_id']) ||
-    $_SESSION['role_id'] != 2
-) {
-    header("Location: login.php");
-    exit();
-}
+// Revalidate the active account, current role, and database branch on every request.
+$managementActor = managementRequireUser($conn, 2, true);
+$managementCsrf = managementCsrfToken();
 
 // Get user branch information
 $user_id = (int)$_SESSION['user_id'];
@@ -46,6 +41,36 @@ if ($userResult->num_rows > 0) {
 if (!$branch_id) {
     $branch_name = 'No Branch Assigned';
 }
+
+$managementTransaction = false;
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    managementVerifyPost();
+    $managementAction = $_POST['action'] ?? '';
+    if (!in_array($managementAction, ['add_user', 'edit_user', 'toggle_status', 'archive_user'], true)) {
+        managementDeny(400, 'Select a valid user-management action.');
+    }
+    if (in_array($managementAction, ['add_user', 'edit_user'], true)) {
+        $postedRole = filter_var($_POST['role_id'] ?? null, FILTER_VALIDATE_INT);
+        if (!in_array($postedRole, [3, 4, 5], true)) {
+            managementDeny(403, 'Branch Admins can only assign Nurse, Admin Staff, or Inventory Officer roles.');
+        }
+        if (!in_array($_POST['status'] ?? 'Active', ['Active', 'Inactive'], true)) {
+            managementDeny(400, 'Select a valid account status.');
+        }
+    }
+}
+
+try {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $conn->begin_transaction();
+        $managementTransaction = true;
+        $managementActor = managementRequireUser($conn, 2, true, true);
+        $branch_id = (string)$managementActor['branch_id'];
+        if ($managementAction !== 'add_user') {
+            $targetId = filter_var($_POST['user_id'] ?? null, FILTER_VALIDATE_INT);
+            $managementTarget = managementBranchTarget($conn, $managementActor, $targetId ?: 0);
+        }
+    }
 
 // Handle Add User
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_user') {
@@ -162,6 +187,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             </html>
             ";
             
+            // Persist the account, initial token and audit before contacting mail.
+            $conn->commit();
+            $managementTransaction = false;
             $mail_sent = send_email($email, $subject, $body);
             
             if ($mail_sent) {
@@ -198,9 +226,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     
     if (empty($errors)) {
         // Check if username or email already exists for other users
-        $checkQuery = "SELECT user_id FROM users WHERE (username = ? OR email = ?) AND user_id != ? AND branch_id = ?";
+        $checkQuery = "SELECT user_id FROM users WHERE (username = ? OR email = ?) AND user_id != ?";
         $stmt = $conn->prepare($checkQuery);
-        $stmt->bind_param("ssis", $new_username, $email, $target_user_id, $branch_id);
+        $stmt->bind_param("ssi", $new_username, $email, $target_user_id);
         $stmt->execute();
         if ($stmt->get_result()->num_rows > 0) {
             $message = "Username or email already exists for another user";
@@ -224,7 +252,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $paramValues[] = $branch_id;   // ADD THIS
                 $params .= "s";               // ADD THIS
 
-                $updateQuery = "UPDATE users SET $updateFields WHERE user_id = ? AND branch_id = ?";
+                $updateQuery = "UPDATE users SET $updateFields WHERE user_id = ? AND branch_id = ? AND role_id IN (3, 4, 5)";
                 $stmt = $conn->prepare($updateQuery);
                 $stmt->bind_param($params, ...$paramValues);
             
@@ -253,10 +281,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // Handle Toggle Status
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'toggle_status') {
     $target_user_id = (int)$_POST['user_id'];
-    $current_status = $_POST['status'];
+    $current_status = $managementTarget['status'];
     $new_status = $current_status === 'Active' ? 'Inactive' : 'Active';
     
-    $updateQuery = "UPDATE users SET status = ? WHERE user_id = ? AND branch_id = ?";
+    $updateQuery = "UPDATE users SET status = ? WHERE user_id = ? AND branch_id = ? AND role_id IN (3, 4, 5)";
     $stmt = $conn->prepare($updateQuery);
     $stmt->bind_param("sis", $new_status, $target_user_id, $branch_id);
     
@@ -283,7 +311,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     
     if ($target_user_id != $user_id) {
         // Check user role
-        $roleCheckQuery = "SELECT role_id, username FROM users WHERE user_id = ? AND branch_id = ?";
+        $roleCheckQuery = "SELECT role_id, username FROM users WHERE user_id = ? AND branch_id = ? AND role_id IN (3, 4, 5)";
         $stmt = $conn->prepare($roleCheckQuery);
         $stmt->bind_param("is", $target_user_id, $branch_id);
         $stmt->execute();
@@ -291,7 +319,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
         if ($userData && !in_array($userData['role_id'], [1, 2])) {
             // Set status to Inactive
-            $archiveQuery = "UPDATE users SET status = 'Inactive' WHERE user_id = ? AND branch_id = ?";
+            $archiveQuery = "UPDATE users SET status = 'Inactive' WHERE user_id = ? AND branch_id = ? AND role_id IN (3, 4, 5)";
             $stmt = $conn->prepare($archiveQuery);
             $stmt->bind_param("is", $target_user_id, $branch_id);
             
@@ -320,6 +348,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 }
 
+    if ($managementTransaction) {
+        // Disable/reset actions must not leave an older reset link usable.
+        if (isset($managementTarget) && (
+            $managementAction === 'archive_user'
+            || ($managementAction === 'toggle_status' && $new_status === 'Inactive')
+            || ($managementAction === 'edit_user' && (
+                $status === 'Inactive' || !empty($new_password)
+            ))
+        ) && $message_type === 'success') {
+            managementRevokeTokens($conn, (int)$managementTarget['user_id']);
+        }
+        $conn->commit();
+        $managementTransaction = false;
+    }
+} catch (Throwable $managementError) {
+    if ($managementTransaction) {
+        $conn->rollback();
+    }
+    error_log('User management save failed: ' . $managementError->getMessage());
+    $message = 'Unable to save the user. Check the details and try again.';
+    $message_type = 'danger';
+}
+
 // Pagination
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 $limit = 10;
@@ -330,7 +381,7 @@ $countQuery = "SELECT COUNT(*) as total
                FROM users 
                WHERE branch_id = ? 
                AND user_id != ? 
-               AND role_id NOT IN (1, 2)";
+               AND role_id IN (3, 4, 5)";
 $stmt = $conn->prepare($countQuery);
 $stmt->bind_param("si", $branch_id, $user_id);
 $stmt->execute();
@@ -343,7 +394,7 @@ $usersQuery = "SELECT u.user_id, u.username, u.email, u.status, r.role_id, r.rol
                JOIN roles r ON u.role_id = r.role_id
                WHERE u.branch_id = ? 
                AND u.user_id != ?
-               AND u.role_id NOT IN (1, 2)
+               AND u.role_id IN (3, 4, 5)
                ORDER BY u.user_id DESC
                LIMIT ? OFFSET ?";
 $stmt = $conn->prepare($usersQuery);
@@ -352,7 +403,7 @@ $stmt->execute();
 $users = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
 // Get available roles
-$rolesQuery = "SELECT role_id, role_name FROM roles WHERE role_id NOT IN (1, 2)";
+$rolesQuery = "SELECT role_id, role_name FROM roles WHERE role_id IN (3, 4, 5)";
 $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
 ?>
 <!DOCTYPE html>
@@ -1027,6 +1078,7 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
                                         <td><?php echo htmlspecialchars($user['role_name']); ?></td>
                                         <td>
                                             <form method="POST" style="display: inline;">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($managementCsrf, ENT_QUOTES, 'UTF-8'); ?>">
                                                 <input type="hidden" name="action" value="toggle_status">
                                                 <input type="hidden" name="user_id" value="<?php echo $user['user_id']; ?>">
                                                 <input type="hidden" name="status" value="<?php echo $user['status']; ?>">
@@ -1087,6 +1139,7 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
         <div class="modal-dialog">
             <div class="modal-content">
                 <form method="POST">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($managementCsrf, ENT_QUOTES, 'UTF-8'); ?>">
                     <div class="modal-header">
                         <h5 class="modal-title"><i class="bi bi-person-plus me-2"></i>Add New User</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -1137,6 +1190,7 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
         <div class="modal-dialog">
             <div class="modal-content">
                 <form method="POST">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($managementCsrf, ENT_QUOTES, 'UTF-8'); ?>">
                     <div class="modal-header">
                         <h5 class="modal-title"><i class="bi bi-pencil-square me-2"></i>Edit User</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -1188,6 +1242,7 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
         <div class="modal-dialog">
             <div class="modal-content">
                 <form method="POST">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($managementCsrf, ENT_QUOTES, 'UTF-8'); ?>">
                     <div class="modal-header" style="background: #ffc107; color: #212529;">
                         <h5 class="modal-title"><i class="bi bi-archive-fill me-2"></i>Archive User</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>

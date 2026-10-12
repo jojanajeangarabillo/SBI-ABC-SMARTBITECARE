@@ -2,9 +2,12 @@
 session_start();
 
 require_once 'sources/db_connect.php';
+require_once 'sources/inventory_stock_helpers.php';
+$stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/inventory_unit_helpers.php';
+require_once 'sources/forecast_training_helper.php';
 
 // ============================================================
 // AUTHENTICATED NURSE
@@ -1175,6 +1178,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $caseId = (int)$visit['case_id'];
 
             $conn->begin_transaction();
+            // Use the same lock order as Vaccination, supply usage and Daily Inventory.
+            forecastTrainingRevision($conn, $branchId, true);
 
             assessmentSaveNonArvAssessment(
                 $conn,
@@ -1186,6 +1191,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             );
 
             $administeredSummaries = [];
+            $reopenedClosings = 0;
 
             foreach ($entries as $entry) {
                 $itemId = (int)$entry['item_id'];
@@ -1302,6 +1308,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 $usage->close();
 
+                // Usage is included once when the nurse submits the daily closing.
+                // A previously submitted count must be verified again after new usage.
+                $reopenedClosings += forecastTrainingUsageChanged(
+                    $conn, $branchId, $itemId, $administeredDate
+                );
+
                 $administeredSummaries[] =
                     $vaccineName . ' (' . $usageDescription . ')';
             }
@@ -1363,6 +1375,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     . ' non-anti-rabies product(s) administered successfully. '
                     . 'The visit and case were marked Completed, inventory usage was recorded, '
                     . 'and no anti-rabies schedule was generated.'
+                    . ($reopenedClosings > 0
+                        ? ' Resubmit Daily Inventory for the affected item(s) and administration date.'
+                        : ' Submit Daily Inventory for the affected item(s) and administration date to include this usage in forecasting.')
             );
 
         // ========================================================
@@ -1850,38 +1865,15 @@ if ($selected) {
             COALESCE(NULLIF(i.base_unit_label, ''), u.unit_name) AS base_unit_label,
             COALESCE(NULLIF(i.display_unit_label, ''), u.unit_name) AS display_unit_label,
             COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base,
-            COALESCE(
-                SUM(
-                    CASE
-                        WHEN s.quantity_available > 0
-                         AND (
-                            s.expiration_date IS NULL
-                            OR s.expiration_date >= CURDATE()
-                         )
-                        THEN s.quantity_available
-                        ELSE 0
-                    END
-                ),
-                0
-            ) AS usable_stock
+            COALESCE(s.usable_stock,0) AS usable_stock
          FROM inventory_items i
          INNER JOIN units u
             ON u.unit_id = i.unit_id
          INNER JOIN inventory_categories c
             ON c.category_id = i.category_id
-         LEFT JOIN inventory_stocks s
-            ON s.item_id = i.item_id
-           AND s.branch_id = ?
+         LEFT JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
          WHERE c.category_name = 'Medical Supplies'
            AND i.item_name NOT LIKE '%Default%'
-         GROUP BY
-            i.item_id,
-            i.item_name,
-            i.unit_id,
-            u.unit_name,
-            i.base_unit_label,
-            i.display_unit_label,
-            i.conversion_to_base
          ORDER BY i.item_name ASC"
     );
 

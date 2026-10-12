@@ -1,0 +1,11 @@
+{
+  "version": "sbc-status-v2",
+  "restocking_lead_days": 7,
+  "safety_buffer_days": 3,
+  "definitions": {
+    "Low Stock": "Positive usable stock is at or below the minimum stock level. Zero is Out of Stock.",
+    "Shortage Risk": "Usable stock is zero, demand exhausts stock within the selected horizon, or days of supply are below lead time plus safety buffer.",
+    "Reorder Needed": "There is no shortage risk, but demand plus minimum stock exceeds usable stock.",
+    "Sufficient": "Stock covers demand, the replenishment window and the minimum ending-stock target."
+  }
+}

@@ -2,6 +2,8 @@
 session_start();
 
 require_once 'sources/db_connect.php';
+require_once 'sources/inventory_stock_helpers.php';
+$stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
 
 
@@ -1831,19 +1833,7 @@ if (!empty($branch_id)) {
             ON c.category_id = i.category_id
 
         LEFT JOIN
-        (
-            SELECT
-                item_id,
-                SUM(quantity_available)
-                    AS total_quantity
-
-            FROM inventory_stocks
-
-            WHERE branch_id = ?
-
-            GROUP BY item_id
-
-        ) stock
+        (SELECT item_id,usable_stock AS total_quantity FROM ($stockTotalsSql) totals WHERE branch_id=?) stock
             ON i.item_id = stock.item_id
 
         GROUP BY
@@ -1884,7 +1874,7 @@ if (!empty($branch_id)) {
                 (int)$row['item_count'];
 
             $row['total_stock'] =
-                (int)$row['total_stock'];
+                (float)$row['total_stock'];
 
             $categories[] =
                 $row;
@@ -2179,21 +2169,7 @@ if (
                        i.category_id
 
                 LEFT JOIN
-                (
-                    SELECT
-                        item_id,
-
-                        SUM(
-                            quantity_available
-                        ) AS total_quantity
-
-                    FROM inventory_stocks
-
-                    WHERE branch_id = ?
-
-                    GROUP BY item_id
-
-                ) stock
+                (SELECT item_id,usable_stock AS total_quantity FROM ($stockTotalsSql) totals WHERE branch_id=?) stock
                     ON i.item_id =
                        stock.item_id
 
@@ -2292,7 +2268,7 @@ if (
                 (int)$view_category['item_count'];
 
             $view_category['total_stock'] =
-                (int)$view_category['total_stock'];
+                (float)$view_category['total_stock'];
         }
     }
 }
@@ -2311,7 +2287,7 @@ if ($view_category) {
         SELECT
             i.item_id,
             i.item_name,
-            u.unit_name,
+            COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
 
             COALESCE(
                 stock.total_quantity,
@@ -2324,19 +2300,7 @@ if ($view_category) {
             ON i.unit_id = u.unit_id
 
         LEFT JOIN
-        (
-            SELECT
-                item_id,
-                SUM(quantity_available)
-                    AS total_quantity
-
-            FROM inventory_stocks
-
-            WHERE branch_id = ?
-
-            GROUP BY item_id
-
-        ) stock
+        (SELECT item_id,usable_stock AS total_quantity FROM ($stockTotalsSql) totals WHERE branch_id=?) stock
             ON i.item_id = stock.item_id
 
         WHERE i.category_id = ?
@@ -2374,7 +2338,7 @@ if ($view_category) {
             ) {
 
                 $item['total_quantity'] =
-                    (int)$item['total_quantity'];
+                    (float)$item['total_quantity'];
 
                 $view_category_items[] =
                     $item;
@@ -3641,7 +3605,7 @@ if ($view_category) {
                                     <td>
 
                                         <?php
-                                        echo (int)$category['total_stock'];
+                                        echo inventoryFormatNumber((float)$category['total_stock']);
                                         ?>
 
                                     </td>
@@ -4522,7 +4486,7 @@ if ($view_category) {
                         >
 
                             <?php
-                            echo (int)$view_category['total_stock'];
+                            echo inventoryFormatNumber((float)$view_category['total_stock']);
                             ?>
 
                             total units
@@ -4566,7 +4530,7 @@ if ($view_category) {
                                         <strong>
 
                                             <?php
-                                            echo (int)$item['total_quantity'];
+                                            echo inventoryFormatNumber((float)$item['total_quantity']);
                                             ?>
 
                                             <?php

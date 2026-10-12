@@ -1,6 +1,8 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/inventory_stock_helpers.php';
+$stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
 
 /* =========================================================
@@ -64,9 +66,9 @@ function transactionDisplayType($type, $quantity)
         case 'OUT':
             return ['Stock Out', '-'];
         case 'ADJUSTMENT':
-            return ['Adjustment', ((int)$quantity < 0 ? '-' : '+')];
+            return ['Adjustment', ((float)$quantity < 0 ? '-' : '+')];
         default:
-            return [$type ?: 'Unknown', ((int)$quantity < 0 ? '-' : '+')];
+            return [$type ?: 'Unknown', ((float)$quantity < 0 ? '-' : '+')];
     }
 }
 
@@ -178,50 +180,11 @@ if (!empty($branch_id)) {
        LOW / OUT OF STOCK COUNTS
        Uses TOTAL USABLE stock per item, not individual batches.
        --------------------------------------------------------- */
-    $stockAlertSql = "
-        SELECT
-            COALESCE(SUM(CASE
-                WHEN x.usable_stock <= 0 THEN 1
-                ELSE 0
-            END), 0) AS out_of_stock,
-
-            COALESCE(SUM(CASE
-                WHEN x.usable_stock > 0
-                 AND x.usable_stock <= x.minimum_stock
-                THEN 1
-                ELSE 0
-            END), 0) AS low_stock
-
-        FROM (
-            SELECT
-                i.item_id,
-                i.minimum_stock,
-                COALESCE(
-                    SUM(
-                        CASE
-                            WHEN s.quantity_available > 0
-                             AND (
-                                    s.expiration_date IS NULL
-                                    OR s.expiration_date >= CURDATE()
-                                 )
-                            THEN s.quantity_available
-                            ELSE 0
-                        END
-                    ),
-                    0
-                ) AS usable_stock
-
-            FROM inventory_items i
-
-            LEFT JOIN inventory_stocks s
-              ON s.item_id = i.item_id
-             AND s.branch_id = ?
-
-            GROUP BY
-                i.item_id,
-                i.minimum_stock
-        ) x
-    ";
+    $stockAlertSql = "SELECT
+    COALESCE(SUM(s.usable_stock<=0),0) AS out_of_stock,
+    COALESCE(SUM(s.usable_stock>0 AND s.usable_stock<=i.minimum_stock),0) AS low_stock
+FROM inventory_items i
+JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?";
 
     $stmt = $conn->prepare($stockAlertSql);
     if (!$stmt) {
@@ -310,85 +273,14 @@ if (!empty($branch_id)) {
        LOW / OUT OF STOCK ITEM LIST
        One row per item. Uses non-expired usable stock only.
        --------------------------------------------------------- */
-    $lowStockQuery = "
-        SELECT
-            x.item_id,
-            x.item_name,
-            x.minimum_stock,
-            x.category_name,
-            x.unit_name,
-            x.usable_stock,
-            x.expired_stock
-        FROM (
-            SELECT
-                i.item_id,
-                i.item_name,
-                i.minimum_stock,
-                c.category_name,
-                u.unit_name,
-
-                COALESCE(
-                    SUM(
-                        CASE
-                            WHEN s.quantity_available > 0
-                             AND (
-                                    s.expiration_date IS NULL
-                                    OR s.expiration_date >= CURDATE()
-                                 )
-                            THEN s.quantity_available
-                            ELSE 0
-                        END
-                    ),
-                    0
-                ) AS usable_stock,
-
-                COALESCE(
-                    SUM(
-                        CASE
-                            WHEN s.quantity_available > 0
-                             AND s.expiration_date IS NOT NULL
-                             AND s.expiration_date < CURDATE()
-                            THEN s.quantity_available
-                            ELSE 0
-                        END
-                    ),
-                    0
-                ) AS expired_stock
-
-            FROM inventory_items i
-
-            INNER JOIN inventory_categories c
-              ON c.category_id = i.category_id
-
-            INNER JOIN units u
-              ON u.unit_id = i.unit_id
-
-            LEFT JOIN inventory_stocks s
-              ON s.item_id = i.item_id
-             AND s.branch_id = ?
-
-            GROUP BY
-                i.item_id,
-                i.item_name,
-                i.minimum_stock,
-                c.category_name,
-                u.unit_name
-        ) AS x
-
-        WHERE
-            x.usable_stock <= 0
-            OR (
-                x.usable_stock > 0
-                AND x.usable_stock <= x.minimum_stock
-            )
-
-        ORDER BY
-            CASE WHEN x.usable_stock <= 0 THEN 0 ELSE 1 END ASC,
-            x.usable_stock ASC,
-            x.item_name ASC
-
-        LIMIT 10
-    ";
+    $lowStockQuery = "SELECT i.item_id,i.item_name,i.minimum_stock,c.category_name,
+    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,s.usable_stock,s.expired_stock
+FROM inventory_items i
+JOIN inventory_categories c ON c.category_id=i.category_id
+JOIN units u ON u.unit_id=i.unit_id
+JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
+WHERE s.usable_stock<=i.minimum_stock
+ORDER BY s.usable_stock<=0 DESC,s.usable_stock,i.item_name LIMIT 10";
 
     $stmt = $conn->prepare($lowStockQuery);
     if (!$stmt) {
@@ -399,17 +291,17 @@ if (!empty($branch_id)) {
     $result = $stmt->get_result();
 
     while ($row = $result->fetch_assoc()) {
-        $usable = (int)$row['usable_stock'];
+        $usable = (float)$row['usable_stock'];
         $minimum = (int)$row['minimum_stock'];
-        $expired = (int)$row['expired_stock'];
+        $expired = (float)$row['expired_stock'];
 
         $status = $usable <= 0 ? 'Out of Stock' : 'Low Stock';
 
         $row['status'] = $status;
         $row['item_id_formatted'] = 'ITM-' . str_pad((string)$row['item_id'], 4, '0', STR_PAD_LEFT);
-        $row['stock_display'] = $usable . ' ' . $row['unit_name'];
+        $row['stock_display'] = inventoryFormatNumber($usable) . ' ' . $row['unit_name'];
         $row['minimum_display'] = $minimum . ' ' . $row['unit_name'];
-        $row['expired_display'] = $expired > 0 ? $expired . ' ' . $row['unit_name'] : '';
+        $row['expired_display'] = $expired > 0 ? inventoryFormatNumber($expired) . ' ' . $row['unit_name'] : '';
 
         $lowStockItems[] = $row;
     }
@@ -427,7 +319,7 @@ if (!empty($branch_id)) {
             s.quantity_available,
             s.expiration_date,
             i.item_name,
-            u.unit_name
+            COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
         FROM inventory_stocks s
         INNER JOIN inventory_items i
           ON i.item_id = s.item_id
@@ -472,7 +364,7 @@ if (!empty($branch_id)) {
             st.transaction_date,
             st.remarks,
             ii.item_name,
-            u.unit_name,
+            COALESCE(NULLIF(TRIM(ii.base_unit_label), ''), u.unit_name) AS unit_name,
             usr.username
         FROM stock_transactions st
         INNER JOIN inventory_items ii
@@ -502,7 +394,7 @@ if (!empty($branch_id)) {
             $row['quantity']
         );
 
-        $quantity = abs((int)$row['quantity']);
+        $quantity = abs((float)$row['quantity']);
         $unitName = $row['unit_name'] ?? '';
 
         $recentTransactionsList[] = [
@@ -510,7 +402,7 @@ if (!empty($branch_id)) {
             'trx' => 'TRX-' . str_pad((string)$row['transaction_id'], 4, '0', STR_PAD_LEFT),
             'type' => $displayType,
             'item' => $row['item_name'] ?? 'Unknown Item',
-            'qty' => $sign . $quantity . ($unitName !== '' ? ' ' . $unitName : ''),
+            'qty' => $sign . inventoryFormatNumber($quantity) . ($unitName !== '' ? ' ' . $unitName : ''),
             'date' => date('M d, Y', strtotime($row['transaction_date'])),
             'date_full' => date('M d, Y h:i A', strtotime($row['transaction_date'])),
             'by' => $row['username'] ?? 'Unknown User',

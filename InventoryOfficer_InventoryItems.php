@@ -3,6 +3,8 @@
 session_start();
 
 require_once 'sources/db_connect.php';
+require_once 'sources/inventory_stock_helpers.php';
+$stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
 
 
@@ -1471,39 +1473,14 @@ if (!empty($branch_id)) {
         ($current_page - 1) *
         $per_page;
 
-    $itemsSQL = "
-        SELECT
-            i.item_id,
-            i.category_id,
-            i.unit_id,
-            i.item_name,
-            i.minimum_stock,
-            i.description,
-            i.is_forecastable,
-
-            c.category_name,
-
-            u.unit_name,
-
-            COALESCE(
-                SUM(s.quantity_available),
-                0
-            ) AS quantity_available
-
-        FROM inventory_items i
-
-        INNER JOIN inventory_categories c
-            ON i.category_id = c.category_id
-
-        INNER JOIN units u
-            ON i.unit_id = u.unit_id
-
-        LEFT JOIN inventory_stocks s
-            ON i.item_id = s.item_id
-            AND s.branch_id = ?
-
-        WHERE 1 = ?
-    ";
+    $itemsSQL = "SELECT i.item_id,i.category_id,i.unit_id,i.item_name,i.minimum_stock,i.description,
+    i.is_forecastable,c.category_name,u.unit_name,
+    COALESCE(NULLIF(TRIM(i.base_unit_label),''),u.unit_name) AS stock_unit_name,
+    COALESCE(s.usable_stock,0) AS quantity_available
+FROM inventory_items i JOIN inventory_categories c ON c.category_id=i.category_id
+JOIN units u ON u.unit_id=i.unit_id
+LEFT JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
+WHERE 1=?";
 
 
     $params = [
@@ -1555,18 +1532,6 @@ if (!empty($branch_id)) {
        ----------------------------------------------------- */
 
     $itemsSQL .= "
-
-        GROUP BY
-            i.item_id,
-            i.category_id,
-            i.unit_id,
-            i.item_name,
-            i.minimum_stock,
-            i.description,
-            i.is_forecastable,
-            c.category_name,
-            u.unit_name
-
         ORDER BY
             i.item_name ASC
 
@@ -1601,7 +1566,7 @@ if (!empty($branch_id)) {
         ) {
 
             $quantity =
-                (int)$row[
+                (float)$row[
                     'quantity_available'
                 ];
 
@@ -1612,8 +1577,7 @@ if (!empty($branch_id)) {
 
 
             /*
-             * Make sure the SUM result
-             * is stored as an integer.
+             * Preserve the shared stock total's decimal precision.
              */
 
             $row[
@@ -1634,7 +1598,7 @@ if (!empty($branch_id)) {
                     'badge-critical';
 
             } elseif (
-                $quantity < $minimum
+                $quantity <= $minimum
             ) {
 
                 $status =
@@ -1760,7 +1724,7 @@ if (!empty($branch_id) && !empty($items)) {
                     $batchRow['batch_lot_no'],
 
                 'quantity_available' =>
-                    (int)$batchRow['quantity_available'],
+                    (float)$batchRow['quantity_available'],
 
                 'expiration_date' =>
                     $batchRow['expiration_date']
@@ -3021,19 +2985,11 @@ body {
                             <td>
 
                                 <?php
-                                echo h(
-                                    $item[
-                                        'quantity_available'
-                                    ]
-                                );
+                                echo h(inventoryFormatNumber((float)$item['quantity_available']));
                                 ?>
 
                                 <?php
-                                echo h(
-                                    $item[
-                                        'unit_name'
-                                    ]
-                                );
+                                echo h($item['stock_unit_name']);
                                 ?>
 
                             </td>
@@ -3092,7 +3048,7 @@ body {
                                                     (int)$item['unit_id'],
 
                                                 'unit_name' =>
-                                                    $item['unit_name'],
+                                                    $item['stock_unit_name'],
 
                                                 'item_name' =>
                                                     $item['item_name'],
@@ -3107,7 +3063,7 @@ body {
                                                     (int)$item['is_forecastable'],
 
                                                 'quantity_available' =>
-                                                    (int)$item['quantity_available'],
+                                                    (float)$item['quantity_available'],
 
                                                 'status' =>
                                                     $item['status'],

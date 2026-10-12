@@ -1,7 +1,11 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/inventory_stock_helpers.php';
+require_once 'sources/forecast_status_helper.php';
+$stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
+require_once 'sources/dashboard_patient_metrics.php';
 
 // Check if user is logged in and is branch admin
 if (
@@ -15,7 +19,6 @@ if (
 
 // Get user branch information
 $user_id = $_SESSION['user_id'];
-$notification_count = getUnreadNotificationCount($conn, $user_id);
 $branch_id = null;
 $branch_name = '';
 
@@ -23,7 +26,7 @@ $branch_name = '';
 $userQuery = "SELECT u.branch_id, b.branch_name 
               FROM users u 
               LEFT JOIN branches b ON u.branch_id = b.branch_id 
-              WHERE u.user_id = ?";
+              WHERE u.user_id = ? AND u.role_id = 2 AND u.status = 'Active'";
 $stmt = $conn->prepare($userQuery);
 $stmt->bind_param("i", $user_id);
 $stmt->execute();
@@ -37,52 +40,14 @@ if ($userResult->num_rows > 0) {
 
 // If no branch assigned, show error or redirect
 if (!$branch_id) {
-    $branch_name = 'No Branch Assigned';
+    http_response_code(403);
+    die('Your active account must be assigned to a branch.');
     // You might want to handle this case differently
 }
 
-// Fetch dynamic statistics for the branch
-$stats = [];
-
-// Total patients for this branch (using branch_id from patients table)
-$patientQuery = "SELECT COUNT(DISTINCT p.patient_id) as total 
-                 FROM patients p 
-                 WHERE p.branch_id = ?";
-$stmt = $conn->prepare($patientQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$patientResult = $stmt->get_result();
-$stats['total_patients'] = $patientResult->fetch_assoc()['total'] ?? 0;
-
-// Total animal bite cases for this branch
-$totalCasesQuery = "SELECT COUNT(*) as total 
-                    FROM animal_bite_cases 
-                    WHERE branch_id = ?";
-$stmt = $conn->prepare($totalCasesQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$totalCasesResult = $stmt->get_result();
-$stats['total_cases'] = $totalCasesResult->fetch_assoc()['total'] ?? 0;
-
-// Ongoing cases
-$ongoingQuery = "SELECT COUNT(*) as ongoing 
-                 FROM animal_bite_cases 
-                 WHERE branch_id = ? AND case_status = 'Ongoing'";
-$stmt = $conn->prepare($ongoingQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$ongoingResult = $stmt->get_result();
-$stats['ongoing_cases'] = $ongoingResult->fetch_assoc()['ongoing'] ?? 0;
-
-// Completed cases
-$completedQuery = "SELECT COUNT(*) as completed 
-                   FROM animal_bite_cases 
-                   WHERE branch_id = ? AND case_status = 'Completed'";
-$stmt = $conn->prepare($completedQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$completedResult = $stmt->get_result();
-$stats['completed_cases'] = $completedResult->fetch_assoc()['completed'] ?? 0;
+// Shared active patient/case totals and visit workflow counts.
+$notification_count = getUnreadNotificationCount($conn, $user_id);
+$stats = dashboardPatientMetrics($conn, (string)$branch_id);
 
 // Total inventory items for this branch
 $totalItemsQuery = "SELECT COUNT(DISTINCT s.item_id) as total 
@@ -95,11 +60,9 @@ $totalItemsResult = $stmt->get_result();
 $stats['total_items'] = $totalItemsResult->fetch_assoc()['total'] ?? 0;
 
 // Low stocks (with proper branch filtering)
-$lowStockQuery = "SELECT COUNT(*) as low_stock 
-                  FROM inventory_stocks s 
-                  JOIN inventory_items i ON s.item_id = i.item_id 
-                  WHERE s.branch_id = ? 
-                  AND s.quantity_available < i.minimum_stock";
+$lowStockQuery = "SELECT COUNT(*) AS low_stock FROM inventory_items i
+JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
+WHERE s.usable_stock<=i.minimum_stock";
 $stmt = $conn->prepare($lowStockQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
@@ -164,27 +127,10 @@ $missedVaccResult = $stmt->get_result();
 $stats['missed_vaccinations'] = $missedVaccResult->fetch_assoc()['missed'] ?? 0;
 
 // Fetch recent forecasting alerts for this branch
-$alerts = [];
-$alertQuery = "SELECT fr.*, i.item_name
-               FROM forecast_results fr
-               JOIN inventory_items i ON fr.item_id = i.item_id
-               WHERE fr.branch_id = ?
-               AND fr.is_stale = 0
-               AND (
-                    fr.forecast_status = 'Shortage Risk'
-                    OR fr.forecast_status = 'Critical'
-                    OR fr.forecast_status = 'High Risk'
-                    OR fr.shortage_probability >= 0.75
-               )
-               ORDER BY fr.forecast_date DESC
-               LIMIT 5";
-$stmt = $conn->prepare($alertQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$alertResult = $stmt->get_result();
-while ($row = $alertResult->fetch_assoc()) {
-    $alerts[] = $row;
-}
+$alerts = array_slice(array_values(array_filter(
+    forecastStatusLatestRows($conn, $branch_id),
+    static fn(array $row): bool => $row['forecast_status'] !== 'Sufficient'
+)), 0, 5);
 
 // Fetch recent activities for this branch
 $activities = [];
@@ -236,13 +182,12 @@ while ($row = $caseTrendResult->fetch_assoc()) {
 
 // Fetch top 5 low stock items for this branch
 $lowStockItems = [];
-$lowStockItemsQuery = "SELECT i.item_name, s.quantity_available, i.minimum_stock 
-                       FROM inventory_stocks s 
-                       JOIN inventory_items i ON s.item_id = i.item_id 
-                       WHERE s.branch_id = ? 
-                       AND s.quantity_available < i.minimum_stock 
-                       ORDER BY (s.quantity_available / i.minimum_stock) ASC 
-                       LIMIT 5";
+$lowStockItemsQuery = "SELECT i.item_id,i.item_name,s.usable_stock AS quantity_available,i.minimum_stock,
+    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
+FROM inventory_items i JOIN units u ON u.unit_id=i.unit_id
+JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
+WHERE s.usable_stock<=i.minimum_stock
+ORDER BY s.usable_stock/NULLIF(i.minimum_stock,0),i.item_name LIMIT 5";
 $stmt = $conn->prepare($lowStockItemsQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();
@@ -1250,6 +1195,70 @@ $username = $userInfo['username'] ?? 'Admin';
             <!-- =========================
          ROW 1
     ========================== -->
+    <!-- Patient visit workflow -->
+    <div class="row g-4 mb-4" aria-label="Patient visits today">
+        <div class="col-lg-3 col-md-6">
+            <div class="stat-card stat-info" data-patient-metric="patient_waiting">
+                <div class="stat-icon"><i class="bi bi-person-exclamation"></i></div>
+                <div class="stat-content">
+                    <div class="stat-label">Patients Waiting</div>
+                    <div class="stat-number"><?php echo number_format($stats['patient_waiting']); ?></div>
+                    <div class="stat-description">Checked in today; awaiting assessment</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6">
+            <div class="stat-card stat-info" data-patient-metric="today_visits">
+                <div class="stat-icon"><i class="bi bi-person-check"></i></div>
+                <div class="stat-content">
+                    <div class="stat-label">Today's Visits</div>
+                    <div class="stat-number"><?php echo number_format($stats['today_visits']); ?></div>
+                    <div class="stat-description">Non-cancelled check-ins today</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6">
+            <div class="stat-card stat-info" data-patient-metric="new_patients_today">
+                <div class="stat-icon"><i class="bi bi-person-plus"></i></div>
+                <div class="stat-content">
+                    <div class="stat-label">New Patients Today</div>
+                    <div class="stat-number"><?php echo number_format($stats['new_patients_today']); ?></div>
+                    <div class="stat-description">Patients checked in as New Patient</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6">
+            <div class="stat-card stat-info" data-patient-metric="returning_patients_today">
+                <div class="stat-icon"><i class="bi bi-arrow-repeat"></i></div>
+                <div class="stat-content">
+                    <div class="stat-label">Returning Patients Today</div>
+                    <div class="stat-number"><?php echo number_format($stats['returning_patients_today']); ?></div>
+                    <div class="stat-description">Follow-up or repeating; no new visit today</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6">
+            <div class="stat-card stat-info" data-patient-metric="completed_consultations_today">
+                <div class="stat-icon"><i class="bi bi-check-circle"></i></div>
+                <div class="stat-content">
+                    <div class="stat-label">Completed Consultations Today</div>
+                    <div class="stat-number"><?php echo number_format($stats['completed_consultations_today']); ?></div>
+                    <div class="stat-description">Today's visits with treatment finished</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6">
+            <div class="stat-card stat-info" data-patient-metric="pending_followup_patients">
+                <div class="stat-icon"><i class="bi bi-calendar-check"></i></div>
+                <div class="stat-content">
+                    <div class="stat-label">Pending Follow-up Patients</div>
+                    <div class="stat-number"><?php echo number_format($stats['pending_followup_patients']); ?></div>
+                    <div class="stat-description">Patients with outstanding vaccination schedules</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="row g-4">
 
         <!-- Total Patients -->
@@ -1268,7 +1277,7 @@ $username = $userInfo['username'] ?? 'Admin';
                     </div>
 
                     <div class="stat-description">
-                        Registered patients
+                        Non-archived patient records
                     </div>
                 </div>
 
@@ -1292,7 +1301,7 @@ $username = $userInfo['username'] ?? 'Admin';
                     </div>
 
                     <div class="stat-description">
-                        All animal bite cases
+                        Non-archived animal bite cases
                     </div>
                 </div>
 
@@ -1552,7 +1561,7 @@ $username = $userInfo['username'] ?? 'Admin';
                                     <div>
                                         <strong><?php echo htmlspecialchars($item['item_name']); ?></strong>
                                         <br>
-                                        <small>Stock: <?php echo $item['quantity_available']; ?> / Min: <?php echo $item['minimum_stock']; ?></small>
+                                        <small>Stock: <?php echo inventoryFormatNumber((float)$item['quantity_available']); ?> <?php echo htmlspecialchars($item['unit_name']); ?> / Min: <?php echo $item['minimum_stock']; ?></small>
                                     </div>
                                 </div>
                             <?php endforeach; ?>
@@ -1574,7 +1583,7 @@ $username = $userInfo['username'] ?? 'Admin';
                         <?php if (empty($alerts)): ?>
                             <div class="alert-item">
                                 <i class="bi bi-check-circle-fill" style="color: #28a745;"></i>
-                                No high-risk forecasts at this time.
+                                No current shortage or reorder alerts at this time.
                             </div>
                         <?php else: ?>
                             <?php foreach ($alerts as $alert): ?>
@@ -1584,7 +1593,8 @@ $username = $userInfo['username'] ?? 'Admin';
                                         <strong><?php echo htmlspecialchars($alert['item_name']); ?></strong>
                                         <br>
                                         <small class="alert-high">
-                                            Shortage Risk:
+                                            <?php echo htmlspecialchars($alert['forecast_status']); ?>
+                                            (<?php echo (int)$alert['forecast_days']; ?> days) · Estimated stockout risk:
                                             <?php
                                             echo number_format(
                                                 ((float) $alert['shortage_probability']) * 100,

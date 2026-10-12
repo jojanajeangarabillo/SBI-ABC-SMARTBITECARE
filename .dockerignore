@@ -9,3 +9,17 @@ __pycache__
 .env.*
 .DS_Store
 Thumbs.db
+
+# SQL dumps and project backups must not enter the public deployment image.
+**/*.[sS][qQ][lL]
+**/*.[sS][qQ][lL].*
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+**/*.bak
+**/*.backup
+**/*.zip
+**/*.7z
+**/*.tar
+**/*.tgz
+**/*.log

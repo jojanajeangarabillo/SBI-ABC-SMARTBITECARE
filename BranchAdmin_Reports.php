@@ -1,6 +1,8 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/inventory_stock_helpers.php';
+$stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
 
 // ============================================
@@ -535,19 +537,17 @@ function generateCaseReport($branchId, $startDate = null, $endDate = null) {
  */
 function generateInventoryReport($branchId, $startDate = null, $endDate = null) {
     global $conn;
+    $stockTotalsSql = inventoryStockTotalsSql();
     
     $params = [];
-    $query = "SELECT i.item_id, i.item_name, ic.category_name, u.unit_name,
-              s.quantity_available, s.expiration_date, s.last_updated,
-              i.minimum_stock,
-              (SELECT SUM(quantity_used) FROM inventory_usage_history 
-               WHERE item_id = i.item_id AND branch_id = ? 
-               AND DATE(usage_date) BETWEEN DATE_SUB(CURDATE(), INTERVAL 30 DAY) AND CURDATE()) as monthly_usage
-              FROM inventory_items i 
-              LEFT JOIN inventory_categories ic ON i.category_id = ic.category_id 
-              LEFT JOIN units u ON i.unit_id = u.unit_id 
-              LEFT JOIN inventory_stocks s ON i.item_id = s.item_id AND s.branch_id = ?
-              WHERE s.branch_id = ?";
+    $query = "SELECT i.item_id,i.item_name,ic.category_name,COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+    s.usable_stock AS quantity_available,s.nearest_expiration AS expiration_date,s.last_updated,
+    i.minimum_stock,
+    (SELECT SUM(quantity_used) FROM inventory_usage_history WHERE item_id=i.item_id AND branch_id=?
+     AND usage_date BETWEEN DATE_SUB(CURDATE(),INTERVAL 30 DAY) AND CURDATE()) AS monthly_usage
+FROM inventory_items i LEFT JOIN inventory_categories ic ON ic.category_id=i.category_id
+LEFT JOIN units u ON u.unit_id=i.unit_id
+JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=? WHERE s.branch_id=?";
     $params[] = $branchId;
     $params[] = $branchId;
     $params[] = $branchId;
@@ -576,7 +576,7 @@ function generateInventoryReport($branchId, $startDate = null, $endDate = null) 
     
     $totalItems = count($items);
     $lowStock = array_reduce($items, function($carry, $item) {
-        return $carry + ($item['quantity_available'] < $item['minimum_stock'] ? 1 : 0);
+        return $carry + ($item['quantity_available'] <= $item['minimum_stock'] ? 1 : 0);
     }, 0);
     $expiring = array_reduce($items, function($carry, $item) {
         if ($item['expiration_date']) {
@@ -598,7 +598,7 @@ function generateInventoryReport($branchId, $startDate = null, $endDate = null) 
     $columnWidths = [45, 30, 18, 16, 22, 25];
     
     $data = array_map(function($item) {
-        $status = $item['quantity_available'] < $item['minimum_stock'] ? 'Low Stock' : 'OK';
+        $status = $item['quantity_available'] <= $item['minimum_stock'] ? 'Low Stock' : 'OK';
         $expiry = $item['expiration_date'] ? date('Y-m-d', strtotime($item['expiration_date'])) : 'N/A';
         
         if ($item['expiration_date']) {
@@ -787,10 +787,9 @@ $stmt->execute();
 $result = $stmt->get_result();
 $stats['total_vaccinations'] = $result->fetch_assoc()['count'] ?? 0;
 
-$statQuery = "SELECT COUNT(*) as count 
-              FROM inventory_stocks s 
-              JOIN inventory_items i ON s.item_id = i.item_id 
-              WHERE s.branch_id = ? AND s.quantity_available < i.minimum_stock";
+$statQuery = "SELECT COUNT(*) AS count FROM inventory_items i
+JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
+WHERE s.usable_stock<=i.minimum_stock";
 $stmt = $conn->prepare($statQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();

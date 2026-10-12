@@ -59,6 +59,20 @@ cat > /etc/apache2/conf-available/smartbitecare.conf <<EOF
     Require all granted
 
     DirectoryIndex landing.php login.php index.php index.html
+
+    <FilesMatch "(?i)(^\\.|^Dockerfile$|\\.(sql(\\.(gz|bz2|xz|zip))?|sqlite3?|db|bak|backup|old|orig|log|ini|env|pem|key|sh|py|pyc|pyo|zip|7z|tar|gz|tgz|rar)$)">
+        Require all denied
+    </FilesMatch>
+</Directory>
+
+<Directory /var/www/html/database>
+    AllowOverride None
+    Require all denied
+</Directory>
+
+<Directory /var/www/html/uploads/documents>
+    AllowOverride None
+    Require all denied
 </Directory>
 EOF
 

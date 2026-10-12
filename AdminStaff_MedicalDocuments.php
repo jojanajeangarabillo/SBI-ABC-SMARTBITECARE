@@ -5406,7 +5406,7 @@ function viewDocument(id) {
                 activeMedicalTab === 'download' ? 'none' : '';
 
             const filePath =
-                escapeHtml(d.file_path);
+                escapeHtml('download_document.php?id=' + encodeURIComponent(d.document_id));
 
             const fileName =
                 escapeHtml(d.file_name);
@@ -5801,7 +5801,7 @@ async function downloadDocument(id) {
             document.createElement('a');
 
         link.href =
-            d.file_path;
+            'download_document.php?id=' + encodeURIComponent(d.document_id) + '&download=1';
 
         link.download =
             d.file_name;
@@ -5857,7 +5857,7 @@ async function printDocument(id) {
 
         const printWindow =
             window.open(
-                d.file_path,
+                'download_document.php?id=' + encodeURIComponent(d.document_id),
                 '_blank'
             );
 

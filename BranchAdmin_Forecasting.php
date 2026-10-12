@@ -6,7 +6,7 @@ session_start();
 // ============================================
 
 require_once 'sources/db_connect.php';
-require_once 'sources/forecast_training_helper.php';
+require_once 'sources/forecast_generation_helper.php';
 require_once 'sources/notification_helper.php';
 
 // Check if user is logged in and is Branch Admin (role_id = 2)
@@ -20,29 +20,19 @@ if (
 }
 
 $user_id = (int)$_SESSION['user_id'];
-$notification_count = getUnreadNotificationCount($conn, $user_id);
-$branch_id = $_SESSION['branch_id'] ?? null;
-
-// If branch_id is not set for Branch Admin, redirect
-if (empty($branch_id)) {
-    header("Location: login.php?error=no_branch");
-    exit();
+// Use the current account assignment, including when a session branch is stale.
+$user_sql = "SELECT u.branch_id,u.username,b.branch_name FROM users u
+             LEFT JOIN branches b ON b.branch_id=u.branch_id
+             WHERE u.user_id=? AND u.role_id=2 AND u.status='Active' LIMIT 1";
+$user_stmt=$conn->prepare($user_sql); $user_stmt->bind_param('i',$user_id);
+$user_stmt->execute(); $user_data=$user_stmt->get_result()->fetch_assoc(); $user_stmt->close();
+if (!$user_data || empty($user_data['branch_id'])) {
+    http_response_code(403); die('Your active administrator account must be assigned to a branch.');
 }
-
-// Get user info
-$user_sql = "SELECT u.username, b.branch_name 
-             FROM users u 
-             LEFT JOIN branches b ON u.branch_id = b.branch_id 
-             WHERE u.user_id = ?";
-$user_stmt = $conn->prepare($user_sql);
-$user_stmt->bind_param("i", $user_id);
-$user_stmt->execute();
-$user_result = $user_stmt->get_result();
-$user_data = $user_result->fetch_assoc();
-$user_stmt->close();
-
-$username = $user_data['username'] ?? 'Branch Admin';
-$branch_name = $user_data['branch_name'] ?? 'Unknown Branch';
+$branch_id=(string)$user_data['branch_id'];
+$username=$user_data['username']; $branch_name=$user_data['branch_name'] ?? $branch_id;
+$notification_count=getUnreadNotificationCount($conn,$user_id);
+$accuracy_setup_ready = !forecastAccuracySchemaProblems($conn);
 
 // ============================================
 // AUDIT LOG FUNCTION
@@ -113,7 +103,7 @@ function forecastUnitMeta(array $row): array
     ];
 }
 
-function forecastFormatQuantity(float $value, int $decimals = 2): string
+function forecastFormatQuantity(float $value, int $decimals = 4): string
 {
     $formatted = number_format($value, $decimals, '.', ',');
     return rtrim(rtrim($formatted, '0'), '.');
@@ -160,24 +150,25 @@ $eligible_data = $eligible_stmt->get_result()->fetch_assoc();
 $eligible_item_count = (int)($eligible_data['eligible_count'] ?? 0);
 $eligible_stmt->close();
 
-// Results are refreshed automatically on the first page visit of each day.
-$latest_forecast_sql = "SELECT MAX(CASE WHEN is_stale = 0 THEN forecast_date END) AS latest_forecast_date,
+// Refresh when the selected horizon has no current result under these rules.
+$currentForecastSql = forecastStatusCurrentSql('fr');
+$latest_forecast_sql = "SELECT MAX(CASE WHEN $currentForecastSql THEN fr.forecast_date END) AS latest_forecast_date,
                                CURDATE() AS database_today,
                                COALESCE(SUM(
                                    CASE
-                                       WHEN forecast_date = CURDATE() AND is_stale = 0 THEN 1
+                                       WHEN fr.forecast_date = CURDATE() AND $currentForecastSql THEN 1
                                        ELSE 0
                                    END
                                ), 0) AS today_forecast_count,
                                COALESCE(SUM(
                                    CASE
-                                       WHEN is_stale = 1 THEN 1
+                                       WHEN COALESCE(($currentForecastSql), 0) = 0 THEN 1
                                        ELSE 0
                                    END
                                ), 0) AS stale_forecast_count
-                        FROM forecast_results
-                        WHERE branch_id = ?
-                          AND forecast_days = ?";
+                        FROM forecast_results fr
+                        WHERE fr.branch_id = ?
+                          AND fr.forecast_days = ?";
 $latest_forecast_stmt = $conn->prepare($latest_forecast_sql);
 $latest_forecast_stmt->bind_param("si", $branch_id, $forecast_days);
 $latest_forecast_stmt->execute();
@@ -188,10 +179,23 @@ $today_forecast_count = (int)($latest_forecast_data['today_forecast_count'] ?? 0
 $stale_forecast_count = (int)($latest_forecast_data['stale_forecast_count'] ?? 0);
 $latest_forecast_stmt->close();
 
+$has_saved_accuracy = false;
+if ($accuracy_setup_ready) {
+    $evaluation_stmt = $conn->prepare('SELECT COUNT(*) AS total FROM forecast_evaluation_runs
+        WHERE branch_id=? AND forecast_date=? AND generated_horizon=? AND evaluation_version=?');
+    $evaluation_version = FORECAST_EVALUATION_VERSION;
+    $evaluation_stmt->bind_param('ssis', $branch_id, $today, $forecast_days, $evaluation_version);
+    $evaluation_stmt->execute();
+    $has_saved_accuracy = (int)$evaluation_stmt->get_result()->fetch_assoc()['total'] > 0;
+    $evaluation_stmt->close();
+}
 $forecast_is_due = $eligible_item_count > 0
-    && ($today_forecast_count === 0 || $stale_forecast_count > 0);
+    && ($today_forecast_count === 0 || $stale_forecast_count > 0 || !$has_saved_accuracy);
 
-if ($forecast_is_due) {
+if (!$accuracy_setup_ready) {
+    $forecast_message = 'Forecast accuracy setup is incomplete. Preview and apply sources/migrate_forecast_accuracy.php before generating new forecasts. Saved forecasts remain available below.';
+    $forecast_message_type = 'warning';
+} elseif ($forecast_is_due) {
     $python_script = __DIR__ . '/forecasting.py';
 
     if (!is_file($python_script)) {
@@ -209,135 +213,21 @@ if ($forecast_is_due) {
             . ' ' . escapeshellarg((string)$forecast_days)
             . ' 2>&1';
 
-        $training_revision_before = forecastTrainingRevision($conn, $branch_id);
-        $output = shell_exec($python_command);
-        $result = is_string($output) ? json_decode(trim($output), true) : null;
-
-        if ($result && !empty($result['success']) && !empty($result['forecasts']) && is_array($result['forecasts'])) {
-            try {
-                $conn->begin_transaction();
-                $training_revision_after = forecastTrainingRevision($conn, $branch_id, true);
-                if ($training_revision_after !== $training_revision_before) {
-                    throw new RuntimeException('Clinic usage or daily inventory changed while forecasting was running. Reload this page to generate a fresh forecast.');
-                }
-
-                // Keep other forecast horizons. Replace only the currently selected horizon.
-                $delete_forecasts_stmt = $conn->prepare(
-                    "DELETE FROM forecast_results WHERE branch_id = ? AND forecast_days = ?"
-                );
-                $delete_forecasts_stmt->bind_param("si", $branch_id, $forecast_days);
-                $delete_forecasts_stmt->execute();
-                $delete_forecasts_stmt->close();
-
-                $insert_forecast_stmt = $conn->prepare("
-                    INSERT INTO forecast_results
-                    (item_id, branch_id, forecast_date, forecast_start_date, forecast_end_date,
-                     current_stock_snapshot, minimum_stock_snapshot, stock_status,
-                     shortage_probability, forecast_status, recommended_reorder, generated_by,
-                     forecasted_consumption, forecast_days, is_stale, stale_at, stale_reason)
-                    VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL)
-                ");
-
-                $forecast_count = 0;
-                foreach ($result['forecasts'] as $forecast_row) {
-                    $item_id = (int)($forecast_row['item_id'] ?? 0);
-                    if ($item_id <= 0) {
-                        continue;
-                    }
-
-                    $item_check_stmt = $conn->prepare(
-                        "SELECT item_id
-                         FROM inventory_items
-                         WHERE item_id = ? AND is_forecastable = 1"
-                    );
-                    $item_check_stmt->bind_param("i", $item_id);
-                    $item_check_stmt->execute();
-                    $valid_item = $item_check_stmt->get_result()->fetch_assoc();
-                    $item_check_stmt->close();
-
-                    if (!$valid_item) {
-                        continue;
-                    }
-
-                    $forecast_start_date = !empty($forecast_row['forecast_start'])
-                        ? (string)$forecast_row['forecast_start']
-                        : null;
-                    $forecast_end_date = !empty($forecast_row['forecast_end'])
-                        ? (string)$forecast_row['forecast_end']
-                        : null;
-
-                    if (!$forecast_start_date || !$forecast_end_date) {
-                        continue;
-                    }
-
-                    $current_stock_snapshot = max(
-                        0.0,
-                        (float)($forecast_row['current_stock'] ?? 0)
-                    );
-                    $minimum_stock_snapshot = max(
-                        0.0,
-                        (float)($forecast_row['minimum_stock'] ?? 0)
-                    );
-                    $stock_status = (string)($forecast_row['stock_status'] ?? 'SUFFICIENT STOCK');
-                    $shortage_probability = max(
-                        0.0,
-                        min(1.0, (float)($forecast_row['shortage_probability'] ?? 0))
-                    );
-                    $forecast_status = (string)($forecast_row['forecast_status'] ?? 'Sufficient');
-                    $recommended_reorder = max(0, (int)($forecast_row['recommended_reorder'] ?? 0));
-                    $generated_by = $user_id;
-                    $forecasted_consumption = max(
-                        0.0,
-                        (float)($forecast_row['forecasted_consumption'] ?? 0)
-                    );
-
-                    $recommended_reorder_value = (float)$recommended_reorder;
-
-                    $insert_forecast_stmt->bind_param(
-                        "isssddsdsdidi",
-                        $item_id,
-                        $branch_id,
-                        $forecast_start_date,
-                        $forecast_end_date,
-                        $current_stock_snapshot,
-                        $minimum_stock_snapshot,
-                        $stock_status,
-                        $shortage_probability,
-                        $forecast_status,
-                        $recommended_reorder_value,
-                        $generated_by,
-                        $forecasted_consumption,
-                        $forecast_days
-                    );
-                    $insert_forecast_stmt->execute();
-                    $forecast_count++;
-                }
-                $insert_forecast_stmt->close();
-
-                if ($forecast_count === 0) {
-                    throw new RuntimeException('The model did not return any valid forecastable items.');
-                }
-
-                $conn->commit();
-                $latest_forecast_date = $today;
-                $forecast_message = $stale_forecast_count > 0
-                    ? "Inventory changed after the previous forecast. A fresh {$forecast_days}-day forecast was generated for {$forecast_count} items."
-                    : "Today's {$forecast_days}-day forecasts were updated automatically for {$forecast_count} items.";
-                $forecast_message_type = 'success';
-                addAuditLog(
-                    $conn,
-                    $user_id,
-                    "Automatically generated {$forecast_days}-day forecasts for {$forecast_count} items",
-                    'Supply Forecasting'
-                );
-            } catch (Throwable $exception) {
-                $conn->rollback();
-                $forecast_message = 'Automatic forecasting failed: ' . $exception->getMessage();
-                $forecast_message_type = 'error';
+        try {
+            $generationSnapshot = forecastGenerationCapture($conn, $branch_id);
+            $output = shell_exec($python_command);
+            $result = is_string($output) ? json_decode(trim($output), true) : null;
+            if (!is_array($result) || empty($result['success'])) {
+                throw new RuntimeException(is_array($result) ? (string)($result['error'] ?? 'Invalid model response.') : 'Invalid model response.');
             }
-        } else {
-            $forecast_message = 'Automatic forecasting failed: '
-                . (is_array($result) ? ($result['error'] ?? 'Invalid model response.') : 'Invalid model response.');
+            $forecast_count = forecastGenerationPublish(
+                $conn, $branch_id, $forecast_days, $user_id, $generationSnapshot, $result
+            );
+            $latest_forecast_date = $today;
+            $forecast_message = "A fresh {$forecast_days}-day forecast was generated for {$forecast_count} items.";
+            $forecast_message_type = 'success';
+        } catch (Throwable $exception) {
+            $forecast_message = 'Automatic forecasting failed: ' . $exception->getMessage();
             $forecast_message_type = 'error';
         }
     }
@@ -351,68 +241,18 @@ if ($forecast_is_due) {
 // ============================================
 
 $forecasts = [];
-$forecast_sql = "SELECT 
-                p.*,
-                i.item_name,
-                i.base_unit_label,
-                i.display_unit_label,
-                i.conversion_to_base,
-                u.unit_name
-             FROM forecast_results p
-             JOIN inventory_items i ON p.item_id = i.item_id
-             LEFT JOIN units u ON i.unit_id = u.unit_id
-             WHERE p.branch_id = ?
-               AND p.forecast_days = ?
-               AND p.is_stale = 0
-               AND p.forecast_date = (
-                   SELECT MAX(fr2.forecast_date)
-                   FROM forecast_results fr2
-                   WHERE fr2.branch_id = ?
-                     AND fr2.forecast_days = ?
-                     AND fr2.is_stale = 0
-               )
-             ORDER BY p.shortage_probability DESC, p.recommended_reorder DESC";
-
-$forecast_stmt = $conn->prepare($forecast_sql);
-$forecast_stmt->bind_param("sisi", $branch_id, $forecast_days, $branch_id, $forecast_days);
-$forecast_stmt->execute();
-$forecast_result = $forecast_stmt->get_result();
-
-while ($row = $forecast_result->fetch_assoc()) {
-    // Determine status color
-    if ($row['shortage_probability'] >= 0.8) {
-        $status_color = 'danger';
-    } elseif ($row['shortage_probability'] >= 0.6) {
-        $status_color = 'warning';
-    } else {
-        $status_color = 'success';
-    }
-    
-    $forecasts[] = [
-        'item_name' => $row['item_name'],
-        'unit_name' => $row['unit_name'],
-        'base_unit_label' => $row['base_unit_label'],
-        'display_unit_label' => $row['display_unit_label'],
-        'conversion_to_base' => (float)$row['conversion_to_base'],
+foreach (forecastStatusLatestRows($conn, $branch_id, $forecast_days) as $row) {
+    $forecasts[] = array_replace($row, [
+        'status_color' => forecastStatusColor($row['forecast_status']),
+        'current_stock' => (float)$row['current_stock_snapshot'],
+        'minimum_stock' => (float)$row['minimum_stock_snapshot'],
         'shortage_probability' => (float)$row['shortage_probability'],
-        'forecast_status' => $row['forecast_status'],
-        'status_color' => $status_color,
-        'recommended_reorder' => (int)$row['recommended_reorder'],
         'forecasted_consumption' => (float)$row['forecasted_consumption'],
-        'forecast_days' => (int)$row['forecast_days'],
-        'current_stock' => (float)($row['current_stock_snapshot'] ?? 0),
-        'minimum_stock' => (float)($row['minimum_stock_snapshot'] ?? 0),
-        'stock_status' => (string)($row['stock_status'] ?? 'SUFFICIENT STOCK'),
         'forecast_date' => date('m/d/Y', strtotime($row['forecast_date'])),
-        'forecast_start_date' => !empty($row['forecast_start_date'])
-            ? date('M d, Y', strtotime($row['forecast_start_date']))
-            : null,
-        'forecast_end_date' => !empty($row['forecast_end_date'])
-            ? date('M d, Y', strtotime($row['forecast_end_date']))
-            : null
-    ];
+        'forecast_start_date' => date('M d, Y', strtotime($row['forecast_start_date'])),
+        'forecast_end_date' => date('M d, Y', strtotime($row['forecast_end_date'])),
+    ]);
 }
-$forecast_stmt->close();
 
 // ============================================
 // GET TRAINING DATA SUMMARY
@@ -1382,6 +1222,7 @@ while ($row = $items_result->fetch_assoc()) {
             <div>
                 <h6><i class="bi bi-calendar-range me-2"></i>Forecast Horizon</h6>
                 <p>Select how far ahead the system should forecast. Each horizon is saved separately.</p>
+                <a href="ForecastAccuracy.php" class="btn btn-sm btn-outline-primary mt-2"><i class="bi bi-clipboard-data me-1"></i>View Forecast Accuracy</a>
             </div>
             <div class="forecast-horizon-options" role="group" aria-label="Forecast horizon">
                 <?php foreach ($allowed_forecast_days as $days_option): ?>
@@ -1452,15 +1293,17 @@ while ($row = $items_result->fetch_assoc()) {
             </div>
         </div>
 
+        <?= forecastStatusLegendHtml() ?>
+
         <!-- Forecast Visualizations -->
         <div class="row g-4 mb-4">
             <div class="col-xl-4 col-lg-5">
                 <div class="forecast-visual-card">
                     <div class="visual-title">
-                        <i class="bi bi-pie-chart-fill me-2"></i>Risk Distribution
+                        <i class="bi bi-pie-chart-fill me-2"></i>Forecast Status Distribution
                     </div>
                     <div class="visual-subtitle">
-                        Number of forecasted items by stockout-risk level.
+                        Number of forecasted items by forecast status.
                     </div>
                     <div class="chart-box">
                         <canvas id="riskDistributionChart"></canvas>
@@ -1508,11 +1351,11 @@ while ($row = $items_result->fetch_assoc()) {
                             >
                         </div>
 
-                        <select class="form-select" id="riskFilter" aria-label="Filter by risk">
-                            <option value="all">All risk levels</option>
-                            <option value="high">High Risk</option>
-                            <option value="moderate">Moderate Risk</option>
-                            <option value="low">Low Risk</option>
+                        <select class="form-select" id="riskFilter" aria-label="Filter by forecast status">
+                            <option value="all">All forecast statuses</option>
+                            <option value="high">Shortage Risk</option>
+                            <option value="moderate">Reorder Needed</option>
+                            <option value="low">Sufficient</option>
                         </select>
 
                         <select class="form-select" id="stockFilter" aria-label="Filter by stock status">
@@ -1545,7 +1388,7 @@ while ($row = $items_result->fetch_assoc()) {
                             <th>Min Stock</th>
                             <th>Stock Status</th>
                             <th>Forecasted Consumption</th>
-                            <th>Stockout Risk</th>
+                            <th>Estimated Stockout Risk</th>
                             <th>Status</th>
                             <th>Recommendation</th>
                             <th>Forecast Period</th>
@@ -1555,9 +1398,9 @@ while ($row = $items_result->fetch_assoc()) {
                         <?php if (count($forecasts) > 0): ?>
                             <?php foreach ($forecasts as $forecast): ?>
                                 <?php
-                                    $risk_level = $forecast['shortage_probability'] >= 0.8
-                                        ? 'high'
-                                        : ($forecast['shortage_probability'] >= 0.6 ? 'moderate' : 'low');
+                                    $risk_level = match ($forecast['forecast_status']) {
+                                        'Shortage Risk' => 'high', 'Reorder Needed' => 'moderate', default => 'low'
+                                    };
 
                                     $unitMeta = forecastUnitMeta($forecast);
                                     $baseUnit = $unitMeta['base_unit'];
@@ -1827,18 +1670,8 @@ const forecastData = <?php echo json_encode(
     JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE
 ); ?>;
 
-function getRiskLevel(probability) {
-    const p = Number(probability) || 0;
-
-    if (p >= 0.8) {
-        return 'high';
-    }
-
-    if (p >= 0.6) {
-        return 'moderate';
-    }
-
-    return 'low';
+function getRiskLevel(status) {
+    return status === 'Shortage Risk' ? 'high' : (status === 'Reorder Needed' ? 'moderate' : 'low');
 }
 
 function initializeForecastCharts() {
@@ -1846,9 +1679,9 @@ function initializeForecastCharts() {
         return;
     }
 
-    const highCount = forecastData.filter(item => getRiskLevel(item.shortage_probability) === 'high').length;
-    const moderateCount = forecastData.filter(item => getRiskLevel(item.shortage_probability) === 'moderate').length;
-    const lowCount = forecastData.filter(item => getRiskLevel(item.shortage_probability) === 'low').length;
+    const highCount = forecastData.filter(item => getRiskLevel(item.forecast_status) === 'high').length;
+    const moderateCount = forecastData.filter(item => getRiskLevel(item.forecast_status) === 'moderate').length;
+    const lowCount = forecastData.filter(item => getRiskLevel(item.forecast_status) === 'low').length;
 
     const riskCanvas = document.getElementById('riskDistributionChart');
 
@@ -1856,7 +1689,7 @@ function initializeForecastCharts() {
         new Chart(riskCanvas, {
             type: 'doughnut',
             data: {
-                labels: ['High Risk', 'Moderate Risk', 'Low Risk'],
+                labels: ['Shortage Risk', 'Reorder Needed', 'Sufficient'],
                 datasets: [{
                     data: [highCount, moderateCount, lowCount],
                     backgroundColor: ['#dc3545', '#ffc107', '#28a745'],
@@ -1902,7 +1735,7 @@ function initializeForecastCharts() {
                     label: 'Stockout Risk (%)',
                     data: topRiskItems.map(item => Math.round((Number(item.shortage_probability) || 0) * 1000) / 10),
                     backgroundColor: topRiskItems.map(item => {
-                        const risk = getRiskLevel(item.shortage_probability);
+                        const risk = getRiskLevel(item.forecast_status);
                         return risk === 'high'
                             ? '#dc3545'
                             : (risk === 'moderate' ? '#ffc107' : '#28a745');
