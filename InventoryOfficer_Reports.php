@@ -1,6 +1,8 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/inventory_stock_helpers.php';
+$stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
 
 if (
@@ -34,7 +36,7 @@ function validDate(string $date): bool
 
 function moneylessNumber($value): string
 {
-    return number_format((float)$value, 0);
+    return inventoryFormatNumber((float)$value);
 }
 
 function reportLabel(string $type): string
@@ -156,46 +158,18 @@ function fetchReportRows(
     string $search
 ): array {
     $rows = [];
+    $stockTotalsSql = inventoryStockTotalsSql();
 
     switch ($reportType) {
 
         case 'low_stock':
-            $sql = "
-                SELECT
-                    i.item_id,
-                    i.item_name,
-                    c.category_name,
-                    u.unit_name,
-                    i.minimum_stock,
-                    COALESCE(SUM(s.quantity_available), 0) AS current_stock,
-                    COALESCE(SUM(
-                        CASE
-                            WHEN s.quantity_available > 0 THEN s.quantity_available
-                            ELSE 0
-                        END
-                    ), 0) AS positive_stock
-                FROM inventory_items i
-                INNER JOIN inventory_categories c
-                    ON c.category_id = i.category_id
-                INNER JOIN units u
-                    ON u.unit_id = i.unit_id
-                LEFT JOIN inventory_stocks s
-                    ON s.item_id = i.item_id
-                   AND s.branch_id = ?
-                WHERE (
-                    ? = ''
-                    OR i.item_name LIKE CONCAT('%', ?, '%')
-                    OR c.category_name LIKE CONCAT('%', ?, '%')
-                )
-                GROUP BY
-                    i.item_id,
-                    i.item_name,
-                    c.category_name,
-                    u.unit_name,
-                    i.minimum_stock
-                HAVING current_stock <= i.minimum_stock
-                ORDER BY current_stock ASC, i.item_name ASC
-            ";
+            $sql = "SELECT i.item_id,i.item_name,c.category_name,COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,i.minimum_stock,
+    s.usable_stock AS current_stock,s.usable_stock AS positive_stock
+FROM inventory_items i JOIN inventory_categories c ON c.category_id=i.category_id
+JOIN units u ON u.unit_id=i.unit_id
+JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
+WHERE (?='' OR i.item_name LIKE CONCAT('%',?,'%') OR c.category_name LIKE CONCAT('%',?,'%'))
+AND s.usable_stock<=i.minimum_stock ORDER BY s.usable_stock,i.item_name";
 
             $stmt = $conn->prepare($sql);
             if (!$stmt) {
@@ -217,7 +191,7 @@ function fetchReportRows(
                     s.stock_id,
                     i.item_name,
                     c.category_name,
-                    u.unit_name,
+                    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
                     s.batch_lot_no,
                     s.manufacturing_date,
                     s.expiration_date,
@@ -274,7 +248,7 @@ function fetchReportRows(
                     h.usage_date,
                     i.item_name,
                     c.category_name,
-                    u.unit_name,
+                    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
                     h.quantity_used,
                     h.patient_count,
                     h.stock_received
@@ -318,7 +292,7 @@ function fetchReportRows(
                     st.transaction_type,
                     i.item_name,
                     c.category_name,
-                    u.unit_name,
+                    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
                     st.quantity,
                     st.transaction_date,
                     usr.username,
@@ -443,7 +417,7 @@ function fetchReportRows(
                     p.forecast_date,
                     i.item_name,
                     c.category_name,
-                    u.unit_name,
+                    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
                     p.shortage_probability,
                     p.forecast_status,
                     p.recommended_reorder,
@@ -654,7 +628,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
         ]);
 
         foreach ($exportRows as $row) {
-            $status = ((int)$row['current_stock'] <= 0)
+            $status = ((float)$row['current_stock'] <= 0)
                 ? 'Critical'
                 : 'Low';
 
@@ -804,9 +778,9 @@ foreach ($reportRows as $row) {
         $summary['quantity'] += (int)$row['quantity'];
         $summary['transactions']++;
     } elseif ($report_type === 'low_stock') {
-        $summary['quantity'] += (int)$row['current_stock'];
+        $summary['quantity'] += (float)$row['current_stock'];
     } elseif ($report_type === 'expiring_stock') {
-        $summary['quantity'] += (int)$row['quantity_available'];
+        $summary['quantity'] += (float)$row['quantity_available'];
     } elseif ($report_type === 'returns') {
         $summary['quantity'] += (float)$row['quantity'];
 
@@ -1772,7 +1746,7 @@ No usage data for the selected date range.
 <td><?php echo h($row['unit_name']); ?></td>
 <td><?php echo moneylessNumber($row['minimum_stock']); ?></td>
 <td><strong><?php echo moneylessNumber($row['current_stock']); ?></strong></td>
-<td><span class="report-status <?php echo (int)$row['current_stock'] <= 0 ? 'status-critical' : 'status-warning'; ?>"><?php echo (int)$row['current_stock'] <= 0 ? 'Critical' : 'Low'; ?></span></td>
+<td><span class="report-status <?php echo (float)$row['current_stock'] <= 0 ? 'status-critical' : 'status-warning'; ?>"><?php echo (float)$row['current_stock'] <= 0 ? 'Critical' : 'Low'; ?></span></td>
 </tr>
 <?php elseif ($report_type === 'expiring_stock'): ?>
 <tr>

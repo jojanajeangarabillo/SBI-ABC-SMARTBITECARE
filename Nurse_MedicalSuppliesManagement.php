@@ -2,6 +2,8 @@
 session_start();
 
 require_once 'sources/db_connect.php';
+require_once 'sources/inventory_stock_helpers.php';
+$stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/forecast_training_helper.php';
@@ -125,12 +127,7 @@ function fetchMedicalSupply(mysqli $conn, int $itemId): ?array
 function currentUsableStock(mysqli $conn, int $itemId, string $branchId): float
 {
     $stmt = $conn->prepare(
-        "SELECT COALESCE(SUM(quantity_available),0) AS total
-         FROM inventory_stocks
-         WHERE item_id=?
-           AND branch_id=?
-           AND quantity_available>0
-           AND (expiration_date IS NULL OR expiration_date>=CURDATE())"
+        "SELECT usable_stock AS total FROM (" . inventoryStockTotalsSql() . ") s WHERE item_id=? AND branch_id=?"
     );
     $stmt->bind_param('is', $itemId, $branchId);
     $stmt->execute();
@@ -449,40 +446,16 @@ $stmt = $conn->prepare(
         COALESCE(NULLIF(i.base_unit_label,''),u.unit_name) AS base_unit_label,
         COALESCE(NULLIF(i.display_unit_label,''),u.unit_name) AS display_unit_label,
         COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base,
-        COALESCE(SUM(
-            CASE
-                WHEN s.quantity_available>0
-                 AND (s.expiration_date IS NULL OR s.expiration_date>=CURDATE())
-                THEN s.quantity_available ELSE 0
-            END
-        ),0) AS current_stock,
-        COALESCE(SUM(
-            CASE
-                WHEN s.quantity_available>0
-                 AND s.expiration_date IS NOT NULL
-                 AND s.expiration_date<CURDATE()
-                THEN s.quantity_available ELSE 0
-            END
-        ),0) AS expired_stock,
-        COUNT(DISTINCT CASE
-            WHEN s.quantity_available>0
-             AND (s.expiration_date IS NULL OR s.expiration_date>=CURDATE())
-            THEN s.stock_id END
-        ) AS usable_batches,
-        MIN(CASE
-            WHEN s.quantity_available>0
-             AND s.expiration_date IS NOT NULL
-             AND s.expiration_date>=CURDATE()
-            THEN s.expiration_date END
-        ) AS nearest_expiry,
-        MAX(s.last_updated) AS last_updated,
+        COALESCE(s.usable_stock,0) AS current_stock,
+        COALESCE(s.expired_stock,0) AS expired_stock,
+        COALESCE(s.usable_batches,0) AS usable_batches,
+        s.nearest_expiration AS nearest_expiry,
+        s.last_updated,
         COALESCE(ut.today_used,0) AS today_used
      FROM inventory_items i
      INNER JOIN inventory_categories c ON c.category_id=i.category_id
      INNER JOIN units u ON u.unit_id=i.unit_id
-     LEFT JOIN inventory_stocks s
-       ON s.item_id=i.item_id
-      AND s.branch_id=?
+     LEFT JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
      LEFT JOIN (
          SELECT item_id,SUM(quantity_used) AS today_used
          FROM inventory_usage_history
@@ -490,8 +463,6 @@ $stmt = $conn->prepare(
          GROUP BY item_id
      ) ut ON ut.item_id=i.item_id
      WHERE c.category_name='Medical Supplies'
-     GROUP BY i.item_id,i.item_name,i.is_consumable,i.minimum_stock,u.unit_name,
-              i.base_unit_label,i.display_unit_label,i.conversion_to_base,ut.today_used
      ORDER BY i.item_name"
 );
 $stmt->bind_param('ss', $branchId, $branchId);

@@ -6,6 +6,8 @@ error_reporting(E_ALL);
 ini_set('display_errors', 0); 
 
 require_once 'sources/db_connect.php';
+require_once 'sources/inventory_stock_helpers.php';
+$stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/forecast_training_helper.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/inventory_unit_helpers.php';
@@ -611,21 +613,15 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_vaccines') {
                 COALESCE(NULLIF(i.base_unit_label, ''), u.unit_name) AS base_unit_label,
                 COALESCE(NULLIF(i.display_unit_label, ''), u.unit_name) AS display_unit_label,
                 COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base,
-                COALESCE(SUM(s.quantity_available), 0) AS quantity_available,
-                MIN(s.expiration_date) AS nearest_expiration
+                COALESCE(s.usable_stock,0) AS quantity_available,
+                s.nearest_expiration
             FROM inventory_items i
             INNER JOIN inventory_categories c ON i.category_id = c.category_id
             INNER JOIN units u ON i.unit_id = u.unit_id
-            LEFT JOIN inventory_stocks s
-                ON i.item_id = s.item_id
-               AND s.branch_id = ?
-               AND s.quantity_available > 0
-               AND (s.expiration_date IS NULL OR s.expiration_date >= CURDATE())
+            LEFT JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
             WHERE c.category_name = 'Medical Supplies'
               AND i.is_consumable = 1
               AND i.item_name NOT LIKE '%Default%'
-            GROUP BY i.item_id, i.item_name, i.unit_id, u.unit_name,
-                     i.base_unit_label, i.display_unit_label, i.conversion_to_base
             ORDER BY i.item_name";
 
     $stmt = $conn->prepare($sql);

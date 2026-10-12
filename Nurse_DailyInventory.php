@@ -2,6 +2,9 @@
 session_start();
 
 require_once 'sources/db_connect.php';
+require_once 'sources/inventory_stock_helpers.php';
+require_once 'sources/daily_inventory_helpers.php';
+$stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/forecast_training_helper.php';
 require_once 'sources/inventory_unit_helpers.php';
@@ -13,6 +16,17 @@ $user = workflowRequireUser($conn, 3);
 $userId = (int)$user['user_id'];
 $user_id = $userId;
 $branchId = (string)$user['branch_id'];
+
+// A stale session role must not authorize a different current database role.
+$roleCheck = $conn->prepare("SELECT user_id FROM users WHERE user_id=? AND role_id=3 AND status='Active'");
+$roleCheck->bind_param('i', $userId);
+$roleCheck->execute();
+$isNurse = (bool)$roleCheck->get_result()->fetch_assoc();
+$roleCheck->close();
+if (!$isNurse) {
+    header('Location: login.php');
+    exit;
+}
 
 $notification_count = getUnreadNotificationCount($conn, $userId);
 $csrf = workflowCsrfToken();
@@ -297,7 +311,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
 
     foreach ($exportRows as $row) {
         $variance = (float)$row['variance'];
-        $isTallied = abs($variance) <= 0.009;
+        $isTallied = abs($variance) < 0.00005;
 
         if ($isTallied) {
             $tallied++;
@@ -411,85 +425,23 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
     exit;
 }
 
-/*
- * Live daily consumption endpoint.
- *
- * Vaccination and other usage flows write actual consumption into
- * inventory_usage_history. This endpoint reads the selected item's
- * consumption for the selected date.
- */
+/** Read usage and the selected day's closing context; never invent an opening. */
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'daily_usage') {
     header('Content-Type: application/json');
-
-    $itemId = (int)($_GET['item_id'] ?? 0);
-    $inventoryDate = trim((string)($_GET['date'] ?? ''));
-
-    if (
-        $itemId < 1 ||
-        DateTime::createFromFormat('Y-m-d', $inventoryDate)?->format('Y-m-d')
-            !== $inventoryDate
-    ) {
-        echo json_encode([
-            'success' => false,
-            'message' => 'Select a valid item and inventory date.'
-        ]);
-        exit;
+    header('Cache-Control: no-store');
+    try {
+        $itemId = dailyInventoryItemId($_GET['item_id'] ?? '');
+        $inventoryDate = is_string($_GET['date'] ?? null) ? trim($_GET['date']) : '';
+        dailyInventoryAssertDate($conn, $inventoryDate);
+        echo json_encode(dailyInventoryContext($conn, $branchId, $itemId, $inventoryDate), JSON_THROW_ON_ERROR);
+    } catch (InvalidArgumentException | RuntimeException $e) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    } catch (Throwable $e) {
+        error_log('Daily inventory context: ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['success' => false, 'message' => 'Unable to load daily inventory. Refresh and try again.']);
     }
-
-    $itemStmt = $conn->prepare(
-        "SELECT i.item_name, u.unit_name,
-                COALESCE(NULLIF(i.base_unit_label,''),u.unit_name)
-                    AS base_unit_label,
-                COALESCE(NULLIF(i.display_unit_label,''),u.unit_name)
-                    AS display_unit_label,
-                COALESCE(NULLIF(i.conversion_to_base,0),1)
-                    AS conversion_to_base
-         FROM inventory_items i
-         INNER JOIN units u ON u.unit_id=i.unit_id
-         WHERE i.item_id=? AND i.is_consumable=1
-         LIMIT 1"
-    );
-
-    $itemStmt->bind_param('i', $itemId);
-    $itemStmt->execute();
-
-    $item = $itemStmt->get_result()->fetch_assoc();
-    $itemStmt->close();
-
-    if (!$item) {
-        echo json_encode([
-            'success' => false,
-            'message' => 'Consumable item not found.'
-        ]);
-        exit;
-    }
-
-    $usageStmt = $conn->prepare(
-        "SELECT COALESCE(SUM(quantity_used),0) AS consumed
-         FROM inventory_usage_history
-         WHERE item_id=? AND branch_id=? AND usage_date=?"
-    );
-
-    $usageStmt->bind_param(
-        'iss',
-        $itemId,
-        $branchId,
-        $inventoryDate
-    );
-    $usageStmt->execute();
-
-    $consumed = (float)(
-        $usageStmt->get_result()->fetch_assoc()['consumed'] ?? 0
-    );
-
-    $usageStmt->close();
-
-    echo json_encode([
-        'success' => true,
-        'consumed' => $consumed,
-        'base_unit' => inventoryBaseUnitLabel($item),
-        'display' => inventoryUsageDescription($consumed, $item)
-    ]);
     exit;
 }
 
@@ -498,90 +450,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         workflowVerifyCsrf();
 
-        $itemId = (int)($_POST['item_id'] ?? 0);
-        $inventoryDate = (string)($_POST['inventory_date'] ?? '');
-        $beginning = (float)($_POST['beginning_stock'] ?? 0);
-        $delivery = (float)($_POST['delivery'] ?? 0);
-        $pullOut = (float)($_POST['pull_out'] ?? 0);
-        $actual = (float)($_POST['actual_count'] ?? 0);
-        $remarks = trim((string)($_POST['remarks'] ?? ''));
-
-        if (
-            $itemId < 1 ||
-            DateTime::createFromFormat(
-                'Y-m-d',
-                $inventoryDate
-            )?->format('Y-m-d') !== $inventoryDate
-        ) {
-            throw new RuntimeException(
-                'Select a valid item and inventory date.'
-            );
-        }
-
-        foreach ([$beginning, $delivery, $pullOut, $actual] as $number) {
-            if ($number < 0) {
-                throw new RuntimeException(
-                    'Inventory values cannot be negative.'
-                );
+        $itemId = dailyInventoryItemId($_POST['item_id'] ?? '');
+        $inventoryDate = is_string($_POST['inventory_date'] ?? null) ? trim($_POST['inventory_date']) : '';
+        dailyInventoryAssertDate($conn, $inventoryDate);
+        $quantities = [];
+        foreach (['beginning_stock' => 'Beginning stock', 'delivery' => 'Delivery',
+                  'pull_out' => 'Pull-out', 'actual_count' => 'Actual physical count'] as $field => $label) {
+            try {
+                $quantities[$field] = stockQuantityParse($_POST[$field] ?? '', true);
+            } catch (InvalidArgumentException $e) {
+                throw new RuntimeException($label . ': ' . $e->getMessage());
             }
         }
-
-        $itemCheck = $conn->prepare(
-            "SELECT i.item_name, u.unit_name,
-                    COALESCE(NULLIF(i.base_unit_label,''),u.unit_name)
-                        AS base_unit_label,
-                    COALESCE(NULLIF(i.display_unit_label,''),u.unit_name)
-                        AS display_unit_label,
-                    COALESCE(NULLIF(i.conversion_to_base,0),1)
-                        AS conversion_to_base
-             FROM inventory_items i
-             INNER JOIN units u ON u.unit_id=i.unit_id
-             WHERE i.item_id=? AND i.is_consumable=1
-             LIMIT 1"
-        );
-
-        $itemCheck->bind_param('i', $itemId);
-        $itemCheck->execute();
-
-        $item = $itemCheck->get_result()->fetch_assoc();
-        $itemCheck->close();
-
-        if (!$item) {
-            throw new RuntimeException(
-                'Select a consumable inventory item.'
-            );
+        $remarks = is_string($_POST['remarks'] ?? null) ? trim($_POST['remarks']) : '';
+        if (strlen($remarks) > 2000) {
+            throw new RuntimeException('The remarks are too long. Keep the note within 500 characters.');
         }
-
-        // Closing counts reconcile stored base-unit stock, which can
-        // contain fractional balances. Do not round them to whole sites.
-
-        forecastTrainingAssertDate($conn, $inventoryDate);
+        $contextToken = is_string($_POST['closing_context_token'] ?? null) ? $_POST['closing_context_token'] : '';
+        if (!preg_match('/\A[a-f0-9]{64}\z/', $contextToken)) {
+            throw new RuntimeException('Load the selected item and date before submitting the closing.');
+        }
 
         $conn->begin_transaction();
         forecastTrainingRevision($conn, $branchId, true);
-
-        $usageStmt = $conn->prepare(
-            'SELECT COALESCE(SUM(quantity_used),0) AS consumed
-             FROM inventory_usage_history
-             WHERE item_id=? AND branch_id=? AND usage_date=?'
-        );
-
-        $usageStmt->bind_param(
-            'iss',
-            $itemId,
-            $branchId,
-            $inventoryDate
-        );
-        $usageStmt->execute();
-
-        $consumed = (float)(
-            $usageStmt->get_result()->fetch_assoc()['consumed'] ?? 0
-        );
-
-        $usageStmt->close();
-
-        $computed = $beginning + $delivery - $consumed - $pullOut;
-        $variance = $actual - $computed;
+        $context = dailyInventoryContext($conn, $branchId, $itemId, $inventoryDate, true);
+        if (!hash_equals($context['context_token'], $contextToken)) {
+            $needsNewCount = true;
+            throw new RuntimeException('Recorded usage or a closing changed. Reload the selected item and date, verify the opening and movements, and enter a fresh physical count.');
+        }
+        $item = $context['item'];
+        $consumedScaled = stockQuantityParse($context['consumed'], true);
+        $computedScaled = $quantities['beginning_stock'] + $quantities['delivery']
+            - $consumedScaled - $quantities['pull_out'];
+        if ($computedScaled < 0) {
+            throw new RuntimeException('Computed ending cannot be negative. Check beginning stock, delivery, recorded usage, and pull-out.');
+        }
+        if ($computedScaled > STOCK_QUANTITY_MAX_SCALED) {
+            throw new RuntimeException('The resulting stock quantity exceeds the supported range.');
+        }
+        $varianceScaled = $quantities['actual_count'] - $computedScaled;
+        if ($varianceScaled !== 0 && $remarks === '') {
+            throw new RuntimeException('Explain the difference between physical and computed stock in Remarks.');
+        }
+        // Counts may contain legacy fractions, including sites; never round them.
+        $beginning = stockQuantityDecimal($quantities['beginning_stock']);
+        $delivery = stockQuantityDecimal($quantities['delivery']);
+        $pullOut = stockQuantityDecimal($quantities['pull_out']);
+        $actual = stockQuantityDecimal($quantities['actual_count']);
+        $consumed = stockQuantityDecimal($consumedScaled);
+        $computed = stockQuantityDecimal($computedScaled);
+        $variance = stockQuantityDecimal($varianceScaled);
 
         $stmt = $conn->prepare(
             "INSERT INTO daily_inventory_closings
@@ -619,7 +537,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         );
 
         $stmt->bind_param(
-            'sisdddddddsi',
+            'sisssssssssi',
             $branchId,
             $itemId,
             $inventoryDate,
@@ -651,24 +569,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'Submitted daily inventory for ' .
                 $item['item_name'] . ' on ' . $inventoryDate .
                 ' | Beginning: ' .
-                inventoryUsageDescription($beginning, $item) .
+                inventoryUsageDescription((float)$beginning, $item) .
                 ' | Delivery: ' .
-                inventoryUsageDescription($delivery, $item) .
+                inventoryUsageDescription((float)$delivery, $item) .
                 ' | Consumed: ' .
-                inventoryUsageDescription($consumed, $item) .
+                inventoryUsageDescription((float)$consumed, $item) .
                 ' | Pull-out: ' .
-                inventoryUsageDescription($pullOut, $item) .
+                inventoryUsageDescription((float)$pullOut, $item) .
                 ' | Actual: ' .
-                inventoryUsageDescription($actual, $item),
+                inventoryUsageDescription((float)$actual, $item),
             'Daily Inventory'
         );
 
         $conn->commit();
+        unset($_SESSION['daily_inventory_form']);
 
         workflowFlash(
             'success',
-            'Daily inventory submitted. Consumed quantity was calculated ' .
-                'from completed treatment records.' .
+            'Daily inventory submitted. Consumption came from recorded usage. ' .
+                'This closing records counts; it does not deduct stock again.' .
                 (
                     $trainingSynced
                         ? ' The forecasting dataset was updated; forecasts ' .
@@ -683,14 +602,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } catch (Throwable $ignored) {
         }
 
+        $_SESSION['daily_inventory_form'] = [];
+        foreach (['item_id', 'inventory_date', 'beginning_stock', 'delivery', 'pull_out', 'actual_count', 'remarks'] as $field) {
+            $_SESSION['daily_inventory_form'][$field] = is_string($_POST[$field] ?? null) ? $_POST[$field] : '';
+        }
+        if (!empty($needsNewCount)) {
+            $_SESSION['daily_inventory_form']['actual_count'] = '';
+        }
         workflowFlash('danger', $e->getMessage());
     }
 
-    header('Location: Nurse_DailyInventory.php');
+    $redirect = 'Nurse_DailyInventory.php';
+    if (isset($inventoryDate) && dailyInventoryValidDate($inventoryDate)) {
+        $redirect .= '?' . http_build_query(['item_id' => $itemId ?? '', 'inventory_date' => $inventoryDate, 'history_date' => $inventoryDate]);
+    }
+    header('Location: ' . $redirect);
     exit;
 }
 
-// Load consumable items and this branch's current stored stock.
+// Restore a rejected form once, or load the item/date selected after submission.
+$formRestore = $_SESSION['daily_inventory_form'] ?? null;
+unset($_SESSION['daily_inventory_form']);
+$formItemId = (string)($formRestore['item_id'] ?? (is_string($_GET['item_id'] ?? null) ? $_GET['item_id'] : ''));
+$formDate = (string)($formRestore['inventory_date'] ?? (is_string($_GET['inventory_date'] ?? null) ? $_GET['inventory_date'] : date('Y-m-d')));
+if (!dailyInventoryValidDate($formDate) || $formDate > date('Y-m-d')) {
+    $formDate = date('Y-m-d');
+}
+
+// Current stock is a live reference only; it is never used as the opening count.
 $itemStmt = $conn->prepare(
     "SELECT i.item_id,i.item_name,u.unit_name,
             COALESCE(NULLIF(i.base_unit_label,''),u.unit_name)
@@ -699,19 +638,12 @@ $itemStmt = $conn->prepare(
                 AS display_unit_label,
             COALESCE(NULLIF(i.conversion_to_base,0),1)
                 AS conversion_to_base,
-            COALESCE(SUM(s.quantity_available),0) AS current_stock
+            COALESCE(s.usable_stock,0) AS current_stock
      FROM inventory_items i
      INNER JOIN units u ON u.unit_id=i.unit_id
-     LEFT JOIN inventory_stocks s
+     LEFT JOIN ($stockTotalsSql) s
         ON s.item_id=i.item_id AND s.branch_id=?
      WHERE i.is_consumable=1
-     GROUP BY
-        i.item_id,
-        i.item_name,
-        u.unit_name,
-        i.base_unit_label,
-        i.display_unit_label,
-        i.conversion_to_base
      ORDER BY i.item_name"
 );
 
@@ -1717,7 +1649,8 @@ $flash = workflowTakeFlash();
             </div>
 
             <div class="content-card-body">
-                <form method="post" class="row g-3">
+                <form method="post" class="row g-3" id="dailyClosingForm">
+                    <input type="hidden" name="closing_context_token" id="closing_context_token" value="">
                     <input
                         type="hidden"
                         name="csrf_token"
@@ -1785,10 +1718,16 @@ $flash = workflowTakeFlash();
                             class="form-control"
                             id="inventory_date"
                             name="inventory_date"
-                            value="<?= date('Y-m-d') ?>"
+                            value="<?= workflowH($formDate) ?>"
                             max="<?= date('Y-m-d') ?>"
                             required
                         >
+                    </div>
+
+                    <div class="col-12">
+                        <div id="openingBalanceHelp" class="alert alert-info py-2 px-3 mb-0" role="status">
+                            Select an item and date. Beginning stock is the opening count, not the current remaining stock.
+                        </div>
                     </div>
 
                     <div class="col-xl-2 col-lg-3 col-md-6">
@@ -1918,6 +1857,8 @@ $flash = workflowTakeFlash();
                         <button
                             class="btn btn-primary w-100"
                             type="submit"
+                            id="submitClosingBtn"
+                            disabled
                         >
                             <i class="bi bi-send-check-fill me-1"></i>
                             Submit
@@ -1992,6 +1933,9 @@ $flash = workflowTakeFlash();
                             automatically from completed Nurse Vaccination
                             and other recorded supply usage for the
                             selected date; it is not manually entered here.
+                            Verify opening stock, delivery and pull-out for that day.
+                            A closing records the reconciliation; it does not change
+                            stored stock. Record stock corrections in Stock Management.
                         </span>
                     </div>
                 </form>
@@ -2109,7 +2053,7 @@ $flash = workflowTakeFlash();
                 $dayVariance = 0;
 
                 foreach ($dailyRows as $dailyRow) {
-                    if (abs((float)$dailyRow['variance']) <= .009) {
+                    if (abs((float)$dailyRow['variance']) < 0.00005) {
                         $dayTallied++;
                     } else {
                         $dayVariance++;
@@ -2201,7 +2145,7 @@ $flash = workflowTakeFlash();
                             <?php foreach ($dailyRows as $closing): ?>
                                 <?php
                                 $hasVariance =
-                                    abs((float)$closing['variance']) > .009;
+                                    abs((float)$closing['variance']) >= 0.00005;
                                 ?>
 
                                 <tr>
@@ -2423,284 +2367,163 @@ $flash = workflowTakeFlash();
 <script src="sources/sidebar.js"></script>
 
 <script>
-function numericField(id) {
-    const el = document.getElementById(id);
-    const value = el ? Number(el.value || 0) : 0;
-
-    return Number.isFinite(value) ? value : 0;
-}
+const initialDailyForm = <?= json_encode(['item_id' => $formItemId, 'inventory_date' => $formDate, 'restore' => $formRestore], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+let dailyContextSequence = 0;
+let dailyContextController = null;
+let dailyContextReady = false;
 
 function selectedBaseUnit() {
     const select = document.getElementById('item_id');
-    const option = select?.options[select.selectedIndex];
-
-    return option?.dataset.baseUnit || 'unit';
+    return select?.options[select.selectedIndex]?.dataset.baseUnit || 'unit';
 }
 
-function formatClosingNumber(value) {
-    return Number(value || 0).toLocaleString(undefined, {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 4
-    });
+// Use integer ten-thousandths, matching server-side DECIMAL(12,4) arithmetic.
+function dailyScaled(value) {
+    if (typeof value !== 'string' || !/^(?:[0-9]+(?:\.[0-9]{1,4})?|\.[0-9]{1,4})$/.test(value)) return null;
+    const parts = value.split('.');
+    const whole = Number(parts[0] || '0');
+    const fraction = Number((parts[1] || '').padEnd(4, '0'));
+    const scaled = whole * 10000 + fraction;
+    return Number.isSafeInteger(scaled) && scaled <= 999999999999 ? scaled : null;
+}
+
+function dailyDecimal(scaled) {
+    const magnitude = Math.abs(scaled);
+    return (scaled < 0 ? '-' : '') + Math.floor(magnitude / 10000)
+        + '.' + String(magnitude % 10000).padStart(4, '0');
+}
+
+function formatClosingNumber(scaled) {
+    return (scaled / 10000).toLocaleString(undefined, {maximumFractionDigits: 4});
+}
+
+function dailyComputed() {
+    const fields = ['beginning_stock', 'delivery', 'consumed_numeric', 'pull_out'];
+    const numbers = fields.map(id => dailyScaled(document.getElementById(id)?.value ?? ''));
+    return numbers.includes(null) ? null : numbers[0] + numbers[1] - numbers[2] - numbers[3];
 }
 
 function refreshClosingPreview() {
-    const consumed = Number(
-        document.getElementById('consumed_numeric')?.value || 0
-    );
-
-    const computed =
-        numericField('beginning_stock') +
-        numericField('delivery') -
-        consumed -
-        numericField('pull_out');
-
-    const actualEl = document.getElementById('actual_count');
-    const hasActual = !!actualEl && actualEl.value !== '';
-    const actual = hasActual ? Number(actualEl.value) : 0;
-    const variance = hasActual ? actual - computed : 0;
+    const computed = dailyContextReady ? dailyComputed() : null;
+    const actual = dailyScaled(document.getElementById('actual_count')?.value ?? '');
     const unit = selectedBaseUnit();
-
-    const computedPreview = document.getElementById('computedPreview');
-    const actualPreview = document.getElementById('actualPreview');
-    const variancePreview = document.getElementById('variancePreview');
+    const computedEl = document.getElementById('computedPreview');
+    const actualEl = document.getElementById('actualPreview');
+    const varianceEl = document.getElementById('variancePreview');
     const varianceBox = document.getElementById('variancePreviewBox');
     const actualBox = document.getElementById('actualPreviewBox');
-
-    if (computedPreview) {
-        computedPreview.textContent =
-            `${formatClosingNumber(computed)} ${unit}`;
-    }
-
-    if (actualPreview) {
-        actualPreview.textContent = hasActual
-            ? `${formatClosingNumber(actual)} ${unit}`
-            : '-';
-    }
-
-    if (varianceBox) {
-        varianceBox.classList.remove('match', 'difference');
-    }
-
-    if (actualBox) {
-        actualBox.classList.remove('match', 'difference');
-    }
-
-    if (!hasActual) {
-        if (variancePreview) {
-            variancePreview.textContent = 'Enter actual count';
-        }
-
-        return;
-    }
-
-    if (Math.abs(variance) <= 0.009) {
-        if (variancePreview) {
-            variancePreview.textContent =
-                'Tallied - actual matches computed';
-        }
-
-        varianceBox?.classList.add('match');
-        actualBox?.classList.add('match');
+    computedEl.textContent = computed === null ? 'Enter opening and movements' : `${formatClosingNumber(computed)} ${unit}`;
+    actualEl.textContent = actual === null ? '-' : `${formatClosingNumber(actual)} ${unit}`;
+    varianceBox.classList.remove('match', 'difference');
+    actualBox.classList.remove('match', 'difference');
+    document.getElementById('useComputedBtn').disabled = computed === null || computed < 0 || computed > 999999999999;
+    document.getElementById('submitClosingBtn').disabled = !dailyContextReady || computed === null || computed < 0
+        || computed > 999999999999 || actual === null;
+    if (computed === null) {
+        varianceEl.textContent = 'Enter opening and movements';
+    } else if (computed < 0 || computed > 999999999999) {
+        varianceEl.textContent = 'Check opening stock and movements';
+        varianceBox.classList.add('difference');
+    } else if (actual === null) {
+        varianceEl.textContent = 'Enter actual physical count';
     } else {
-        if (variancePreview) {
-            variancePreview.textContent =
-                `Variance: ${formatClosingNumber(variance)} ${unit}`;
-        }
-
-        varianceBox?.classList.add('difference');
-        actualBox?.classList.add('difference');
+        const variance = actual - computed;
+        varianceEl.textContent = variance === 0 ? 'Tallied - actual matches computed' : `Variance: ${formatClosingNumber(variance)} ${unit}`;
+        varianceBox.classList.add(variance === 0 ? 'match' : 'difference');
+        actualBox.classList.add(variance === 0 ? 'match' : 'difference');
     }
 }
 
-async function refreshAutomaticConsumption() {
-    const itemSelect = document.getElementById('item_id');
+function resetDailyFields() {
+    for (const id of ['beginning_stock', 'actual_count', 'remarks']) document.getElementById(id).value = '';
+    for (const id of ['delivery', 'pull_out']) document.getElementById(id).value = '0';
+    document.getElementById('consumed_numeric').value = '0';
+    document.getElementById('closing_context_token').value = '';
+}
+
+async function refreshAutomaticConsumption(restore = null) {
+    const sequence = ++dailyContextSequence;
+    dailyContextController?.abort();
+    dailyContextController = new AbortController();
+    dailyContextReady = false;
+    resetDailyFields();
+    const select = document.getElementById('item_id');
     const dateInput = document.getElementById('inventory_date');
     const consumedInput = document.getElementById('consumed_auto');
-
-    if (!itemSelect || !dateInput || !consumedInput) {
-        return;
-    }
-
-    const itemId = itemSelect.value;
+    const help = document.getElementById('openingBalanceHelp');
+    const unitHelp = document.getElementById('unitConversionHelp');
+    const option = select.options[select.selectedIndex];
+    const selected = select.value;
     const date = dateInput.value;
-
-    if (!itemId || !date) {
-        consumedInput.value = '0';
-        document.getElementById('consumed_numeric').value = '0';
-
-        refreshClosingPreview();
-        return;
-    }
-
-    consumedInput.value = 'Loading...';
-
+    const baseUnit = selectedBaseUnit();
+    document.querySelectorAll('.inventory-unit-label').forEach(el => { el.textContent = selected ? `(${baseUnit})` : ''; });
+    document.querySelectorAll('.inventory-number').forEach(el => { el.step = '0.0001'; el.disabled = true; });
+    document.getElementById('remarks').disabled = true;
+    consumedInput.value = selected && date ? 'Loading...' : '0';
+    help.textContent = selected && date ? 'Loading the selected day...' : 'Select an item and date. Beginning stock is the opening count, not the current remaining stock.';
+    unitHelp.style.display = 'none';
+    refreshClosingPreview();
+    if (!selected || !date) return;
     try {
-        const params = new URLSearchParams({
-            ajax: 'daily_usage',
-            item_id: itemId,
-            date: date
+        const params = new URLSearchParams({ajax: 'daily_usage', item_id: selected, date});
+        const response = await fetch(`Nurse_DailyInventory.php?${params}`, {
+            headers: {Accept: 'application/json'}, cache: 'no-store', signal: dailyContextController.signal
         });
-
-        const response = await fetch(
-            `Nurse_DailyInventory.php?${params.toString()}`,
-            {
-                headers: {
-                    'Accept': 'application/json'
-                }
-            }
-        );
-
         const data = await response.json();
-
-        if (!data.success) {
-            consumedInput.value = 'Unavailable';
-            document.getElementById('consumed_numeric').value = '0';
-
-            refreshClosingPreview();
-            return;
+        if (sequence !== dailyContextSequence) return;
+        if (!response.ok || !data.success) throw new Error(data.message || 'Unable to load the selected day.');
+        consumedInput.value = data.display || `${data.consumed} ${baseUnit}`;
+        document.getElementById('consumed_numeric').value = data.consumed;
+        for (const [id, value] of Object.entries(data.fields)) document.getElementById(id).value = value;
+        document.getElementById('closing_context_token').value = data.context_token;
+        help.textContent = data.opening_message;
+        if (restore && restore.item_id === selected && restore.inventory_date === date) {
+            for (const id of ['beginning_stock', 'delivery', 'pull_out', 'remarks']) {
+                if (typeof restore[id] === 'string') document.getElementById(id).value = restore[id];
+            }
+            if (!data.needs_physical_count && typeof restore.actual_count === 'string') document.getElementById('actual_count').value = restore.actual_count;
+            help.textContent += ' Your entered values were restored. Verify them before resubmitting.';
         }
-
-        consumedInput.value =
-            data.display ||
-            `${data.consumed} ${data.base_unit || ''}`.trim();
-
-        document.getElementById('consumed_numeric').value =
-            String(Number(data.consumed || 0));
-
+        const displayUnit = option.dataset.displayUnit || baseUnit;
+        const conversion = Number(option.dataset.conversion || 1);
+        unitHelp.textContent = `Current usable stock now: ${data.current_stock_display}. All counts use ${baseUnit}.`
+            + (conversion > 1 && baseUnit.toLowerCase() !== displayUnit.toLowerCase() ? ` 1 ${displayUnit} = ${conversion} ${baseUnit}.` : '')
+            + ' This live stock is a reference, not the opening count for the selected date.';
+        unitHelp.style.display = 'block';
+        document.querySelectorAll('.inventory-number').forEach(el => { el.disabled = false; });
+        document.getElementById('remarks').disabled = false;
+        dailyContextReady = true;
         refreshClosingPreview();
     } catch (error) {
-        console.error(
-            'Unable to load automatic consumption:',
-            error
-        );
-
+        if (sequence !== dailyContextSequence || error.name === 'AbortError') return;
         consumedInput.value = 'Unavailable';
-        document.getElementById('consumed_numeric').value = '0';
-
+        help.textContent = error.message || 'Unable to load daily inventory. Refresh and try again.';
+        document.getElementById('closing_context_token').value = '';
         refreshClosingPreview();
     }
 }
 
-document.getElementById('item_id')?.addEventListener(
-    'change',
-    function () {
-        const selected = this.options[this.selectedIndex];
-        const beginning = document.getElementById('beginning_stock');
-        const help = document.getElementById('unitConversionHelp');
-
-        if (!selected || !selected.value) {
-            document.querySelectorAll(
-                '.inventory-unit-label'
-            ).forEach(label => {
-                label.textContent = '';
-            });
-
-            if (help) {
-                help.style.display = 'none';
-            }
-
-            refreshAutomaticConsumption();
-            return;
-        }
-
-        const baseUnit = selected.dataset.baseUnit || 'unit';
-        const displayUnit = selected.dataset.displayUnit || baseUnit;
-        const conversion = Number(selected.dataset.conversion || 1);
-        const step = selected.dataset.step || '0.0001';
-
-        document.querySelectorAll(
-            '.inventory-unit-label'
-        ).forEach(label => {
-            label.textContent = `(${baseUnit})`;
-        });
-
-        document.querySelectorAll(
-            '.inventory-number'
-        ).forEach(input => {
-            input.step = step;
-        });
-
-        if (
-            selected.dataset.stock !== undefined &&
-            beginning &&
-            beginning.value === ''
-        ) {
-            beginning.value = String(Number(selected.dataset.stock));
-        }
-
-        if (help) {
-            const stockDisplay =
-                selected.dataset.stockDisplay ||
-                `${selected.dataset.stock} ${baseUnit}`;
-
-            if (
-                conversion > 1 &&
-                baseUnit.toLowerCase() !== displayUnit.toLowerCase()
-            ) {
-                help.innerHTML =
-                    `<strong>Current stock:</strong> ${stockDisplay}. ` +
-                    `Enter all manually counted fields in ` +
-                    `<strong>${baseUnit}</strong>. ` +
-                    `Rule: 1 ${displayUnit} = ${conversion} ${baseUnit}.`;
-            } else {
-                help.innerHTML =
-                    `<strong>Current stock:</strong> ${stockDisplay}. ` +
-                    `Enter all manually counted fields in ${baseUnit}.`;
-            }
-
-            help.style.display = 'block';
-        }
-
-        refreshAutomaticConsumption();
-        refreshClosingPreview();
-    }
-);
-
-document.getElementById('inventory_date')?.addEventListener(
-    'change',
-    refreshAutomaticConsumption
-);
-
-[
-    'beginning_stock',
-    'delivery',
-    'pull_out',
-    'actual_count'
-].forEach(function (id) {
-    document.getElementById(id)?.addEventListener(
-        'input',
-        refreshClosingPreview
-    );
+document.getElementById('item_id').addEventListener('change', () => refreshAutomaticConsumption());
+document.getElementById('inventory_date').addEventListener('change', () => refreshAutomaticConsumption());
+for (const id of ['beginning_stock', 'delivery', 'pull_out', 'actual_count']) {
+    document.getElementById(id).addEventListener('input', refreshClosingPreview);
+}
+document.getElementById('useComputedBtn').addEventListener('click', () => {
+    const computed = dailyContextReady ? dailyComputed() : null;
+    if (computed === null || computed < 0 || computed > 999999999999) return;
+    document.getElementById('actual_count').value = dailyDecimal(computed);
+    refreshClosingPreview();
 });
-
-document.getElementById('useComputedBtn')?.addEventListener(
-    'click',
-    function () {
-        const consumed = Number(
-            document.getElementById('consumed_numeric')?.value || 0
-        );
-
-        const computed =
-            numericField('beginning_stock') +
-            numericField('delivery') -
-            consumed -
-            numericField('pull_out');
-
-        const actual = document.getElementById('actual_count');
-
-        if (actual) {
-            actual.value = String(
-                Number(Math.max(0, computed).toFixed(4))
-            );
-
-            refreshClosingPreview();
-        }
+document.getElementById('dailyClosingForm').addEventListener('submit', event => {
+    if (!dailyContextReady || document.getElementById('submitClosingBtn').disabled) {
+        event.preventDefault();
+        document.getElementById('openingBalanceHelp').textContent = 'Load the selected item and date, then verify the counts before submitting.';
     }
-);
+});
+document.getElementById('item_id').value = initialDailyForm.item_id || '';
+document.getElementById('inventory_date').value = initialDailyForm.inventory_date;
+refreshAutomaticConsumption(initialDailyForm.restore);
 
-refreshAutomaticConsumption();
-refreshClosingPreview();
 </script>
 </body>
 </html>

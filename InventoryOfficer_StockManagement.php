@@ -1,8 +1,12 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/inventory_stock_helpers.php';
+$stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
 require_once 'sources/inventory_officer_activity_helper.php';
+require_once 'sources/stock_quantity_helpers.php';
+require_once 'sources/stock_receipt_source_helper.php';
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 5) {
     header('Location: login.php');
@@ -133,6 +137,7 @@ function itemOptions($items) {
             . ' data-total-stock="' . h($item['total_stock'] ?? $item['quantity_available']) . '"'
             . ' data-unit-id="' . h($item['unit_id']) . '"'
             . ' data-unit-name="' . h($item['unit_name']) . '"'
+            . ' data-quantity-step="' . inventoryInputStep($item) . '"'
             . ' data-category-id="' . h($item['category_id']) . '"'
             . ' data-category-name="' . h($item['category_name']) . '"'
             . ' data-minimum-stock="' . h($item['minimum_stock']) . '"'
@@ -142,7 +147,7 @@ function itemOptions($items) {
 }
 
 /* Get logged-in officer and branch. */
-$userQuery = "SELECT u.branch_id, u.username, b.branch_name
+$userQuery = "SELECT u.branch_id, u.username, u.role_id, u.status, b.branch_name
               FROM users u
               LEFT JOIN branches b ON u.branch_id = b.branch_id
               WHERE u.user_id = ?
@@ -154,6 +159,7 @@ $stmt->execute();
 $userResult = $stmt->get_result();
 if ($userResult->num_rows === 1) {
     $userData = $userResult->fetch_assoc();
+    if ($userData['status'] !== 'Active' || (int)$userData['role_id'] !== 5) { http_response_code(403); die('Active Inventory Officer access is required.'); }
     $branch_id = $userData['branch_id'];
     $branch_name = $userData['branch_name'] ?? 'Unknown Branch';
     $username = $userData['username'] ?? 'Inventory Officer';
@@ -163,6 +169,10 @@ $stmt->close();
 if (!$branch_id) {
     $branch_name = 'No Branch Assigned';
 }
+
+try { stockReceiptSourceAssertSchema($conn); }
+catch (Throwable $e) { http_response_code(503); die(h($e->getMessage())); }
+$sourceBranches=$conn->query("SELECT branch_id,branch_name FROM branches WHERE status='Active' ORDER BY branch_name")->fetch_all(MYSQLI_ASSOC);
 
 $notification_count = getUnreadNotificationCount($conn, $user_id);
 
@@ -183,7 +193,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     $item_id = filter_input(INPUT_POST, 'item_id', FILTER_VALIDATE_INT);
-    $quantity = filter_input(INPUT_POST, 'quantity', FILTER_VALIDATE_INT);
+    $quantityScaled = null;
+    $quantity = null;
+    if (in_array($action, ['stock_in', 'stock_out'], true)) {
+        try {
+            $quantityScaled = stockQuantityParse($_POST['quantity'] ?? null);
+            $quantity = stockQuantityDecimal($quantityScaled);
+        } catch (InvalidArgumentException $e) {
+            redirectWithMessage('error', $e->getMessage(), $action === 'stock_in' ? 'stockIn' : 'stockOut');
+        }
+    }
     $transaction_date = trim($_POST['transaction_date'] ?? '');
     $remarks = trim($_POST['remarks'] ?? '');
 
@@ -207,7 +226,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $itemStmt = $conn->prepare("SELECT i.item_id, i.item_name, i.category_id, i.unit_id,
-                                           c.category_name, u.unit_name
+                                           c.category_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
                                     FROM inventory_items i
                                     INNER JOIN inventory_categories c ON i.category_id = c.category_id
                                     INNER JOIN units u ON i.unit_id = u.unit_id
@@ -223,6 +242,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirectWithMessage('error', 'Selected item does not exist.', 'stockIn');
         }
 
+        try {
+            stockQuantityValidateUnit($quantityScaled, $itemData);
+        } catch (InvalidArgumentException $e) {
+            redirectWithMessage('error', $e->getMessage(), 'stockIn');
+        }
         $requiresBatchTracking = requiresBatchTracking($itemData['category_name']);
 
         if ($requiresBatchTracking) {
@@ -255,7 +279,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $conn->begin_transaction();
 
         try {
-           
+            $origin=stockReceiptSourceFromForm($conn,(string)$branch_id,$_POST);
             if ($requiresBatchTracking) {
                 $archivedBatchStmt = $conn->prepare("SELECT stock_id
                                                      FROM inventory_stocks_archive
@@ -288,6 +312,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                              WHERE item_id = ?
                                                AND branch_id = ?
                                                AND batch_lot_no IS NULL
+                                               AND expiration_date IS NULL
                                              LIMIT 1
                                              FOR UPDATE");
                 if (!$stockStmt) throw new Exception('Unable to check existing stock.');
@@ -299,7 +324,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stockStmt->close();
 
             if ($stockRow) {
-                $newQuantity = (int)$stockRow['quantity_available'] + $quantity;
+                $newQuantity = stockQuantityDecimal(stockQuantityParse($stockRow['quantity_available'], true) + $quantityScaled);
 
                 if ($requiresBatchTracking) {
                     if (($stockRow['manufacturing_date'] ?? null) !== $manufacturing_date ||
@@ -313,7 +338,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                                 AND branch_id = ?");
                     if (!$update) throw new Exception('Unable to prepare stock update.');
                     $stockId = (int)$stockRow['stock_id'];
-                    $update->bind_param('iis', $newQuantity, $stockId, $branch_id);
+                    $update->bind_param('sis', $newQuantity, $stockId, $branch_id);
                 } else {
                     $update = $conn->prepare("UPDATE inventory_stocks
                                               SET quantity_available = ?
@@ -321,7 +346,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                                 AND branch_id = ?");
                     if (!$update) throw new Exception('Unable to prepare stock update.');
                     $stockId = (int)$stockRow['stock_id'];
-                    $update->bind_param('iis', $newQuantity, $stockId, $branch_id);
+                    $update->bind_param('sis', $newQuantity, $stockId, $branch_id);
                 }
 
                 if (!$update->execute()) throw new Exception('Unable to update stock: ' . $update->error);
@@ -331,9 +356,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                                 (item_id, batch_lot_no, manufacturing_date, branch_id, quantity_available, expiration_date)
                                                 VALUES (?, ?, ?, ?, ?, ?)");
                 if (!$insertStock) throw new Exception('Unable to prepare stock insert. Make sure batch_lot_no and manufacturing_date exist in inventory_stocks.');
-                $insertStock->bind_param('isssis', $item_id, $batch_lot_no, $manufacturing_date, $branch_id, $quantity, $expiration_date);
+                $insertStock->bind_param('isssss', $item_id, $batch_lot_no, $manufacturing_date, $branch_id, $quantity, $expiration_date);
 
                 if (!$insertStock->execute()) throw new Exception('Unable to create the stock record: ' . $insertStock->error);
+                $stockId = (int)$conn->insert_id;
                 $insertStock->close();
             }
 
@@ -346,11 +372,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $transactionRemarks = $batchRemark . ($remarks !== '' ? ' | ' . $remarks : '');
             }
 
+            $transactionRemarks .= ' | Source: ' . $origin['name'] . ' (' . $origin['type'] . ')';
+            $sourceBranch=$origin['branch']; $sourceType=$origin['type']; $sourceName=$origin['name'];
+            $baseUnit=(string)$itemData['unit_name'];
             $insertTrx = $conn->prepare("INSERT INTO stock_transactions
-                                         (item_id, user_id, vaccination_id, branch_id, transaction_type, quantity, remarks, transaction_date)
-                                         VALUES (?, ?, NULL, ?, 'IN', ?, ?, ?)");
+                                         (item_id, user_id, vaccination_id, branch_id, transaction_type, quantity, remarks, transaction_date,
+                                          source_branch_id,receipt_source_type,source_name_snapshot,receipt_stock_id,receipt_batch_snapshot,receipt_base_unit_snapshot)
+                                         VALUES (?, ?, NULL, ?, 'IN', ?, ?, ?, ?, ?, ?, ?, ?, ?)");
             if (!$insertTrx) throw new Exception('Unable to prepare stock transaction.');
-            $insertTrx->bind_param('iisiss', $item_id, $user_id, $branch_id, $quantity, $transactionRemarks, $transactionDateTime);
+            $insertTrx->bind_param('iisssssssiss', $item_id, $user_id, $branch_id, $quantity, $transactionRemarks, $transactionDateTime,
+                $sourceBranch,$sourceType,$sourceName,$stockId,$batch_lot_no,$baseUnit);
 
             if (!$insertTrx->execute()) throw new Exception('Unable to record the stock transaction: ' . $insertTrx->error);
             $transactionId = (int)$conn->insert_id;
@@ -370,6 +401,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $transactionRemarks
             )) {
                 throw new Exception('Stock In was recorded, but its audit log or Branch Admin notification could not be saved.');
+            }
+
+            // Save nurse receipt notices in the same transaction as this Stock In.
+            if ($requiresBatchTracking && !inventoryOfficerNotifyNursesStockIn(
+                $conn, (string)$branch_id, $transactionId, $stockId
+            )) {
+                throw new Exception('Unable to save the nurse receipt notification. Stock In was not saved. Try again.');
             }
 
             $conn->commit();
@@ -393,7 +431,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         try {
             /* Get category so batch-tracked items can be issued using FEFO. */
-            $itemStmt = $conn->prepare("SELECT i.item_name, i.category_id, c.category_name, u.unit_name
+            $itemStmt = $conn->prepare("SELECT i.item_name, i.category_id, c.category_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
                                         FROM inventory_items i
                                         INNER JOIN inventory_categories c ON i.category_id = c.category_id
                                         INNER JOIN units u ON i.unit_id = u.unit_id
@@ -407,7 +445,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$itemData) throw new Exception('Selected item does not exist.');
             $requiresBatchTracking = requiresBatchTracking($itemData['category_name']);
 
-            $remaining = $quantity;
+            stockQuantityValidateUnit($quantityScaled, $itemData);
+            $remaining = $quantityScaled;
             $usedBatches = [];
 
             if ($requiresBatchTracking) {
@@ -420,7 +459,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                                    AND quantity_available > 0
                                                    AND expiration_date IS NOT NULL
                                                    AND expiration_date < CURDATE()
-                                                 ORDER BY expiration_date ASC, stock_id ASC
+                                                 ORDER BY expiration_date IS NULL, expiration_date ASC, stock_id ASC
                                                  FOR UPDATE");
                 } else {
                     $stockStmt = $conn->prepare("SELECT stock_id, quantity_available, batch_lot_no, expiration_date
@@ -428,9 +467,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                                  WHERE item_id = ?
                                                    AND branch_id = ?
                                                    AND quantity_available > 0
-                                                   AND expiration_date IS NOT NULL
-                                                   AND expiration_date >= CURDATE()
-                                                 ORDER BY expiration_date ASC, stock_id ASC
+                                                   AND (expiration_date IS NULL OR expiration_date >= CURDATE())
+                                                 ORDER BY expiration_date IS NULL, expiration_date ASC, stock_id ASC
                                                  FOR UPDATE");
                 }
                 if (!$stockStmt) throw new Exception('Unable to load batch-tracked stock.');
@@ -440,11 +478,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                              FROM inventory_stocks
                                              WHERE item_id = ?
                                                AND branch_id = ?
-                                               AND batch_lot_no IS NULL
-                                             LIMIT 1
+                                               AND quantity_available > 0
+                                               AND ((? = 'Expired' AND expiration_date IS NOT NULL AND expiration_date < CURDATE())
+                                                 OR (? <> 'Expired' AND (expiration_date IS NULL OR expiration_date >= CURDATE())))
+                                             ORDER BY expiration_date IS NULL, expiration_date ASC, stock_id ASC
                                              FOR UPDATE");
                 if (!$stockStmt) throw new Exception('Unable to load stock.');
-                $stockStmt->bind_param('is', $item_id, $branch_id);
+                $stockStmt->bind_param('isss', $item_id, $branch_id, $reason, $reason);
             }
 
             $stockStmt->execute();
@@ -456,22 +496,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             foreach ($stockRows as $stockRow) {
                 if ($remaining <= 0) break;
 
-                $available = (int)$stockRow['quantity_available'];
+                $available = stockQuantityParse($stockRow['quantity_available'], true);
+                if ($available <= 0) continue;
                 $deduct = min($remaining, $available);
-                $newQuantity = $available - $deduct;
+                $newQuantity = stockQuantityDecimal($available - $deduct);
                 $stockId = (int)$stockRow['stock_id'];
 
                 $update = $conn->prepare("UPDATE inventory_stocks
                                           SET quantity_available = ?
                                           WHERE stock_id = ? AND branch_id = ?");
                 if (!$update) throw new Exception('Unable to prepare stock out update.');
-                $update->bind_param('iis', $newQuantity, $stockId, $branch_id);
+                $update->bind_param('sis', $newQuantity, $stockId, $branch_id);
                 if (!$update->execute()) throw new Exception('Unable to update stock: ' . $update->error);
                 $update->close();
 
                 $batch = $stockRow['batch_lot_no'];
                 if ($batch !== null && $batch !== '') {
-                    $usedBatches[] = $batch . ' (-' . $deduct . ')';
+                    $usedBatches[] = $batch . ' (-' . stockQuantityText($deduct) . ')';
                 }
 
                 $remaining -= $deduct;
@@ -490,7 +531,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                          (item_id, user_id, vaccination_id, branch_id, transaction_type, quantity, remarks, transaction_date)
                                          VALUES (?, ?, NULL, ?, 'OUT', ?, ?, ?)");
             if (!$insertTrx) throw new Exception('Unable to prepare stock transaction.');
-            $insertTrx->bind_param('iisiss', $item_id, $user_id, $branch_id, $quantity, $combinedRemarks, $transactionDateTime);
+            $insertTrx->bind_param('iissss', $item_id, $user_id, $branch_id, $quantity, $combinedRemarks, $transactionDateTime);
             if (!$insertTrx->execute()) throw new Exception('Unable to record stock transaction: ' . $insertTrx->error);
             $transactionId = (int)$conn->insert_id;
             $insertTrx->close();
@@ -539,7 +580,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                                 s.expiration_date,
                                                 s.last_updated,
                                                 i.item_name,
-                                                u.unit_name
+                                                COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
                                            FROM inventory_stocks s
                                            INNER JOIN inventory_items i ON s.item_id = i.item_id
                                            INNER JOIN units u ON i.unit_id = u.unit_id
@@ -561,8 +602,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 throw new Exception('Only already-expired stock can be disposed and archived.');
             }
 
-            $disposeQty = (int)$expiredRow['quantity_available'];
-            if ($disposeQty <= 0) {
+            $disposeScaled = stockQuantityParse($expiredRow['quantity_available'], true);
+            $disposeQty = stockQuantityDecimal($disposeScaled);
+            if ($disposeScaled <= 0) {
                 throw new Exception('This expired batch has no remaining stock to dispose.');
             }
 
@@ -596,7 +638,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                          VALUES (?, ?, NULL, ?, 'OUT', ?, ?, ?)");
             if (!$insertTrx) throw new Exception('Unable to prepare expired stock transaction.');
             $itemIdForTrx = (int)$expiredRow['item_id'];
-            $insertTrx->bind_param('iisiss', $itemIdForTrx, $user_id, $branch_id, $disposeQty, $transactionRemarks, $transactionDateTime);
+            $insertTrx->bind_param('iissss', $itemIdForTrx, $user_id, $branch_id, $disposeQty, $transactionRemarks, $transactionDateTime);
             if (!$insertTrx->execute()) {
                 throw new Exception('Unable to record expired stock disposal: ' . $insertTrx->error);
             }
@@ -641,7 +683,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     /* ------------------------- ADJUSTMENT ----------------------- */
     if ($action === 'adjustment') {
-        $adjustedQuantity = filter_input(INPUT_POST, 'adjusted_quantity', FILTER_VALIDATE_INT);
+        try {
+            $adjustedScaled = stockQuantityParse($_POST['adjusted_quantity'] ?? null, true);
+            $adjustedQuantity = stockQuantityDecimal($adjustedScaled);
+        } catch (InvalidArgumentException $e) {
+            redirectWithMessage('error', $e->getMessage(), 'adjustment');
+        }
         $reason = trim($_POST['adjustment_reason'] ?? '');
         $selectedStockId = filter_input(INPUT_POST, 'stock_id', FILTER_VALIDATE_INT);
         $allowedReasons = ['Miscount / Physical Count Correction', 'Damaged', 'Expired', 'System Correction', 'Other'];
@@ -653,7 +700,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $conn->begin_transaction();
 
         try {
-            $itemStmt = $conn->prepare("SELECT i.item_name, i.category_id, c.category_name, u.unit_name
+            $itemStmt = $conn->prepare("SELECT i.item_name, i.category_id, c.category_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
                                         FROM inventory_items i
                                         INNER JOIN inventory_categories c ON i.category_id = c.category_id
                                         INNER JOIN units u ON i.unit_id = u.unit_id
@@ -667,25 +714,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$itemData) throw new Exception('Selected item does not exist.');
             $requiresBatchTracking = requiresBatchTracking($itemData['category_name']);
 
-            if ($requiresBatchTracking) {
-                if (!$selectedStockId || $selectedStockId <= 0) {
-                    throw new Exception('Please select the Batch/Lot you want to adjust.');
-                }
-
-                $stockStmt = $conn->prepare("SELECT stock_id, quantity_available, batch_lot_no, expiration_date
-                                             FROM inventory_stocks
-                                             WHERE stock_id = ? AND item_id = ? AND branch_id = ?
-                                             LIMIT 1 FOR UPDATE");
-                if (!$stockStmt) throw new Exception('Unable to load the selected batch.');
-                $stockStmt->bind_param('iis', $selectedStockId, $item_id, $branch_id);
-            } else {
-                $stockStmt = $conn->prepare("SELECT stock_id, quantity_available, batch_lot_no, expiration_date
-                                             FROM inventory_stocks
-                                             WHERE item_id = ? AND branch_id = ? AND batch_lot_no IS NULL
-                                             LIMIT 1 FOR UPDATE");
-                if (!$stockStmt) throw new Exception('Unable to load stock for adjustment.');
-                $stockStmt->bind_param('is', $item_id, $branch_id);
+            if (!$selectedStockId || $selectedStockId <= 0) {
+                throw new Exception('Please select the stock record you want to adjust.');
             }
+            $stockStmt = $conn->prepare("SELECT stock_id, quantity_available, batch_lot_no, expiration_date
+                FROM inventory_stocks WHERE stock_id=? AND item_id=? AND branch_id=?
+                LIMIT 1 FOR UPDATE");
+            if (!$stockStmt) throw new Exception('Unable to load the selected stock record.');
+            $stockStmt->bind_param('iis', $selectedStockId, $item_id, $branch_id);
 
             $stockStmt->execute();
             $stockRow = $stockStmt->get_result()->fetch_assoc();
@@ -693,17 +729,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             if (!$stockRow) throw new Exception('No matching stock record exists for the selected item in this branch.');
 
-            $currentQuantity = (int)$stockRow['quantity_available'];
-            $delta = $adjustedQuantity - $currentQuantity;
+            stockQuantityValidateUnit($adjustedScaled, $itemData);
+            $currentScaled = stockQuantityParse($stockRow['quantity_available'], true);
+            $currentQuantity = stockQuantityDecimal($currentScaled);
+            $deltaScaled = $adjustedScaled - $currentScaled;
+            $delta = stockQuantityDecimal($deltaScaled);
 
-            if ($delta === 0) {
+            if ($deltaScaled === 0) {
                 throw new Exception('The adjusted quantity is the same as the current stock. No change was made.');
             }
 
             $stockId = (int)$stockRow['stock_id'];
             $update = $conn->prepare("UPDATE inventory_stocks SET quantity_available = ? WHERE stock_id = ? AND branch_id = ?");
             if (!$update) throw new Exception('Unable to prepare adjustment update.');
-            $update->bind_param('iis', $adjustedQuantity, $stockId, $branch_id);
+            $update->bind_param('sis', $adjustedQuantity, $stockId, $branch_id);
             if (!$update->execute()) throw new Exception('Unable to update stock: ' . $update->error);
             $update->close();
 
@@ -716,7 +755,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                          (item_id, user_id, vaccination_id, branch_id, transaction_type, quantity, remarks, transaction_date)
                                          VALUES (?, ?, NULL, ?, 'ADJUSTMENT', ?, ?, ?)");
             if (!$insertTrx) throw new Exception('Unable to prepare adjustment transaction.');
-            $insertTrx->bind_param('iisiss', $item_id, $user_id, $branch_id, $delta, $combinedRemarks, $transactionDateTime);
+            $insertTrx->bind_param('iissss', $item_id, $user_id, $branch_id, $delta, $combinedRemarks, $transactionDateTime);
             if (!$insertTrx->execute()) throw new Exception('Unable to record adjustment: ' . $insertTrx->error);
             $transactionId = (int)$conn->insert_id;
             $insertTrx->close();
@@ -780,34 +819,16 @@ if ($branch_id) {
      * Stock quantity is aggregated because medical supplies may have
      * multiple batches for the same item.
      */
-    $itemsQuery = "SELECT
-                        i.item_id,
-                        i.item_name,
-                        i.minimum_stock,
-                        i.category_id,
-                        c.category_name,
-                        u.unit_id,
-                        u.unit_name,
-                        COALESCE(SUM(CASE
-                            WHEN s.quantity_available > 0
-                             AND (s.expiration_date IS NULL OR s.expiration_date >= CURDATE())
-                            THEN s.quantity_available ELSE 0 END), 0) AS quantity_available,
-                        COALESCE(SUM(CASE
-                            WHEN s.quantity_available > 0
-                             AND s.expiration_date IS NOT NULL
-                             AND s.expiration_date < CURDATE()
-                            THEN s.quantity_available ELSE 0 END), 0) AS expired_stock,
-                        COALESCE(SUM(s.quantity_available), 0) AS total_stock
-                   FROM inventory_items i
-                   INNER JOIN inventory_categories c ON i.category_id = c.category_id
-                   INNER JOIN units u ON i.unit_id = u.unit_id
-                   LEFT JOIN inventory_stocks s
-                     ON s.item_id = i.item_id
-                    AND s.branch_id = ?
-                   GROUP BY i.item_id, i.item_name, i.minimum_stock,
-                            i.category_id, c.category_name,
-                            u.unit_id, u.unit_name
-                   ORDER BY i.item_name ASC";
+    $itemsQuery = "SELECT i.item_id,i.item_name,i.minimum_stock,i.category_id,c.category_name,
+    u.unit_id,COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+    COALESCE(s.usable_stock,0) AS quantity_available,
+    COALESCE(s.expired_stock,0) AS expired_stock,
+    COALESCE(s.total_stock,0) AS total_stock
+FROM inventory_items i
+JOIN inventory_categories c ON c.category_id=i.category_id
+JOIN units u ON u.unit_id=i.unit_id
+LEFT JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
+ORDER BY i.item_name";
 
     $stmt = $conn->prepare($itemsQuery);
     if ($stmt) {
@@ -825,13 +846,12 @@ if ($branch_id) {
 $batchesByItem = [];
 if ($branch_id) {
     $batchQuery = "SELECT s.stock_id, s.item_id, s.batch_lot_no, s.quantity_available, s.manufacturing_date, s.expiration_date,
-                          i.item_name, c.category_name, u.unit_name
+                          i.item_name, c.category_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
                    FROM inventory_stocks s
                    INNER JOIN inventory_items i ON s.item_id = i.item_id
                    INNER JOIN inventory_categories c ON i.category_id = c.category_id
                    INNER JOIN units u ON i.unit_id = u.unit_id
                    WHERE s.branch_id = ?
-                     AND s.batch_lot_no IS NOT NULL
                    ORDER BY i.item_name ASC, s.expiration_date ASC, s.stock_id ASC";
 
     $stmt = $conn->prepare($batchQuery);
@@ -861,7 +881,7 @@ if ($branch_id) {
                             s.manufacturing_date,
                             s.expiration_date,
                             i.item_name,
-                            u.unit_name
+                            COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
                         FROM inventory_stocks s
                         INNER JOIN inventory_items i ON s.item_id = i.item_id
                         INNER JOIN units u ON i.unit_id = u.unit_id
@@ -897,7 +917,7 @@ if ($branch_id) {
                           a.archived_by,
                           a.archive_reason,
                           i.item_name,
-                          u.unit_name,
+                          COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
                           COALESCE(au.username, 'Unknown User') AS archived_by_name
                       FROM inventory_stocks_archive a
                       INNER JOIN inventory_items i ON a.item_id = i.item_id
@@ -931,7 +951,7 @@ if (isset($_GET['view_stock_id']) && ctype_digit((string)$_GET['view_stock_id'])
                       s.last_updated,
                       i.item_name,
                       i.minimum_stock,
-                      u.unit_name,
+                      COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
                       c.category_name
                   FROM inventory_stocks s
                   INNER JOIN inventory_items i ON s.item_id = i.item_id
@@ -1569,7 +1589,8 @@ body{
 
                         <div class="col-md-6">
                             <label for="stockInQuantity">Quantity</label>
-                            <input id="stockInQuantity" name="quantity" type="number" min="1" step="1" class="form-control" placeholder="Enter quantity..." required>
+                            <input id="stockInQuantity" name="quantity" type="number" min="0.0001" max="99999999.9999" step="0.0001" class="form-control" placeholder="Enter quantity..." required>
+                            <div id="stockInQuantityHelp" class="form-text-small">Select an item to see its quantity unit.</div>
                         </div>
 
                         <div class="col-md-6">
@@ -1599,6 +1620,28 @@ body{
                             <input id="stockInDate" name="transaction_date" type="date" class="form-control" value="<?php echo h(date('Y-m-d')); ?>" required>
                         </div>
 
+                        <div class="col-md-6">
+                            <label for="stockSourceType">Stock Source</label>
+                            <select id="stockSourceType" name="stock_source_type" class="form-select" required onchange="updateStockSource()">
+                                <option value="">Select source...</option>
+                                <option value="Branch">Another clinic branch</option>
+                                <option value="External">External supplier</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="stockSourceBranch">Source Branch</label>
+                            <select id="stockSourceBranch" name="stock_source_branch_id" class="form-select" disabled>
+                                <option value="">Select sending branch...</option>
+                                <?php foreach ($sourceBranches as $source): ?>
+                                    <?php if ((string)$source['branch_id']===(string)$branch_id) continue; ?>
+                                    <option value="<?php echo h($source['branch_id']); ?>"><?php echo h($source['branch_name']); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="stockSourceName">Supplier Name / Reference (Optional)</label>
+                            <input id="stockSourceName" name="stock_source_name" class="form-control" maxlength="255" disabled>
+                        </div>
                         <div class="col-12">
                             <label for="stockInRemarks">Remarks</label>
                             <textarea id="stockInRemarks" name="remarks" class="form-control" rows="2" maxlength="500" placeholder="Enter remarks here (Optional)"></textarea>
@@ -1636,7 +1679,8 @@ body{
 
                         <div class="col-md-6">
                             <label for="stockOutQuantity">Quantity</label>
-                            <input id="stockOutQuantity" name="quantity" type="number" min="1" step="1" class="form-control" placeholder="Enter quantity..." required>
+                            <input id="stockOutQuantity" name="quantity" type="number" min="0.0001" max="99999999.9999" step="0.0001" class="form-control" placeholder="Enter quantity..." required>
+                            <div id="stockOutQuantityHelp" class="form-text-small">Select an item to see its quantity unit.</div>
                             <div id="stockOutAvailable" class="form-text-small">Usable stock available: —</div>
                             <div id="stockOutWarning" class="form-text-small"></div>
                         </div>
@@ -1693,11 +1737,11 @@ body{
                         </div>
 
                         <div class="col-md-6" id="adjustmentBatchWrapper" style="display:none;">
-                            <label for="adjustmentBatch">Batch/Lot No.</label>
+                            <label for="adjustmentBatch">Stock Record / Batch</label>
                             <select id="adjustmentBatch" name="stock_id" class="form-select">
                                 <option value="">Select batch...</option>
                             </select>
-                            <div class="form-text-small">Batch selection is required for Vaccines and Medical Supplies.</div>
+                            <div class="form-text-small">Select the specific stock record whose remaining quantity you counted.</div>
                         </div>
 
                         <div class="col-md-6">
@@ -1708,7 +1752,8 @@ body{
 
                         <div class="col-md-6">
                             <label for="adjustedQuantity">Adjusted Quantity</label>
-                            <input id="adjustedQuantity" name="adjusted_quantity" type="number" min="0" step="1" class="form-control" placeholder="Enter new quantity..." required>
+                            <input id="adjustedQuantity" name="adjusted_quantity" type="number" min="0" max="99999999.9999" step="0.0001" class="form-control" placeholder="Enter new quantity..." required>
+                            <div id="adjustedQuantityHelp" class="form-text-small">Enter the verified remaining stock in the selected item’s unit.</div>
                         </div>
 
                         <div class="col-md-6">
@@ -1792,7 +1837,7 @@ body{
                                             <i class="bi bi-eye"></i>
                                         </a>
 
-                                        <?php if ($days !== null && $days < 0 && (int)$row['quantity_available'] > 0): ?>
+                                        <?php if ($days !== null && $days < 0 && (float)$row['quantity_available'] > 0): ?>
                                             <form method="POST" action="InventoryOfficer_StockManagement.php" style="display:inline;" onsubmit="return openConfirmationModal(this, 'Dispose the remaining expired stock and move this batch to Archived Stocks? This action cannot be undone.');">
                                                 <input type="hidden" name="csrf_token" value="<?php echo h($csrfToken); ?>">
                                                 <input type="hidden" name="action" value="archive_expired">
@@ -1893,7 +1938,7 @@ body{
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <?php if ($viewDays !== null && $viewDays < 0 && (int)$viewStock['quantity_available'] > 0): ?>
+                    <?php if ($viewDays !== null && $viewDays < 0 && (float)$viewStock['quantity_available'] > 0): ?>
                         <form method="POST" action="InventoryOfficer_StockManagement.php" class="me-auto" onsubmit="return openConfirmationModal(this, 'Dispose the remaining expired stock and archive this batch? This action cannot be undone.');">
                             <input type="hidden" name="csrf_token" value="<?php echo h($csrfToken); ?>">
                             <input type="hidden" name="action" value="archive_expired">
@@ -2047,7 +2092,28 @@ function showPanel(id, btn) {
 /* -------------------------------------------------------------
  * STOCK IN ITEM DETAILS
  * ----------------------------------------------------------- */
+function updateQuantityInput(selectId, quantityId, helpId, allowZero) {
+    var select = document.getElementById(selectId);
+    var quantity = document.getElementById(quantityId);
+    var help = document.getElementById(helpId);
+    if (!select || !quantity) return;
+    var option = select.options[select.selectedIndex];
+    var selected = option && option.value;
+    var step = selected ? (option.getAttribute('data-quantity-step') || '0.0001') : '0.0001';
+    quantity.step = step;
+    quantity.min = allowZero ? '0' : step;
+    quantity.max = step === '1' ? '99999999' : '99999999.9999';
+    if (help) {
+        var unit = selected ? option.getAttribute('data-unit-name') : '';
+        help.textContent = selected
+            ? 'Enter ' + (allowZero ? 'remaining stock' : 'quantity') + ' in ' + unit + '. '
+                + (step === '1' ? 'Use whole numbers.' : 'Up to four decimal places are allowed.')
+            : 'Select an item to see its quantity unit.';
+    }
+}
+
 function updateStockInItemDetails() {
+    updateQuantityInput('stockInItem', 'stockInQuantity', 'stockInQuantityHelp', false);
     var select = document.getElementById('stockInItem');
     var unitInput = document.getElementById('stockInUnit');
     var unitIdInput = document.getElementById('stockInUnitId');
@@ -2108,7 +2174,18 @@ function updateStockInItemDetails() {
     }
 }
 
+function updateStockSource() {
+    const kind=document.getElementById('stockSourceType').value;
+    const branch=document.getElementById('stockSourceBranch');
+    branch.disabled=kind!=='Branch'; branch.required=kind==='Branch';
+    if (branch.disabled) branch.value='';
+    const name=document.getElementById('stockSourceName');
+    name.disabled=kind!=='External'; if (name.disabled) name.value='';
+}
+
 function validateStockInForm() {
+    const source=document.getElementById('stockSourceType').value;
+    if (!source || (source==='Branch' && !document.getElementById('stockSourceBranch').value)) { alert('Select the stock source and sending branch.'); return false; }
     var select = document.getElementById('stockInItem');
     var quantity = document.getElementById('stockInQuantity');
     var date = document.getElementById('stockInDate');
@@ -2194,6 +2271,7 @@ function updateStockDisplay(selectId, displayId, prefix) {
 }
 
 function updateStockOutDisplay() {
+    updateQuantityInput('stockOutItem', 'stockOutQuantity', 'stockOutQuantityHelp', false);
     var select = document.getElementById('stockOutItem');
     var reasonSelect = document.getElementById('stockOutReason');
     var display = document.getElementById('stockOutAvailable');
@@ -2223,6 +2301,7 @@ function updateStockOutDisplay() {
 var batchesByItem = <?php echo json_encode($batchesByItem, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
 
 function updateAdjustmentItemDetails() {
+    updateQuantityInput('adjustmentItem', 'adjustedQuantity', 'adjustedQuantityHelp', true);
     var itemSelect = document.getElementById('adjustmentItem');
     var batchWrapper = document.getElementById('adjustmentBatchWrapper');
     var batchSelect = document.getElementById('adjustmentBatch');
@@ -2242,36 +2321,31 @@ function updateAdjustmentItemDetails() {
         return;
     }
 
-    var requiresBatchTracking = option.getAttribute('data-batch-tracked') === '1';
     var unit = option.getAttribute('data-unit-name') || '';
-    var totalStock = option.getAttribute('data-stock') || '0';
-
-    if (requiresBatchTracking) {
-        batchWrapper.style.display = 'block';
-        batchSelect.required = true;
-        currentStock.value = '—';
-        if (stockHelp) stockHelp.textContent = 'Select the specific batch you want to adjust.';
-
-        var batches = batchesByItem[String(option.value)] || [];
-        batches.forEach(function(batch) {
-            var opt = document.createElement('option');
-            opt.value = batch.stock_id;
-            opt.setAttribute('data-stock', batch.quantity_available);
-            opt.setAttribute('data-unit', batch.unit_name || unit);
-            opt.setAttribute('data-expiration', batch.expiration_date || '');
-
-            var label = batch.batch_lot_no || 'No Batch';
-            label += ' — ' + batch.quantity_available + ' ' + (batch.unit_name || unit);
-            if (batch.expiration_date) label += ' — Exp: ' + batch.expiration_date;
-            opt.textContent = label;
-            batchSelect.appendChild(opt);
-        });
-    } else {
-        batchWrapper.style.display = 'none';
-        batchSelect.required = false;
-        currentStock.value = totalStock + ' ' + unit;
-        if (stockHelp) stockHelp.textContent = 'Current branch stock for this item.';
+    var batches = batchesByItem[String(option.value)] || [];
+    batchWrapper.style.display = 'block';
+    batchSelect.required = true;
+    currentStock.value = '—';
+    if (stockHelp) stockHelp.textContent = batches.length
+        ? 'Select the stock record whose remaining quantity you counted.'
+        : 'No stock record exists for this item in your branch. Record Stock In first.';
+    batches.forEach(function(batch) {
+        var opt = document.createElement('option');
+        opt.value = batch.stock_id;
+        opt.setAttribute('data-stock', batch.quantity_available);
+        opt.setAttribute('data-unit', batch.unit_name || unit);
+        opt.setAttribute('data-expiration', batch.expiration_date || '');
+        var label = batch.batch_lot_no || ('Unlabelled stock #' + batch.stock_id);
+        label += ' — ' + batch.quantity_available + ' ' + (batch.unit_name || unit);
+        if (batch.expiration_date) label += ' — Exp: ' + batch.expiration_date;
+        opt.textContent = label;
+        batchSelect.appendChild(opt);
+    });
+    if (batches.length === 1) {
+        batchSelect.value = String(batches[0].stock_id);
+        updateAdjustmentBatchStock();
     }
+
 }
 
 function updateAdjustmentBatchStock() {
@@ -2382,6 +2456,8 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    updateStockOutDisplay();
+
     var outReason = document.getElementById('stockOutReason');
     if (outReason) {
         outReason.addEventListener('change', function() {
@@ -2409,5 +2485,6 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 
+<script>document.addEventListener('DOMContentLoaded', updateStockSource);</script>
 </body>
 </html>

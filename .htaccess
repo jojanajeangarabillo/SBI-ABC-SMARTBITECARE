@@ -1,0 +1,10 @@
+Options -Indexes
+
+<FilesMatch "(?i)(^\.|^Dockerfile$|\.(sql(\.(gz|bz2|xz|zip))?|sqlite3?|db|bak|backup|old|orig|log|ini|env|pem|key|sh|py|pyc|pyo|zip|7z|tar|gz|tgz|rar)$)">
+    Require all denied
+</FilesMatch>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule (^|/)(\.git|\.svn|database|uploads/documents)(/|$) - [F,L,NC]
+</IfModule>

@@ -1,12 +1,20 @@
 <?php
 
+require_once __DIR__ . '/forecast_notification_helper.php';
+
 function getUnreadNotificationCount($conn, $user_id)
 {
+    // Keep Inventory Officer forecast alerts current on every page that shows
+    // a bell count. Other roles are skipped using their current database role.
+    $forecastAlertsReady = forecastNotificationRefresh($conn, (int)$user_id);
+    $forecastVisibilitySql = $forecastAlertsReady ? ''
+        : " AND COALESCE(notification_type, '') NOT IN " . forecastNotificationTypesSql();
     $query = "
         SELECT COUNT(*) AS unread_count
         FROM notifications
         WHERE user_id = ?
           AND is_read = 0
+          $forecastVisibilitySql
     ";
 
     $stmt = $conn->prepare($query);

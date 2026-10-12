@@ -3,6 +3,7 @@ session_start();
 
 require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
+require_once 'sources/forecast_status_helper.php';
 require_once 'sources/notification_helper.php';
 
 /* =========================================================
@@ -19,20 +20,6 @@ $branchName = (string)($user['branch_name'] ?? $branchId);
 /* =========================================================
    HELPERS
    ========================================================= */
-function nurseForecastRiskClass(float $probability): string
-{
-    if ($probability >= 0.80) return 'danger';
-    if ($probability >= 0.60) return 'warning';
-    return 'success';
-}
-
-function nurseForecastRiskLabel(float $probability): string
-{
-    if ($probability >= 0.80) return 'High Risk';
-    if ($probability >= 0.60) return 'Moderate Risk';
-    return 'Low Risk';
-}
-
 function nurseStockStatusClass(string $status): string
 {
     return match (strtoupper(trim($status))) {
@@ -74,7 +61,7 @@ function nurseForecastUnitMeta(array $row): array
     ];
 }
 
-function nurseForecastFormatQuantity(float $value, int $decimals = 2): string
+function nurseForecastFormatQuantity(float $value, int $decimals = 4): string
 {
     $formatted = number_format($value, $decimals, '.', ',');
     return rtrim(rtrim($formatted, '0'), '.');
@@ -101,72 +88,8 @@ if (!in_array($forecastDays, $allowedForecastDays, true)) {
 /* =========================================================
    LATEST VALID / NON-STALE FORECAST DATE
    ========================================================= */
-$latestDate = null;
-
-$latestStmt = $conn->prepare(
-    "SELECT MAX(forecast_date) AS latest_date
-     FROM forecast_results
-     WHERE branch_id = ?
-       AND forecast_days = ?
-       AND is_stale = 0"
-);
-
-if ($latestStmt) {
-    $latestStmt->bind_param('si', $branchId, $forecastDays);
-    $latestStmt->execute();
-    $latestDate = $latestStmt->get_result()->fetch_assoc()['latest_date'] ?? null;
-    $latestStmt->close();
-}
-
-/* =========================================================
-   FORECAST RESULTS
-   Use the stock snapshot saved with the forecast so the Nurse
-   never sees live stock mixed with an older risk calculation.
-   ========================================================= */
-$forecasts = [];
-
-if ($latestDate !== null) {
-    $forecastStmt = $conn->prepare(
-        "SELECT
-            fr.item_id,
-            fr.forecast_date,
-            fr.forecast_start_date,
-            fr.forecast_end_date,
-            fr.current_stock_snapshot,
-            fr.minimum_stock_snapshot,
-            fr.stock_status,
-            fr.shortage_probability,
-            fr.forecast_status,
-            fr.recommended_reorder,
-            fr.forecasted_consumption,
-            fr.forecast_days,
-            i.item_name,
-            i.base_unit_label,
-            i.display_unit_label,
-            i.conversion_to_base,
-            u.unit_name
-         FROM forecast_results fr
-         INNER JOIN inventory_items i
-            ON i.item_id = fr.item_id
-         LEFT JOIN units u
-            ON u.unit_id = i.unit_id
-         WHERE fr.branch_id = ?
-           AND fr.forecast_date = ?
-           AND fr.forecast_days = ?
-           AND fr.is_stale = 0
-         ORDER BY
-            fr.shortage_probability DESC,
-            fr.recommended_reorder DESC,
-            i.item_name ASC"
-    );
-
-    if ($forecastStmt) {
-        $forecastStmt->bind_param('ssi', $branchId, $latestDate, $forecastDays);
-        $forecastStmt->execute();
-        $forecasts = $forecastStmt->get_result()->fetch_all(MYSQLI_ASSOC);
-        $forecastStmt->close();
-    }
-}
+$forecasts = forecastStatusLatestRows($conn, $branchId, $forecastDays);
+$latestDate = $forecasts[0]['forecast_date'] ?? null;
 
 /* =========================================================
    SUMMARY
@@ -179,16 +102,11 @@ $lowRiskCount = 0;
 foreach ($forecasts as &$forecast) {
     $probability = max(0.0, min(1.0, (float)$forecast['shortage_probability']));
 
-    if ($probability >= 0.80) {
-        $highRiskCount++;
-    } elseif ($probability >= 0.60) {
-        $moderateRiskCount++;
-    } else {
-        $lowRiskCount++;
-    }
-
-    $forecast['risk_class'] = nurseForecastRiskClass($probability);
-    $forecast['risk_label'] = nurseForecastRiskLabel($probability);
+    if ($forecast['forecast_status'] === 'Shortage Risk') $highRiskCount++;
+    elseif ($forecast['forecast_status'] === 'Reorder Needed') $moderateRiskCount++;
+    else $lowRiskCount++;
+    $forecast['risk_class'] = forecastStatusColor($forecast['forecast_status']);
+    $forecast['risk_label'] = $forecast['forecast_status'];
     $forecast['risk_percentage'] = round($probability * 100, 1);
     $forecast['current_stock'] = (float)($forecast['current_stock_snapshot'] ?? 0);
     $forecast['minimum_stock'] = (float)($forecast['minimum_stock_snapshot'] ?? 0);
@@ -206,7 +124,11 @@ unset($forecast);
 $forecastStartDate = $forecasts[0]['forecast_start_date'] ?? null;
 $forecastEndDate = $forecasts[0]['forecast_end_date'] ?? null;
 
-$chartForecasts = array_slice($forecasts, 0, 10);
+$chartForecasts = $forecasts;
+usort($chartForecasts, static fn(array $a, array $b): int =>
+    (float)$b['shortage_probability'] <=> (float)$a['shortage_probability']
+    ?: strcmp($a['item_name'], $b['item_name']));
+$chartForecasts = array_slice($chartForecasts, 0, 10);
 
 $chartLabels = array_map(
     fn($row) => (string)$row['item_name'],
@@ -1236,6 +1158,8 @@ $chartRiskValues = array_map(
             </div>
         </div>
 
+        <?= forecastStatusLegendHtml() ?>
+
         <!-- Summary -->
         <section class="stats-grid" aria-label="Forecast summary">
 
@@ -1251,7 +1175,7 @@ $chartRiskValues = array_map(
                 <div class="stat-icon">
                     <i class="bi bi-exclamation-triangle-fill"></i>
                 </div>
-                <div class="stat-label">High Risk</div>
+                <div class="stat-label">Shortage Risk</div>
                 <div class="stat-value"><?= number_format($highRiskCount) ?></div>
             </div>
 
@@ -1259,7 +1183,7 @@ $chartRiskValues = array_map(
                 <div class="stat-icon">
                     <i class="bi bi-exclamation-circle-fill"></i>
                 </div>
-                <div class="stat-label">Moderate Risk</div>
+                <div class="stat-label">Reorder Needed</div>
                 <div class="stat-value"><?= number_format($moderateRiskCount) ?></div>
             </div>
 
@@ -1267,7 +1191,7 @@ $chartRiskValues = array_map(
                 <div class="stat-icon">
                     <i class="bi bi-check-circle-fill"></i>
                 </div>
-                <div class="stat-label">Low Risk</div>
+                <div class="stat-label">Sufficient</div>
                 <div class="stat-value"><?= number_format($lowRiskCount) ?></div>
             </div>
 
@@ -1286,7 +1210,7 @@ $chartRiskValues = array_map(
                             Forecast Overview
                         </h2>
                         <p>
-                            Quick visual summary of risk levels and the supplies with the highest stockout risk.
+                            Forecast statuses and supplementary stockout estimates for the selected horizon.
                         </p>
                     </div>
 
@@ -1299,7 +1223,7 @@ $chartRiskValues = array_map(
                 <div class="visual-grid">
 
                     <div class="chart-panel">
-                        <h6>Risk Distribution</h6>
+                        <h6>Forecast Status Distribution</h6>
                         <p>How many forecasted items fall into each risk level.</p>
 
                         <div class="chart-canvas-wrap">
@@ -1379,10 +1303,10 @@ $chartRiskValues = array_map(
                     </div>
 
                     <select id="riskFilter" class="form-select" aria-label="Filter by risk">
-                        <option value="">All Risk Levels</option>
-                        <option value="high risk">High Risk</option>
-                        <option value="moderate risk">Moderate Risk</option>
-                        <option value="low risk">Low Risk</option>
+                        <option value="">All Forecast Statuses</option>
+                        <option value="shortage risk">Shortage Risk</option>
+                        <option value="reorder needed">Reorder Needed</option>
+                        <option value="sufficient">Sufficient</option>
                     </select>
 
                     <select id="stockFilter" class="form-select" aria-label="Filter by stock status">
@@ -1418,8 +1342,8 @@ $chartRiskValues = array_map(
                             <th>Minimum Stock</th>
                             <th>Stock Status</th>
                             <th>Forecasted Use</th>
-                            <th>Stockout Risk</th>
-                            <th>Risk Level</th>
+                            <th>Estimated Stockout Risk</th>
+                            <th>Forecast Status</th>
                             <th>Recommended Reorder</th>
                         </tr>
                     </thead>
@@ -1761,7 +1685,7 @@ document.addEventListener('DOMContentLoaded', function () {
             type: 'doughnut',
 
             data: {
-                labels: ['High Risk', 'Moderate Risk', 'Low Risk'],
+                labels: ['Shortage Risk', 'Reorder Needed', 'Sufficient'],
 
                 datasets: [{
                     data: [

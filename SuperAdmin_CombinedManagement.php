@@ -4,15 +4,33 @@ require_once 'sources/db_connect.php';
 require_once 'sources/app_config.php';
 require_once 'sources/mailer.php';
 require_once 'sources/notification_helper.php';
+require_once __DIR__ . '/sources/user_management_security.php';
 
-// Check if user is logged in and is super admin
-if (
-    !isset($_SESSION['user_id']) ||
-    !isset($_SESSION['role_id']) ||
-    $_SESSION['role_id'] != 1
-) {
-    header("Location: login.php");
-    exit();
+$managementActor = managementRequireUser($conn, 1);
+$managementCsrf = managementCsrfToken();
+
+// Account changes are never triggered by a GET URL.
+if (isset($_GET['archive_admin_id'])) {
+    header('Allow: POST');
+    managementDeny(405, 'Use the Archive Admin confirmation form.');
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    managementVerifyPost();
+    $managementActions = 0;
+    foreach (['add_branch', 'edit_branch', 'archive_branch', 'send_email'] as $key) {
+        if (isset($_POST[$key])) {
+            $managementActions++;
+        }
+    }
+    if (isset($_POST['action'])) {
+        if (!in_array($_POST['action'], ['add_admin', 'archive_admin'], true)) {
+            managementDeny(400, 'Select a valid management action.');
+        }
+        $managementActions++;
+    }
+    if ($managementActions !== 1) {
+        managementDeny(400, 'Submit one management action at a time.');
+    }
 }
 
 $user_id = (int)$_SESSION['user_id'];
@@ -526,8 +544,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 // Handle Archive (Deactivate) Admin
-if (isset($_GET['archive_admin_id'])) {
-    $archive_id = (int)($_GET['archive_admin_id'] ?? 0);
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'archive_admin') {
+    $archive_id = (int)($_POST['archive_admin_id'] ?? 0);
     $archive_transaction_started = false;
 
     try {
@@ -1788,6 +1806,7 @@ if (isset($_GET['archive_id'])) {
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <form method="POST" action="SuperAdmin_CombinedManagement.php">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($managementCsrf, ENT_QUOTES, 'UTF-8'); ?>">
                 <input type="hidden" name="tab" value="branches" />
                 <div class="modal-body">
                     <div class="row g-3">
@@ -1893,6 +1912,7 @@ if (isset($_GET['archive_id'])) {
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <form method="POST" action="SuperAdmin_CombinedManagement.php">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($managementCsrf, ENT_QUOTES, 'UTF-8'); ?>">
                 <input type="hidden" name="tab" value="branches" />
                 <div class="modal-body">
                     <?php if ($edit_branch): ?>
@@ -1944,6 +1964,7 @@ if (isset($_GET['archive_id'])) {
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" style="filter: brightness(0) invert(1);"></button>
             </div>
             <form method="POST" action="SuperAdmin_CombinedManagement.php">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($managementCsrf, ENT_QUOTES, 'UTF-8'); ?>">
                 <input type="hidden" name="tab" value="branches" />
                 <div class="modal-body">
                     <?php if ($archive_branch): ?>
@@ -1983,6 +2004,7 @@ if (isset($_GET['archive_id'])) {
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <form method="POST" action="SuperAdmin_CombinedManagement.php" id="addAdminForm">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($managementCsrf, ENT_QUOTES, 'UTF-8'); ?>">
                 <input type="hidden" name="tab" value="admins" />
                 <div class="modal-body">
                     <input type="hidden" name="action" value="add_admin" />
@@ -2041,6 +2063,7 @@ if (isset($_GET['archive_id'])) {
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <form method="POST" action="SuperAdmin_CombinedManagement.php" id="emailForm">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($managementCsrf, ENT_QUOTES, 'UTF-8'); ?>">
                 <input type="hidden" name="tab" value="admins" />
                 <div class="modal-body">
                     <input type="hidden" name="send_email" value="1" />
@@ -2098,9 +2121,14 @@ if (isset($_GET['archive_id'])) {
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <a href="#" id="archiveConfirmLink" class="btn btn-danger">
-                    <i class="bi bi-archive me-1"></i> Archive Admin
-                </a>
+                <form method="POST" action="SuperAdmin_CombinedManagement.php" style="margin: 0;">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($managementCsrf, ENT_QUOTES, 'UTF-8'); ?>">
+                    <input type="hidden" name="action" value="archive_admin">
+                    <input type="hidden" name="archive_admin_id" id="archiveAdminId" value="">
+                    <button type="submit" class="btn btn-danger">
+                        <i class="bi bi-archive me-1"></i> Archive Admin
+                    </button>
+                </form>
             </div>
         </div>
     </div>
@@ -2208,7 +2236,7 @@ if (isset($_GET['archive_id'])) {
     // Archive admin confirmation
     function archiveAdmin(userId, username) {
         document.getElementById('archiveAdminName').textContent = username;
-        document.getElementById('archiveConfirmLink').href = 'SuperAdmin_CombinedManagement.php?archive_admin_id=' + userId + '&tab=admins';
+        document.getElementById('archiveAdminId').value = userId;
         var modal = new bootstrap.Modal(document.getElementById('archiveConfirmModal'));
         modal.show();
     }

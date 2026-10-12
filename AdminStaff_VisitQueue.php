@@ -4,6 +4,7 @@ session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/dashboard_patient_metrics.php';
 
 $user = workflowRequireUser($conn, 4);
 $userId = (int)$user['user_id'];
@@ -203,18 +204,14 @@ $visitStmt->execute();
 $visits = $visitStmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $visitStmt->close();
 
-$statsStmt = $conn->prepare(
-    "SELECT COUNT(*) AS today_visits,
-            COALESCE(SUM(workflow_status = 'Waiting for Nurse'), 0) AS waiting_count,
-            COALESCE(SUM(workflow_status = 'Under Assessment'), 0) AS assessment_count,
-            COALESCE(SUM(workflow_status = 'For Registry'), 0) AS registry_count
-     FROM patient_visits
-     WHERE branch_id = ? AND visit_date = CURDATE()"
-);
-$statsStmt->bind_param('s', $branchId);
-$statsStmt->execute();
-$visitStats = $statsStmt->get_result()->fetch_assoc() ?: [];
-$statsStmt->close();
+// Use the same definitions as the dashboards; the history still shows cancellations.
+$patientMetrics = dashboardPatientMetrics($conn, $branchId);
+$visitStats = [
+    'today_visits' => $patientMetrics['today_visits'],
+    'waiting_count' => $patientMetrics['patient_waiting'],
+    'assessment_count' => $patientMetrics['under_assessment_today'],
+    'registry_count' => $patientMetrics['for_registry_today'],
+];
 
 $flash = workflowTakeFlash();
 
@@ -904,7 +901,7 @@ $statusClasses = [
                     <i class="bi bi-person-check-fill stat-icon"></i>
                     <h6>Today's Check-ins</h6>
                     <h2><?php echo number_format((int)($visitStats['today_visits'] ?? 0)); ?></h2>
-                    <p>All visits recorded today</p>
+                    <p>Non-cancelled visits recorded today</p>
                 </div>
                 <div class="stat-card warning">
                     <i class="bi bi-hourglass-split stat-icon"></i>
