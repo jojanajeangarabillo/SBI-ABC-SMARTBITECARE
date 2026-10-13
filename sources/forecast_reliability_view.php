@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__.'/forecast_reliability_helper.php';
+require_once __DIR__.'/forecast_metrics_summary.php';
 
 function forecastReliabilityUrl(array $changes=[]): string
 {
@@ -14,7 +15,8 @@ function forecastReliabilityUrl(array $changes=[]): string
 function forecastReliabilityLoad(mysqli $conn,string $branch,string $search,string $horizon,int $size,int $page): array
 {
     $data=['problems'=>forecastReliabilitySchemaProblems($conn),'runs'=>[],'run'=>null,'rows'=>[],
-        'total'=>0,'pages'=>1,'page'=>1,'details'=>[],'summary'=>['better'=>0,'mixed'=>0,'baseline'=>0,'limited'=>0]];
+        'total'=>0,'pages'=>1,'page'=>1,'details'=>[],'overall_metrics'=>['overall'=>[],'by_unit'=>[]],
+        'summary'=>['better'=>0,'mixed'=>0,'baseline'=>0,'limited'=>0]];
     if($data['problems']||$branch==='')return $data;
     $stmt=accuracyQuery($conn,'SELECT * FROM forecast_reliability_runs WHERE branch_id=? ORDER BY reliability_id DESC LIMIT 50','s',[$branch]);
     $data['runs']=$stmt->get_result()->fetch_all(MYSQLI_ASSOC);$stmt->close();
@@ -30,6 +32,9 @@ function forecastReliabilityLoad(mysqli $conn,string $branch,string $search,stri
     if(in_array($horizon,['7','14','30'],true)){$parts[]='horizon_days=?';$types.='i';$params[]=(int)$horizon;}
     if($search!==''){$parts[]="item_name LIKE ? ESCAPE '!'";$types.='s';$params[]='%'.str_replace(['!','%','_'],['!!','!%','!_'],$search).'%';}
     $where=' FROM forecast_reliability_windows WHERE '.implode(' AND ',$parts);
+    // Use every matching window; do not aggregate just the visible item page.
+    $stmt=accuracyQuery($conn,'SELECT item_id,base_unit,horizon_days,status,training_records,observed_records,xgb_mae,xgb_rmse,xgb_smape_percent,last_mae,last_rmse,last_smape_percent,mean_mae,mean_rmse,mean_smape_percent'.$where,$types,$params);
+    $data['overall_metrics']=forecastMetricsSummarize($stmt->get_result(),true);$stmt->close();
     $valid="status='Available' AND observed_records=horizon_days AND training_records>0";
     $aggregates="SELECT item_id,item_name,base_unit,horizon_days,COUNT(*) AS attempted_windows,
         SUM(CASE WHEN $valid THEN 1 ELSE 0 END) AS complete_windows,
@@ -104,6 +109,7 @@ function forecastReliabilityRender(array $data,array $branches,string $branchId,
         <button class="btn btn-primary" type="submit">Apply filters</button><a class="filter-clear" href="<?= accuracyH(forecastReliabilityUrl(['q'=>'','horizon'=>'all','page'=>1])) ?>">Reset</a>
     </form>
     <?php if(!$run): ?><section class="panel empty-state"><?= accuracyIcon('clock') ?><h2>No saved rolling evaluation yet</h2><p>Run the evaluation command in INSTALL-AND-TEST.md for this branch. Opening this report only reads saved evidence.</p></section><?php return;endif; ?>
+    <?php forecastMetricsRender($data['overall_metrics'],true,$search!==''); ?>
     <section class="panel evidence-panel"><div class="evidence-title"><span class="evidence-icon"><?= accuracyIcon('book') ?></span><div><h2>Repeated tests with matching baselines</h2><p>Every complete comparison uses the same actual dates and quantities for all three methods.</p></div></div><div class="evidence-grid"><div><span>Historical starting dates</span><strong><?= (int)$run['requested_windows'] ?> requested · 30 days apart</strong></div><div><span>Training information</span><strong>Only records through each starting date</strong></div><div><span>Simple comparisons</span><strong>Last usage + recent mean</strong></div><div><span>Future clinic validation</span><strong>Still requires forecasts saved in advance</strong></div></div></section>
     <section class="cards" aria-label="Baseline comparison totals"><?php foreach(['better'=>['Lower MAE than both','high','check'],'mixed'=>['Mixed comparison','moderate','target'],'baseline'=>['Baselines match or beat model','low','alert'],'limited'=>['Limited or no demand','unrated','clock']] as $key=>$card): ?><div class="metric-card <?= $card[1] ?>"><span class="metric-icon"><?= accuracyIcon($card[2]) ?></span><div><div class="metric-label"><?= $card[0] ?></div><div class="metric-value"><?= (int)$data['summary'][$key] ?></div><div class="metric-note">Item / horizon groups across filters</div></div></div><?php endforeach; ?></section>
     <section class="panel rolling-results"><div class="run-info"><div><span>Rolling evaluation</span><strong>#<?= (int)$run['reliability_id'] ?> · <?= accuracyH(date('M j, Y · g:i a',strtotime($run['generated_at']))) ?> Manila</strong></div><div><span>Observed history</span><strong><?= accuracyH(accuracyPeriod($run['data_start'],$run['data_end'])) ?></strong></div><div><span>Historical input sources</span><strong><?php $sources=[];foreach(($details['sources']??[]) as $name=>$count)$sources[]=str_replace('_',' ',(string)$name).': '.number_format((int)$count);echo accuracyH(implode(' · ',$sources)); ?></strong></div></div><div class="table-header rolling-table-header"><div><h2>Paired model and baseline errors</h2><p>Lower MAE is better. Errors are measured in each item's base unit. No errors are pooled across different items or horizons.</p></div><div class="actions"><a class="btn" href="<?= accuracyH(forecastReliabilityUrl(['export'=>'csv'])) ?>">Export window scores</a><a class="btn" href="<?= accuracyH(forecastReliabilityUrl(['export'=>'daily'])) ?>">Export daily evidence</a></div></div>
