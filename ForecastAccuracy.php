@@ -5,6 +5,7 @@ require_once 'sources/db_connect.php';
 require_once 'sources/forecast_accuracy_helper.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/forecast_reliability_view.php';
+require_once 'sources/forecast_metrics_summary.php';
 
 // Provisional dashboard review targets, not universal accuracy standards.
 // Changing these changes presentation only, never saved scores or forecasts.
@@ -103,6 +104,7 @@ if(!$rollingView&&isset($_GET['run'])){
 $rolling=$rollingView?forecastReliabilityLoad($conn,$branchId,$search,$horizon,$perPage,$page):null;
 if($rollingView&&isset($_GET['export'])){http_response_code(409);exit('No saved rolling evaluation is available for export.');}
 $problems=$rollingView?[]:forecastAccuracySchemaProblems($conn);$runs=[];$run=null;$rows=[];
+$overallMetrics=['overall'=>[],'by_unit'=>[]];
 $totals=['total'=>0,'high'=>0,'moderate'=>0,'low'=>0,'unrated'=>0];$totalPages=1;
 $where='';$queryTypes='';$queryParams=[];
 if(!$rollingView&&!$problems&&$branchId!==''){
@@ -116,6 +118,9 @@ if(!$rollingView&&!$problems&&$branchId!==''){
         if($horizon!=='all'){$parts[]='horizon_days=?';$queryTypes.='i';$queryParams[]=(int)$horizon;}
         if($search!==''){$parts[]="item_name LIKE ? ESCAPE '!'";$queryTypes.='s';$queryParams[]='%'.str_replace(['!','%','_'],['!!','!%','!_'],$search).'%';}
         $where=' FROM forecast_evaluation_items WHERE '.implode(' AND ',$parts);
+        // Aggregate the complete filtered result set, independently of pagination.
+        $stmt=accuracyQuery($conn,'SELECT item_id,base_unit,method,horizon_days,evaluation_status,training_records,testing_records,mae,rmse,smape_percent'.$where,$queryTypes,$queryParams);
+        $overallMetrics=forecastMetricsSummarize($stmt->get_result());$stmt->close();
         $high=sprintf('%.4f',ACCURACY_REVIEW_HIGH_MAX);$moderate=sprintf('%.4f',ACCURACY_REVIEW_MODERATE_MAX);$minimum=ACCURACY_REVIEW_MIN_TEST_RECORDS;
         $rated="evaluation_status='Available' AND training_records>0 AND testing_records>=$minimum AND actual_total>0 AND smape_percent BETWEEN 0 AND 200";
         $stmt=accuracyQuery($conn,"SELECT COUNT(*) AS total,
@@ -238,7 +243,7 @@ body{background:#f9faff;font-size:15px}.sidebar{padding:0;visibility:visible;bac
         <form class="panel filters" method="get" action="ForecastAccuracy.php" id="accuracyFilters">
             <?php if($role===1): ?><div class="field"><label for="branch">Branch</label><select name="branch" id="branch"><?php foreach($branches as $b): ?><option value="<?= accuracyH($b['branch_id']) ?>" <?= $branchId===$b['branch_id']?'selected':'' ?>><?= accuracyH($b['branch_name']) ?></option><?php endforeach; ?></select></div><?php else: ?><input type="hidden" name="branch" value="<?= accuracyH($branchId) ?>"><?php endif; ?>
             <div class="field field-wide"><label for="run">Saved evaluation</label><select name="run" id="run" <?= !$runs?'disabled':'' ?>><?php if(!$runs): ?><option>No evaluations saved yet</option><?php endif; ?><?php foreach($runs as $r): ?><option value="<?= (int)$r['evaluation_id'] ?>" <?= (int)$r['evaluation_id']===$runId?'selected':'' ?>>#<?= (int)$r['evaluation_id'] ?> · <?= accuracyH(date('M j, Y · g:i a',strtotime($r['generated_at']))) ?> · <?= (int)$r['generated_horizon'] ?> days</option><?php endforeach; ?></select></div>
-            <div class="field"><label for="method">Test method</label><select name="method" id="method"><?php foreach(['all'=>'All methods','recursive'=>'Recursive','one_step'=>'One-day'] as $v=>$label): ?><option value="<?= $v ?>" <?= $method===$v?'selected':'' ?>><?= $label ?></option><?php endforeach; ?></select></div>
+            <div class="field"><label for="method">Test method</label><select name="method" id="method"><?php foreach(['all'=>'All methods','recursive'=>'Forecast test','one_step'=>'Known-patient diagnostic'] as $v=>$label): ?><option value="<?= $v ?>" <?= $method===$v?'selected':'' ?>><?= $label ?></option><?php endforeach; ?></select></div>
             <div class="field field-small"><label for="horizon">Test horizon</label><select name="horizon" id="horizon"><?php foreach(['all'=>'All horizons','1'=>'1 day','7'=>'7 days','14'=>'14 days','30'=>'30 days'] as $v=>$label): ?><option value="<?= accuracyH($v) ?>" <?= $horizon===(string)$v?'selected':'' ?>><?= $label ?></option><?php endforeach; ?></select></div>
             <div class="field field-search"><label for="itemSearch">Item search</label><div class="search-box"><?= accuracyIcon('search') ?><input type="search" name="q" id="itemSearch" value="<?= accuracyH($search) ?>" placeholder="Search a supply…" maxlength="200"></div></div>
             <div class="field field-small"><label for="perPage">Rows per page</label><select id="perPage" name="per_page"><?php foreach([10,20,50] as $size): ?><option value="<?= $size ?>" <?= $perPage===$size?'selected':'' ?>><?= $size ?> rows</option><?php endforeach; ?></select></div>
@@ -246,6 +251,7 @@ body{background:#f9faff;font-size:15px}.sidebar{padding:0;visibility:visible;bac
         </form>
         <?php if(!$run): ?><section class="panel empty-state"><?= accuracyIcon('chart') ?><h2>No saved accuracy results yet</h2><p>Open Supply Forecasting as this branch's administrator and select a horizon. Its first successful generation after setup saves the test results here. Viewing this report never runs the model or changes stock.</p><a class="btn" href="<?= accuracyH($back) ?>"><?= accuracyIcon('arrow') ?><?= $role===2?'Open supply forecasting':'Back to dashboard' ?></a></section>
         <?php else: ?>
+            <?php forecastMetricsRender($overallMetrics,false,$search!==''); ?>
             <section class="panel evidence-panel" aria-label="Reliability evidence">
                 <div class="evidence-title"><span class="evidence-icon"><?= accuracyIcon('book') ?></span><div><h2>What these results can establish</h2><p>This saved evaluation uses one historical cutoff. Open Repeated tests &amp; baselines for additional saved evidence.</p></div></div>
                 <div class="evidence-grid"><div><span>Chronological holdout</span><strong><?= $chronologicalEvidence?'Saved train/test separation':'Insufficient saved dates' ?></strong></div><div><span>Repeated test windows</span><strong>Not recorded by this evaluator</strong></div><div><span>Baseline comparison</span><strong>Not recorded by this evaluator</strong></div><div><span>Prospective clinic validation</span><strong>Not established by this report</strong></div></div>
