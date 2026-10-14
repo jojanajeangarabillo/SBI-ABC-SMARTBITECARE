@@ -104,6 +104,38 @@ function forecastStatusNormalizeRow(array $row): array
         (int)$row['forecast_days'], (int)$row['restocking_lead_days'], (int)$row['safety_buffer_days']));
 }
 
+/** forecast_results.forecast_method is added by sources/migrate_forecast_method.php. */
+function forecastMethodColumnExists(mysqli $conn): bool
+{
+    $stmt = $conn->prepare("SELECT COUNT(*) AS total FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'forecast_results' AND COLUMN_NAME = 'forecast_method'");
+    $stmt->execute();
+    $exists = (int)$stmt->get_result()->fetch_assoc()['total'] > 0;
+    $stmt->close();
+    return $exists;
+}
+
+/** Which method produced a forecast: XGBoost or the recent 28-day average fallback. */
+function forecastMethodLabel(?string $method): string
+{
+    return match ($method) {
+        'xgboost' => 'XGBoost',
+        'recent_mean' => 'Recent 28-day average',
+        default => 'Not recorded',
+    };
+}
+
+function forecastMethodBadgeHtml(?string $method): string
+{
+    $title = match ($method) {
+        'xgboost' => 'XGBoost beat the recent 28-day average on this item\'s holdout test.',
+        'recent_mean' => 'XGBoost did not beat the recent 28-day average on this item\'s holdout test, so the average is used.',
+        default => 'This forecast was saved before the forecasting method was recorded.',
+    };
+    return '<div class="text-muted" style="font-size:11px;" title="' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '">'
+        . 'Method: ' . htmlspecialchars(forecastMethodLabel($method), ENT_QUOTES, 'UTF-8') . '</div>';
+}
+
 function forecastStatusLegendHtml(): string
 {
     $policy = forecastStatusPolicy();

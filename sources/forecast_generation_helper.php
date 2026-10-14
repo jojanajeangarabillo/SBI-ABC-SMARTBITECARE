@@ -105,6 +105,9 @@ function forecastGenerationValidate(array $result, array $snapshot, int $days): 
             || forecastStatusTicks($minimum) !== forecastStatusTicks((float)$item['minimum_stock'])) {
             throw new RuntimeException('The model used different stock or minimum settings. Generate a fresh forecast.');
         }
+        if (!in_array($row['method'] ?? null, ['xgboost', 'recent_mean'], true)) {
+            throw new RuntimeException('The model returned an unknown forecasting method. Install all forecasting files together.');
+        }
         $daily = $row['daily_forecasts'] ?? null;
         if (!is_array($daily) || !array_is_list($daily) || count($daily) !== $days) {
             throw new RuntimeException('The model returned an incomplete daily forecast horizon.');
@@ -154,13 +157,17 @@ function forecastGenerationPublish(mysqli $conn, string $branchId, int $days, in
         $delete->bind_param('si', $branchId, $days);
         forecastTrainingExecute($delete);
         $delete->close();
+        // The method column is optional until sources/migrate_forecast_method.php is applied.
+        $storeMethod = forecastMethodColumnExists($conn);
         $insert = forecastTrainingStatement($conn,
             'INSERT INTO forecast_results (item_id, branch_id, forecast_date, forecast_start_date,
              forecast_end_date, current_stock_snapshot, minimum_stock_snapshot, stock_status,
              shortage_probability, forecast_status, recommended_reorder, generated_by,
              forecasted_consumption, forecast_days, is_stale, stale_at, stale_reason,
-             status_rule_version, restocking_lead_days, safety_buffer_days)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?)');
+             status_rule_version, restocking_lead_days, safety_buffer_days'
+             . ($storeMethod ? ', forecast_method' : '') . ')
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?'
+             . ($storeMethod ? ', ?' : '') . ')');
         foreach ($forecasts as $row) {
             $id = $row['item_id'];
             $date = $snapshot['database_today'];
@@ -176,9 +183,16 @@ function forecastGenerationPublish(mysqli $conn, string $branchId, int $days, in
             $version = $row['status_rule_version'];
             $lead = $row['restocking_lead_days'];
             $buffer = $row['safety_buffer_days'];
-            $insert->bind_param('isssssssdsiisisii', $id, $branchId, $date, $start, $end,
-                $stock, $minimum, $stockStatus, $probability, $status, $reorder, $userId,
-                $demand, $days, $version, $lead, $buffer);
+            $method = $row['method'];
+            if ($storeMethod) {
+                $insert->bind_param('isssssssdsiisisiis', $id, $branchId, $date, $start, $end,
+                    $stock, $minimum, $stockStatus, $probability, $status, $reorder, $userId,
+                    $demand, $days, $version, $lead, $buffer, $method);
+            } else {
+                $insert->bind_param('isssssssdsiisisii', $id, $branchId, $date, $start, $end,
+                    $stock, $minimum, $stockStatus, $probability, $status, $reorder, $userId,
+                    $demand, $days, $version, $lead, $buffer);
+            }
             forecastTrainingExecute($insert);
         }
         $insert->close();

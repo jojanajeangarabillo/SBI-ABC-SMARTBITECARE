@@ -1487,6 +1487,7 @@ $chartRiskValues = array_map(
                                         ) ?>
                                     </div>
                                 <?php endif; ?>
+                                <?= forecastMethodBadgeHtml($forecast['forecast_method'] ?? null) ?>
                             </td>
 
                             <td>
