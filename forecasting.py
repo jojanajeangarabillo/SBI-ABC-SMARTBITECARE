@@ -109,7 +109,15 @@ RECENT_WINDOW_DAYS = 28
 SANITY_FLOOR_FRACTION = 0.5
 DEFAULT_MAX_TRAINING_GAP_DAYS = 21
 HOLDOUT_FRACTION = 0.2
-MINIMUM_HOLDOUT_ORIGINS = 5
+# Per-item method choice: XGBoost must beat the recent mean in at least
+# SELECTION_MIN_WINS of the last SELECTION_ORIGINS rolling origins AND have an
+# average MAE at least SELECTION_MIN_IMPROVEMENT lower. Each origin retrains on
+# earlier targets and scores a block of SELECTION_BLOCK_DAYS forecast dates.
+SELECTION_ORIGINS = 4
+SELECTION_MIN_WINS = 3
+SELECTION_MIN_IMPROVEMENT = 0.05
+SELECTION_SPACING_DAYS = 14
+SELECTION_BLOCK_DAYS = 7
 MAXIMUM_TARGET_RATIO = 10.0
 METHOD_XGBOOST = "xgboost"
 METHOD_RECENT_MEAN = "recent_mean"
@@ -654,42 +662,66 @@ def apply_sanity_floor(total, recent_mean, horizon):
     return np.maximum(np.nan_to_num(total, nan=0.0), SANITY_FLOOR_FRACTION * recent_mean * horizon)
 
 
+def selection_origins(frame, horizon):
+    """The last SELECTION_ORIGINS rolling origins whose scored blocks are fully observed."""
+    if frame.empty:
+        return []
+    last_origin = frame.loc[frame[f"target_{horizon}"].notna(), "origin"].max()
+    if pd.isna(last_origin):
+        return []
+    latest = pd.Timestamp(last_origin) - pd.Timedelta(days=SELECTION_BLOCK_DAYS - 1)
+    # Space origins at least H days apart so their target windows do not overlap.
+    spacing = max(SELECTION_SPACING_DAYS, horizon)
+    return sorted(latest - pd.Timedelta(days=spacing * k) for k in range(SELECTION_ORIGINS))
+
+
 def fit_forecaster(clean_history, model_factory=None):
     """Train direct 7/14/30-day models and pick xgboost or recent_mean per item.
 
-    The choice uses a chronological holdout inside the supplied history: the
-    models are fitted on target windows that end before the holdout, and each
-    item keeps XGBoost only when its holdout MAE on H-day totals is strictly
-    lower than recent 28-day mean x H. Final models are refitted on all rows.
+    For each horizon, the last 4 rolling origins before the forecast date each
+    retrain the model on target windows that end by that origin, then score the
+    H-day totals forecast on that origin and the next 6 days. An item keeps
+    XGBoost only if it beats recent 28-day mean x H on MAE in at least 3 of the
+    4 origins AND its average MAE across them is at least 5% lower; otherwise
+    the recent mean is used. Final models are refitted on all rows.
     """
     frame = build_feature_frame(clean_history)
-    forecaster = {"models": {}, "choices": {}, "errors": {}, "holdout_start": None}
+    forecaster = {"models": {}, "choices": {}, "errors": {}, "selection_origins": {}}
     if frame.empty:
         return forecaster
-    dates = sorted(clean_history["record_date"].unique())
-    holdout_start = pd.Timestamp(dates[int(len(dates) * (1 - HOLDOUT_FRACTION))]) if len(dates) >= 20 else None
-    forecaster["holdout_start"] = holdout_start
     for horizon in HORIZONS:
+        target = f"target_{horizon}"
+        origins = selection_origins(frame, horizon)
+        per_origin = []
+        for origin in origins:
+            # Targets ending on or before the origin date were known on it.
+            model = fit_horizon_model(training_rows(frame, horizon, origin + pd.Timedelta(days=1)),
+                                      horizon, model_factory)
+            block = frame[(frame["origin"] >= origin)
+                          & (frame["origin"] < origin + pd.Timedelta(days=SELECTION_BLOCK_DAYS))
+                          & frame[target].notna()]
+            if model is None or block.empty:
+                continue
+            xgb_total, recent_total = raw_predictions({horizon: model}, block, horizon)
+            xgb_total = apply_sanity_floor(xgb_total, block["recent_mean"].to_numpy(float), horizon)
+            per_origin.append(block[["item_id"]].assign(
+                origin=origin,
+                xgb_error=np.abs(xgb_total - block[target].to_numpy(float)),
+                mean_error=np.abs(recent_total - block[target].to_numpy(float))))
         choice, errors = {}, {}
-        if holdout_start is not None:
-            early = fit_horizon_model(training_rows(frame, horizon, holdout_start), horizon, model_factory)
-            test = frame[(frame["origin"] >= holdout_start - pd.Timedelta(days=1))
-                         & frame[f"target_{horizon}"].notna()]
-            if early is not None and not test.empty:
-                xgb_total, recent_total = raw_predictions({horizon: early}, test, horizon)
-                xgb_total = apply_sanity_floor(xgb_total, test["recent_mean"].to_numpy(float), horizon)
-                scored = test.assign(xgb_error=np.abs(xgb_total - test[f"target_{horizon}"]),
-                                     mean_error=np.abs(recent_total - test[f"target_{horizon}"]))
-                for item_id, item in scored.groupby("item_id"):
-                    if len(item) < MINIMUM_HOLDOUT_ORIGINS:
-                        continue
-                    xgb_mae = float(item["xgb_error"].mean())
-                    mean_mae = float(item["mean_error"].mean())
-                    use_xgb = xgb_mae < mean_mae
-                    choice[int(item_id)] = METHOD_XGBOOST if use_xgb else METHOD_RECENT_MEAN
-                    errors[int(item_id)] = xgb_mae if use_xgb else mean_mae
+        if per_origin:
+            scores = pd.concat(per_origin).groupby(["item_id", "origin"])[["xgb_error", "mean_error"]].mean()
+            for item_id, item in scores.groupby(level="item_id"):
+                xgb_mae = float(item["xgb_error"].mean())
+                mean_mae = float(item["mean_error"].mean())
+                wins = int((item["xgb_error"] < item["mean_error"]).sum())
+                use_xgb = (len(item) >= SELECTION_ORIGINS and wins >= SELECTION_MIN_WINS
+                           and xgb_mae < mean_mae and xgb_mae <= (1 - SELECTION_MIN_IMPROVEMENT) * mean_mae)
+                choice[int(item_id)] = METHOD_XGBOOST if use_xgb else METHOD_RECENT_MEAN
+                errors[int(item_id)] = xgb_mae if use_xgb else mean_mae
         forecaster["choices"][horizon] = choice
         forecaster["errors"][horizon] = errors
+        forecaster["selection_origins"][horizon] = [o.strftime("%Y-%m-%d") for o in origins]
         forecaster["models"][horizon] = fit_horizon_model(training_rows(frame, horizon), horizon, model_factory)
     return forecaster
 
