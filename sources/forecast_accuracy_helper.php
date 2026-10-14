@@ -1,7 +1,10 @@
 <?php
 declare(strict_types=1);
 
-const FORECAST_EVALUATION_VERSION = 'sbc-evaluation-v1';
+const FORECAST_EVALUATION_VERSION = 'sbc-evaluation-v2';
+// Must match FEATURE_COLUMNS in forecasting.py (no same-day patient count).
+const FORECAST_FEATURE_COLUMNS = ['usage_7_scaled','usage_28_scaled','usage_28_log','patient_avg_7',
+    'bite_lag_3','bite_lag_7','bite_lag_28','bite_mean_7','dow','month','supply_type'];
 
 function forecastAccuracyTableDefinitions(): array
 {
@@ -137,7 +140,7 @@ function forecastAccuracyValidate(array $result, array $snapshot): array
         || !is_string($data['source_hash'] ?? null) || !preg_match('/^[a-f0-9]{64}$/D', $data['source_hash'])
         || !is_string($data['model_version'] ?? null) || $data['model_version'] === '' || strlen($data['model_version']) > 80
         || !is_array($data['model_parameters'] ?? null) || !is_array($data['feature_columns'] ?? null)
-        || $data['feature_columns'] !== ['dow','month','day','is_weekend','patient_volume','supply_type','lag_1','lag_7','rolling_7']
+        || $data['feature_columns'] !== FORECAST_FEATURE_COLUMNS
         || !is_array($data['rows'] ?? null) || !array_is_list($data['rows']) || !$data['rows'] || count($data['rows']) > 4000) {
         throw new RuntimeException('The model did not return a valid forecast accuracy batch. Install all Step 12 files together.');
     }

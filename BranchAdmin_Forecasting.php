@@ -1494,6 +1494,7 @@ while ($row = $items_result->fetch_assoc()) {
                                                 ); ?>
                                             </div>
                                         <?php endif; ?>
+                                        <?php echo forecastMethodBadgeHtml($forecast['forecast_method'] ?? null); ?>
                                     </td>
                                     <td>
                                         <?php echo number_format($forecast['shortage_probability'] * 100, 1); ?>%
