@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import forecasting as model
 
-VERSION = 'sbc-rolling-v1'
+VERSION = 'sbc-rolling-v2'
 HORIZONS = (7, 14, 30)
 MIN_TRAIN_DATES = 30
 METHODS = ('xgb', 'last', 'mean')
@@ -51,7 +51,7 @@ def read_snapshot(branch):
             WHERE i.is_forecastable=1 ORDER BY i.item_id""")
         catalog = cursor.fetchall()
         cursor.execute("""SELECT t.training_id,t.branch_id,t.item_id,t.record_date,t.patient_count,
-            t.quantity_used,t.beginning_stock,t.stock_received,t.ending_stock,
+            t.animal_bite_cases,t.quantity_used,t.beginning_stock,t.stock_received,t.ending_stock,
             i.item_name,i.minimum_stock,t.source_type,t.base_unit_label_snapshot
             FROM training_dataset t JOIN inventory_items i ON i.item_id=t.item_id
             WHERE t.branch_id=%s AND i.is_forecastable=1 AND t.record_date<=%s
@@ -100,12 +100,15 @@ def evaluate(raw, catalog, as_of, windows=5, model_factory=None, progress=None):
     raw = raw[raw.record_date <= pd.Timestamp(as_of).normalize()].copy()
     if raw.empty:
         raise ValueError('No records fall on or before the evaluation cutoff.')
-    history, _ = model.prepare_training_data(raw)
+    history = model.prepare_training_data(raw)
     end = history.record_date.max()
     origins = sorted(end - pd.Timedelta(days=30 * k) for k in range(1, windows + 1))
     items = {int(i['item_id']): i for i in catalog}
-    source_fields = ['branch_id', 'item_id', 'record_date', 'patient_count', 'quantity_used',
+    source_fields = ['branch_id', 'item_id', 'record_date', 'patient_count', 'animal_bite_cases', 'quantity_used',
                      'item_name', 'source_type', 'base_unit_label_snapshot']
+    for field in source_fields:
+        if field not in raw.columns:
+            raw[field] = None
     snapshot = raw.sort_values(['item_id', 'record_date'])[source_fields].to_json(
         orient='records', date_format='iso', double_precision=15)
     catalog_snapshot = [{'item_id': int(i['item_id']), 'item_name': str(i['item_name']).strip(),
@@ -120,45 +123,45 @@ def evaluate(raw, catalog, as_of, windows=5, model_factory=None, progress=None):
               for k, v in params.items() if v is None or isinstance(v, (str, int, float, bool))}
     details = dict(features=model.FEATURE_COLUMNS, parameters=params, requested_windows=windows,
                    origin_spacing_days=30, min_training_model_dates=MIN_TRAIN_DATES,
+                   model=('Production forecast: direct 7/14/30-day XGBoost totals, or the recent 28-day mean '
+                          'when XGBoost did not beat it on an inner holdout; sanity floor 50% of the recent mean.'),
                    baselines={'last': 'Last observed usage, fixed throughout the window',
                               'mean': 'Mean of the seven latest observed usage records, fixed throughout the window'},
                    sources=raw.source_type.fillna('unknown').value_counts().to_dict(),
                    missing_unit_snapshots=int(raw.base_unit_label_snapshot.fillna('').str.strip().eq('').sum()),
                    data_note='Source labels document origin; they do not certify authenticity.',
                    window_note='Expanding training, disjoint test blocks per horizon; horizons within each block overlap.',
-                   scoring='Daily rounded 4-decimal forecasts; MAE, RMSE, SMAPE; totals sum those same daily forecasts.')
+                   scoring='Daily rounded 4-decimal forecasts; MAE, RMSE, SMAPE; totals sum those same daily forecasts.',
+                   production_methods={})
+    frame = model.build_feature_frame(history)
     rows = []
     for fold, origin in enumerate(origins, 1):
         if progress:
             progress(f'Window {fold}/{windows}: training through {text_date(origin)}')
-        # Build features from this prefix only, including patient-volume inputs.
-        prefix_raw = raw[raw.record_date <= origin].copy()
-        if prefix_raw.empty:
-            training = pd.DataFrame(columns=model.FEATURE_COLUMNS + [model.TARGET_COLUMN, 'item_id', 'record_date'])
-        else:
-            _, training = model.prepare_training_data(prefix_raw)
-        ready = training.record_date.nunique() >= MIN_TRAIN_DATES
-        fitted = None
-        if ready:
-            fitted = factory()
-            fitted.fit(training[model.FEATURE_COLUMNS].astype(float), training[model.TARGET_COLUMN].astype(float))
+        # Train from this prefix only; features at the origin use no later data.
+        prefix_history = history[history.record_date <= origin]
+        ready = prefix_history.record_date.nunique() >= MIN_TRAIN_DATES
+        forecaster = model.fit_forecaster(prefix_history, model_factory) if ready else None
         for item_id in sorted(history.item_id.astype(int).unique()):
             item_id = int(item_id)
             item = items[item_id]
             item_history = history[history.item_id == item_id]
-            prefix = item_history[item_history.record_date <= origin].copy()
-            item_train = training[training.item_id == item_id]
-            path = None
+            prefix = item_history[item_history.record_date <= origin]
+            paths_by_horizon = {}
             why = None
             if not ready:
                 why = 'Fewer than 30 unique model training dates before this starting date.'
-            elif len(prefix) < model.MINIMUM_HISTORY_RECORDS or item_train.empty:
+            elif len(prefix) < model.MINIMUM_HISTORY_RECORDS:
                 why = 'Not enough pre-window history for this item.'
             else:
-                forecast, why = model.generate_item_forecast(fitted, prefix, 0, 0, 0, 0, 30, origin)
-                if forecast:
-                    path = {pd.Timestamp(d['date']): float(d['forecasted_consumption'])
-                            for d in forecast['daily_forecasts']}
+                for horizon in HORIZONS:
+                    path = model.forecast_item_path(forecaster, frame, prefix_history, item_id, origin, horizon)
+                    if path is None:
+                        why = 'No recent usage was available on this starting date.'
+                        break
+                    paths_by_horizon[horizon] = path
+                    details['production_methods'].setdefault(text_date(origin), {}).setdefault(
+                        str(item_id), {})[str(horizon)] = path['method']
             recent = prefix.quantity_used.astype(float).tail(7).to_numpy()
             last = round(float(recent[-1]), 4) if len(recent) else None
             mean = round(float(np.mean(recent)), 4) if len(recent) else None
@@ -169,9 +172,9 @@ def evaluate(raw, catalog, as_of, windows=5, model_factory=None, progress=None):
                 dates = pd.date_range(start, finish, freq='D')
                 row = dict(fold_number=fold, item_id=item_id, item_name=str(item['item_name']).strip(),
                            base_unit=str(item['base_unit']).strip(), horizon_days=horizon, origin_date=text_date(origin),
-                           training_records=len(item_train),
-                           training_start=text_date(item_train.record_date.min()) if len(item_train) else None,
-                           training_end=text_date(item_train.record_date.max()) if len(item_train) else None,
+                           training_records=len(prefix),
+                           training_start=text_date(prefix.record_date.min()) if len(prefix) else None,
+                           training_end=text_date(prefix.record_date.max()) if len(prefix) else None,
                            testing_start=text_date(start), testing_end=text_date(finish),
                            observed_records=len(actual), status='Unavailable', reason=why,
                            actual_total=None, daily_results=[])
@@ -181,11 +184,13 @@ def evaluate(raw, catalog, as_of, windows=5, model_factory=None, progress=None):
                 if why is None and (len(actual) != horizon or set(actual.record_date) != set(dates)):
                     row['reason'] = f'Only {len(actual)} of {horizon} actual daily records exist. Missing days are not zero.'
                 elif why is None:
-                    if path is None or not all(d in path for d in dates):
+                    path = paths_by_horizon[horizon]
+                    predicted = dict(zip(path['dates'], np.round(path['daily'], 4)))
+                    if not all(d in predicted for d in dates):
                         raise ValueError('Production forecasting returned an incomplete daily path.')
                     by_date = actual.set_index('record_date').quantity_used.astype(float)
-                    daily = [dict(date=text_date(d), actual=float(by_date.loc[d]), xgb=path[d], last=last, mean=mean)
-                             for d in dates]
+                    daily = [dict(date=text_date(d), actual=float(by_date.loc[d]), xgb=float(predicted[d]),
+                                  last=last, mean=mean) for d in dates]
                     for name in METHODS:
                         scores = model.forecast_error_scores([d['actual'] for d in daily], [d[name] for d in daily])
                         for field in ('mae', 'rmse', 'smape_percent', 'forecast_total'):

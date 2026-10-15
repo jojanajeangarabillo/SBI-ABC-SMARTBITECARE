@@ -1,0 +1,37 @@
+-- Optional: set each item's minimum stock to about 7 days of simulated usage (Cainta).
+-- Review before running. Applies to inventory_items.minimum_stock used by forecasting.
+UPDATE inventory_items SET minimum_stock = 2 WHERE TRIM(item_name) = '1CC/3CC';
+UPDATE inventory_items SET minimum_stock = 1 WHERE TRIM(item_name) = '5CC/10CC';
+UPDATE inventory_items SET minimum_stock = 174 WHERE TRIM(item_name) = 'ABHAYRAB';
+UPDATE inventory_items SET minimum_stock = 1500 WHERE TRIM(item_name) = 'ALCOHOL';
+UPDATE inventory_items SET minimum_stock = 300 WHERE TRIM(item_name) = 'AMOXICILLIN 500MG';
+UPDATE inventory_items SET minimum_stock = 5 WHERE TRIM(item_name) = 'ATS (Anti-Tetanus Serum)';
+UPDATE inventory_items SET minimum_stock = 5 WHERE TRIM(item_name) = 'ATS 1,500 "IU"';
+UPDATE inventory_items SET minimum_stock = 5 WHERE TRIM(item_name) = 'ATS 3000 "IU"';
+UPDATE inventory_items SET minimum_stock = 5 WHERE TRIM(item_name) = 'ATS 5,000 "IU"';
+UPDATE inventory_items SET minimum_stock = 500 WHERE TRIM(item_name) = 'BETADINE';
+UPDATE inventory_items SET minimum_stock = 100 WHERE TRIM(item_name) = 'CEFALEXIN 500 MG';
+UPDATE inventory_items SET minimum_stock = 100 WHERE TRIM(item_name) = 'CETIRIZINE';
+UPDATE inventory_items SET minimum_stock = 174 WHERE TRIM(item_name) = 'CHIRORAB';
+UPDATE inventory_items SET minimum_stock = 13 WHERE TRIM(item_name) = 'COTTON BALLS';
+UPDATE inventory_items SET minimum_stock = 280 WHERE TRIM(item_name) = 'ERIG (Equine Rabies Immunoglobulin)';
+UPDATE inventory_items SET minimum_stock = 4 WHERE TRIM(item_name) = 'FACEMASK';
+UPDATE inventory_items SET minimum_stock = 5 WHERE TRIM(item_name) = 'FLU';
+UPDATE inventory_items SET minimum_stock = 200 WHERE TRIM(item_name) = 'G23';
+UPDATE inventory_items SET minimum_stock = 100 WHERE TRIM(item_name) = 'G27';
+UPDATE inventory_items SET minimum_stock = 4 WHERE TRIM(item_name) = 'GAUZE PAD';
+UPDATE inventory_items SET minimum_stock = 11 WHERE TRIM(item_name) = 'GLOVES';
+UPDATE inventory_items SET minimum_stock = 15 WHERE TRIM(item_name) = 'HEPA B';
+UPDATE inventory_items SET minimum_stock = 5 WHERE TRIM(item_name) = 'HEPA BIG';
+UPDATE inventory_items SET minimum_stock = 25 WHERE TRIM(item_name) = 'HRIG';
+UPDATE inventory_items SET minimum_stock = 5 WHERE TRIM(item_name) = 'HTIG';
+UPDATE inventory_items SET minimum_stock = 800 WHERE TRIM(item_name) = 'INSULIN';
+UPDATE inventory_items SET minimum_stock = 300 WHERE TRIM(item_name) = 'MEFENAMIC 500 MG';
+UPDATE inventory_items SET minimum_stock = 12 WHERE TRIM(item_name) = 'MICROPRE';
+UPDATE inventory_items SET minimum_stock = 5 WHERE TRIM(item_name) = 'PPD';
+UPDATE inventory_items SET minimum_stock = 500 WHERE TRIM(item_name) = 'STERILE WATER';
+UPDATE inventory_items SET minimum_stock = 624 WHERE TRIM(item_name) = 'Speeda';
+UPDATE inventory_items SET minimum_stock = 20 WHERE TRIM(item_name) = 'TOXOID ABHAYTOX';
+UPDATE inventory_items SET minimum_stock = 40 WHERE TRIM(item_name) = 'TOXOID BETT';
+UPDATE inventory_items SET minimum_stock = 20 WHERE TRIM(item_name) = 'TT (Tetanus Toxoid)';
+UPDATE inventory_items SET minimum_stock = 186 WHERE TRIM(item_name) = 'VAXIRAB';

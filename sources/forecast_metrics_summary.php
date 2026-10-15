@@ -105,8 +105,8 @@ function forecastMetricsSummarize(iterable $rows, bool $rolling = false): array
 function forecastMetricsLabel(array $row): string
 {
     return match ($row['method']) {
-        'recursive' => 'XGBoost forecast test',
-        'one_step' => 'Known-patient diagnostic',
+        'recursive' => 'Horizon forecast test',
+        'one_step' => 'Next-day check',
         'xgb' => 'XGBoost',
         'last' => 'Last usage',
         'mean' => 'Recent mean',

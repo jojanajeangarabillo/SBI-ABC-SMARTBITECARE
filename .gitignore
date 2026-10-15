@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.sql
+!database/smartbitecare.sql
+!database/data/update_minimum_stock.sql
