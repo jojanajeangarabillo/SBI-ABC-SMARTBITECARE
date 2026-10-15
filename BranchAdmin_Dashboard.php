@@ -1567,7 +1567,7 @@ $username = $userInfo['username'] ?? 'Admin';
                             <?php endforeach; ?>
                         <?php endif; ?>
                         <div class="text-end mt-3">
-                            <button class="btn btn-custom" onclick="window.location.href='BranchAdmin_MedicalSupplies.php'">
+                            <button class="btn btn-custom" onclick="window.location.href='BranchAdmin_InventoryOverview.php'">
                                 View All Supplies
                             </button>
                         </div>
