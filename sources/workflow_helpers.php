@@ -418,34 +418,60 @@ function workflowLateDecisionLabel(?string $decision, $days = null): string
 }
 
 /**
- * Unfinished dose placeholders of the ACTIVE cycle that are more than the
- * 7-day window overdue (as of $asOf, default today). Outside doses and
- * archived cycles are excluded. Returns ['max_days' => int, 'rows' => [...]]
- * where each row has vaccination_id, dose_number, scheduled_date, days_late
- * and late_decision (NULL before the migration or when not chosen yet).
+ * THE late-dose check used by both the Assessment alert/box and the save, and
+ * by the Vaccination restart action, so they can never disagree.
+ *
+ * A dose counts only when it is a missed dose by the shared rule
+ * (workflowMissedDoseCondition: active non-archived row of the current cycle,
+ * dose stage D0-D28, Missed or still Scheduled with a past date, and NEVER
+ * completed - no Completed row for the same case and dose) of THIS patient
+ * and case, and is more than the 7-day window late on $asOf (default today).
+ * Archived/restarted cycles, other cases and stages already completed (for
+ * example a leftover placeholder next to the completed row) never count.
+ *
+ * Returns ['max_days' => int, 'rows' => [...]] with one row per dose stage:
+ * vaccination_id, dose_number, scheduled_date, days_late, late_decision
+ * (NULL before the migration or when no choice was saved yet).
  */
 function workflowCaseLateDoses(mysqli $conn, int $patientId, int $caseId, string $branchId, ?string $asOf = null): array
 {
     $asOf = $asOf ?? date('Y-m-d');
-    $decisionSql = workflowLateDecisionReady($conn) ? 'late_decision' : 'NULL';
+    $decisionSql = workflowLateDecisionReady($conn) ? 'vr.late_decision' : 'NULL';
     $stmt = $conn->prepare(
-        "SELECT vaccination_id, dose_number, scheduled_date,
-                DATEDIFF(?, scheduled_date) AS days_late, $decisionSql AS late_decision
-         FROM vaccination_records
-         WHERE patient_id = ? AND case_id = ? AND branch_id = ? AND is_archived = 0
-           AND vaccination_status IN ('Scheduled', 'Missed')
-           AND scheduled_date IS NOT NULL
-           AND DATEDIFF(?, scheduled_date) > ?
-         ORDER BY scheduled_date ASC, vaccination_id ASC"
+        "SELECT vr.vaccination_id, vr.dose_number, vr.scheduled_date,
+                DATEDIFF(?, vr.scheduled_date) AS days_late, $decisionSql AS late_decision
+         " . workflowMissedDoseFromSql() . "
+         WHERE vr.patient_id = ? AND vr.case_id = ? AND vr.branch_id = ?
+           AND vr.dose_number BETWEEN 1 AND 6
+           AND " . workflowMissedDoseCondition('vr', 'c', 'p') . "
+           AND DATEDIFF(?, vr.scheduled_date) > ?
+         ORDER BY vr.dose_number ASC, vr.scheduled_date ASC, vr.vaccination_id ASC"
     );
     $window = WORKFLOW_LATE_DOSE_WINDOW_DAYS;
     $stmt->bind_param('siissi', $asOf, $patientId, $caseId, $branchId, $asOf, $window);
     $stmt->execute();
-    $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $found = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
     $stmt->close();
+    // One row per dose stage (the oldest schedule of a duplicated placeholder).
+    $rows = [];
+    foreach ($found as $row) {
+        $dose = (int)$row['dose_number'];
+        if (!isset($rows[$dose])) $rows[$dose] = $row;
+    }
+    $rows = array_values($rows);
+    usort($rows, static fn($a, $b) => strcmp((string)$a['scheduled_date'], (string)$b['scheduled_date']));
     $max = 0;
     foreach ($rows as $row) $max = max($max, (int)$row['days_late']);
     return ['max_days' => $max, 'rows' => $rows];
+}
+
+/** True when the nurse still has to choose (some late dose has no saved "continue"). */
+function workflowLateDoseDecisionNeeded(array $late): bool
+{
+    foreach ($late['rows'] ?? [] as $row) {
+        if ((string)($row['late_decision'] ?? '') !== 'continue') return true;
+    }
+    return false;
 }
 
 /**
