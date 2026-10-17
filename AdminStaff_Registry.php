@@ -847,9 +847,14 @@ $flash = workflowTakeFlash();
                         <h5><span class="section-icon"><i class="bi bi-journal-medical"></i></span>Registry Verification Queue</h5>
                         <p>Charts appear here after the Nurse completes and signs the clinical assessment.</p>
                     </div>
-                    <span class="badge rounded-pill text-bg-light border">
-                        <?php echo number_format(count($records)); ?> records
-                    </span>
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <a class="btn btn-sm btn-outline-primary" href="AdminStaff_RegistryLogbook.php">
+                            <i class="bi bi-journal-text me-1"></i>Logbook View &amp; Excel Export
+                        </a>
+                        <span class="badge rounded-pill text-bg-light border">
+                            <?php echo number_format(count($records)); ?> records
+                        </span>
+                    </div>
                 </div>
 
                 <div class="table-responsive">
