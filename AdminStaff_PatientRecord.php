@@ -3867,7 +3867,20 @@ body.sidebar-collapsed .main {
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">PhilHealth Membership Type</label>
-                                    <input type="text" class="form-control" id="philhealthType" placeholder="e.g., Sponsored, Indigent, etc.">
+                                    <select class="form-select" id="philhealthTypeSelect">
+                                        <option value="">Select membership</option>
+                                        <option value="Employed">Employed</option>
+                                        <option value="Self-Earning / Individually Paying">Self-Earning / Individually Paying</option>
+                                        <option value="OFW">OFW</option>
+                                        <option value="Kasambahay">Kasambahay</option>
+                                        <option value="Indigent">Indigent</option>
+                                        <option value="Sponsored">Sponsored</option>
+                                        <option value="Senior Citizen">Senior Citizen</option>
+                                        <option value="Lifetime Member">Lifetime Member</option>
+                                        <option value="Dependent">Dependent</option>
+                                        <option value="Other">Other (specify)</option>
+                                    </select>
+                                    <input type="text" class="form-control mt-2" id="philhealthType" maxlength="50" placeholder="Specify membership type" style="display:none;">
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">Contact Number <span class="text-danger">*</span></label>
@@ -3900,11 +3913,19 @@ body.sidebar-collapsed .main {
                                 <div class="mb-3">
                                     <label class="form-label">Biting Animal</label>
                                     <select class="form-select" id="bitingAnimal">
+                                        <option value="">Not stated / Non-bite visit</option>
                                         <option value="Dog">Dog</option>
                                         <option value="Cat">Cat</option>
+                                        <option value="Monkey">Monkey</option>
+                                        <option value="Cow">Cow</option>
+                                        <option value="Carabao">Carabao</option>
+                                        <option value="Bat">Bat</option>
+                                        <option value="Pig">Pig</option>
+                                        <option value="Rat">Rat</option>
                                         <option value="Not Applicable">Not Applicable</option>
                                         <option value="Others">Others</option>
                                     </select>
+                                    <small class="text-muted">Optional for non-bite services (e.g. rusty nail puncture, Hepa B, Flu, PPD).</small>
                                 </div>
                                 <div id="customAnimalContainer" style="display:none;">
                                     <label class="form-label">Specify Animal</label>
@@ -3913,6 +3934,7 @@ body.sidebar-collapsed .main {
                                 <div class="mb-3">
                                     <label class="form-label">Status of the Biting Animal</label>
                                     <select class="form-select" id="animalStatus">
+                                        <option value="">Not stated</option>
                                         <option value="Alive/Healthy">Alive/Healthy</option>
                                         <option value="Sick">Sick</option>
                                         <option value="Died">Died</option>
@@ -4979,14 +5001,14 @@ body.sidebar-collapsed .main {
             });
             
             document.getElementById('philhealth').value = data.has_philhealth === 'Yes' ? 'Yes' : 'No';
-            document.getElementById('philhealthType').value = data.philhealth_membership || '';
+            setPhilhealthType(data.philhealth_membership || '');
             document.getElementById('contactNumber').value = data.contact_number || '';
             document.getElementById('admissionDate').value = data.admission_date || '';
             document.getElementById('dateOfBite').value = data.date_of_bite || '';
             document.getElementById('siteOfBite').value = data.site_of_bite || '';
-            const knownAnimals = ['Dog', 'Cat', 'Not Applicable'];
-            if (knownAnimals.includes(data.biting_animal)) {
-                document.getElementById('bitingAnimal').value = data.biting_animal;
+            const knownAnimals = ['', 'Dog', 'Cat', 'Monkey', 'Cow', 'Carabao', 'Bat', 'Pig', 'Rat', 'Not Applicable'];
+            if (knownAnimals.includes(data.biting_animal || '')) {
+                document.getElementById('bitingAnimal').value = data.biting_animal || '';
                 document.getElementById('customAnimal').value = '';
                 document.getElementById('customAnimalContainer').style.display = 'none';
             } else {
@@ -5107,6 +5129,34 @@ body.sidebar-collapsed .main {
             btn.disabled = false;
             btn.innerHTML = originalText;
             archiveTargetCaseId = null;
+        }
+    });
+
+    // PhilHealth membership: fixed choices plus "Other (specify)". The text
+    // box #philhealthType always holds the value that is saved.
+    function setPhilhealthType(value) {
+        const select = document.getElementById('philhealthTypeSelect');
+        const input = document.getElementById('philhealthType');
+        const known = Array.from(select.options).map(o => o.value).filter(v => v !== '' && v !== 'Other');
+        if (value === '' || known.includes(value)) {
+            select.value = value;
+            input.style.display = 'none';
+        } else {
+            select.value = 'Other';
+            input.style.display = 'block';
+        }
+        input.value = value;
+    }
+
+    document.getElementById('philhealthTypeSelect').addEventListener('change', function() {
+        const input = document.getElementById('philhealthType');
+        if (this.value === 'Other') {
+            input.value = '';
+            input.style.display = 'block';
+            input.focus();
+        } else {
+            input.value = this.value;
+            input.style.display = 'none';
         }
     });
 
@@ -5233,6 +5283,7 @@ body.sidebar-collapsed .main {
         document.getElementById('editPatientId').value = '';
         document.getElementById('modalTitle').textContent = 'Add New Patient';
         document.getElementById('patientForm').reset();
+        setPhilhealthType('');
         document.getElementById('caseNo').value = '';
         document.getElementById('caseNo').classList.remove('is-valid', 'is-invalid');
         document.getElementById('caseNoFeedback').style.display = 'none';
@@ -5405,8 +5456,9 @@ body.sidebar-collapsed .main {
     document.getElementById('philhealth').addEventListener('change', function() {
         togglePhilhealthStatus();
         document.getElementById('philhealthType').disabled = this.value === 'No';
+        document.getElementById('philhealthTypeSelect').disabled = this.value === 'No';
         if (this.value === 'No') {
-            document.getElementById('philhealthType').value = '';
+            setPhilhealthType('');
         }
     });
 

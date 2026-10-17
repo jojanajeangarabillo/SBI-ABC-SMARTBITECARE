@@ -1130,7 +1130,7 @@ function drawMedicalCertificate(&$stream, $data, $hasLogo = false)
     $detailRows = [
         ['Date of Bite/Exposure', $data['bite_date']],
         ['Animal', $data['animal_type']],
-        ['Site of Bite/Exposure', $data['bite_location']],
+        ['Site of Bite', $data['bite_location']],
         ['Type / Category of Exposure', $data['bite_category']],
         ['Treatment Given', getTreatmentSummary($data)]
     ];
@@ -1247,7 +1247,7 @@ function drawReferralLetter(&$stream, $data, $hasLogo = false)
     $detailRows = [
         ['Date of Bite/Exposure', $data['bite_date']],
         ['Animal', $data['animal_type']],
-        ['Site of Exposure', $data['bite_location']],
+        ['Site of Bite', $data['bite_location']],
         ['Type / Category of Exposure', $data['bite_category']],
         ['Initial Assessment / Case Status', $data['case_status']],
         ['Treatment Given', getTreatmentSummary($data)]
@@ -2447,7 +2447,7 @@ function viewPatient(patientId) {
                     '</div>' +
 
                     '<div class="col-md-3">' +
-                    '<strong>Bite Location:</strong> ' +
+                    '<strong>Site of Bite:</strong> ' +
                     escapeHtml(c.bite_location || 'N/A') +
                     '</div>' +
 

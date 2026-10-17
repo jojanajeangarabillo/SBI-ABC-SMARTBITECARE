@@ -260,7 +260,7 @@ const ASSESSMENT_ACTIVE_REGIMENS = ['PVRV TRC SPEEDA', 'PVRV TRC ABHAYRAB'];
 
 /**
  * Validate body-map coordinates independently of the browser. The nurse only
- * clicks the location; the written site stays in SITE OF BITE, so a marker
+ * clicks the location; the written site stays in Site of Bite, so a marker
  * label is optional (older markers keep their saved labels).
  */
 function assessmentBiteMarkers($raw): string {
@@ -3520,7 +3520,7 @@ $flash = workflowTakeFlash();
                                         class="form-label"
                                         for="exposure_site"
                                     >
-                                        SITE OF BITE
+                                        Site of Bite
                                     </label>
 
                                     <input
@@ -3590,7 +3590,7 @@ $flash = workflowTakeFlash();
                                 <div class="col-12">
                                     <div class="bite-map-panel" id="biteMapPanel">
                                         <h6 class="mb-2">Bite Location Diagram</h6>
-                                        <p class="small text-muted mb-3">Click the body to place a dot on each bite location. Click a numbered dot or its Remove button to delete it. Write the site in SITE OF BITE above.</p>
+                                        <p class="small text-muted mb-3">Click the body to place a dot on each bite location. Click a numbered dot or its Remove button to delete it. Write the site in Site of Bite above.</p>
                                         <input type="hidden" id="bite_markers" name="bite_markers" value="<?= workflowH((string)($selected['bite_markers'] ?? '[]')) ?>">
                                         <div class="row g-3">
                                             <div class="col-md-6">
@@ -5104,7 +5104,7 @@ document.addEventListener('DOMContentLoaded', function () {
             status.textContent = 'Click on the human silhouette to place the marker.';
             return;
         }
-        // The written site stays in SITE OF BITE; the dot only marks the location.
+        // The written site stays in Site of Bite; the dot only marks the location.
         markers.push({ x: Number((x * 100).toFixed(4)), y: Number((y * 100).toFixed(4)), label: '' });
         render('Marker added.');
     });

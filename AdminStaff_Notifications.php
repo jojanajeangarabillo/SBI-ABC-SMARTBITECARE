@@ -259,7 +259,7 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
                 WHEN p.gender IS NULL OR p.gender = '' THEN 'Missing Gender'
                 WHEN p.contact_number IS NULL OR p.contact_number = '' THEN 'Missing Contact Number'
                 WHEN c.animal_type IS NULL OR c.animal_type = '' THEN 'Missing Animal Type'
-                WHEN c.bite_location IS NULL OR c.bite_location = '' THEN 'Missing Bite Location'
+                WHEN c.bite_location IS NULL OR c.bite_location = '' THEN 'Missing Site of Bite'
                 WHEN r.registry_number IS NULL OR r.registry_number = '' THEN 'Missing Registry Number'
                 ELSE NULL
             END as missing_field

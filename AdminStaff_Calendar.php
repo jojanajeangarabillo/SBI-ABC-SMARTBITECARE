@@ -417,7 +417,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
     header('Content-Disposition: attachment; filename="' . $filename . '.csv"');
     
     $output = fopen('php://output', 'w');
-    fputcsv($output, ['Case No.', 'Case Number', 'Patient Name', 'Gender', 'Age', 'Contact', 'Animal Type', 'Bite Location', 'Vaccine', 'Dose', 'Scheduled Date', 'Administered Date', 'Status']);
+    fputcsv($output, ['Case No.', 'Case Number', 'Patient Name', 'Gender', 'Age', 'Contact', 'Animal Type', 'Site of Bite', 'Vaccine', 'Dose', 'Scheduled Date', 'Administered Date', 'Status']);
     
     while ($row = $exportResult->fetch_assoc()) {
         fputcsv($output, [
