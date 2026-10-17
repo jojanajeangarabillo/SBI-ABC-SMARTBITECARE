@@ -152,7 +152,7 @@ $recordsQuery = "
         DATE(c.created_at) as date_of_confinement,
         c.case_status,
         c.remarks as case_remarks,
-        r.registry_number as case_no,
+        COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
         r.remarks as registry_remarks,
         ph.philhealth_record_id,
         ph.has_philhealth,
@@ -201,7 +201,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         $exportQuery = "
             SELECT 
                 p.full_name as patient_name,
-                r.registry_number as case_no,
+                COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
                 DATE(COALESCE(c.date_of_bite, c.created_at)) as admission_date,
                 ph.status as philhealth_status,
                 ph.remarks as philhealth_remarks,
@@ -285,7 +285,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             p.full_name as patient_name,
             DATE(COALESCE(c.date_of_bite, c.created_at)) as admission_date,
             DATE(c.created_at) as date_of_confinement,
-            r.registry_number as case_no,
+            COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
             ph.status as philhealth_status,
             ph.remarks as philhealth_remarks,
             (

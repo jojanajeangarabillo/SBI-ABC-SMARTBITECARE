@@ -4,6 +4,7 @@ require_once __DIR__ . '/sources/db_connect.php';
 require_once 'sources/inventory_stock_helpers.php';
 $stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
+require_once 'sources/workflow_helpers.php';
 
 // Check if user is Super Admin
 if (
@@ -94,6 +95,9 @@ $vaccinations_sql = "SELECT
                       FROM vaccination_records";
 $vaccinations_result = $conn->query($vaccinations_sql);
 $vaccinations_data = $vaccinations_result->fetch_assoc();
+// Missed doses: the same shared definition each branch dashboard uses; the
+// all-branch total is the sum of the branch counts.
+$missedByBranch = workflowMissedDoseCountsByBranch($conn);
 
 // 6. Total Inventory Items
 $inventory_sql = "SELECT 
@@ -927,6 +931,31 @@ $today_data = $today_result->fetch_assoc();
             <div class="stat-sub">
                 <?php echo number_format($stock_data['total_usable_batches'] ?? 0); ?>
                 Batches With Usable Stock
+            </div>
+        </div>
+    </div>
+
+    <!-- Missed Doses (all branches = sum of branches) -->
+    <div class="col-lg-4 col-md-6">
+        <div class="stat-card stat-warning">
+            <div class="stat-icon">
+                <i class="bi bi-calendar-x"></i>
+            </div>
+
+            <div class="stat-title">Missed Doses (All Branches)</div>
+
+            <div class="stat-number" id="missedDosesTotal"><?php echo number_format($missedByBranch['total']['doses']); ?></div>
+
+            <div class="stat-sub">
+                <?php
+                $missedParts = [];
+                foreach ($missedByBranch['branches'] as $missedBranch) {
+                    if ($missedBranch['doses'] > 0) {
+                        $missedParts[] = htmlspecialchars(trim($missedBranch['branch_name']), ENT_QUOTES, 'UTF-8') . ': ' . number_format($missedBranch['doses']);
+                    }
+                }
+                echo $missedParts ? implode(' | ', $missedParts) : 'No missed doses in any branch';
+                ?>
             </div>
         </div>
     </div>

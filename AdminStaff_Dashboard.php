@@ -54,7 +54,9 @@ $followUpCount = $patientMetrics['pending_followup_patients'];
 $visitQueueCount = $patientMetrics['patient_waiting'];
 $registryQueueCount = $patientMetrics['for_registry'];
 $todayScheduleCount = $patientMetrics['followup_patients_due_today'];
-$overdueScheduleCount = $patientMetrics['overdue_followup_patients'];
+// Same shared definition as the Calendar, Nurse and Branch Admin dashboards.
+$overdueScheduleCount = $patientMetrics['missed_doses'];
+$overduePatientCount = $patientMetrics['overdue_followup_patients'];
 $newPatientsCount = $patientMetrics['new_patients_month'];
 
 // 3. Get PhilHealth Patients - FIXED: Use has_philhealth instead of philhealth_number
@@ -1366,7 +1368,7 @@ while ($row = $trendResult->fetch_assoc()) {
                 </a>
                 <a href="AdminStaff_Calendar.php" class="priority-item <?php echo $overdueScheduleCount > 0 ? 'danger' : ''; ?>">
                     <span class="priority-icon"><i class="bi bi-calendar-x-fill"></i></span>
-                    <span class="priority-copy"><strong><?php echo $overdueScheduleCount; ?></strong><span>Patients with overdue schedules</span></span>
+                    <span class="priority-copy"><strong><?php echo $overdueScheduleCount; ?></strong><span>Missed doses (<?php echo (int)$overduePatientCount; ?> patient<?php echo $overduePatientCount === 1 ? '' : 's'; ?>) - past due, not given</span></span>
                 </a>
                 <a href="AdminStaff_VisitQueue.php" class="priority-item">
                     <span class="priority-icon"><i class="bi bi-person-lines-fill"></i></span>

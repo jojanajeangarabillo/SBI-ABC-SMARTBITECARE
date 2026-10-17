@@ -462,8 +462,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Same validation, closing and training_dataset sync as the whole-day sheet.
             $saved = dailyInventorySaveClosing(
                 $conn, $branchId, $userId, $itemId, $inventoryDate, $values, $remarks, $contextToken,
-                is_string($_POST['extra_consumed'] ?? null) ? $_POST['extra_consumed'] : '',
-                is_string($_POST['extra_consumed_remarks'] ?? null) ? $_POST['extra_consumed_remarks'] : ''
+                is_string($_POST['wastage_quantity'] ?? null) ? $_POST['wastage_quantity'] : '',
+                is_string($_POST['wastage_reason'] ?? null) ? $_POST['wastage_reason'] : '',
+                is_string($_POST['wastage_other'] ?? null) ? $_POST['wastage_other'] : ''
             );
         } catch (DailyInventoryStaleContextException $stale) {
             $needsNewCount = true;
@@ -474,10 +475,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         workflowFlash(
             'success',
-            'Daily inventory submitted. Consumption came from recorded usage. ' .
+            'Daily inventory submitted. Consumed came from the Assessment, Vaccination and supply usage recorded for the day. ' .
                 ($saved['manual_usage'] !== null
-                    ? 'The consumed quantity you entered (' . $saved['manual_usage']['description']
-                      . ') was recorded as usage and deducted from stock once. '
+                    ? 'The adjustment (' . $saved['manual_usage']['description']
+                      . ') was recorded as wastage, deducted from stock once and added to Consumed. '
                     : 'This closing records counts; it does not deduct stock again.') .
                 (
                     $trainingSynced
@@ -495,7 +496,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $_SESSION['daily_inventory_form'] = [];
         foreach (['item_id', 'inventory_date', 'beginning_stock', 'delivery', 'pull_out', 'actual_count', 'remarks',
-                  'extra_consumed', 'extra_consumed_remarks'] as $field) {
+                  'wastage_quantity', 'wastage_reason', 'wastage_other'] as $field) {
             $_SESSION['daily_inventory_form'][$field] = is_string($_POST[$field] ?? null) ? $_POST[$field] : '';
         }
         if (!empty($needsNewCount)) {
@@ -1661,56 +1662,75 @@ $flash = workflowTakeFlash();
                         >
                     </div>
 
-                    <div class="col-xl-2 col-md-6">
+                    <div class="col-xl-4 col-md-6">
                         <label class="form-label" for="consumed_auto">
                             Consumed (Auto)
                             <span class="inventory-unit-label"></span>
                         </label>
 
-                        <input
-                            type="text"
-                            class="form-control"
-                            id="consumed_auto"
-                            value="0"
-                            readonly
-                        >
+                        <div class="input-group">
+                            <input
+                                type="text"
+                                class="form-control"
+                                id="consumed_auto"
+                                value="0"
+                                readonly
+                            >
+                            <button class="btn btn-outline-secondary" type="button" id="adjustConsumedBtn"
+                                    aria-expanded="false" aria-controls="adjustConsumedPanel" disabled>
+                                <i class="bi bi-pencil-square me-1"></i>Edit / Adjust
+                            </button>
+                        </div>
 
-                        <small class="text-muted">
-                            From completed vaccination / usage records.
+                        <small class="text-muted d-block">
+                            Auto-computed from Assessment and Vaccination records (and Medical Supplies usage) for this date.
                         </small>
+                        <small class="d-block text-primary" id="consumedBreakdown"></small>
                     </div>
 
-                    <div class="col-xl-2 col-md-6">
-                        <label class="form-label" for="extra_consumed">
-                            Add Consumed
-                            <span class="inventory-unit-label"></span>
-                        </label>
-
-                        <input
-                            type="number"
-                            step="0.0001"
-                            min="0"
-                            class="form-control inventory-number"
-                            id="extra_consumed"
-                            name="extra_consumed"
-                            placeholder="0"
-                        >
-
-                        <small class="text-muted">
-                            Sold or given without a vaccination record (e.g. Mefenamic). Recorded as usage and deducted from stock once.
-                        </small>
+                    <div class="col-12" id="adjustConsumedPanel" style="display:none">
+                        <div class="border rounded p-3 bg-light">
+                            <strong class="d-block mb-1"><i class="bi bi-exclamation-octagon me-1"></i>Adjust Consumed (wastage)</strong>
+                            <p class="small text-muted mb-2">
+                                For leakage, a broken vial/ampule or another accident. The extra quantity lost is recorded as
+                                wastage (separate from patient use), deducted from stock once and added to Consumed.
+                                To record medicine dispensed without a vaccination record, use Medical Supplies Management.
+                            </p>
+                            <div class="row g-2 align-items-end">
+                                <div class="col-md-3">
+                                    <label class="form-label small" for="wastage_quantity">Extra quantity lost <span class="inventory-unit-label"></span></label>
+                                    <input type="number" step="0.0001" min="0" class="form-control inventory-number"
+                                           id="wastage_quantity" name="wastage_quantity" placeholder="0">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label small" for="wastage_reason">Reason</label>
+                                    <select class="form-select" id="wastage_reason" name="wastage_reason">
+                                        <option value="">Select a reason</option>
+                                        <?php foreach (dailyInventoryWastageReasons() as $reason): ?>
+                                            <option value="<?= workflowH($reason) ?>"><?= workflowH($reason === 'Other' ? 'Other (specify)' : $reason) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                                <div class="col-md-3" id="wastageOtherBox" style="display:none">
+                                    <label class="form-label small" for="wastage_other">Specify reason</label>
+                                    <input type="text" class="form-control" id="wastage_other" name="wastage_other" maxlength="200">
+                                </div>
+                                <div class="col-md-3">
+                                    <span class="small text-muted d-block">Final Consumed</span>
+                                    <strong id="finalConsumedPreview">-</strong>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
-                    <div class="col-xl-4 col-md-6" id="extraConsumedRemarksBox">
-                        <label class="form-label" for="extra_consumed_remarks">Remark for Added Consumed</label>
-                        <input
-                            type="text"
-                            class="form-control"
-                            id="extra_consumed_remarks"
-                            name="extra_consumed_remarks"
-                            maxlength="500"
-                            placeholder="Required when Add Consumed is entered"
-                        >
+                    <div class="col-12" id="closingOutOfDateBox" style="display:none">
+                        <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2 mb-0 py-2">
+                            <i class="bi bi-exclamation-triangle-fill"></i>
+                            <span id="closingOutOfDateText" class="flex-grow-1"></span>
+                            <button type="button" class="btn btn-sm btn-warning" id="refreshClosingBtn">
+                                <i class="bi bi-arrow-repeat me-1"></i>Refresh closing
+                            </button>
+                        </div>
                     </div>
 
                     <div class="col-xl-2 col-md-6">
@@ -1856,10 +1876,11 @@ $flash = workflowTakeFlash();
                         <i class="bi bi-info-circle-fill"></i>
                         <span>
                             All numbers on this form use the selected
-                            item's base unit. Consumed quantity is read
-                            automatically from completed Nurse Vaccination
-                            and other recorded supply usage for the
-                            selected date; it is not manually entered here.
+                            item's base unit. Consumed is read automatically
+                            from the Assessment and Vaccination records (and
+                            Medical Supplies usage) of the selected date, each
+                            use counted once; doses given at another clinic are
+                            not counted. Use Edit / Adjust only for wastage.
                             Verify opening stock, delivery and pull-out for that day.
                             A closing records the reconciliation; it does not change
                             stored stock. Record stock corrections in Stock Management.
@@ -2157,9 +2178,12 @@ $flash = workflowTakeFlash();
                                             </span>
 
                                             <div class="small text-danger mt-1">
-                                                Usage changed after closing.
-                                                Select this item and date above
-                                                and submit updated counts.
+                                                Out of date: usage was recorded after this closing.
+                                                <a href="Nurse_DailyInventory.php?<?= workflowH(http_build_query([
+                                                    'item_id' => (int)$closing['item_id'],
+                                                    'inventory_date' => (string)$closing['inventory_date'],
+                                                    'history_date' => (string)$closing['inventory_date'],
+                                                ])) ?>">Refresh closing</a>
                                             </div>
                                         <?php else: ?>
                                             <span
@@ -2298,6 +2322,7 @@ const initialDailyForm = <?= json_encode(['item_id' => $formItemId, 'inventory_d
 let dailyContextSequence = 0;
 let dailyContextController = null;
 let dailyContextReady = false;
+let lastDailyContext = null;
 
 function selectedBaseUnit() {
     const select = document.getElementById('item_id');
@@ -2327,13 +2352,25 @@ function formatClosingNumber(scaled) {
 function dailyComputed() {
     const fields = ['beginning_stock', 'delivery', 'consumed_numeric', 'pull_out'];
     const numbers = fields.map(id => dailyScaled(document.getElementById(id)?.value ?? ''));
-    // Optional consumed entered without a vaccination record (blank = 0).
-    const extraValue = document.getElementById('extra_consumed')?.value ?? '';
+    // Optional wastage adjustment (blank = 0); final Consumed = auto + adjustment.
+    const extraValue = document.getElementById('wastage_quantity')?.value ?? '';
     const extra = extraValue === '' ? 0 : dailyScaled(extraValue);
     return numbers.includes(null) || extra === null ? null : numbers[0] + numbers[1] - numbers[2] - extra - numbers[3];
 }
 
+function refreshFinalConsumed() {
+    const auto = dailyScaled(document.getElementById('consumed_numeric').value);
+    const extraValue = document.getElementById('wastage_quantity').value;
+    const extra = extraValue === '' ? 0 : dailyScaled(extraValue);
+    const el = document.getElementById('finalConsumedPreview');
+    el.textContent = !dailyContextReady || auto === null || extra === null ? '-'
+        : `${formatClosingNumber(auto + extra)} ${selectedBaseUnit()}` + (extra > 0 ? ` (auto ${formatClosingNumber(auto)} + adjustment ${formatClosingNumber(extra)})` : '');
+    document.getElementById('wastageOtherBox').style.display =
+        document.getElementById('wastage_reason').value === 'Other' ? '' : 'none';
+}
+
 function refreshClosingPreview() {
+    refreshFinalConsumed();
     const computed = dailyContextReady ? dailyComputed() : null;
     const actual = dailyScaled(document.getElementById('actual_count')?.value ?? '');
     const unit = selectedBaseUnit();
@@ -2365,7 +2402,10 @@ function refreshClosingPreview() {
 }
 
 function resetDailyFields() {
-    for (const id of ['beginning_stock', 'actual_count', 'remarks', 'extra_consumed', 'extra_consumed_remarks']) document.getElementById(id).value = '';
+    for (const id of ['beginning_stock', 'actual_count', 'remarks', 'wastage_quantity', 'wastage_reason', 'wastage_other']) document.getElementById(id).value = '';
+    document.getElementById('closingOutOfDateBox').style.display = 'none';
+    document.getElementById('consumedBreakdown').textContent = '';
+    lastDailyContext = null;
     for (const id of ['delivery', 'pull_out']) document.getElementById(id).value = '0';
     document.getElementById('consumed_numeric').value = '0';
     document.getElementById('closing_context_token').value = '';
@@ -2389,7 +2429,9 @@ async function refreshAutomaticConsumption(restore = null) {
     document.querySelectorAll('.inventory-unit-label').forEach(el => { el.textContent = selected ? `(${baseUnit})` : ''; });
     document.querySelectorAll('.inventory-number').forEach(el => { el.step = '0.0001'; el.disabled = true; });
     document.getElementById('remarks').disabled = true;
-    document.getElementById('extra_consumed_remarks').disabled = true;
+    document.getElementById('wastage_reason').disabled = true;
+    document.getElementById('wastage_other').disabled = true;
+    document.getElementById('adjustConsumedBtn').disabled = true;
     consumedInput.value = selected && date ? 'Loading...' : '0';
     help.textContent = selected && date ? 'Loading the selected day...' : 'Select an item and date. Beginning stock is the opening count, not the current remaining stock.';
     unitHelp.style.display = 'none';
@@ -2405,11 +2447,20 @@ async function refreshAutomaticConsumption(restore = null) {
         if (!response.ok || !data.success) throw new Error(data.message || 'Unable to load the selected day.');
         consumedInput.value = data.display || `${data.consumed} ${baseUnit}`;
         document.getElementById('consumed_numeric').value = data.consumed;
+        document.getElementById('consumedBreakdown').textContent = data.consumed_breakdown || '';
+        lastDailyContext = data;
+        if (data.closing_out_of_date) {
+            document.getElementById('closingOutOfDateText').textContent =
+                'The saved closing for this date is out of date: usage was recorded after it was submitted (saved Consumed '
+                + formatClosingNumber(dailyScaled(String(data.closing_saved_consumed)) ?? 0) + `, now ${formatClosingNumber(dailyScaled(data.consumed) ?? 0)} ${baseUnit}). `
+                + 'Refresh it: verify the counts and submit again.';
+            document.getElementById('closingOutOfDateBox').style.display = '';
+        }
         for (const [id, value] of Object.entries(data.fields)) document.getElementById(id).value = value;
         document.getElementById('closing_context_token').value = data.context_token;
         help.textContent = data.opening_message;
         if (restore && restore.item_id === selected && restore.inventory_date === date) {
-            for (const id of ['beginning_stock', 'delivery', 'pull_out', 'remarks', 'extra_consumed', 'extra_consumed_remarks']) {
+            for (const id of ['beginning_stock', 'delivery', 'pull_out', 'remarks', 'wastage_quantity', 'wastage_reason', 'wastage_other']) {
                 if (typeof restore[id] === 'string') document.getElementById(id).value = restore[id];
             }
             if (!data.needs_physical_count && typeof restore.actual_count === 'string') document.getElementById('actual_count').value = restore.actual_count;
@@ -2423,7 +2474,12 @@ async function refreshAutomaticConsumption(restore = null) {
         unitHelp.style.display = 'block';
         document.querySelectorAll('.inventory-number').forEach(el => { el.disabled = false; });
         document.getElementById('remarks').disabled = false;
-        document.getElementById('extra_consumed_remarks').disabled = false;
+        document.getElementById('wastage_reason').disabled = false;
+        document.getElementById('wastage_other').disabled = false;
+        document.getElementById('adjustConsumedBtn').disabled = false;
+        if (document.getElementById('wastage_quantity').value !== '') {
+            document.getElementById('adjustConsumedPanel').style.display = '';
+        }
         dailyContextReady = true;
         refreshClosingPreview();
     } catch (error) {
@@ -2437,9 +2493,31 @@ async function refreshAutomaticConsumption(restore = null) {
 
 document.getElementById('item_id').addEventListener('change', () => refreshAutomaticConsumption());
 document.getElementById('inventory_date').addEventListener('change', () => refreshAutomaticConsumption());
-for (const id of ['beginning_stock', 'delivery', 'pull_out', 'actual_count', 'extra_consumed']) {
+for (const id of ['beginning_stock', 'delivery', 'pull_out', 'actual_count', 'wastage_quantity', 'wastage_reason']) {
     document.getElementById(id).addEventListener('input', refreshClosingPreview);
+    document.getElementById(id).addEventListener('change', refreshClosingPreview);
 }
+document.getElementById('adjustConsumedBtn').addEventListener('click', () => {
+    const panel = document.getElementById('adjustConsumedPanel');
+    const open = panel.style.display === 'none';
+    panel.style.display = open ? '' : 'none';
+    document.getElementById('adjustConsumedBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (!open) {
+        for (const id of ['wastage_quantity', 'wastage_reason', 'wastage_other']) document.getElementById(id).value = '';
+        refreshClosingPreview();
+    } else {
+        document.getElementById('wastage_quantity').focus();
+    }
+});
+// Out-of-date closing: reload the saved Actual count so the nurse can verify and resubmit.
+document.getElementById('refreshClosingBtn').addEventListener('click', () => {
+    if (!lastDailyContext || lastDailyContext.closing_saved_actual === null) return;
+    document.getElementById('actual_count').value = lastDailyContext.closing_saved_actual;
+    document.getElementById('openingBalanceHelp').textContent =
+        'Closing refreshed with the current Consumed. The saved Actual count was reloaded: confirm it with a physical count, explain any variance, then Submit.';
+    refreshClosingPreview();
+    document.getElementById('actual_count').focus();
+});
 document.getElementById('useComputedBtn').addEventListener('click', () => {
     const computed = dailyContextReady ? dailyComputed() : null;
     if (computed === null || computed < 0 || computed > 999999999999) return;

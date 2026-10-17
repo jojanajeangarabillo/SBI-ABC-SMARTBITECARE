@@ -12,6 +12,7 @@ session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/workflow_helpers.php';
+require_once 'sources/patient_display_helper.php';
 require_once 'sources/case_number_helper.php';
 require_once 'sources/philhealth_requirements_helper.php';
 
@@ -216,6 +217,10 @@ function archiveAdminScheduleRows(
 }
 
 function loadDoseStageData(mysqli $conn, int $caseId, string $branchId): array {
+    // Nurse's late-dose choice (continue / restart), after migrate_late_dose_decision.php.
+    $lateSql = workflowLateDecisionReady($conn)
+        ? 'vr.late_decision, vr.late_days'
+        : 'NULL AS late_decision, NULL AS late_days';
     $stmt = $conn->prepare("
         SELECT
             vr.dose_number,
@@ -223,7 +228,8 @@ function loadDoseStageData(mysqli $conn, int $caseId, string $branchId): array {
             vr.date_administered,
             vr.vaccination_status,
             vr.remarks,
-            vr.nurse_id
+            vr.nurse_id,
+            $lateSql
         FROM vaccination_records vr
         WHERE vr.case_id = ?
           AND vr.branch_id = ?
@@ -255,8 +261,12 @@ function loadDoseStageData(mysqli $conn, int $caseId, string $branchId): array {
                 'scheduled_date' => '',
                 'administered_date' => '',
                 'status' => '',
-                'locked' => false
+                'locked' => false,
+                'late_note' => ''
             ];
+        }
+        if (!empty($row['late_decision'])) {
+            $stages[$key]['late_note'] = workflowLateDecisionLabel((string)$row['late_decision'], $row['late_days']);
         }
 
         $status = (string)($row['vaccination_status'] ?? 'Scheduled');
@@ -308,6 +318,11 @@ function loadDoseStageData(mysqli $conn, int $caseId, string $branchId): array {
     foreach ($stages as $key => $stage) {
         if (($stage['status'] ?? '') === '') {
             $stages[$key]['status'] = 'Scheduled';
+        }
+        // Same rule as every page: a past-due dose that was not given is Missed.
+        if ($stages[$key]['status'] === 'Scheduled' && $stage['scheduled_date'] !== ''
+            && (string)frontToDbDate($stage['scheduled_date']) < date('Y-m-d')) {
+            $stages[$key]['status'] = 'Missed';
         }
     }
 
@@ -760,10 +775,7 @@ if ($action) {
                         p.birthday,
                         p.gender,
                         p.address,
-                        c.animal_type,
-                        c.bite_location,
-                        c.animal_status,
-                        c.date_of_bite,
+                        " . patientClinicalSelectSql($conn, 'c', 'la') . ",
                         c.case_status,
                         c.remarks AS case_remarks,
                         c.created_at,
@@ -778,6 +790,7 @@ if ($action) {
                         ph.status AS philhealth_status
                     FROM animal_bite_cases c
                     JOIN patients p ON c.patient_id = p.patient_id
+                    " . patientLatestAssessmentJoinSql('c', 'la') . "
                     LEFT JOIN (
                         SELECT rr.case_id, MAX(rr.registry_id) AS registry_id
                         FROM registry_records rr
@@ -909,11 +922,7 @@ if ($action) {
                         c.case_number,
                         c.patient_id,
                         c.branch_id AS case_branch_id,
-                        c.animal_type,
-                        c.bite_location,
-                        c.bite_category,
-                        c.animal_status,
-                        c.date_of_bite,
+                        " . patientClinicalSelectSql($conn, 'c', 'la') . ",
                         c.case_status,
                         c.remarks AS case_remarks,
                         c.created_at AS case_created_at,
@@ -943,6 +952,7 @@ if ($action) {
                     INNER JOIN patients p
                       ON c.patient_id = p.patient_id
                      AND p.branch_id = c.branch_id
+                    " . patientLatestAssessmentJoinSql('c', 'la') . "
                     LEFT JOIN registry_records r
                       ON c.case_id = r.case_id
                      AND r.is_archived = 0
@@ -965,6 +975,27 @@ if ($action) {
                 }
 
                 $doseInfo = loadDoseStageData($conn, $caseId, (string)$logged_branch_id);
+
+                // Doses of a restarted (archived) cycle stay visible as history.
+                $archivedStmt = $conn->prepare(
+                    "SELECT dose_number, scheduled_date, date_administered, vaccination_status, is_archived
+                     FROM vaccination_records
+                     WHERE case_id = ? AND branch_id = ? AND is_archived = 1 AND dose_number >= 1
+                     ORDER BY archived_at, dose_number, vaccination_id"
+                );
+                $archivedStmt->bind_param('is', $caseId, $logged_branch_id);
+                $archivedStmt->execute();
+                $archivedDoses = [];
+                foreach ($archivedStmt->get_result()->fetch_all(MYSQLI_ASSOC) as $archivedRow) {
+                    $archivedDoses[] = [
+                        'dose_label' => workflowDoseLabel((int)$archivedRow['dose_number']),
+                        'scheduled_date' => dbToFrontDate($archivedRow['scheduled_date']),
+                        'administered_date' => dbToFrontDate($archivedRow['date_administered']),
+                        'original_status' => patientDoseStatus(['is_archived' => 0] + $archivedRow),
+                        'status' => 'Archived/Restarted',
+                    ];
+                }
+                $archivedStmt->close();
 
                 // PhilHealth requirements received at intake (after the migration).
                 $requirements = [];
@@ -1032,6 +1063,9 @@ if ($action) {
                     'biting_animal' => $row['animal_type'] ?? '',
                     'bite_category' => $row['bite_category'] ?? '',
                     'animal_status' => $row['animal_status'] ?? '',
+                    'bite_type' => $row['bite_type'] ?? '',
+                    'wound_type' => $row['wound_type'] ?? '',
+                    'registry_number' => $row['registry_number'] ?? '',
                     // Treatment values are read-only here. Nurses own actual administration.
                     'erig_ml' => $row['erig'] ?? 0,
                     'ats' => (bool)$row['ats'],
@@ -1040,6 +1074,7 @@ if ($action) {
                     'route' => $doseInfo['profile']['route'],
                     'vacc_category' => $doseInfo['profile']['category'],
                     'vaccination_doses' => $doseInfo['stages'],
+                    'archived_doses' => $archivedDoses,
                     'dose_labels' => $doseInfo['dose_labels'],
                     'regimen_label' => $doseInfo['regimen_label'],
                     'vaccination_status' => $doseInfo['overall_status'],
@@ -3683,6 +3718,7 @@ body.sidebar-collapsed .main {
             }
         }
 </style>
+<?php echo patientDoseStatusScript(); ?>
 </head>
 <body>
     <!-- ========== SIDEBAR ========== -->
@@ -4453,14 +4489,9 @@ body.sidebar-collapsed .main {
         scheduleSection.style.display = category === 'Others' ? 'none' : 'block';
     }
 
+    // Shared labels and colours (sources/patient_display_helper.php).
     function scheduleStatusBadge(status) {
-        if (status === 'Administered') {
-            return '<span class="badge bg-success">Completed by Nurse</span>';
-        }
-        if (status === 'Missed') {
-            return '<span class="badge bg-danger">Missed</span>';
-        }
-        return '<span class="badge bg-primary">Scheduled</span>';
+        return window.patientStatusBadge(window.patientStatusLabel(status));
     }
 
     function renderScheduleTable(doseData = null) {
@@ -5019,6 +5050,18 @@ body.sidebar-collapsed .main {
                             <span class="patient-view-label">Animal Status</span>
                             <span class="patient-view-value">${value(data.animal_status)}</span>
                         </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Category</span>
+                            <span class="patient-view-value">${value(data.bite_category)}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Type of Bite</span>
+                            <span class="patient-view-value">${value(data.bite_type, 'Not yet assessed by Nurse')}</span>
+                        </div>
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">Type of Wound</span>
+                            <span class="patient-view-value">${value(data.wound_type, 'Not yet assessed by Nurse')}</span>
+                        </div>
                     </div>
                 </section>
 
@@ -5072,10 +5115,36 @@ body.sidebar-collapsed .main {
                                                 <td class="patient-view-dose">${escapeHtml((data.dose_labels && data.dose_labels[d.key]) || d.label)}</td>
                                                 <td>${displayDate(stage.scheduled_date, '—')}</td>
                                                 <td>${displayDate(stage.administered_date, 'Not administered')}</td>
-                                                <td>${scheduleStatusBadge(stage.status || 'Scheduled')}</td>
+                                                <td>${scheduleStatusBadge(stage.status || 'Scheduled')}${stage.late_note ? `<div class="small text-muted mt-1">${escapeHtml(stage.late_note)}</div>` : ''}</td>
                                             </tr>
                                         `;
                                     }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                ` : ''}
+
+                ${Array.isArray(data.archived_doses) && data.archived_doses.length > 0 ? `
+                    <section class="patient-view-section">
+                        <div class="patient-view-section-header">
+                            <i class="bi bi-archive"></i>
+                            Previous Cycle (Archived/Restarted)
+                        </div>
+                        <div class="patient-view-schedule-wrap">
+                            <table class="patient-view-schedule">
+                                <thead>
+                                    <tr><th>Dose</th><th>Scheduled Date</th><th>Administered Date</th><th>Status</th></tr>
+                                </thead>
+                                <tbody>
+                                    ${data.archived_doses.map(a => `
+                                        <tr>
+                                            <td class="patient-view-dose">${escapeHtml(a.dose_label)}</td>
+                                            <td>${displayDate(a.scheduled_date, '—')}</td>
+                                            <td>${displayDate(a.administered_date, 'Not administered')}</td>
+                                            <td>${window.patientStatusBadge(a.status)} <small class="text-muted">(was ${escapeHtml(a.original_status)})</small></td>
+                                        </tr>
+                                    `).join('')}
                                 </tbody>
                             </table>
                         </div>

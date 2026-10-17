@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/workflow_helpers.php';
+
 // Read-only dashboard definitions. Dates use db_connect.php's Manila session.
 // A visit belongs to a branch only when its patient AND case agree with it.
 function dashboardPatientVisitSql(): string
@@ -105,7 +107,13 @@ function dashboardPatientMetrics(mysqli $conn, string $branchId): array
         if (!$row) {
             throw new RuntimeException('Patient dashboard counts were not returned.');
         }
-        return array_map(static fn($value): int => (int)$value, $row);
+        $metrics = array_map(static fn($value): int => (int)$value, $row);
+        // Missed/overdue always uses the one shared definition (see
+        // workflowMissedDoseCondition) so every page shows the same number.
+        $missed = workflowMissedDoseCounts($conn, $branchId);
+        $metrics['missed_doses'] = $missed['doses'];
+        $metrics['overdue_followup_patients'] = $missed['patients'];
+        return $metrics;
     } finally {
         $stmt->close();
     }
