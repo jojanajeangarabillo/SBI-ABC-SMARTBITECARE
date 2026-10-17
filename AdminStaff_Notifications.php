@@ -2,6 +2,7 @@
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/workflow_helpers.php';
 
 // Check if user is logged in and is an admin staff
 if (
@@ -86,12 +87,12 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             v.scheduled_date as next_schedule,
             v.vaccination_status,
             CASE 
-                WHEN v.dose_number = 1 THEN 'Day 0 (1st Dose)'
-                WHEN v.dose_number = 2 THEN 'Day 3 (2nd Dose)'
-                WHEN v.dose_number = 3 THEN 'Day 7 (3rd Dose)'
-                WHEN v.dose_number = 4 THEN 'Day 14 (4th Dose)'
-                WHEN v.dose_number = 5 THEN 'Day 21 (5th Dose)'
-                WHEN v.dose_number = 6 THEN 'Day 28 (6th Dose)'
+                WHEN v.dose_number = 1 THEN 'Day 0 (D0)'
+                WHEN v.dose_number = 2 THEN 'Day 3 (D3)'
+                WHEN v.dose_number = 3 THEN 'Day 7 (D7)'
+                WHEN v.dose_number = 4 THEN 'Day 14 (D14)'
+                WHEN v.dose_number = 5 THEN 'Day 21 (D21)'
+                WHEN v.dose_number = 6 THEN 'Day 28 (D28)'
                 ELSE CONCAT('Dose ', v.dose_number)
             END as dose_label
         FROM animal_bite_cases c
@@ -99,6 +100,8 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
         INNER JOIN patients p ON c.patient_id = p.patient_id
         LEFT JOIN registry_records r ON c.case_id = r.case_id
         WHERE c.branch_id = ?
+        AND c.is_archived = 0
+        AND v.is_archived = 0
         AND v.scheduled_date IS NOT NULL
         AND v.vaccination_status = 'Scheduled'
         AND v.scheduled_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY)
@@ -176,12 +179,12 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             v.vaccination_status,
             DATEDIFF(CURDATE(), v.scheduled_date) as days_overdue,
             CASE 
-                WHEN v.dose_number = 1 THEN 'Day 0 (1st Dose)'
-                WHEN v.dose_number = 2 THEN 'Day 3 (2nd Dose)'
-                WHEN v.dose_number = 3 THEN 'Day 7 (3rd Dose)'
-                WHEN v.dose_number = 4 THEN 'Day 14 (4th Dose)'
-                WHEN v.dose_number = 5 THEN 'Day 21 (5th Dose)'
-                WHEN v.dose_number = 6 THEN 'Day 28 (6th Dose)'
+                WHEN v.dose_number = 1 THEN 'Day 0 (D0)'
+                WHEN v.dose_number = 2 THEN 'Day 3 (D3)'
+                WHEN v.dose_number = 3 THEN 'Day 7 (D7)'
+                WHEN v.dose_number = 4 THEN 'Day 14 (D14)'
+                WHEN v.dose_number = 5 THEN 'Day 21 (D21)'
+                WHEN v.dose_number = 6 THEN 'Day 28 (D28)'
                 ELSE CONCAT('Dose ', v.dose_number)
             END as dose_label
         FROM animal_bite_cases c
@@ -189,8 +192,12 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
         INNER JOIN patients p ON c.patient_id = p.patient_id
         LEFT JOIN registry_records r ON c.case_id = r.case_id
         WHERE c.branch_id = ?
+        AND c.is_archived = 0
+        AND c.case_status <> 'Completed'
+        AND v.is_archived = 0
+        AND v.item_id IS NULL
         AND v.scheduled_date IS NOT NULL
-        AND v.vaccination_status = 'Scheduled'
+        AND v.vaccination_status IN ('Scheduled', 'Missed')
         AND v.scheduled_date < CURDATE()
         ORDER BY v.scheduled_date ASC
     ";
@@ -204,7 +211,14 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
         $daysOverdue = $row['days_overdue'];
         
         $missedScheduleLabel = date('M d, Y', strtotime($row['next_schedule']));
-        $message = "🚨 <strong>{$patientInfo}</strong> is {$daysOverdue} day" . ($daysOverdue > 1 ? 's' : '') . " overdue for {$row['dose_label']} (scheduled {$missedScheduleLabel}) (Case: {$row['case_no']})";
+        // Same 7-day clinic rule as the Nurse pages (workflowLateDoseStatus()).
+        if ((int)$daysOverdue <= WORKFLOW_LATE_DOSE_WINDOW_DAYS) {
+            $ruleText = 'Can still come back until ' . date('M d, Y', strtotime($row['next_schedule'] . ' +' . WORKFLOW_LATE_DOSE_WINDOW_DAYS . ' days'))
+                . '; the remaining doses will move forward.';
+        } else {
+            $ruleText = 'More than ' . WORKFLOW_LATE_DOSE_WINDOW_DAYS . ' days late: a new vaccination cycle from Day 0 is needed after nurse re-assessment.';
+        }
+        $message = "🚨 <strong>{$patientInfo}</strong> is {$daysOverdue} day" . ($daysOverdue > 1 ? 's' : '') . " overdue for {$row['dose_label']} (scheduled {$missedScheduleLabel}) (Case: {$row['case_no']}). {$ruleText}";
         $type = 'overdue';
         $icon = 'bi-exclamation-triangle-fill';
         $iconClass = 'danger';

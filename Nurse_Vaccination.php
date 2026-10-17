@@ -125,17 +125,45 @@ function logAudit($conn, $user_id, $branch_id, $action, $module) {
     return $stmt->execute();
 }
 
-// Function to get dose label
+// Day label of a stored dose number (1=D0 ... 6=D28). See workflowDoseLabel().
 function getDoseLabel($dose_number) {
-    $doseMap = [
-        1 => 'D0',
-        2 => 'D3',
-        3 => 'D7',
-        4 => 'D14',
-        5 => 'D21',
-        6 => 'D28/30'
+    return workflowDoseLabel((int)$dose_number);
+}
+
+/**
+ * Patient-facing order of the case's doses ("Dose 4 - D28") plus the regimen
+ * details the vaccination form needs (stages and default sites per session).
+ */
+function getCaseDoseContext($conn, $case_id) {
+    $caseProfile = workflowCaseProfile($conn, (int)$case_id);
+    $profile = (string)($caseProfile['profile'] ?? '');
+    $route = (string)($caseProfile['route'] ?? '');
+    $numbers = getRequiredDoseNumbers($conn, $case_id);
+    $stmt = $conn->prepare("SELECT DISTINCT dose_number FROM vaccination_records
+                            WHERE case_id = ? AND is_archived = 0 AND dose_number BETWEEN 1 AND 6");
+    $stmt->bind_param('i', $case_id);
+    $stmt->execute();
+    foreach ($stmt->get_result()->fetch_all(MYSQLI_ASSOC) as $row) {
+        $numbers[] = (int)$row['dose_number'];
+    }
+    $stmt->close();
+    $map = workflowDoseSequenceMap($profile, $numbers);
+    $stages = [];
+    foreach ($map as $doseNumber => $sequence) {
+        $stages[] = [
+            'dose_number' => (int)$doseNumber,
+            'sequence' => (int)$sequence,
+            'label' => workflowDoseDisplay((int)$doseNumber, $map),
+        ];
+    }
+    return [
+        'map' => $map,
+        'stages' => $stages,
+        'profile' => $profile,
+        'regimen_label' => $profile !== '' ? workflowProfileLabel($profile, $route) : 'Not set',
+        'route' => workflowProfileRoute($profile, $route),
+        'default_sites' => workflowProfileDefaultSites($profile, $route),
     ];
-    return $doseMap[$dose_number] ?? 'D' . $dose_number;
 }
 
 // Get completed dose-stage flags for a patient/case.
@@ -148,7 +176,7 @@ function getCompletedDoseStages($conn, $patient_id, $case_id) {
         3 => false, // D7
         4 => false, // D14
         5 => false, // D21
-        6 => false  // D28/30
+        6 => false  // D28
     ];
 
     /*
@@ -793,7 +821,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_scheduled_doses') {
                         WHEN vr.dose_number = 3 THEN '7'
                         WHEN vr.dose_number = 4 THEN '14'
                         WHEN vr.dose_number = 5 THEN '21'
-                        WHEN vr.dose_number = 6 THEN '28/30'
+                        WHEN vr.dose_number = 6 THEN '28'
                         ELSE vr.dose_number
                     END
                 ) as dose_label
@@ -861,14 +889,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_scheduled_doses') {
                 'dose_d21' => 5,
                 'dose_d28_30' => 6
             ];
-            $doseLabels = [
-                1 => 'D0',
-                2 => 'D3',
-                3 => 'D7',
-                4 => 'D14',
-                5 => 'D21',
-                6 => 'D28/30'
-            ];
             
             foreach ($doseMap as $field => $num) {
                 if ($regRow[$field] == 1) {
@@ -891,7 +911,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_scheduled_doses') {
                         'administered_by_name' => 'Nurse',
                         'created_at' => null,
                         'inventory_item_name' => null,
-                        'dose_label' => $doseLabels[$num]
+                        'dose_label' => getDoseLabel($num)
                     ];
                 }
             }
@@ -906,12 +926,24 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_scheduled_doses') {
     // Completion is stage-based, not row-based. Multiple vaccine/products may
     // be administered under the same D0/D3/etc. stage.
     $isComplete = isVaccinationComplete($conn, $patientIdForNext, $caseIdForNext);
+    $doseContext = getCaseDoseContext($conn, $caseIdForNext);
+    foreach ($doses as &$dose) {
+        $number = (int)($dose['dose_number'] ?? 0);
+        $dose['dose_sequence'] = $doseContext['map'][$number] ?? $number;
+        $dose['dose_display'] = workflowDoseDisplay($number, $doseContext['map']);
+    }
+    unset($dose);
     
     echo json_encode([
         'success' => true, 
         'data' => $doses,
         'next_dose' => $next_dose,
         'next_dose_label' => getDoseLabel($next_dose),
+        'next_dose_display' => workflowDoseDisplay((int)$next_dose, $doseContext['map']),
+        'stages' => $doseContext['stages'],
+        'regimen_label' => $doseContext['regimen_label'],
+        'route' => $doseContext['route'],
+        'default_sites' => $doseContext['default_sites'],
         'is_complete' => $isComplete
     ]);
     exit;
@@ -931,11 +963,17 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_next_dose') {
     $next_dose = getNextDoseNumber($conn, $patient_id, $case_id);
     
     $isComplete = isVaccinationComplete($conn, $patient_id, $case_id);
+    $doseContext = getCaseDoseContext($conn, $case_id);
     
     echo json_encode([
         'success' => true,
         'next_dose' => $next_dose,
         'next_dose_label' => getDoseLabel($next_dose),
+        'next_dose_display' => workflowDoseDisplay((int)$next_dose, $doseContext['map']),
+        'stages' => $doseContext['stages'],
+        'regimen_label' => $doseContext['regimen_label'],
+        'route' => $doseContext['route'],
+        'default_sites' => $doseContext['default_sites'],
         'is_complete' => $isComplete
     ]);
     exit;
@@ -1002,6 +1040,8 @@ if (isset($_POST['submit_vaccination'])) {
         $reopened_closings = 0;
         $success_count = 0;
         $vaccination_details = [];
+        // Late doses (1-7 days) shift the remaining schedule once per dose stage.
+        $late_stage_shifts = [];
 
         foreach ($vaccine_items as $item) {
             $item_id = intval($item['item_id'] ?? 0);
@@ -1091,9 +1131,11 @@ if (isset($_POST['submit_vaccination'])) {
                     );
                 }
 
-                if (!in_array($site_count, [1, 2], true)) {
+                // ID: 2 sites (regular) or 1 site (booster). IM: one full vial.
+                $full_vial_sites = (int)round(inventoryConversionToBase($vaccine));
+                if (!in_array($site_count, [1, 2, $full_vial_sites], true)) {
                     throw new Exception(
-                        'Select either Regular - 2 Sites or Booster - 1 Site for ' .
+                        'Select Regular - 2 Sites, Booster - 1 Site or IM - Full Vial for ' .
                         $vaccine_name . '.'
                     );
                 }
@@ -1104,7 +1146,8 @@ if (isset($_POST['submit_vaccination'])) {
                     'ARV administration: '
                     . $site_count
                     . ' '
-                    . ($site_count === 1 ? 'site' : 'sites');
+                    . ($site_count === 1 ? 'site' : 'sites')
+                    . ($site_count === $full_vial_sites ? ' (IM full vial)' : '');
 
                 $remarks = $remarks !== ''
                     ? $siteNote . ' | ' . $remarks
@@ -1171,10 +1214,11 @@ if (isset($_POST['submit_vaccination'])) {
             $completed_date = ($vaccination_status === 'Completed') ? $date_administered : null;
             $scheduled_date = ($vaccination_status !== 'Completed') ? $date_administered : null;
 
-            // Find and lock the active schedule placeholder created by
-            // Administrative Staff for this exact patient/case/dose stage.
-            // The first product submitted for the stage updates this row.
-            // Additional products under the same stage are inserted separately.
+            // Find and lock the active schedule placeholder for this exact
+            // patient/case/dose stage. A placeholder already marked Missed can
+            // still be completed late (clinic 7-day rule below). The first
+            // product submitted for the stage updates this row; additional
+            // products under the same stage are inserted separately.
             $findSchedule = $conn->prepare("
                 SELECT vaccination_id, scheduled_date
                 FROM vaccination_records
@@ -1182,11 +1226,10 @@ if (isset($_POST['submit_vaccination'])) {
                   AND case_id = ?
                   AND branch_id = ?
                   AND dose_number = ?
-                  AND vaccination_status = 'Scheduled'
+                  AND vaccination_status IN ('Scheduled', 'Missed')
                   AND is_archived = 0
-                  AND nurse_id IS NULL
                   AND item_id IS NULL
-                ORDER BY vaccination_id ASC
+                ORDER BY vaccination_status = 'Scheduled' DESC, vaccination_id ASC
                 LIMIT 1
                 FOR UPDATE
             ");
@@ -1211,6 +1254,35 @@ if (isset($_POST['submit_vaccination'])) {
                 $scheduled_date = $scheduleRow['scheduled_date'];
             }
 
+            /*
+             * Clinic missed-dose rule: up to 7 days late, record the dose on the
+             * actual date and move the remaining doses forward by the delay.
+             * More than 7 days late, the schedule goes back to Day 0, which is
+             * done by re-assessing the patient (old records are archived).
+             */
+            if (
+                $admin_schedule_id !== null
+                && $vaccination_status === 'Completed'
+                && !empty($scheduleRow['scheduled_date'])
+            ) {
+                $days_late = (int)(new DateTimeImmutable((string)$scheduleRow['scheduled_date']))
+                    ->diff(new DateTimeImmutable($date_administered))->format('%r%a');
+                if ($days_late > WORKFLOW_LATE_DOSE_WINDOW_DAYS) {
+                    throw new Exception(
+                        getDoseLabel($dose_number) . ' was due ' . $scheduleRow['scheduled_date'] . ' and is '
+                        . $days_late . ' days late. The clinic allows up to ' . WORKFLOW_LATE_DOSE_WINDOW_DAYS
+                        . ' days; a new vaccination cycle from Day 0 is required. Re-assess the patient in the '
+                        . 'Assessment Queue to start the new cycle (the old records are kept as history).'
+                    );
+                }
+                if ($days_late >= 1 && !isset($late_stage_shifts[$dose_number])) {
+                    $late_stage_shifts[$dose_number] = [
+                        'scheduled' => (string)$scheduleRow['scheduled_date'],
+                        'days' => $days_late,
+                    ];
+                }
+            }
+
             $vaccination_id = 0;
 
             if ($admin_schedule_id !== null && $vaccination_status === 'Completed') {
@@ -1233,7 +1305,7 @@ if (isset($_POST['submit_vaccination'])) {
                         remarks = ?,
                         nurse_id = ?
                     WHERE vaccination_id = ?
-                      AND vaccination_status = 'Scheduled'
+                      AND vaccination_status IN ('Scheduled', 'Missed')
                       AND is_archived = 0
                 ");
                 $updateVaccination->bind_param(
@@ -1265,7 +1337,7 @@ if (isset($_POST['submit_vaccination'])) {
                         remarks = ?,
                         nurse_id = ?
                     WHERE vaccination_id = ?
-                      AND vaccination_status = 'Scheduled'
+                      AND vaccination_status IN ('Scheduled', 'Missed')
                       AND is_archived = 0
                 ");
                 $updateVaccination->bind_param(
@@ -1274,7 +1346,8 @@ if (isset($_POST['submit_vaccination'])) {
                     $user_id,
                     $admin_schedule_id
                 );
-                if (!$updateVaccination->execute() || $updateVaccination->affected_rows !== 1) {
+                // An already-Missed placeholder may report 0 changed rows.
+                if (!$updateVaccination->execute()) {
                     throw new Exception('Failed to mark the scheduled vaccination as missed.');
                 }
                 $updateVaccination->close();
@@ -1538,6 +1611,19 @@ if (isset($_POST['submit_vaccination'])) {
             $success_count++;
         }
 
+        $shifted_doses = 0;
+        foreach ($late_stage_shifts as $shift) {
+            $shifted_doses += workflowShiftRemainingSchedule(
+                $conn,
+                $patient_id,
+                $case_id,
+                $branch_id,
+                $shift['scheduled'],
+                (int)$shift['days'],
+                $user_id
+            );
+        }
+
         $adminStaff = getAdminStaffByBranch($conn, $branch_id);
 
         if (!empty($adminStaff) && !empty($vaccination_details)) {
@@ -1589,6 +1675,10 @@ if (isset($_POST['submit_vaccination'])) {
         echo json_encode([
             'success' => true,
             'message' => 'Successfully saved ' . $success_count . ' vaccination entr' . ($success_count === 1 ? 'y' : 'ies') . '.'
+                . ($shifted_doses > 0
+                    ? ' The dose was given late, so ' . $shifted_doses . ' remaining dose(s) moved '
+                      . max(array_column($late_stage_shifts, 'days')) . ' day(s) later.'
+                    : '')
                 . ($reopened_closings > 0 ? ' Resubmit ' . $reopened_closings . ' affected daily inventory closing(s) because usage changed after closing.' : '')
         ]);
         exit;
@@ -2884,7 +2974,25 @@ let nextDoseNumber = 1;
 let isVaccinationComplete = false;
 const csrfToken = <?php echo json_encode($_SESSION['csrf_token']); ?>;
 
-const DOSE_MAP = { 1: 'D0', 2: 'D3', 3: 'D7', 4: 'D14', 5: 'D21', 6: 'D28/30' };
+const DOSE_MAP = { 1: 'D0', 2: 'D3', 3: 'D7', 4: 'D14', 5: 'D21', 6: 'D28' };
+// Regimen context of the selected case (from get_next_dose/get_scheduled_doses).
+let caseStages = [];
+let caseDefaultSites = 2;
+let caseRegimenLabel = '';
+let nextDoseDisplay = '';
+// Calendar shortcut: Nurse_Vaccination.php?patient_id=..&case_id=..&dose=..
+const vaccinationPreselect = (function () {
+    const params = new URLSearchParams(window.location.search);
+    const patient = params.get('patient_id');
+    if (!patient || !/^\d+$/.test(patient)) return null;
+    return {
+        patientId: patient,
+        caseId: /^\d+$/.test(params.get('case_id') || '') ? params.get('case_id') : '',
+        dose: /^[1-6]$/.test(params.get('dose') || '') ? params.get('dose') : ''
+    };
+})();
+let pendingCasePreselect = null;
+let pendingDosePreselect = null;
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -2896,6 +3004,35 @@ function escapeHtml(value) {
 }
 
 function getDoseLabel(d) { return DOSE_MAP[d] || 'D' + d; }
+
+// "Dose 4 - D28": the order the patient receives the dose, with its day label.
+function getDoseDisplay(d) {
+    const stage = caseStages.find(s => Number(s.dose_number) === Number(d));
+    return stage ? stage.label : getDoseLabel(d);
+}
+
+function doseOptionsHtml(selected) {
+    const stages = caseStages.length
+        ? caseStages
+        : [1, 2, 3, 4, 5, 6].map(n => ({ dose_number: n, label: getDoseLabel(n) }));
+    return stages.map(s => `<option value="${Number(s.dose_number)}" ${Number(s.dose_number) === Number(selected) ? 'selected' : ''}>${escapeHtml(s.label)}</option>`).join('');
+}
+
+function refreshDoseSelects() {
+    document.querySelectorAll('.vaccine-entry select.dose-number').forEach(function (select) {
+        const current = select.value;
+        select.innerHTML = doseOptionsHtml(current || nextDoseNumber);
+        if (!select.value) select.value = String(nextDoseNumber);
+    });
+}
+
+function applyCaseContext(data) {
+    if (Array.isArray(data.stages)) caseStages = data.stages;
+    if (data.default_sites !== undefined) caseDefaultSites = Number(data.default_sites);
+    if (data.regimen_label) caseRegimenLabel = data.regimen_label;
+    if (data.next_dose_display) nextDoseDisplay = data.next_dose_display;
+    refreshDoseSelects();
+}
 
 function formatInventoryNumber(value, maximumFractionDigits = 4) {
     return Number(value || 0).toLocaleString(undefined, {
@@ -2958,7 +3095,23 @@ document.addEventListener('DOMContentLoaded', function() { loadVaccines(); });
 
 function loadVaccines() {
     fetch('Nurse_Vaccination.php?ajax=get_vaccines')
-        .then(r => r.json()).then(data => { availableVaccines = data; })
+        .then(r => r.json()).then(data => {
+            availableVaccines = data;
+            // Opened from the Calendar: fill in the patient, case and dose.
+            if (vaccinationPreselect) {
+                const patientSelect = document.getElementById('patientSelect');
+                if (patientSelect) {
+                    patientSelect.value = vaccinationPreselect.patientId;
+                    if (patientSelect.value === vaccinationPreselect.patientId) {
+                        pendingCasePreselect = vaccinationPreselect.caseId;
+                        pendingDosePreselect = vaccinationPreselect.dose;
+                        loadPatientData();
+                    } else {
+                        showAlert('This patient is no longer eligible for vaccination. Please refresh the page.', 'warning');
+                    }
+                }
+            }
+        })
         .catch(e => console.error('Error loading vaccines:', e));
 }
 
@@ -3051,11 +3204,15 @@ function loadPatientData() {
                 data.data.forEach(function(row) {
                     if (row.case_id) {
                         hasCases = true;
-                        cs.innerHTML += `<option value="${row.case_id}">Case #${row.case_id} - ${row.animal_type || 'Unknown'} (${row.case_status || 'N/A'})</option>`;
+                        cs.innerHTML += `<option value="${Number(row.case_id)}">Case ${escapeHtml(row.case_number || ('#' + row.case_id))} - ${escapeHtml(row.animal_type || 'Unknown')} (${escapeHtml(row.case_status || 'N/A')})</option>`;
                     }
                 });
                 if (!hasCases) cs.innerHTML += '<option value="">No active cases found</option>';
-                if (hasCases && cs.options.length === 2) { cs.value = cs.options[1].value; onCaseChange(); }
+                if (hasCases && pendingCasePreselect) {
+                    cs.value = String(pendingCasePreselect);
+                    pendingCasePreselect = null;
+                    if (cs.value) onCaseChange();
+                } else if (hasCases && cs.options.length === 2) { cs.value = cs.options[1].value; onCaseChange(); }
                 
                 document.getElementById('vaccineEntries').innerHTML = '';
                 doseCounter = 0;
@@ -3070,6 +3227,10 @@ function loadPatientData() {
 function onCaseChange() {
     var cid = document.getElementById('caseSelect').value;
     currentCaseId = cid;
+    caseStages = [];
+    caseDefaultSites = 2;
+    caseRegimenLabel = '';
+    nextDoseDisplay = '';
     if (cid && currentPatientId) {
         loadScheduledDoses(cid);
         loadNextDose(currentPatientId, cid);
@@ -3086,12 +3247,17 @@ function loadNextDose(pid, cid) {
             if (data.success) {
                 nextDoseNumber = data.next_dose;
                 isVaccinationComplete = data.is_complete || false;
+                applyCaseContext(data);
                 updateNextDoseIndicator();
                 var firstEntry = document.querySelector('.vaccine-entry');
                 if (firstEntry && !isVaccinationComplete) {
                     var doseInput = firstEntry.querySelector('.dose-number');
-                    if (doseInput) { doseInput.value = nextDoseNumber; }
+                    if (doseInput) {
+                        doseInput.value = String(pendingDosePreselect || nextDoseNumber);
+                        if (!doseInput.value) doseInput.value = String(nextDoseNumber);
+                    }
                 }
+                pendingDosePreselect = null;
             }
         }).catch(e => console.error('Error loading next dose:', e));
 }
@@ -3113,10 +3279,10 @@ function updateNextDoseIndicator() {
         document.getElementById('doseSuggestion').style.display = 'none';
     } else {
         indicator.style.display = 'block';
-        label.textContent = getDoseLabel(nextDoseNumber);
+        label.textContent = nextDoseDisplay || getDoseDisplay(nextDoseNumber);
         label.style.color = '#2e7d32';
-        info.textContent = 'Next dose to administer';
-        suggestion.textContent = 'Dose ' + getDoseLabel(nextDoseNumber) + ' is the next scheduled dose';
+        info.textContent = 'Next dose to administer' + (caseRegimenLabel ? ' (' + caseRegimenLabel + ')' : '');
+        suggestion.textContent = (nextDoseDisplay || getDoseDisplay(nextDoseNumber)) + ' is the next scheduled dose';
         completeBadge.style.display = 'none';
         document.getElementById('doseSuggestion').style.display = 'inline-flex';
     }
@@ -3130,6 +3296,7 @@ function loadScheduledDoses(cid) {
     fetch(`Nurse_Vaccination.php?ajax=get_scheduled_doses&case_id=${cid}&patient_id=${currentPatientId}`)
         .then(r => r.json()).then(data => {
             if (data.success && data.data.length > 0) {
+                applyCaseContext(data);
                 renderScheduledDoses(data.data);
                 if (data.next_dose) { nextDoseNumber = data.next_dose; isVaccinationComplete = data.is_complete || false; updateNextDoseIndicator(); }
             } else {
@@ -3169,7 +3336,7 @@ function renderScheduledDoses(doses) {
     sortedKeys.forEach(function(key) {
         var dosesInGroup = grouped[key];
         var doseNumber = parseInt(key, 10) || parseInt(dosesInGroup[0]?.dose_number || 0, 10);
-        var doseLabel = getDoseLabel(doseNumber);
+        var doseLabel = dosesInGroup[0]?.dose_display || getDoseDisplay(doseNumber);
 
         var statuses = dosesInGroup.map(d => (d.vaccination_status || 'Scheduled'));
         if (statuses.some(s => s === 'Completed')) {
@@ -3187,7 +3354,7 @@ function renderScheduledDoses(doses) {
             var statusIcon = status === 'Completed'
                 ? '<i class="bi bi-check-circle-fill text-success"></i>'
                 : status === 'Scheduled'
-                    ? '<i class="bi bi-clock-fill text-warning"></i>'
+                    ? '<i class="bi bi-clock-fill text-primary"></i>'
                     : status === 'Missed'
                         ? '<i class="bi bi-x-circle-fill text-danger"></i>'
                         : '<i class="bi bi-dash-circle"></i>';
@@ -3205,7 +3372,7 @@ function renderScheduledDoses(doses) {
         }).join('');
 
         html += `<tr>
-                    <td><strong>${escapeHtml(doseLabel)}</strong><br><small class="text-muted">Dose ${doseNumber}</small></td>
+                    <td><strong>${escapeHtml(doseLabel)}</strong>${caseRegimenLabel ? `<br><small class="text-muted">${escapeHtml(caseRegimenLabel)}</small>` : ''}</td>
                     <td colspan="7">${vaccineList}</td>
                 </tr>`;
     });
@@ -3321,7 +3488,7 @@ function addVaccineEntry(autoSuggest = false) {
         <div class="row g-3">
             <div class="col-lg-5"><label class="form-label fw-semibold">Vaccine / Product <span class="text-danger">*</span></label><select class="form-select vaccine-select" onchange="updateVaccineUnit(this)" required><option value="">-- Select Vaccine --</option>${vaccineOptions}</select></div>
             <div class="col-lg-4"><label class="form-label fw-semibold">Available stock</label><input type="text" class="form-control stock-display" readonly value="Select vaccine"></div>
-            <div class="col-lg-3"><label class="form-label fw-semibold">Dose stage <span class="text-danger">*</span></label><input type="number" class="form-control dose-number" min="1" max="6" value="${suggestedDose}" required><small class="text-muted dose-label-text">Dose ${getDoseLabel(suggestedDose)}</small></div>
+            <div class="col-lg-3"><label class="form-label fw-semibold">Dose <span class="text-danger">*</span></label><select class="form-select dose-number" required>${doseOptionsHtml(suggestedDose)}</select><small class="text-muted dose-label-text">${escapeHtml(caseRegimenLabel || 'Doses follow the vaccination regimen')}</small></div>
             <div class="col-lg-4">
                 <label class="form-label fw-semibold usage-label">Actual amount used <span class="text-danger">*</span></label>
                 <div class="input-group">
@@ -3333,8 +3500,9 @@ function addVaccineEntry(autoSuggest = false) {
                 <div class="arv-site-control">
                     <span class="arv-site-label">ARV administration sites</span>
                     <div class="arv-site-buttons">
-                        <button type="button" class="arv-site-btn" data-sites="2">Regular - 2 Sites</button>
-                        <button type="button" class="arv-site-btn" data-sites="1">Booster - 1 Site</button>
+                        <button type="button" class="arv-site-btn" data-sites="2">Regular ID - 2 Sites</button>
+                        <button type="button" class="arv-site-btn" data-sites="1">Booster ID - 1 Site</button>
+                        <button type="button" class="arv-site-btn" data-sites="full">IM - Full Vial</button>
                     </div>
                     <div class="arv-site-summary">Select the actual number of sites administered to the patient.</div>
                     <input type="hidden" class="arv-site-count" value="0">
@@ -3460,7 +3628,14 @@ function updateVaccineUnit(select) {
 
         if (siteConfigValid) {
             entry.querySelector('.conversion-help').textContent =
-                'Clinic inventory rule: 1 Vial = 6 sites. Select Regular - 2 Sites or Booster - 1 Site based on the actual administration.';
+                'Clinic inventory rule: 1 Vial = 6 sites. The regimen preselects the usual amount (ID 2 sites, Booster ID 1 site, IM full vial); change it if a different amount was given.';
+            // Preselect the regimen's default sites per session.
+            const defaultButton = entry.querySelector(
+                '.arv-site-btn[data-sites="' + (caseDefaultSites === 0 ? 'full' : String(caseDefaultSites || 2)) + '"]'
+            );
+            if (defaultButton) {
+                setTimeout(function () { defaultButton.click(); }, 0);
+            }
         } else {
             entry.querySelector('.conversion-help').textContent =
                 'This ARV product must be configured as base unit site, display unit Vial, and 1 Vial = 6 sites.';
@@ -3513,10 +3688,16 @@ document.addEventListener('click', function(event) {
         return;
     }
 
-    const sites =
-        Number(button.getAttribute('data-sites') || 0);
+    // "full" = one whole vial for an IM session (1 Vial = 6 sites).
+    const fullVialSites =
+        Math.round(Number(selectedOption.getAttribute('data-conversion') || 6));
 
-    if (![1, 2].includes(sites)) {
+    const sites =
+        button.getAttribute('data-sites') === 'full'
+            ? fullVialSites
+            : Number(button.getAttribute('data-sites') || 0);
+
+    if (![1, 2, fullVialSites].includes(sites)) {
         return;
     }
 
@@ -3690,20 +3871,24 @@ function submitVaccination() {
             || parseInt(dNum.value) > 6
         ) {
             showAlert(
-                'Please enter a valid dose number (1-6).',
+                'Please select the dose.',
                 'warning'
             );
             hasError = true;
             return;
         }
 
+        var fullVialSites = selectedOption
+            ? Math.round(Number(selectedOption.getAttribute('data-conversion') || 6))
+            : 6;
+
         if (
             !isMissed
             && isSiteArv
-            && ![1, 2].includes(siteCount)
+            && ![1, 2, fullVialSites].includes(siteCount)
         ) {
             showAlert(
-                'For the selected ARV vaccine, choose Regular - 2 Sites or Booster - 1 Site.',
+                'For the selected ARV vaccine, choose Regular ID - 2 Sites, Booster ID - 1 Site or IM - Full Vial.',
                 'warning'
             );
             hasError = true;

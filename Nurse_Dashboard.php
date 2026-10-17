@@ -7,6 +7,7 @@ require_once 'sources/forecast_status_helper.php';
 $stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
 require_once 'sources/dashboard_patient_metrics.php';
+require_once 'sources/workflow_helpers.php';
 
 // ============================================================
 // NURSE ACCESS CONTROL
@@ -89,7 +90,7 @@ function dashboardDoseLabel($dose_number) {
         3 => 'D7',
         4 => 'D14',
         5 => 'D21',
-        6 => 'D28/30'
+        6 => 'D28'
     ];
     return $doseMap[(int)$dose_number] ?? ('D' . (int)$dose_number);
 }
@@ -1468,7 +1469,14 @@ $todayDisplay = date('l, F j, Y');
                                         </div>
 
                                         <div class="list-side">
-                                            <span class="mini-badge danger"><?php echo (int)$followup['days_overdue'] > 0 ? 'Overdue' : 'Due Today'; ?></span>
+                                            <?php
+                                                // Same 7-day clinic rule as the Assessment Queue follow-ups.
+                                                $followupDays = (int)$followup['days_overdue'];
+                                                $followupBadge = $followupDays <= 0
+                                                    ? 'Due Today'
+                                                    : ($followupDays <= WORKFLOW_LATE_DOSE_WINDOW_DAYS ? 'Catch-up (≤' . WORKFLOW_LATE_DOSE_WINDOW_DAYS . 'd)' : 'New cycle (Day 0)');
+                                            ?>
+                                            <span class="mini-badge danger" title="<?php echo htmlspecialchars(workflowLateDoseStatus($followupDays)['description']); ?>"><?php echo htmlspecialchars($followupBadge); ?></span>
                                         </div>
                                     </div>
                                 <?php endforeach; ?>
@@ -1727,7 +1735,7 @@ $todayDisplay = date('l, F j, Y');
                                     'D7' => (float)($doseCompletion['dose7_rate'] ?? 0),
                                     'D14' => (float)($doseCompletion['dose14_rate'] ?? 0),
                                     'D21' => (float)($doseCompletion['dose21_rate'] ?? 0),
-                                    'D28/30' => (float)($doseCompletion['dose28_rate'] ?? 0),
+                                    'D28' => (float)($doseCompletion['dose28_rate'] ?? 0),
                                 ];
                             ?>
 

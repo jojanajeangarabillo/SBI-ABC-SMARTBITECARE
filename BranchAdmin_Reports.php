@@ -4,6 +4,7 @@ require_once 'sources/db_connect.php';
 require_once 'sources/inventory_stock_helpers.php';
 $stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
+require_once 'sources/workflow_helpers.php';
 
 // ============================================
 // AUDIT LOG FUNCTION
@@ -695,7 +696,8 @@ function generateVaccinationReport($branchId, $startDate = null, $endDate = null
         return [
             substr($v['patient_name'] ?: 'Unknown', 0, 18),
             substr($v['vaccine_name'] ?: 'N/A', 0, 20),
-            'Dose ' . ($v['dose_number'] ?: 'N/A'),
+            // Day label (D0, D3, D7, D14, D21, D28); 0 = one-time product.
+            (int)$v['dose_number'] > 0 ? workflowDoseLabel((int)$v['dose_number']) : 'One-time',
             $v['date_administered'] ? date('Y-m-d', strtotime($v['date_administered'])) : 'Pending',
             $v['vaccination_status'] ?: 'N/A',
             $v['is_final_dose'] ? 'Yes' : 'No'

@@ -11,6 +11,7 @@ if (!empty($_GET['action']) || !empty($_POST['action'])) {
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/workflow_helpers.php';
 
 // Check if user is logged in and is an admin staff
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || $_SESSION['role_id'] != 4) {
@@ -311,6 +312,15 @@ function loadDoseStageData(mysqli $conn, int $caseId, string $branchId): array {
     $doseNumbers = array_values(array_unique($doseNumbers));
     sort($doseNumbers);
 
+    // Patient-facing dose order from the nurse-confirmed vaccination regimen
+    // ("Dose 4 - D28"); stored dose numbers keep their day-slot meaning.
+    $caseProfile = workflowCaseProfile($conn, $caseId);
+    $sequenceMap = workflowDoseSequenceMap($caseProfile['profile'], $doseNumbers);
+    $doseLabels = [];
+    foreach ($doseNumbers as $doseNumber) {
+        $doseLabels[doseNumberToKey($doseNumber)] = workflowDoseDisplay($doseNumber, $sequenceMap);
+    }
+
     $total = count($stages);
     $completed = 0;
     foreach ($stages as $stage) {
@@ -330,6 +340,10 @@ function loadDoseStageData(mysqli $conn, int $caseId, string $branchId): array {
         'stages' => $stages,
         'dose_numbers' => $doseNumbers,
         'profile' => inferScheduleProfile($doseNumbers),
+        'regimen_label' => $caseProfile['profile'] !== null
+            ? workflowProfileLabel($caseProfile['profile'], $caseProfile['route'])
+            : '',
+        'dose_labels' => $doseLabels,
         'overall_status' => $overall,
         'completed_count' => $completed,
         'total_count' => $total,
@@ -1008,6 +1022,8 @@ if ($action) {
                     'route' => $doseInfo['profile']['route'],
                     'vacc_category' => $doseInfo['profile']['category'],
                     'vaccination_doses' => $doseInfo['stages'],
+                    'dose_labels' => $doseInfo['dose_labels'],
+                    'regimen_label' => $doseInfo['regimen_label'],
                     'vaccination_status' => $doseInfo['overall_status'],
                     'vaccination_remarks' => $doseInfo['remarks'],
                     'status' => $row['philhealth_status'] ?? '',
@@ -4166,7 +4182,7 @@ body.sidebar-collapsed .main {
         { key: 'd7', label: 'D7', doseNum: 3 },
         { key: 'd14', label: 'D14', doseNum: 4 },
         { key: 'd21', label: 'D21', doseNum: 5 },
-        { key: 'd28', label: 'D28/30', doseNum: 6 }
+        { key: 'd28', label: 'D28', doseNum: 6 }
     ];
 
     let currentDoseData = {};
@@ -4866,8 +4882,8 @@ body.sidebar-collapsed .main {
                             <span class="patient-view-value">${value(data.active_regimen)}</span>
                         </div>
                         <div class="patient-view-field">
-                            <span class="patient-view-label">Vaccination Category</span>
-                            <span class="patient-view-value">${value(data.vacc_category)}</span>
+                            <span class="patient-view-label">Vaccination Regimen</span>
+                            <span class="patient-view-value">${value(data.regimen_label, 'Not yet assessed by Nurse')}</span>
                         </div>
                         <div class="patient-view-field">
                             <span class="patient-view-label">Vaccination Status</span>
@@ -4902,7 +4918,7 @@ body.sidebar-collapsed .main {
                                         if (!stage) return '';
                                         return `
                                             <tr>
-                                                <td class="patient-view-dose">${escapeHtml(d.label)}</td>
+                                                <td class="patient-view-dose">${escapeHtml((data.dose_labels && data.dose_labels[d.key]) || d.label)}</td>
                                                 <td>${displayDate(stage.scheduled_date, '—')}</td>
                                                 <td>${displayDate(stage.administered_date, 'Not administered')}</td>
                                                 <td>${scheduleStatusBadge(stage.status || 'Scheduled')}</td>
