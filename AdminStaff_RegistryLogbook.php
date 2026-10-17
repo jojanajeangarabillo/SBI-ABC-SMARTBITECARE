@@ -3,6 +3,7 @@ session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/patient_display_helper.php';
 
 /*
  * Registry logbook: the clinic's paper logbook columns, read-only, with a
@@ -35,19 +36,19 @@ if ($from > $to) {
     [$from, $to] = [$to, $from];
 }
 
+// Clinical fields: latest nurse assessment, intake as fallback; age as of
+// today (sources/patient_display_helper.php, same as every other page).
 $casesStmt = $conn->prepare(
-    "SELECT c.case_id, c.case_number, DATE(c.created_at) AS logbook_date, c.date_of_bite, c.bite_location,
-            c.animal_type, c.animal_status, c.bite_category, c.remarks AS case_remarks,
+    "SELECT c.case_id, c.case_number, DATE(c.created_at) AS logbook_date,
+            " . patientClinicalSelectSql($conn, 'c', 'la') . ",
+            c.remarks AS case_remarks,
             p.full_name, p.address, p.gender, p.contact_number, p.birthday,
-            TIMESTAMPDIFF(YEAR, p.birthday, DATE(c.created_at)) AS age,
+            " . patientDisplayAgeSql('p') . " AS age,
             r.registry_number, r.status_of_biting_animal, r.erig, r.ats, r.tt, r.active_regimen,
-            r.dose_d0, r.dose_d3, r.dose_d7, r.dose_d14, r.dose_d28_30, r.remarks AS registry_remarks,
-            (SELECT a.bite_category FROM clinical_assessments a WHERE a.case_id = c.case_id
-             ORDER BY a.updated_at DESC, a.assessment_id DESC LIMIT 1) AS assessed_category,
-            (SELECT a.active_regimen FROM clinical_assessments a WHERE a.case_id = c.case_id
-             ORDER BY a.updated_at DESC, a.assessment_id DESC LIMIT 1) AS assessed_regimen
+            r.dose_d0, r.dose_d3, r.dose_d7, r.dose_d14, r.dose_d21, r.dose_d28_30, r.remarks AS registry_remarks
      FROM animal_bite_cases c
      INNER JOIN patients p ON p.patient_id = c.patient_id
+     " . patientLatestAssessmentJoinSql('c', 'la') . "
      LEFT JOIN registry_records r ON r.case_id = c.case_id AND r.is_archived = 0
      WHERE c.branch_id = ? AND c.is_archived = 0
        AND DATE(c.created_at) BETWEEN ? AND ?
@@ -84,8 +85,9 @@ if ($caseIds) {
     $vaccStmt->close();
 }
 
+// D21 is listed so PrEP (D0, D7, D21) doses are not lost.
 $doseColumns = ['D0' => [1, 'dose_d0'], 'D3' => [2, 'dose_d3'], 'D7' => [3, 'dose_d7'],
-    'D14' => [4, 'dose_d14'], 'D28' => [6, 'dose_d28_30']];
+    'D14' => [4, 'dose_d14'], 'D21' => [5, 'dose_d21'], 'D28' => [6, 'dose_d28_30']];
 
 $rows = [];
 foreach ($cases as $case) {
@@ -139,8 +141,8 @@ foreach ($cases as $case) {
 
     $rows[] = [
         'Date' => !empty($case['logbook_date']) ? date('m/d/Y', strtotime($case['logbook_date'])) : '',
-        'Case No.' => (string)($case['case_number'] ?: $case['registry_number']),
-        'Patient Name' => (string)$case['full_name'],
+        'Case No.' => patientDisplayCaseNumber($case['case_number'], $case['registry_number']),
+        'Patient Name' => patientDisplayName($case['full_name']),
         'Address' => (string)($case['address'] ?? ''),
         'Age' => $case['age'] !== null ? (string)$case['age'] : '',
         'Gender' => (string)($case['gender'] ?? ''),
@@ -148,11 +150,11 @@ foreach ($cases as $case) {
         'Site of Bite' => (string)($case['bite_location'] ?? ''),
         'Biting Animal' => (string)($case['animal_type'] ?? ''),
         'Status of Animal' => (string)($case['animal_status'] ?: ($case['status_of_biting_animal'] ?? '')),
-        'Category' => (string)($case['bite_category'] ?: ($case['assessed_category'] ?? '')),
+        'Category' => (string)($case['bite_category'] ?? ''),
         'ERIG (mL)' => $erigText,
         'ATS (mL)' => $atsText,
         'TT' => $tt ? '✓' : '',
-        'Active Regimen' => (string)($case['active_regimen'] ?: ($case['assessed_regimen'] ?? '')),
+        'Active Regimen' => (string)(($case['assessment_active_regimen'] ?? '') ?: ($case['active_regimen'] ?? '')),
     ] + $doses + [
         'Contact No.' => (string)($case['contact_number'] ?? ''),
         'Remarks' => $remarks,

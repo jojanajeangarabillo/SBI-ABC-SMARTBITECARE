@@ -69,10 +69,93 @@ function workflowNotifyRole(mysqli $conn, string $branchId, int $roleId, string 
 }
 
 /**
+ * Notify every active Admin Staff of the branch once per $sourceKey. The
+ * notifications table has a unique (user_id, source_key) key, so a double
+ * click or a resubmitted form never creates a second row. Returns the number
+ * of notifications created by this call.
+ */
+function workflowNotifyRoleOnce(
+    mysqli $conn,
+    string $branchId,
+    int $roleId,
+    string $title,
+    string $message,
+    string $type,
+    string $sourceKey
+): int {
+    $hasKey = workflowColumnExists($conn, 'notifications', 'source_key');
+    $find = $conn->prepare('SELECT user_id FROM users WHERE branch_id = ? AND role_id = ? AND status = "Active"');
+    $find->bind_param('si', $branchId, $roleId);
+    $find->execute();
+    $users = $find->get_result()->fetch_all(MYSQLI_ASSOC);
+    $find->close();
+    if ($hasKey) {
+        $insert = $conn->prepare(
+            'INSERT IGNORE INTO notifications (user_id, title, message, notification_type, source_key, is_read, created_at)
+             VALUES (?, ?, ?, ?, ?, 0, NOW())'
+        );
+    } else {
+        // Without the source_key column, skip users who already have this exact message.
+        $insert = $conn->prepare(
+            'INSERT INTO notifications (user_id, title, message, notification_type, is_read, created_at)
+             SELECT ?, ?, ?, ?, 0, NOW() FROM DUAL
+             WHERE NOT EXISTS (SELECT 1 FROM notifications WHERE user_id = ? AND notification_type = ? AND message = ?)'
+        );
+    }
+    $created = 0;
+    foreach ($users as $row) {
+        $uid = (int)$row['user_id'];
+        if ($hasKey) {
+            $insert->bind_param('issss', $uid, $title, $message, $type, $sourceKey);
+        } else {
+            $insert->bind_param('isssiss', $uid, $title, $message, $type, $uid, $type, $message);
+        }
+        $insert->execute();
+        $created += max(0, (int)$insert->affected_rows);
+    }
+    $insert->close();
+    return $created;
+}
+
+/**
+ * Patient-facing label of the dose(s) handled on a visit, for example
+ * "Dose 2 - D3". Uses the doses completed on the visit date; otherwise the
+ * next dose still to give; "One-time" for non-anti-rabies products.
+ */
+function workflowVisitDoseLabel(mysqli $conn, int $caseId, string $branchId, string $visitDate): string
+{
+    $profile = workflowCaseProfile($conn, $caseId);
+    $stmt = $conn->prepare(
+        "SELECT dose_number, vaccination_status, date_administered, scheduled_date
+         FROM vaccination_records
+         WHERE case_id = ? AND branch_id = ? AND is_archived = 0
+         ORDER BY dose_number, vaccination_id"
+    );
+    $stmt->bind_param('is', $caseId, $branchId);
+    $stmt->execute();
+    $rows = workflowAnnotateCaseDoses($stmt->get_result()->fetch_all(MYSQLI_ASSOC), $profile['profile']);
+    $stmt->close();
+    $given = [];
+    $next = '';
+    foreach ($rows as $row) {
+        if ($row['vaccination_status'] === 'Completed' && (string)$row['date_administered'] === $visitDate) {
+            $given[$row['dose_display']] = true;
+        } elseif ($next === '' && in_array($row['vaccination_status'], ['Scheduled', 'Missed'], true)) {
+            $next = (string)$row['dose_display'];
+        }
+    }
+    if ($given) return implode(', ', array_keys($given));
+    if (($profile['profile'] ?? '') === 'OTHER') return 'One-time';
+    return $next !== '' ? $next . ' (next due)' : 'Not recorded';
+}
+
+/**
  * Clinic rule: a patient may return up to 7 days late for a dose. Within that
  * window the dose is recorded on the actual date and every remaining dose moves
- * forward by the same delay. More than 7 days late starts a new cycle from Day 0
- * (old records are archived, never deleted).
+ * forward by the same delay, automatically. More than 7 days late, the nurse
+ * chooses: continue the current schedule (same shift, confirmed with an optional
+ * remark) or re-assess and restart from Day 0 (old records are archived, never
+ * deleted). The system never restarts a cycle by itself.
  */
 const WORKFLOW_LATE_DOSE_WINDOW_DAYS = 7;
 
@@ -295,7 +378,11 @@ function workflowStoredProfile(mysqli $conn, string $profile): string
 
 /**
  * Classify a dose that is $daysLate days past its scheduled date.
- * 'on_time' (0 or early), 'catchup' (1-7 days), 'restart' (more than 7 days).
+ * 'on_time' (0 or early), 'catchup' (1-7 days), 'nurse_decision' (more than 7 days).
+ *
+ * More than 7 days late is never restarted automatically: the nurse chooses to
+ * continue the current schedule (remaining doses shift by the delay) or to
+ * re-assess and restart from Day 0. See workflowRecordLateDecision().
  */
 function workflowLateDoseStatus(int $daysLate): array
 {
@@ -309,9 +396,195 @@ function workflowLateDoseStatus(int $daysLate): array
             'description' => $daysLate . ' day' . ($daysLate === 1 ? '' : 's') . ' late. Record the dose on the actual date; '
                 . 'the remaining doses move forward by the same number of days (allowed up to ' . $window . ' days late).'];
     }
-    return ['classification' => 'restart', 'label' => 'New Cycle Required (Day 0)',
-        'description' => $daysLate . ' days late, more than the ' . $window . '-day limit. Re-assess the patient: '
-            . 'a new vaccination cycle starts from Day 0 and the old records are archived for history.'];
+    return ['classification' => 'nurse_decision', 'label' => 'Over ' . $window . ' Days Late - Nurse Decision',
+        'description' => $daysLate . ' days late, more than the ' . $window . '-day limit. The nurse chooses: continue the '
+            . 'current schedule (the dose is recorded on the actual date and the remaining doses move forward), or re-assess '
+            . 'and restart from Day 0 (the old records are archived for history).'];
+}
+
+/** True once sources/migrate_late_dose_decision.php has added the decision columns. */
+function workflowLateDecisionReady(mysqli $conn): bool
+{
+    return workflowColumnExists($conn, 'vaccination_records', 'late_decision');
+}
+
+/** Display text for a stored decision, e.g. "Continued current schedule (12 days late)". */
+function workflowLateDecisionLabel(?string $decision, $days = null): string
+{
+    $decision = strtolower(trim((string)$decision));
+    if ($decision === '') return '';
+    $text = $decision === 'continue' ? 'Continued current schedule' : 'Restarted from Day 0';
+    return $text . ((int)$days > 0 ? ' (' . (int)$days . ' days late)' : '');
+}
+
+/**
+ * Unfinished dose placeholders of the ACTIVE cycle that are more than the
+ * 7-day window overdue (as of $asOf, default today). Outside doses and
+ * archived cycles are excluded. Returns ['max_days' => int, 'rows' => [...]]
+ * where each row has vaccination_id, dose_number, scheduled_date, days_late
+ * and late_decision (NULL before the migration or when not chosen yet).
+ */
+function workflowCaseLateDoses(mysqli $conn, int $patientId, int $caseId, string $branchId, ?string $asOf = null): array
+{
+    $asOf = $asOf ?? date('Y-m-d');
+    $decisionSql = workflowLateDecisionReady($conn) ? 'late_decision' : 'NULL';
+    $stmt = $conn->prepare(
+        "SELECT vaccination_id, dose_number, scheduled_date,
+                DATEDIFF(?, scheduled_date) AS days_late, $decisionSql AS late_decision
+         FROM vaccination_records
+         WHERE patient_id = ? AND case_id = ? AND branch_id = ? AND is_archived = 0
+           AND vaccination_status IN ('Scheduled', 'Missed')
+           AND scheduled_date IS NOT NULL
+           AND DATEDIFF(?, scheduled_date) > ?
+         ORDER BY scheduled_date ASC, vaccination_id ASC"
+    );
+    $window = WORKFLOW_LATE_DOSE_WINDOW_DAYS;
+    $stmt->bind_param('siissi', $asOf, $patientId, $caseId, $branchId, $asOf, $window);
+    $stmt->execute();
+    $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+    $max = 0;
+    foreach ($rows as $row) $max = max($max, (int)$row['days_late']);
+    return ['max_days' => $max, 'rows' => $rows];
+}
+
+/**
+ * Store the nurse's choice for a dose more than 7 days late on its
+ * vaccination record and write the audit entry (patient, case, dose, days
+ * late, option chosen, nurse). The choice is also appended to remarks so
+ * pages that only show remarks display it. $context holds patient_name,
+ * patient_id, case_number, case_id, dose_label and nurse_name.
+ */
+function workflowRecordLateDecision(
+    mysqli $conn,
+    int $vaccinationId,
+    string $decision,
+    int $daysLate,
+    string $remark,
+    int $userId,
+    string $branchId,
+    array $context
+): void {
+    if (!in_array($decision, ['continue', 'restart'], true)) {
+        throw new RuntimeException('Choose Continue current schedule or Restart from Day 0.');
+    }
+    $remark = mb_substr(trim($remark), 0, 500);
+    $note = 'Late dose (' . $daysLate . ' days): ' . ($decision === 'continue'
+        ? 'nurse chose to continue the current schedule'
+        : 'nurse chose to re-assess and restart from Day 0')
+        . ($remark !== '' ? ' - ' . $remark : '');
+    if (workflowLateDecisionReady($conn)) {
+        $stmt = $conn->prepare(
+            "UPDATE vaccination_records
+             SET late_decision = ?, late_days = ?, late_decision_remark = NULLIF(?, ''),
+                 late_decision_by = ?, late_decision_at = NOW(),
+                 remarks = CONCAT_WS(' | ', NULLIF(remarks, ''), ?)
+             WHERE vaccination_id = ? AND branch_id = ?"
+        );
+        $stmt->bind_param('sisisis', $decision, $daysLate, $remark, $userId, $note, $vaccinationId, $branchId);
+    } else {
+        $stmt = $conn->prepare(
+            "UPDATE vaccination_records SET remarks = CONCAT_WS(' | ', NULLIF(remarks, ''), ?)
+             WHERE vaccination_id = ? AND branch_id = ?"
+        );
+        $stmt->bind_param('sis', $note, $vaccinationId, $branchId);
+    }
+    $stmt->execute();
+    $stmt->close();
+    workflowAudit($conn, $userId, $branchId,
+        'Late dose decision: ' . strtoupper($decision === 'continue' ? 'Continue current schedule' : 'Restart from Day 0')
+            . ' | Patient: ' . ($context['patient_name'] ?? '') . ' (ID: ' . (int)($context['patient_id'] ?? 0) . ')'
+            . ' | Case: ' . ($context['case_number'] ?? '') . ' (ID: ' . (int)($context['case_id'] ?? 0) . ')'
+            . ' | Dose: ' . ($context['dose_label'] ?? '')
+            . ' | Days late: ' . $daysLate
+            . ' | Nurse: ' . ($context['nurse_name'] ?? ('User ' . $userId))
+            . ($remark !== '' ? ' | Remark: ' . $remark : ''),
+        'Vaccination Follow-up');
+}
+
+/**
+ * ONE definition of a "missed dose", used by every calendar, dashboard,
+ * report and notification count:
+ *   a dose (dose_number >= 1) of an active, non-archived vaccination cycle
+ *   (case not archived and still Ongoing, patient not archived) whose
+ *   scheduled date is before today and that is marked Missed or still
+ *   Scheduled, and was never completed (no Completed row for the same case
+ *   and dose). Archived/restarted cycles and doses given at another clinic
+ *   (stored as Completed) never count.
+ * The number means DOSES (one per case + dose); the patient count is also
+ * returned for pages that show "N patients".
+ * Aliases: $v vaccination_records, $c animal_bite_cases, $p patients.
+ */
+function workflowMissedDoseCondition(string $v = 'vr', string $c = 'c', string $p = 'p'): string
+{
+    return "($v.is_archived = 0
+        AND $v.dose_number >= 1
+        AND $v.scheduled_date IS NOT NULL
+        AND $v.scheduled_date < CURDATE()
+        AND $v.vaccination_status IN ('Scheduled', 'Missed')
+        AND COALESCE($v.vaccine_name, '') NOT LIKE '%Default%'
+        AND COALESCE($c.is_archived, 0) = 0
+        AND $c.case_status = 'Ongoing'
+        AND COALESCE($p.is_archived, 0) = 0
+        AND NOT EXISTS (
+            SELECT 1 FROM vaccination_records missed_done
+            WHERE missed_done.case_id = $v.case_id
+              AND missed_done.dose_number = $v.dose_number
+              AND missed_done.is_archived = 0
+              AND missed_done.vaccination_status = 'Completed'
+        ))";
+}
+
+/** FROM/JOIN clause matching workflowMissedDoseCondition('vr', 'c', 'p'). */
+function workflowMissedDoseFromSql(): string
+{
+    return "FROM vaccination_records vr
+        INNER JOIN animal_bite_cases c ON c.case_id = vr.case_id
+            AND c.patient_id = vr.patient_id AND c.branch_id = vr.branch_id
+        INNER JOIN patients p ON p.patient_id = vr.patient_id";
+}
+
+/** Missed doses and patients for one branch: ['doses' => int, 'patients' => int]. */
+function workflowMissedDoseCounts(mysqli $conn, string $branchId): array
+{
+    $stmt = $conn->prepare(
+        'SELECT COUNT(DISTINCT vr.case_id, vr.dose_number) AS doses, COUNT(DISTINCT vr.patient_id) AS patients '
+        . workflowMissedDoseFromSql() . ' WHERE vr.branch_id = ? AND ' . workflowMissedDoseCondition()
+    );
+    $stmt->bind_param('s', $branchId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc() ?: [];
+    $stmt->close();
+    return ['doses' => (int)($row['doses'] ?? 0), 'patients' => (int)($row['patients'] ?? 0)];
+}
+
+/**
+ * Missed doses per branch (every branch listed, zero included) plus the
+ * all-branch total, which is always the sum of the branches.
+ */
+function workflowMissedDoseCountsByBranch(mysqli $conn): array
+{
+    $branches = [];
+    $result = $conn->query('SELECT branch_id, branch_name FROM branches ORDER BY branch_id');
+    while ($row = $result->fetch_assoc()) {
+        $branches[(string)$row['branch_id']] = ['branch_name' => (string)$row['branch_name'], 'doses' => 0, 'patients' => 0];
+    }
+    $result = $conn->query(
+        'SELECT vr.branch_id, COUNT(DISTINCT vr.case_id, vr.dose_number) AS doses, COUNT(DISTINCT vr.patient_id) AS patients '
+        . workflowMissedDoseFromSql() . ' WHERE ' . workflowMissedDoseCondition() . ' GROUP BY vr.branch_id'
+    );
+    while ($row = $result->fetch_assoc()) {
+        $id = (string)$row['branch_id'];
+        $branches[$id] = ($branches[$id] ?? ['branch_name' => $id]) + ['doses' => 0, 'patients' => 0];
+        $branches[$id]['doses'] = (int)$row['doses'];
+        $branches[$id]['patients'] = (int)$row['patients'];
+    }
+    $total = ['doses' => 0, 'patients' => 0];
+    foreach ($branches as $branch) {
+        $total['doses'] += $branch['doses'];
+        $total['patients'] += $branch['patients'];
+    }
+    return ['branches' => $branches, 'total' => $total];
 }
 
 /** Scheduled dates that have passed become Missed. Completed records are not touched. */
@@ -341,6 +614,8 @@ function workflowMarkMissedSchedules(mysqli $conn, string $branchId, int $userId
  * Move every remaining (not yet given) dose of a case forward by $delayDays
  * after a dose scheduled on $originalDate was given late. Shifted dates that
  * are still in the past stay Missed; the others become Scheduled again.
+ * Up to 7 days this is automatic; beyond that only when the nurse chose to
+ * continue the current schedule ($nurseChoseContinue).
  * Returns the number of dose rows moved.
  */
 function workflowShiftRemainingSchedule(
@@ -350,9 +625,11 @@ function workflowShiftRemainingSchedule(
     string $branchId,
     string $originalDate,
     int $delayDays,
-    int $userId
+    int $userId,
+    bool $nurseChoseContinue = false
 ): int {
-    if ($delayDays < 1 || $delayDays > WORKFLOW_LATE_DOSE_WINDOW_DAYS) {
+    // More than 7 days is shifted only after the nurse chose "Continue current schedule".
+    if ($delayDays < 1 || ($delayDays > WORKFLOW_LATE_DOSE_WINDOW_DAYS && !$nurseChoseContinue)) {
         return 0;
     }
     $note = 'Moved ' . $delayDays . ' day' . ($delayDays === 1 ? '' : 's') . ' later because the dose due '

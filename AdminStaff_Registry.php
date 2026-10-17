@@ -8,6 +8,17 @@ $user = workflowRequireUser($conn, 4);
 
 $userId = (int)$user['user_id'];
 $branchId = (string)$user['branch_id'];
+// Opened from a "Chart Ready for Registry" notification: mark it read and
+// highlight that visit in the queue.
+$highlightVisitId = (int)($_GET['visit_id'] ?? 0);
+if (preg_match('/^db_(\d+)$/', (string)($_GET['notification'] ?? ''), $notificationMatch)) {
+    $readStmt = $conn->prepare("UPDATE notifications SET is_read = 1
+        WHERE notification_id = ? AND user_id = ? AND notification_type = 'registry'");
+    $readNotificationId = (int)$notificationMatch[1];
+    $readStmt->bind_param('ii', $readNotificationId, $userId);
+    $readStmt->execute();
+    $readStmt->close();
+}
 $notification_count = getAdminStaffNotificationCount($conn, $branchId);
 $csrf = workflowCsrfToken();
 
@@ -878,7 +889,7 @@ $flash = workflowTakeFlash();
                             <?php endif; ?>
 
                             <?php foreach ($records as $row): ?>
-                                <tr class="registry-queue-row">
+                                <tr class="registry-queue-row<?= (int)$row['visit_id'] === $highlightVisitId ? ' table-warning' : '' ?>" id="registry-visit-<?= (int)$row['visit_id'] ?>">
                                     <td>
                                         <div class="patient-name"><?php echo workflowH($row['full_name']); ?></div>
                                         <div class="case-number"><?php echo workflowH($row['case_number']); ?></div>
@@ -1095,6 +1106,11 @@ $flash = workflowTakeFlash();
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="sources/sidebar.js"></script>
     <script>
+    // Scroll to the registry entry opened from a notification.
+    document.addEventListener('DOMContentLoaded', function () {
+        const target = document.getElementById('registry-visit-<?= (int)$highlightVisitId ?>');
+        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
         document.addEventListener('DOMContentLoaded', function () {
             const modalElement = document.getElementById('registryConfirmModal');
             const confirmButton = document.getElementById('confirmRegistryButton');

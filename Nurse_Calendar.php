@@ -109,6 +109,8 @@ $todayCount = (int)($summary['today_count'] ?? 0);
 $next7Count = (int)($summary['next_7_count'] ?? 0);
 $next14Count = (int)($summary['next_14_count'] ?? 0);
 $next30Count = (int)($summary['next_30_count'] ?? 0);
+// Same shared missed-dose count as the dashboards and the Admin Staff Calendar.
+$missedShared = workflowMissedDoseCounts($conn, $branchId);
 
 $whereSql = "
     vr.branch_id = ?
@@ -766,6 +768,11 @@ function nurseCalendarUrl(string $range, string $search, int $page = 1): string
                 </a>
             </div>
         </div>
+
+        <a class="alert alert-<?= $missedShared['doses'] > 0 ? 'danger' : 'success' ?> d-flex align-items-center gap-2 py-2 text-decoration-none" href="Nurse_Assessment.php#followups">
+            <i class="bi bi-calendar-x"></i>
+            <span><strong><?= (int)$missedShared['doses'] ?></strong> missed dose(s) for <?= (int)$missedShared['patients'] ?> patient(s): past due, not given. Open the Assessment Queue follow-ups.</span>
+        </a>
 
         <div class="filter-card">
             <div class="range-tabs" aria-label="Schedule date filters">

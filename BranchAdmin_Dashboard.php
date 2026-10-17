@@ -115,16 +115,8 @@ $stmt->execute();
 $scheduledVaccResult = $stmt->get_result();
 $stats['scheduled_vaccinations'] = $scheduledVaccResult->fetch_assoc()['scheduled'] ?? 0;
 
-// Missed vaccinations for this branch
-$missedVaccQuery = "SELECT COUNT(*) as missed 
-                    FROM vaccination_records 
-                    WHERE branch_id = ? 
-                    AND vaccination_status = 'Missed'";
-$stmt = $conn->prepare($missedVaccQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$missedVaccResult = $stmt->get_result();
-$stats['missed_vaccinations'] = $missedVaccResult->fetch_assoc()['missed'] ?? 0;
+// Missed doses for this branch - one shared definition (workflowMissedDoseCondition).
+$stats['missed_vaccinations'] = (int)$stats['missed_doses'];
 
 // Fetch recent forecasting alerts for this branch
 $alerts = array_slice(array_values(array_filter(
@@ -1500,14 +1492,14 @@ $username = $userInfo['username'] ?? 'Admin';
                 </div>
 
                 <div class="stat-content">
-                    <div class="stat-label">Missed Vaccinations</div>
+                    <div class="stat-label">Missed Doses</div>
 
                     <div class="stat-number">
                         <?php echo number_format($stats['missed_vaccinations']); ?>
                     </div>
 
                     <div class="stat-description">
-                        Missed scheduled appointments
+                        Past due, not given (<?php echo number_format((int)$stats['overdue_followup_patients']); ?> patient(s))
                     </div>
                 </div>
 

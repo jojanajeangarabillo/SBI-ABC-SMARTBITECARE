@@ -163,23 +163,8 @@ $stmt->execute();
 $stats['upcoming_vaccinations'] = (int)($stmt->get_result()->fetch_assoc()['upcoming'] ?? 0);
 $stmt->close();
 
-// 9. MISSED VACCINATIONS
-$missedQuery = "SELECT COUNT(*) AS missed
-                FROM (
-                    SELECT vr.patient_id, vr.case_id, vr.dose_number
-                    FROM vaccination_records vr
-                    LEFT JOIN inventory_items ii ON vr.item_id = ii.item_id
-                    WHERE vr.branch_id = ?
-                      AND vr.is_archived = 0
-                      AND vr.vaccination_status = 'Missed'
-                      AND COALESCE(NULLIF(vr.vaccine_name, ''), ii.item_name, '') NOT LIKE '%Default%'
-                    GROUP BY vr.patient_id, vr.case_id, vr.dose_number
-                ) AS missed_stages";
-$stmt = $conn->prepare($missedQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$stats['missed_vaccinations'] = (int)($stmt->get_result()->fetch_assoc()['missed'] ?? 0);
-$stmt->close();
+// 9. MISSED DOSES - one shared definition for every page (workflowMissedDoseCondition).
+$stats['missed_vaccinations'] = (int)$stats['missed_doses'];
 
 // 10. ANIMAL BITE CATEGORY STATISTICS
 $categoryQuery = "SELECT bite_category, COUNT(*) AS count
@@ -1266,9 +1251,9 @@ $todayDisplay = date('l, F j, Y');
                 <a class="stat-card-link" href="Nurse_Vaccination.php?tab=patients">
                     <div class="stat-card stat-danger">
                         <span class="stat-icon"><i class="bi bi-calendar-x"></i></span>
-                        <span class="stat-title">Missed Vaccinations</span>
+                        <span class="stat-title">Missed Doses</span>
                         <span class="stat-number"><?php echo number_format($stats['missed_vaccinations']); ?></span>
-                        <span class="stat-note">Needs follow-up</span>
+                        <span class="stat-note"><?php echo number_format((int)$stats['overdue_followup_patients']); ?> patient(s) - past due, not given</span>
                     </div>
                 </a>
             </div>
@@ -1474,7 +1459,7 @@ $todayDisplay = date('l, F j, Y');
                                                 $followupDays = (int)$followup['days_overdue'];
                                                 $followupBadge = $followupDays <= 0
                                                     ? 'Due Today'
-                                                    : ($followupDays <= WORKFLOW_LATE_DOSE_WINDOW_DAYS ? 'Catch-up (≤' . WORKFLOW_LATE_DOSE_WINDOW_DAYS . 'd)' : 'New cycle (Day 0)');
+                                                    : ($followupDays <= WORKFLOW_LATE_DOSE_WINDOW_DAYS ? 'Catch-up (≤' . WORKFLOW_LATE_DOSE_WINDOW_DAYS . 'd)' : 'Over ' . WORKFLOW_LATE_DOSE_WINDOW_DAYS . 'd - nurse decides');
                                             ?>
                                             <span class="mini-badge danger" title="<?php echo htmlspecialchars(workflowLateDoseStatus($followupDays)['description']); ?>"><?php echo htmlspecialchars($followupBadge); ?></span>
                                         </div>

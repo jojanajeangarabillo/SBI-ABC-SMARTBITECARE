@@ -5,6 +5,7 @@ require_once 'sources/inventory_stock_helpers.php';
 $stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
 require_once 'sources/workflow_helpers.php';
+require_once 'sources/patient_display_helper.php';
 
 // ============================================
 // AUDIT LOG FUNCTION
@@ -676,7 +677,8 @@ function generateVaccinationReport($branchId, $startDate = null, $endDate = null
     $scheduled = array_reduce($vaccinations, function($carry, $v) {
         return $carry + ($v['vaccination_status'] == 'Scheduled' ? 1 : 0);
     }, 0);
-    $missed = $total - $completed - $scheduled;
+    // Missed doses use the one shared definition (same number as the dashboards).
+    $missed = workflowMissedDoseCounts($conn, (string)$branchId)['doses'];
     $finalDoses = array_reduce($vaccinations, function($carry, $v) {
         return $carry + ($v['is_final_dose'] ? 1 : 0);
     }, 0);
@@ -685,21 +687,21 @@ function generateVaccinationReport($branchId, $startDate = null, $endDate = null
         'Total Vaccinations' => $total,
         'Completed' => $completed,
         'Scheduled' => $scheduled,
-        'Missed' => $missed,
+        'Missed doses (today)' => $missed,
         'Final Doses' => $finalDoses
     ]);
     
     $headers = ['Patient', 'Vaccine', 'Dose', 'Administered', 'Status', 'Final'];
     $columnWidths = [35, 35, 22, 26, 22, 18];
     
-    $data = array_map(function($v) {
+    $data = array_map(function($v) use ($conn) {
         return [
             substr($v['patient_name'] ?: 'Unknown', 0, 18),
             substr($v['vaccine_name'] ?: 'N/A', 0, 20),
-            // Day label (D0, D3, D7, D14, D21, D28); 0 = one-time product.
-            (int)$v['dose_number'] > 0 ? workflowDoseLabel((int)$v['dose_number']) : 'One-time',
+            // Shared dose label ("Dose 2 - D3") and status, as on every page.
+            patientDoseDisplay($conn, (int)$v['case_id'], (int)$v['dose_number']),
             $v['date_administered'] ? date('Y-m-d', strtotime($v['date_administered'])) : 'Pending',
-            $v['vaccination_status'] ?: 'N/A',
+            patientDoseStatus($v),
             $v['is_final_dose'] ? 'Yes' : 'No'
         ];
     }, $vaccinations);
