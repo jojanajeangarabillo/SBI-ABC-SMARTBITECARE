@@ -13,6 +13,7 @@ require_once 'sources/workflow_helpers.php';
 require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/daily_inventory_helpers.php';
+require_once 'sources/patient_display_helper.php';
 
 // ============================================================
 // NURSE ACCESS CONTROL
@@ -932,6 +933,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_scheduled_doses') {
         $number = (int)($dose['dose_number'] ?? 0);
         $dose['dose_sequence'] = $doseContext['map'][$number] ?? $number;
         $dose['dose_display'] = workflowDoseDisplay($number, $doseContext['map']);
+        // Shared status rule: a past-due dose not given shows as Missed on every page.
+        if (($dose['vaccination_status'] ?? '') !== 'Invalid Future Date') {
+            $dose['vaccination_status'] = patientDoseStatus($dose);
+        }
     }
     unset($dose);
     

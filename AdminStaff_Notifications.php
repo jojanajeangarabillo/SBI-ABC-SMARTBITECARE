@@ -3,6 +3,7 @@ session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/workflow_helpers.php';
+require_once 'sources/patient_display_helper.php';
 
 // Check if user is logged in and is an admin staff
 if (
@@ -126,7 +127,7 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             p.full_name as patient_name,
             p.gender,
             TIMESTAMPDIFF(YEAR, p.birthday, CURDATE()) as age,
-            r.registry_number as case_no,
+            COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
             v.dose_number,
             v.scheduled_date as next_schedule,
             v.vaccination_status,
@@ -157,6 +158,8 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
     $upcomingResult = $stmt->get_result();
 
     while ($row = $upcomingResult->fetch_assoc()) {
+        // Shared dose label ("Dose 2 - D3") and case number (sources/patient_display_helper.php).
+        $row = patientNormalizeScheduleRow($conn, $row);
         $daysUntil = (strtotime($row['next_schedule']) - strtotime($today)) / (60 * 60 * 24);
         $daysUntil = (int)$daysUntil;
         
@@ -217,7 +220,7 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             p.full_name as patient_name,
             p.gender,
             TIMESTAMPDIFF(YEAR, p.birthday, CURDATE()) as age,
-            r.registry_number as case_no,
+            COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
             v.dose_number,
             v.scheduled_date as next_schedule,
             v.vaccination_status,
@@ -252,6 +255,8 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
     $overdueResult = $stmt->get_result();
 
     while ($row = $overdueResult->fetch_assoc()) {
+        // Shared dose label ("Dose 2 - D3") and case number (sources/patient_display_helper.php).
+        $row = patientNormalizeScheduleRow($conn, $row);
         $patientInfo = $row['patient_name'] . ' (' . $row['age'] . ' yrs, ' . ($row['gender'] ? substr($row['gender'], 0, 1) : 'N/A') . ')';
         $daysOverdue = $row['days_overdue'];
         
@@ -297,7 +302,7 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             p.full_name as patient_name,
             p.gender,
             TIMESTAMPDIFF(YEAR, p.birthday, CURDATE()) as age,
-            r.registry_number as case_no,
+            COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
             c.created_at,
             CASE 
                 WHEN p.birthday IS NULL THEN 'Missing Date of Birth'
@@ -369,7 +374,7 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             p.full_name as patient_name,
             p.gender,
             TIMESTAMPDIFF(YEAR, p.birthday, CURDATE()) as age,
-            r.registry_number as case_no,
+            COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
             c.created_at,
             c.animal_type
         FROM animal_bite_cases c
@@ -433,7 +438,7 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             p.full_name as patient_name,
             p.gender,
             TIMESTAMPDIFF(YEAR, p.birthday, CURDATE()) as age,
-            r.registry_number as case_no,
+            COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
             c.created_at,
             c.animal_type
         FROM animal_bite_cases c
@@ -487,7 +492,7 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
         SELECT 
             c.case_id,
             p.full_name as patient_name,
-            r.registry_number as case_no,
+            COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
             ph.status as philhealth_status,
             ph.updated_at
         FROM animal_bite_cases c

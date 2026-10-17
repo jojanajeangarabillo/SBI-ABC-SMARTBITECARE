@@ -2,6 +2,7 @@
 session_start();
 
 require_once 'sources/db_connect.php';
+require_once 'sources/patient_display_helper.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/fit_to_work_certificate.php';
 
@@ -324,17 +325,14 @@ function getPatientCaseForDocument($conn, $patientId, $caseId, $branchId)
             p.address,
             c.case_id,
             c.case_number,
-            c.animal_type,
-            c.bite_location,
-            c.bite_category,
-            c.animal_status,
-            c.date_of_bite,
+            " . patientClinicalSelectSql($conn, 'c', 'la') . ",
             c.case_status,
             c.remarks AS case_remarks
         FROM patients p
         INNER JOIN animal_bite_cases c
             ON c.patient_id = p.patient_id
            AND c.branch_id = p.branch_id
+        " . patientLatestAssessmentJoinSql('c', 'la') . "
         WHERE p.patient_id = ?
           AND c.case_id = ?
           AND p.branch_id = ?
@@ -471,15 +469,9 @@ function buildPatientDocumentContent(
     $patientId = (int)$patientCase['patient_id'];
     $caseId = (int)$patientCase['case_id'];
     $birthdayRaw = $patientCase['birthday'] ?? null;
-    $age = '';
-    if (!empty($birthdayRaw)) {
-        try {
-            $birthDate = new DateTime($birthdayRaw);
-            $age = (string)$birthDate->diff(new DateTime('today'))->y;
-        } catch (Throwable $ignored) {
-            $age = '';
-        }
-    }
+    // Same age (as of today) as every page: sources/patient_display_helper.php.
+    $ageYears = patientDisplayAge($birthdayRaw);
+    $age = $ageYears === null ? '' : (string)$ageYears;
 
     $data = [
         'document_type' => $documentType,
@@ -490,14 +482,19 @@ function buildPatientDocumentContent(
         'branch_contact' => $branchContact,
         'branch_email' => $branchEmail,
         'prepared_by' => $preparedBy,
-        'patient_name' => $patientCase['full_name'] ?? 'N/A',
+        'patient_name' => patientDisplayName($patientCase['full_name'] ?? ''),
         'birthday' => !empty($birthdayRaw) ? date('F d, Y', strtotime($birthdayRaw)) : 'N/A',
         'age' => $age !== '' ? $age : 'N/A',
         'sex' => $patientCase['gender'] ?? 'N/A',
         'address' => $patientCase['address'] ?? 'N/A',
         'contact_number' => $patientCase['contact_number'] ?? 'N/A',
         'email' => $patientCase['email'] ?? 'N/A',
-        'case_number' => $patientCase['case_number'] ?? ('C' . str_pad((string)$caseId, 4, '0', STR_PAD_LEFT)),
+        'case_number' => trim((string)($patientCase['case_number'] ?? '')) !== '' ? $patientCase['case_number'] : ('C' . str_pad((string)$caseId, 4, '0', STR_PAD_LEFT)),
+        'bite_type' => $patientCase['bite_type'] ?? '',
+        'wound_type' => $patientCase['wound_type'] ?? '',
+        'regimen' => patientRegimenLabel($patientCase['treatment_profile'] ?? null, $patientCase['regimen_route'] ?? null),
+        // Doses in the patient's order with the shared labels/statuses.
+        'dose_stages' => patientCaseDoses($conn, $caseId, (string)$branchId),
         'animal_type' => $patientCase['animal_type'] ?? 'N/A',
         'bite_location' => $patientCase['bite_location'] ?? 'N/A',
         'bite_category' => $patientCase['bite_category'] ?? 'N/A',
@@ -820,22 +817,12 @@ function drawVaccinationCertificate(&$stream, $data, $hasLogo = false)
     }
     $y -= 20;
 
-    $doseMap = getVaccinationDoseMap($data);
-    for ($dose = 1; $dose <= 5; $dose++) {
-        $v = $doseMap[$dose] ?? [];
+    // The case's own doses ("Dose 4 - D28"), not fixed day slots, so every
+    // regimen prints exactly the doses shown on the Vaccination page.
+    foreach (array_slice($data['dose_stages'] ?? [], 0, 6) as $v) {
         $scheduled = !empty($v['scheduled_date']) ? date('M d, Y', strtotime($v['scheduled_date'])) : '';
         $administered = !empty($v['date_administered']) ? date('M d, Y', strtotime($v['date_administered'])) : '';
-        $status = trim((string)($v['vaccination_status'] ?? ''));
-        if ($status === '') {
-            $status = 'Pending';
-        }
-
-        $suffix = 'th';
-        if ($dose === 1) $suffix = 'st';
-        elseif ($dose === 2) $suffix = 'nd';
-        elseif ($dose === 3) $suffix = 'rd';
-
-        $values = [$dose . $suffix . ' Dose', $scheduled, $administered, $status];
+        $values = [(string)$v['dose_display'], $scheduled, $administered, (string)$v['status']];
         $cx = $x;
         foreach ($cols as $i => $cw) {
             pdfRect($stream, $cx, $y, $cw, 20, null, [0.60,0.65,0.74], 0.55);
@@ -930,16 +917,14 @@ function drawMedicalCertificate(&$stream, $data, $hasLogo = false)
     }
     $y -= 20;
 
-    $doseMap = getVaccinationDoseMap($data);
-    $followups = [1 => 'D0', 2 => 'D3', 3 => 'D7', 4 => 'D14', 6 => 'D28'];
-    foreach ($followups as $doseNumber => $label) {
-        $v = $doseMap[$doseNumber] ?? [];
+    // The case's own doses and shared statuses (same as the Vaccination page).
+    foreach (array_slice($data['dose_stages'] ?? [], 0, 6) as $v) {
         $scheduled = !empty($v['scheduled_date']) ? date('M d, Y', strtotime($v['scheduled_date'])) : '';
-        $status = $v['vaccination_status'] ?? '';
+        $status = (string)$v['status'];
         if (!empty($v['date_administered'])) {
-            $status .= ($status !== '' ? ' - ' : '') . 'Given ' . date('M d, Y', strtotime($v['date_administered']));
+            $status .= ' - Given ' . date('M d, Y', strtotime($v['date_administered']));
         }
-        $values = [$label, $scheduled, $status];
+        $values = [(string)$v['dose_display'], $scheduled, $status];
         $cx = $x;
         foreach ($cols as $i => $cw) {
             pdfRect($stream, $cx, $y, $cw, 19, null, [0.60,0.65,0.74], 0.55);

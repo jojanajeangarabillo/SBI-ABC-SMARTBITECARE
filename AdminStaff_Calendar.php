@@ -3,6 +3,7 @@ session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/workflow_helpers.php';
+require_once 'sources/patient_display_helper.php';
 
 // Check if user is logged in and is an admin staff
 if (
@@ -87,7 +88,7 @@ $allFollowUpsQuery = "
         c.bite_category,
         c.date_of_bite,
         c.case_status,
-        r.registry_number as case_no,
+        COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
         v.vaccination_id,
         v.dose_number,
         v.vaccine_name,
@@ -210,7 +211,7 @@ $allFollowUpsResult = $stmt->get_result();
 
 $followUpRecords = [];
 while ($row = $allFollowUpsResult->fetch_assoc()) {
-    $followUpRecords[] = $row;
+    $followUpRecords[] = patientNormalizeScheduleRow($conn, $row);
 }
 
 // ----------------------------------------------------------------------
@@ -344,7 +345,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
     
     $exportQuery = "
         SELECT 
-            r.registry_number as case_no,
+            COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
             c.case_number,
             p.full_name as patient_name,
             p.gender,
@@ -426,12 +427,13 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
     header('Content-Disposition: attachment; filename="' . $filename . '.csv"');
     
     $output = fopen('php://output', 'w');
-    fputcsv($output, ['Case No.', 'Case Number', 'Patient Name', 'Gender', 'Age', 'Contact', 'Animal Type', 'Site of Bite', 'Vaccine', 'Dose', 'Scheduled Date', 'Administered Date', 'Status']);
+    fputcsv($output, ['Case No.', 'Registry No.', 'Patient Name', 'Gender', 'Age', 'Contact', 'Animal Type', 'Site of Bite', 'Vaccine', 'Dose', 'Scheduled Date', 'Administered Date', 'Status']);
     
     while ($row = $exportResult->fetch_assoc()) {
+        $row = patientNormalizeScheduleRow($conn, $row);
         fputcsv($output, [
             $row['case_no'] ?? 'N/A',
-            $row['case_number'] ?? 'N/A',
+            $row['registry_no'] ?? '',
             $row['patient_name'],
             $row['gender'] ?? 'N/A',
             $row['age'] ?? 'N/A',
@@ -439,7 +441,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
             $row['animal_type'] ?? 'N/A',
             $row['bite_location'] ?? 'N/A',
             $row['vaccine_name'] ?? 'N/A',
-            $row['dose_number'] ?? 'N/A',
+            $row['dose_label'] ?? ('Dose ' . ($row['dose_number'] ?? '')),
             $row['scheduled_date'],
             $row['date_administered'] ?? 'N/A',
             $row['display_status'] ?? $row['vaccination_status']
@@ -568,7 +570,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     p.birthday,
                     c.animal_type,
                     c.bite_location,
-                    r.registry_number as case_no,
+                    COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
                     v.vaccination_id,
                     v.dose_number,
                     v.vaccine_name,
@@ -670,7 +672,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             
             $records = [];
             while ($row = $result->fetch_assoc()) {
-                $records[] = $row;
+                $records[] = patientNormalizeScheduleRow($conn, $row);
             }
             
             echo json_encode([
@@ -698,7 +700,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 SELECT DISTINCT
                     c.case_id,
                     c.case_number,
-                    r.registry_number as case_no,
+                    COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
                     p.full_name as patient_name,
                     p.gender,
                     p.birthday,
@@ -739,7 +741,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
 
             $records = [];
             while ($row = $result->fetch_assoc()) {
-                $records[] = $row;
+                $records[] = patientNormalizeScheduleRow($conn, $row);
             }
 
             echo json_encode([
@@ -788,7 +790,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     v.vaccination_status,
                     v.is_final_dose,
                     v.remarks as vaccination_remarks,
-                    r.registry_number as case_no,
+                    COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
                     TIMESTAMPDIFF(YEAR, p.birthday, CURDATE()) as age
                 FROM animal_bite_cases c
                 INNER JOIN (
@@ -2369,6 +2371,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         }
 
 </style>
+<?php echo patientDoseStatusScript(); ?>
 </head>
 
 <body>
@@ -2679,7 +2682,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                                 <td><?php echo htmlspecialchars($record['dose_label'] ?? 'Dose ' . $record['dose_number']); ?></td>
                                 <td><?php echo $record['scheduled_date'] ? date('M d, Y', strtotime($record['scheduled_date'])) : 'N/A'; ?></td>
                                 <td><?php echo $record['date_administered'] ? date('M d, Y', strtotime($record['date_administered'])) : '—'; ?></td>
-                                <td><span class="status-badge <?php echo $statusClass; ?>"><?php echo htmlspecialchars($statusLabel); ?></span></td>
+                                <td><?php echo patientDoseStatusBadge($statusLabel); ?></td>
                                 <td>
                                     <button type="button"
                                             class="btn-action view-patient-btn"
@@ -3226,7 +3229,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     <td>${record.dose_label || 'Dose ' + record.dose_number}</td>
                     <td>${record.scheduled_date ? new Date(record.scheduled_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'N/A'}</td>
                     <td>${record.date_administered ? new Date(record.date_administered).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td>
-                    <td><span class="status-badge ${statusClass}">${record.display_status}</span></td>
+                    <td>${window.patientStatusBadge(record.display_status)}</td>
                     <td>
                         <button type="button"
                                 class="btn-action view-patient-btn"

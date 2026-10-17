@@ -10,6 +10,7 @@ session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/workflow_helpers.php';
+require_once 'sources/patient_display_helper.php';
 require_once 'sources/fit_to_work_certificate.php';
 
 // Check if user is logged in and is a nurse
@@ -97,6 +98,15 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'get_patient') {
     $stmt_cases->execute();
     $cases = $stmt_cases->get_result()->fetch_all(MYSQLI_ASSOC);
     $stmt_cases->close();
+    // Clinical fields: latest nurse assessment, intake as fallback (shared helper).
+    foreach ($cases as &$caseRow) {
+        $clinical = patientCaseClinical($conn, (int)$caseRow['case_id']);
+        foreach ($clinical as $key => $value) {
+            if ($value !== null && $value !== '') $caseRow[$key] = $value;
+        }
+        $caseRow['regimen_label'] = patientRegimenLabel($clinical['treatment_profile'] ?? null, $clinical['regimen_route'] ?? null);
+    }
+    unset($caseRow);
 
     // Complete vaccination history for this patient in the current branch.
     // LEFT JOIN keeps historical vaccination records visible even if an
@@ -112,9 +122,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'get_patient') {
                     ON v.unit_id = u.unit_id
                  WHERE v.patient_id = ?
                    AND v.branch_id = ?
-                   AND v.is_archived = 0
                  ORDER BY
                     v.case_id DESC,
+                    v.is_archived ASC,
                     v.dose_number ASC,
                     COALESCE(v.scheduled_date, v.date_administered, v.created_at) ASC,
                     v.vaccination_id ASC";
@@ -127,19 +137,24 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'get_patient') {
 
     // Show doses in the order the patient receives them ("Dose 4 - D28"),
     // using each case's vaccination regimen. Stored dose numbers are unchanged.
+    // Active cycle first; rows of a restarted (archived) cycle follow and are
+    // labelled Archived/Restarted, never hidden or deleted.
     $byCase = [];
     foreach ($vaccinations as $vaccination) {
-        $byCase[(int)$vaccination['case_id']][] = $vaccination;
+        $byCase[(int)$vaccination['case_id'] . ((int)$vaccination['is_archived'] === 1 ? '-archived' : '')][] = $vaccination;
     }
     $caseNumbers = [];
     foreach ($cases as $caseRow) {
         $caseNumbers[(int)$caseRow['case_id']] = (string)($caseRow['case_number'] ?? '');
     }
     $vaccinations = [];
-    foreach ($byCase as $caseId => $rows) {
+    foreach ($byCase as $caseKey => $rows) {
+        $caseId = (int)$caseKey;
         $caseProfile = workflowCaseProfile($conn, (int)$caseId);
         foreach (workflowAnnotateCaseDoses($rows, $caseProfile['profile']) as $row) {
             $row['case_number'] = $caseNumbers[(int)$caseId] ?? '';
+            // Shared status rule (past-due, not given = Missed) on every page.
+            $row['vaccination_status'] = patientDoseStatus($row);
             $row['regimen_label'] = $caseProfile['profile'] !== null
                 ? workflowProfileLabel($caseProfile['profile'], $caseProfile['route'])
                 : '';
@@ -227,11 +242,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_document']))
         // Validate both the patient and selected case against the Nurse's branch.
         $sql = "SELECT
                     p.patient_id,p.full_name,p.email,p.contact_number,p.birthday,p.gender,p.address,
-                    a.case_id,a.case_number,a.animal_type,a.bite_location,a.bite_category,
-                    a.animal_status,a.date_of_bite,a.case_status,a.remarks AS case_remarks
+                    a.case_id,a.case_number,
+                    " . patientClinicalSelectSql($conn, 'a', 'la') . ",
+                    a.case_status,a.remarks AS case_remarks
                 FROM patients p
                 INNER JOIN animal_bite_cases a
                     ON a.patient_id=p.patient_id AND a.branch_id=p.branch_id
+                " . patientLatestAssessmentJoinSql('a', 'la') . "
                 WHERE p.patient_id=? AND p.branch_id=? AND p.is_archived=0
                   AND a.case_id=? AND a.branch_id=? AND a.is_archived=0
                 LIMIT 1";
@@ -709,15 +726,9 @@ function buildPatientDocumentContent(
     $patientId = (int)$patientCase['patient_id'];
     $caseId = (int)$patientCase['case_id'];
     $birthdayRaw = $patientCase['birthday'] ?? null;
-    $age = '';
-    if (!empty($birthdayRaw)) {
-        try {
-            $birthDate = new DateTime($birthdayRaw);
-            $age = (string)$birthDate->diff(new DateTime('today'))->y;
-        } catch (Throwable $ignored) {
-            $age = '';
-        }
-    }
+    // Same age (as of today) as every page: sources/patient_display_helper.php.
+    $ageYears = patientDisplayAge($birthdayRaw);
+    $age = $ageYears === null ? '' : (string)$ageYears;
 
     $data = [
         'document_type' => $documentType,
@@ -728,14 +739,19 @@ function buildPatientDocumentContent(
         'branch_contact' => $branchContact,
         'branch_email' => $branchEmail,
         'prepared_by' => $preparedBy,
-        'patient_name' => $patientCase['full_name'] ?? 'N/A',
+        'patient_name' => patientDisplayName($patientCase['full_name'] ?? ''),
         'birthday' => !empty($birthdayRaw) ? date('F d, Y', strtotime($birthdayRaw)) : 'N/A',
         'age' => $age !== '' ? $age : 'N/A',
         'sex' => $patientCase['gender'] ?? 'N/A',
         'address' => $patientCase['address'] ?? 'N/A',
         'contact_number' => $patientCase['contact_number'] ?? 'N/A',
         'email' => $patientCase['email'] ?? 'N/A',
-        'case_number' => $patientCase['case_number'] ?? ('C' . str_pad((string)$caseId, 4, '0', STR_PAD_LEFT)),
+        'case_number' => trim((string)($patientCase['case_number'] ?? '')) !== '' ? $patientCase['case_number'] : ('C' . str_pad((string)$caseId, 4, '0', STR_PAD_LEFT)),
+        'bite_type' => $patientCase['bite_type'] ?? '',
+        'wound_type' => $patientCase['wound_type'] ?? '',
+        'regimen' => patientRegimenLabel($patientCase['treatment_profile'] ?? null, $patientCase['regimen_route'] ?? null),
+        // Doses in the patient's order with the shared labels/statuses.
+        'dose_stages' => patientCaseDoses($conn, $caseId, (string)$branchId),
         'animal_type' => $patientCase['animal_type'] ?? 'N/A',
         'bite_location' => $patientCase['bite_location'] ?? 'N/A',
         'bite_category' => $patientCase['bite_category'] ?? 'N/A',
@@ -1058,22 +1074,12 @@ function drawVaccinationCertificate(&$stream, $data, $hasLogo = false)
     }
     $y -= 20;
 
-    $doseMap = getVaccinationDoseMap($data);
-    for ($dose = 1; $dose <= 5; $dose++) {
-        $v = $doseMap[$dose] ?? [];
+    // The case's own doses ("Dose 4 - D28"), not fixed day slots, so every
+    // regimen prints exactly the doses shown on the Vaccination page.
+    foreach (array_slice($data['dose_stages'] ?? [], 0, 6) as $v) {
         $scheduled = !empty($v['scheduled_date']) ? date('M d, Y', strtotime($v['scheduled_date'])) : '';
         $administered = !empty($v['date_administered']) ? date('M d, Y', strtotime($v['date_administered'])) : '';
-        $status = trim((string)($v['vaccination_status'] ?? ''));
-        if ($status === '') {
-            $status = 'Pending';
-        }
-
-        $suffix = 'th';
-        if ($dose === 1) $suffix = 'st';
-        elseif ($dose === 2) $suffix = 'nd';
-        elseif ($dose === 3) $suffix = 'rd';
-
-        $values = [$dose . $suffix . ' Dose', $scheduled, $administered, $status];
+        $values = [(string)$v['dose_display'], $scheduled, $administered, (string)$v['status']];
         $cx = $x;
         foreach ($cols as $i => $cw) {
             pdfRect($stream, $cx, $y, $cw, 20, null, [0.60,0.65,0.74], 0.55);
@@ -1168,16 +1174,14 @@ function drawMedicalCertificate(&$stream, $data, $hasLogo = false)
     }
     $y -= 20;
 
-    $doseMap = getVaccinationDoseMap($data);
-    $followups = [1 => 'D0', 2 => 'D3', 3 => 'D7', 4 => 'D14', 6 => 'D28'];
-    foreach ($followups as $doseNumber => $label) {
-        $v = $doseMap[$doseNumber] ?? [];
+    // The case's own doses and shared statuses (same as the Vaccination page).
+    foreach (array_slice($data['dose_stages'] ?? [], 0, 6) as $v) {
         $scheduled = !empty($v['scheduled_date']) ? date('M d, Y', strtotime($v['scheduled_date'])) : '';
-        $status = $v['vaccination_status'] ?? '';
+        $status = (string)$v['status'];
         if (!empty($v['date_administered'])) {
-            $status .= ($status !== '' ? ' - ' : '') . 'Given ' . date('M d, Y', strtotime($v['date_administered']));
+            $status .= ' - Given ' . date('M d, Y', strtotime($v['date_administered']));
         }
-        $values = [$label, $scheduled, $status];
+        $values = [(string)$v['dose_display'], $scheduled, $status];
         $cx = $x;
         foreach ($cols as $i => $cw) {
             pdfRect($stream, $cx, $y, $cw, 19, null, [0.60,0.65,0.74], 0.55);
@@ -1982,6 +1986,7 @@ function getStatusBadge($status)
             }
         }
     </style>
+<?php echo patientDoseStatusScript(); ?>
 </head>
 <body>
 
@@ -2541,7 +2546,7 @@ function viewPatient(patientId) {
                 html += '<td>' + escapeHtml(formatHistoryDate(v.date_administered)) + '</td>';
                 html +=
                     '<td>' +
-                    '<span class="status-badge ' + historyStatusClass(status) + '">' +
+                    window.patientStatusBadge(status) + '<span class="d-none">' +
                     escapeHtml(status) +
                     '</span>' +
                     '</td>';

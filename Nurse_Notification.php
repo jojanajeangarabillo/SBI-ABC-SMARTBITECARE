@@ -195,7 +195,7 @@ $followUpTodayQuery = "
         v.dose_number,
         v.next_schedule,
         v.vaccine_name,
-        r.registry_number as case_no
+        COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no
     FROM animal_bite_cases c
     INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
     INNER JOIN patients p ON c.patient_id = p.patient_id
@@ -275,7 +275,7 @@ $recentVaccinationsQuery = "
         v.date_administered,
         v.vaccination_id,
         c.case_id,
-        r.registry_number as case_no
+        COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no
     FROM vaccination_records v
     INNER JOIN patients p ON v.patient_id = p.patient_id
     INNER JOIN animal_bite_cases c ON v.case_id = c.case_id

@@ -110,9 +110,16 @@ function drawFitToWorkCertificate(&$stream, $data, $hasLogo = false)
         pdfCellText($stream, $x, $y, $w, 19, 'No completed vaccination recorded for this case.', 6.6, false, 'center');
         $y -= 19;
     }
-    foreach (array_slice($given, 0, 6) as $index => $v) {
+    // Shared patient-facing label per dose stage ("Dose 2 - D3"); several
+    // products given on the same day share their stage label.
+    $stageLabels = [];
+    foreach ($data['dose_stages'] ?? [] as $stage) {
+        $stageLabels[(int)$stage['dose_number']] = (string)$stage['dose_display'];
+    }
+    foreach (array_slice($given, 0, 6) as $v) {
+        $doseNumber = (int)$v['dose_number'];
         $values = [
-            'Dose ' . ($index + 1) . ' - ' . workflowDoseLabel((int)$v['dose_number']),
+            $doseNumber <= 0 ? 'One-time' : ($stageLabels[$doseNumber] ?? workflowDoseLabel($doseNumber)),
             date('M d, Y', strtotime((string)$v['date_administered'])),
             (string)($v['vaccine_name'] ?? ''),
         ];

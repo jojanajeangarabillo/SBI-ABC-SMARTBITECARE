@@ -2,6 +2,7 @@
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/patient_display_helper.php';
 
 // Check if user is logged in and is a branch admin
 checkUserRole([2]); // role_id 2 = Branch Admin
@@ -107,6 +108,14 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'get_patient') {
             $stmt->execute();
             $vaccinations = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
             $stmt->close();
+            // Same clinical source, dose labels and statuses as every page.
+            $case = array_merge($case, array_filter(patientCaseClinical($conn, $caseId), static fn($v) => $v !== null && $v !== ''));
+            $case['regimen_label'] = patientRegimenLabel($case['treatment_profile'] ?? null, $case['regimen_route'] ?? null);
+            foreach ($vaccinations as &$vacc) {
+                $vacc['dose_display'] = patientDoseDisplay($conn, $caseId, (int)$vacc['dose_number']);
+                $vacc['vaccination_status'] = patientDoseStatus($vacc);
+            }
+            unset($vacc);
         }
 
         echo json_encode([
@@ -1000,6 +1009,7 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
             border-radius: 12px;
         }
     </style>
+<?php echo patientDoseStatusScript(); ?>
 </head>
 <body>
     <!-- ========== SIDEBAR ========== -->
@@ -1516,6 +1526,9 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
                     <div class="detail-row"><span class="detail-label">Animal Type</span><span class="detail-value">${displayValue(caseData.animal_type, 'Not recorded')}</span></div>
                     <div class="detail-row"><span class="detail-label">Site of Bite</span><span class="detail-value">${displayValue(caseData.bite_location, 'Not recorded')}</span></div>
                     <div class="detail-row"><span class="detail-label">Bite Category</span><span class="detail-value">${displayValue(caseData.bite_category, 'Not recorded')}</span></div>
+                    <div class="detail-row"><span class="detail-label">Type of Bite</span><span class="detail-value">${displayValue(caseData.bite_type, 'Not yet assessed by Nurse')}</span></div>
+                    <div class="detail-row"><span class="detail-label">Type of Wound</span><span class="detail-value">${displayValue(caseData.wound_type, 'Not yet assessed by Nurse')}</span></div>
+                    <div class="detail-row"><span class="detail-label">Vaccination Regimen</span><span class="detail-value">${displayValue(caseData.regimen_label, 'Not yet assessed by Nurse')}</span></div>
                     <div class="detail-row"><span class="detail-label">Animal Status</span><span class="detail-value">${displayValue(caseData.animal_status, 'Not recorded')}</span></div>
                     <div class="detail-row"><span class="detail-label">Remarks</span><span class="detail-value">${displayValue(caseData.case_remarks, 'No remarks')}</span></div>
                     <div class="detail-row"><span class="detail-label">Date Created</span><span class="detail-value">${displayValue(caseData.case_created_at, 'Not recorded')}</span></div>`;
@@ -1531,6 +1544,7 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
                     if (vacc.vaccination_status === 'Completed') vaccStatusBadge = 'badge-completed';
                     else if (vacc.vaccination_status === 'Scheduled') vaccStatusBadge = 'badge-scheduled';
                     else if (vacc.vaccination_status === 'Missed') vaccStatusBadge = 'badge-missed';
+                    const sharedStatusBadge = window.patientStatusBadge(vacc.vaccination_status);
 
                     const dateLine = vacc.date_administered
                         ? `Administered: ${escapeHtml(vacc.date_administered)}`
@@ -1541,12 +1555,12 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
                             <div class="d-flex justify-content-between align-items-start gap-3">
                                 <div>
                                     <div class="fw-semibold text-dark">${displayValue(vacc.vaccine_name, 'Unspecified Vaccine')}</div>
-                                    <span class="vaccine-dose">${escapeHtml('Dose ' + (vacc.dose_number ?? 'N/A'))}</span>
+                                    <span class="vaccine-dose">${escapeHtml(vacc.dose_display || ('Dose ' + (vacc.dose_number ?? 'N/A')))}</span>
                                     <div class="vaccine-date"><i class="bi bi-calendar3 me-1"></i>${dateLine}</div>
                                     ${vacc.administered_at ? `<div class="vaccine-date"><i class="bi bi-clock me-1"></i>Recorded: ${escapeHtml(vacc.administered_at)}</div>` : ''}
                                     ${vacc.remarks ? `<div class="vaccine-date"><i class="bi bi-chat me-1"></i>${escapeHtml(vacc.remarks)}</div>` : ''}
                                 </div>
-                                <span class="badge-status ${vaccStatusBadge}">${escapeHtml(vacc.vaccination_status || 'Pending')}</span>
+                                ${sharedStatusBadge}
                             </div>
                             ${Number(vacc.is_final_dose) === 1 ? '<span class="badge bg-primary mt-2" style="font-size:10px">Final Dose</span>' : ''}
                         </div>`;
