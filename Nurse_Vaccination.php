@@ -347,6 +347,79 @@ function getRequiredDoseNumbers($conn, $case_id) {
     return [1, 2, 3, 4, 5, 6];
 }
 
+/**
+ * Validation when a dose is recorded on the Vaccination page:
+ *  1. The dose stage must belong to the case's regimen (PEP-ID has no D14/D21).
+ *  2. A Completed dose cannot be dated before an earlier stage's administered
+ *     date, or after a later stage's administered date.
+ *  3. Two different dose stages cannot be given on the same day. Doses given
+ *     at another clinic (recorded on the Assessment page) are the exception.
+ * Only active (current-cycle) rows of this case are compared; archived cycles
+ * never block. Throws Exception with a message for the nurse.
+ */
+function vaccinationAssertDoseAllowed(
+    mysqli $conn,
+    int $patientId,
+    int $caseId,
+    string $branchId,
+    int $doseNumber,
+    string $status,
+    string $dateAdministered,
+    array $requiredDoses
+): void {
+    $required = array_map('intval', $requiredDoses);
+    if ($required && !in_array($doseNumber, $required, true)) {
+        $profile = workflowCaseProfile($conn, $caseId);
+        $labels = implode(', ', array_map('workflowDoseLabel', $required));
+        throw new Exception(
+            workflowDoseLabel($doseNumber) . ' is not a dose of this case\'s regimen ('
+            . workflowProfileLabel($profile['profile'], $profile['route']) . ': ' . $labels
+            . '). Choose one of: ' . $labels . '.'
+        );
+    }
+    if ($status !== 'Completed') {
+        return;
+    }
+    $stmt = $conn->prepare(
+        "SELECT dose_number, date_administered,
+                (item_id IS NULL AND COALESCE(quantity_used, 0) = 0
+                 AND COALESCE(vaccine_name, '') = 'Given at other clinic') AS is_outside
+         FROM vaccination_records
+         WHERE patient_id = ? AND case_id = ? AND branch_id = ? AND is_archived = 0
+           AND vaccination_status = 'Completed' AND date_administered IS NOT NULL
+           AND dose_number BETWEEN 1 AND 6 AND dose_number <> ?"
+    );
+    $stmt->bind_param('iisi', $patientId, $caseId, $branchId, $doseNumber);
+    $stmt->execute();
+    $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+    $shown = static fn(string $date): string => date('M d, Y', strtotime($date));
+    foreach ($rows as $row) {
+        $otherDose = (int)$row['dose_number'];
+        $otherDate = (string)$row['date_administered'];
+        if ($otherDose < $doseNumber && $dateAdministered < $otherDate) {
+            throw new Exception(
+                workflowDoseLabel($doseNumber) . ' cannot be dated ' . $shown($dateAdministered) . ': the previous dose '
+                . workflowDoseLabel($otherDose) . ' was given on ' . $shown($otherDate)
+                . '. Enter a date on or after ' . $shown($otherDate) . '.'
+            );
+        }
+        if ($otherDose > $doseNumber && $dateAdministered > $otherDate) {
+            throw new Exception(
+                workflowDoseLabel($doseNumber) . ' cannot be dated ' . $shown($dateAdministered) . ': the later dose '
+                . workflowDoseLabel($otherDose) . ' was already given on ' . $shown($otherDate) . '.'
+            );
+        }
+        if ($dateAdministered === $otherDate && !(int)$row['is_outside']) {
+            throw new Exception(
+                workflowDoseLabel($otherDose) . ' was already given on ' . $shown($otherDate) . '. Two different dose stages ('
+                . workflowDoseLabel($otherDose) . ' and ' . workflowDoseLabel($doseNumber)
+                . ') cannot be given on the same day. Check the dose or the date.'
+            );
+        }
+    }
+}
+
 // Validate YYYY-MM-DD date
 function validYmdDate($date) {
     $d = DateTime::createFromFormat('Y-m-d', $date);
@@ -1192,6 +1265,12 @@ if (isset($_POST['submit_vaccination'])) {
                 !empty($requiredDoses)
                 && $dose_number === (int)end($requiredDoses)
             ) ? 1 : 0;
+
+            // Dose-recording checks (clear message, nothing saved).
+            vaccinationAssertDoseAllowed(
+                $conn, $patient_id, $case_id, (string)$branch_id, $dose_number,
+                $vaccination_status, $date_administered, $requiredDoses
+            );
 
             // Different products may be administered under the same dose stage
             // (for example Rabies Vaccine + ERIG + ATS on D0). What we prevent is
