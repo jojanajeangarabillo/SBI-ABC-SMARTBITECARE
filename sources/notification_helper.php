@@ -49,6 +49,8 @@ function getAdminStaffNotificationCount(mysqli $conn, $branch_id):int
             ON c.case_id = v.case_id
            AND c.branch_id = v.branch_id
         WHERE c.branch_id = ?
+          AND c.is_archived = 0
+          AND v.is_archived = 0
           AND v.scheduled_date IS NOT NULL
           AND v.vaccination_status = 'Scheduled'
           AND v.scheduled_date BETWEEN CURDATE()
@@ -76,8 +78,12 @@ function getAdminStaffNotificationCount(mysqli $conn, $branch_id):int
             ON c.case_id = v.case_id
            AND c.branch_id = v.branch_id
         WHERE c.branch_id = ?
+          AND c.is_archived = 0
+          AND c.case_status <> 'Completed'
+          AND v.is_archived = 0
+          AND v.item_id IS NULL
           AND v.scheduled_date IS NOT NULL
-          AND v.vaccination_status = 'Scheduled'
+          AND v.vaccination_status IN ('Scheduled', 'Missed')
           AND v.scheduled_date < CURDATE()
     ";
 

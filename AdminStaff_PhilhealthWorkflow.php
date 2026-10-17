@@ -3,6 +3,7 @@ session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/philhealth_requirements_helper.php';
 
 $user=workflowRequireUser($conn,4);$userId=(int)$user['user_id'];$branchId=(string)$user['branch_id'];$notification_count = getAdminStaffNotificationCount($conn, $branchId);$csrf=workflowCsrfToken();
 $branchName=(string)($user['branch_name']??$branchId);$username=(string)($user['username']??'Administrative Staff');
@@ -357,6 +358,13 @@ $flash=workflowTakeFlash();
                                     </td>
                                     <td>
                                         <span class="badge-status <?php echo workflowH(philhealthStatusClass($currentStatus)); ?>"><?php echo workflowH($currentStatus); ?></span>
+                                        <?php if(philhealthRequirementsReady($conn)):?>
+                                            <div class="status-remarks"><span class="detail-label">Requirements Received</span>
+                                                <?php foreach(philhealthRequirementFields() as $reqField=>$reqLabel):?>
+                                                    <div><i class="bi <?php echo !empty($r[$reqField])?'bi-check-square-fill text-success':'bi-square text-muted'; ?> me-1"></i><?php echo workflowH($reqLabel); ?></div>
+                                                <?php endforeach;?>
+                                            </div>
+                                        <?php endif;?>
                                         <?php if(!empty($r['remarks'])):?><div class="status-remarks"><span class="detail-label">Latest Remarks</span><?php echo workflowH($r['remarks']); ?></div><?php endif;?>
                                         <?php if(!empty($r['date_sent_to_main'])):?><div class="text-muted small mt-2">Sent: <?php echo workflowH(date('M d, Y',strtotime($r['date_sent_to_main']))); ?></div><?php endif;?>
                                     </td>

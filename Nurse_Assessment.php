@@ -26,26 +26,21 @@ $csrf = workflowCsrfToken();
 
 /*
  * ============================================================
- * CLINIC-CONFIGURED MISSED-SCHEDULE RULE
+ * CLINIC MISSED-DOSE RULE (see WORKFLOW_LATE_DOSE_WINDOW_DAYS)
  * ============================================================
  *
- * This is a SmartBiteCare workflow/business rule and should match
- * the clinic supervisor's approved protocol.
+ * 1-7 days late:
+ *      The dose is recorded on the actual date in Vaccination and every
+ *      remaining scheduled dose moves forward by the same number of days.
  *
- * 1-30 days overdue:
- *      The scheduled vaccination is marked Missed and the patient
- *      remains eligible for nurse-managed catch-up/rescheduling.
+ * More than 7 days late:
+ *      The old schedule is not continued. When the Nurse re-assesses the
+ *      patient, a new treatment cycle starts from Day 0.
  *
- * More than 30 days overdue:
- *      The old schedule must NOT be automatically continued.
- *      Nurse reassessment/new treatment cycle is required.
- *
- * IMPORTANT:
- *      Previous vaccination records are preserved for history,
- *      auditability, and traceability. They are never deleted just
- *      because a new treatment cycle may be required.
+ * Previous vaccination records are archived for history, auditability and
+ * traceability. They are never deleted.
  */
-$catchUpWindowDays = 30;
+$catchUpWindowDays = WORKFLOW_LATE_DOSE_WINDOW_DAYS;
 
 /**
  * Load one Medical Supplies item from the database.
@@ -256,16 +251,18 @@ function assessmentBatchSummary(
     return implode(', ', $parts);
 }
 
+/** Fixed choices shared by the form and server-side validation. */
+const ASSESSMENT_ANIMAL_OPTIONS = ['Dog', 'Cat', 'Monkey', 'Cow', 'Carabao', 'Bat', 'Pig', 'Rat', 'Not Applicable'];
+const ASSESSMENT_ANIMAL_STATUS_OPTIONS = ['Alive/Healthy', 'Sick', 'Died', 'Unknown', 'Not Applicable'];
+const ASSESSMENT_WOUND_TYPES = ['Abrasion', 'Punctured', 'Scratch', 'Avulsion'];
+const ASSESSMENT_BITE_TYPES = ['Bite', 'Non-Bite'];
+const ASSESSMENT_ACTIVE_REGIMENS = ['PVRV TRC SPEEDA', 'PVRV TRC ABHAYRAB'];
+
 /**
- * Persist an assessment explicitly marked as NOT an anti-rabies schedule.
- *
- * clinical_assessments already supports treatment_profile='OTHER', so no
- * database migration is required. d0_date is NOT NULL in the existing
- * schema; for an OTHER assessment we retain the existing stored value or
- * use today's date only as a technical placeholder. No vaccination schedule
- * is generated from it.
+ * Validate body-map coordinates independently of the browser. The nurse only
+ * clicks the location; the written site stays in Site of Bite, so a marker
+ * label is optional (older markers keep their saved labels).
  */
-/** Validate body-map coordinates independently of the browser. */
 function assessmentBiteMarkers($raw): string {
     if (!is_string($raw) || strlen($raw) > 12000) {
         throw new RuntimeException('Invalid bite-location markers.');
@@ -276,11 +273,12 @@ function assessmentBiteMarkers($raw): string {
     }
     $clean = [];
     foreach ($markers as $marker) {
+        $label = $marker['label'] ?? '';
         if (!is_array($marker)
-            || !isset($marker['x'], $marker['y'], $marker['label'])
+            || !isset($marker['x'], $marker['y'])
             || !is_numeric($marker['x']) || !is_numeric($marker['y'])
-            || !is_string($marker['label'])
-            || strlen($marker['label']) > 120
+            || !is_string($label)
+            || strlen($label) > 120
             || !is_finite((float)$marker['x']) || !is_finite((float)$marker['y'])
             || (float)$marker['x'] < 0 || (float)$marker['x'] > 100
             || (float)$marker['y'] < 0 || (float)$marker['y'] > 100) {
@@ -289,205 +287,128 @@ function assessmentBiteMarkers($raw): string {
         $clean[] = [
             'x' => round((float)$marker['x'], 4),
             'y' => round((float)$marker['y'], 4),
-            'label' => trim($marker['label'])
+            'label' => trim($label)
         ];
     }
     return json_encode($clean, JSON_THROW_ON_ERROR);
 }
 
-function assessmentSaveNonArvAssessment(
-    mysqli $conn,
-    array $visit,
-    int $visitId,
-    int $userId,
-    string $branchId,
-    array $payload
-): void {
-    $history = trim((string)($payload['exposure_history'] ?? ''));
-    $exposureDate = trim((string)($payload['date_of_exposure'] ?? ''));
-    $site = trim((string)($payload['exposure_site'] ?? ''));
-    $biteMarkers = assessmentBiteMarkers($payload['bite_markers'] ?? '[]');
-    $animal = trim((string)($payload['animal_type'] ?? ''));
-    $animalStatus = trim((string)($payload['animal_status'] ?? ''));
-    $category = trim((string)($payload['bite_category'] ?? ''));
-    $route = trim((string)($payload['route'] ?? ''));
-    $regimen = trim((string)($payload['active_regimen'] ?? ''));
-    $concerns = trim((string)($payload['important_concerns'] ?? ''));
-    $instructions = trim((string)($payload['instructions_given'] ?? ''));
-    $notes = trim((string)($payload['chart_notes'] ?? ''));
-
-    if ($history === '') {
-        throw new RuntimeException(
-            'History of incident/exposure is required.'
-        );
-    }
-
-    if (
-        $exposureDate !== ''
-        && DateTime::createFromFormat(
-            'Y-m-d',
-            $exposureDate
-        )?->format('Y-m-d') !== $exposureDate
-    ) {
-        throw new RuntimeException(
-            'Enter a valid exposure date.'
-        );
-    }
-
-    $patientId = (int)$visit['patient_id'];
-    $caseId = (int)$visit['case_id'];
-
-    $d0Date = date('Y-m-d');
-
-    $existing = $conn->prepare(
-        "SELECT d0_date
-         FROM clinical_assessments
-         WHERE visit_id = ?
-         LIMIT 1"
-    );
-
-    if ($existing) {
-        $existing->bind_param(
-            'i',
-            $visitId
-        );
-
-        $existing->execute();
-
-        $existingRow =
-            $existing
-                ->get_result()
-                ->fetch_assoc();
-
-        $existing->close();
-
-        if (
-            $existingRow
-            && !empty($existingRow['d0_date'])
-        ) {
-            $d0Date =
-                (string)$existingRow['d0_date'];
+/** A select with an "Other (specify)" text box: return the chosen or typed value. */
+function assessmentChoice(array $payload, string $field, array $allowed, string $otherField): string
+{
+    $value = trim((string)($payload[$field] ?? ''));
+    if ($value === 'Others' || $value === 'Other') {
+        $value = trim((string)($payload[$otherField] ?? ''));
+        if ($value === '') {
+            throw new RuntimeException('Specify the value for the "Other" choice.');
         }
+        return mb_substr($value, 0, 100);
+    }
+    if ($value !== '' && !in_array($value, $allowed, true)) {
+        // Older records may hold free text; keep it when it is resubmitted unchanged.
+        return mb_substr($value, 0, 100);
+    }
+    return $value;
+}
+
+function assessmentValidDate(string $date, string $message): void
+{
+    if ($date !== '' && DateTime::createFromFormat('Y-m-d', $date)?->format('Y-m-d') !== $date) {
+        throw new RuntimeException($message);
+    }
+}
+
+/**
+ * Read and validate the exposure fields shared by the anti-rabies and the
+ * one-time (non-ARV) save paths. Animal fields are optional, so non-bite and
+ * non-rabies services (Hepa B, Flu, PPD, rusty-object punctures) save without them.
+ */
+function assessmentCollectExposure(array $payload): array
+{
+    $history = trim((string)($payload['exposure_history'] ?? ''));
+    if ($history === '') {
+        throw new RuntimeException('History of incident/exposure is required.');
+    }
+    $exposureDate = trim((string)($payload['date_of_exposure'] ?? ''));
+    assessmentValidDate($exposureDate, 'Enter a valid exposure date.');
+
+    $biteType = trim((string)($payload['bite_type'] ?? ''));
+    if ($biteType !== '' && !in_array($biteType, ASSESSMENT_BITE_TYPES, true)) {
+        throw new RuntimeException('Select a valid Type of Bite.');
+    }
+    $woundType = trim((string)($payload['wound_type'] ?? ''));
+    if ($woundType !== '' && !in_array($woundType, ASSESSMENT_WOUND_TYPES, true)) {
+        throw new RuntimeException('Select a valid Type of Wound.');
+    }
+    $regimen = trim((string)($payload['active_regimen'] ?? ''));
+    if ($regimen === 'Other') {
+        $regimen = trim((string)($payload['active_regimen_other'] ?? ''));
+        if ($regimen === '') throw new RuntimeException('Specify the Active Regimen.');
     }
 
-    /*
-     * If this visit previously generated anti-rabies schedule placeholders,
-     * retire only the still-Scheduled rows for THIS visit. Completed/Missed
-     * records are historical clinical records and are never deleted here.
-     */
-    $archiveSchedule = $conn->prepare(
-        "UPDATE vaccination_records
-         SET
-            is_archived = 1,
-            archived_at = NOW(),
-            archived_by = ?
-         WHERE visit_id = ?
-           AND branch_id = ?
-           AND vaccination_status = 'Scheduled'
-           AND is_archived = 0"
-    );
+    return [
+        'exposure_history' => $history,
+        'date_of_exposure' => $exposureDate,
+        'exposure_site' => mb_substr(trim((string)($payload['exposure_site'] ?? '')), 0, 255),
+        'bite_markers' => assessmentBiteMarkers($payload['bite_markers'] ?? '[]'),
+        'animal_type' => assessmentChoice($payload, 'animal_type', ASSESSMENT_ANIMAL_OPTIONS, 'animal_type_other'),
+        'animal_status' => assessmentChoice($payload, 'animal_status', ASSESSMENT_ANIMAL_STATUS_OPTIONS, 'animal_status_other'),
+        'bite_category' => trim((string)($payload['bite_category'] ?? '')),
+        'bite_type' => $biteType,
+        'wound_type' => $woundType,
+        'active_regimen' => mb_substr($regimen, 0, 100),
+        // Hidden in the form (redundant fields); existing values are posted back unchanged.
+        'important_concerns' => trim((string)($payload['important_concerns'] ?? '')),
+        'instructions_given' => trim((string)($payload['instructions_given'] ?? '')),
+        'chart_notes' => trim((string)($payload['chart_notes'] ?? '')),
+    ];
+}
 
-    if ($archiveSchedule) {
-        $archiveSchedule->bind_param(
-            'iis',
-            $userId,
-            $visitId,
-            $branchId
-        );
-
-        $archiveSchedule->execute();
-        $archiveSchedule->close();
+/**
+ * Insert or update the visit's clinical assessment. Columns added by
+ * sources/migrate_clinical_assessment_fields.php are written only when they exist.
+ */
+function assessmentUpsert(mysqli $conn, array $data): void
+{
+    $optional = ['previous_vaccination_date', 'outside_clinic_name', 'wound_type', 'bite_type'];
+    $columns = ['visit_id' => 'i', 'patient_id' => 'i', 'case_id' => 'i', 'branch_id' => 's', 'nurse_id' => 'i',
+        'exposure_history' => 's', 'date_of_exposure' => 's', 'exposure_site' => 's', 'animal_type' => 's',
+        'animal_status' => 's', 'bite_category' => 's', 'treatment_profile' => 's', 'route' => 's',
+        'active_regimen' => 's', 'important_concerns' => 's', 'instructions_given' => 's', 'chart_notes' => 's',
+        'd0_date' => 's', 'bite_markers' => 's'];
+    foreach ($optional as $column) {
+        if (workflowColumnExists($conn, 'clinical_assessments', $column)) $columns[$column] = 's';
     }
-
-    $profile = 'OTHER';
-
-    $assessment = $conn->prepare(
-        "INSERT INTO clinical_assessments
-         (
-            visit_id,
-            patient_id,
-            case_id,
-            branch_id,
-            nurse_id,
-            exposure_history,
-            date_of_exposure,
-            exposure_site,
-            animal_type,
-            animal_status,
-            bite_category,
-            treatment_profile,
-            route,
-            active_regimen,
-            important_concerns,
-            instructions_given,
-            chart_notes,
-            d0_date,
-            bite_markers
-         )
-         VALUES (
-            ?, ?, ?, ?, ?, ?, NULLIF(?, ''),
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-         )
-         ON DUPLICATE KEY UPDATE
-            nurse_id = VALUES(nurse_id),
-            exposure_history = VALUES(exposure_history),
-            date_of_exposure = VALUES(date_of_exposure),
-            exposure_site = VALUES(exposure_site),
-            animal_type = VALUES(animal_type),
-            animal_status = VALUES(animal_status),
-            bite_category = VALUES(bite_category),
-            treatment_profile = VALUES(treatment_profile),
-            route = VALUES(route),
-            active_regimen = VALUES(active_regimen),
-            important_concerns = VALUES(important_concerns),
-            instructions_given = VALUES(instructions_given),
-            chart_notes = VALUES(chart_notes),
-            d0_date = VALUES(d0_date),
-            bite_markers = VALUES(bite_markers),
-            updated_at = NOW()"
-    );
-
-    if (!$assessment) {
-        throw new RuntimeException(
-            'Unable to prepare the non-ARV assessment.'
-        );
+    $nullable = ['date_of_exposure', 'previous_vaccination_date', 'outside_clinic_name', 'wound_type', 'bite_type'];
+    $placeholders = [];
+    $updates = [];
+    $values = [];
+    foreach ($columns as $column => $type) {
+        $placeholders[] = in_array($column, $nullable, true) ? "NULLIF(?, '')" : '?';
+        if (!in_array($column, ['visit_id', 'patient_id', 'case_id', 'branch_id'], true)) {
+            $updates[] = "$column = VALUES($column)";
+        }
+        $values[] = $type === 'i' ? (int)($data[$column] ?? 0) : (string)($data[$column] ?? '');
     }
-
-    $assessment->bind_param(
-        'iiisissssssssssssss',
-        $visitId,
-        $patientId,
-        $caseId,
-        $branchId,
-        $userId,
-        $history,
-        $exposureDate,
-        $site,
-        $animal,
-        $animalStatus,
-        $category,
-        $profile,
-        $route,
-        $regimen,
-        $concerns,
-        $instructions,
-        $notes,
-        $d0Date,
-        $biteMarkers
-    );
-
-    if (!$assessment->execute()) {
-        $error = $assessment->error;
-        $assessment->close();
-
-        throw new RuntimeException(
-            'Unable to save the non-ARV assessment: '
-            . $error
-        );
+    $sql = 'INSERT INTO clinical_assessments (' . implode(', ', array_keys($columns)) . ')
+            VALUES (' . implode(', ', $placeholders) . ')
+            ON DUPLICATE KEY UPDATE ' . implode(', ', $updates) . ', updated_at = NOW()';
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) {
+        throw new RuntimeException('Unable to prepare the clinical assessment.');
     }
+    $stmt->bind_param(implode('', $columns), ...$values);
+    if (!$stmt->execute()) {
+        $error = $stmt->error;
+        $stmt->close();
+        throw new RuntimeException('Unable to save the clinical assessment: ' . $error);
+    }
+    $stmt->close();
+}
 
-    $assessment->close();
-
+/** Copy the nurse-confirmed exposure details to the case and mark the visit Under Assessment. */
+function assessmentUpdateCaseAndVisit(mysqli $conn, array $data, int $visitId, int $userId, string $branchId): void
+{
     $caseUpdate = $conn->prepare(
         "UPDATE animal_bite_cases
          SET
@@ -500,25 +421,21 @@ function assessmentSaveNonArvAssessment(
          WHERE case_id = ?
            AND branch_id = ?"
     );
-
     if (!$caseUpdate) {
-        throw new RuntimeException(
-            'Unable to prepare the case update.'
-        );
+        throw new RuntimeException('Unable to prepare the case update.');
     }
-
+    $caseId = (int)$data['case_id'];
     $caseUpdate->bind_param(
         'ssssssis',
-        $animal,
-        $site,
-        $category,
-        $animalStatus,
-        $exposureDate,
-        $notes,
+        $data['animal_type'],
+        $data['exposure_site'],
+        $data['bite_category'],
+        $data['animal_status'],
+        $data['date_of_exposure'],
+        $data['chart_notes'],
         $caseId,
         $branchId
     );
-
     $caseUpdate->execute();
     $caseUpdate->close();
 
@@ -527,28 +444,74 @@ function assessmentSaveNonArvAssessment(
          SET
             workflow_status = 'Under Assessment',
             assigned_nurse = ?,
-            assessment_started_at =
-                COALESCE(assessment_started_at, NOW()),
+            assessment_started_at = COALESCE(assessment_started_at, NOW()),
             updated_at = NOW()
          WHERE visit_id = ?
            AND branch_id = ?"
     );
-
     if (!$visitUpdate) {
-        throw new RuntimeException(
-            'Unable to prepare the visit update.'
-        );
+        throw new RuntimeException('Unable to prepare the visit update.');
     }
-
-    $visitUpdate->bind_param(
-        'iis',
-        $userId,
-        $visitId,
-        $branchId
-    );
-
+    $visitUpdate->bind_param('iis', $userId, $visitId, $branchId);
     $visitUpdate->execute();
     $visitUpdate->close();
+}
+
+/** Existing d0_date for a visit, or today as the technical placeholder (d0_date is NOT NULL). */
+function assessmentExistingD0(mysqli $conn, int $visitId): string
+{
+    $existing = $conn->prepare('SELECT d0_date FROM clinical_assessments WHERE visit_id = ? LIMIT 1');
+    $existing->bind_param('i', $visitId);
+    $existing->execute();
+    $row = $existing->get_result()->fetch_assoc();
+    $existing->close();
+    return !empty($row['d0_date']) ? (string)$row['d0_date'] : date('Y-m-d');
+}
+
+/** Retire the still-Scheduled anti-rabies rows of THIS visit. Completed/Missed history is kept. */
+function assessmentArchiveVisitSchedule(mysqli $conn, int $visitId, int $userId, string $branchId): void
+{
+    $archive = $conn->prepare(
+        "UPDATE vaccination_records
+         SET is_archived = 1, archived_at = NOW(), archived_by = ?
+         WHERE visit_id = ? AND branch_id = ? AND vaccination_status = 'Scheduled' AND is_archived = 0"
+    );
+    if ($archive) {
+        $archive->bind_param('iis', $userId, $visitId, $branchId);
+        $archive->execute();
+        $archive->close();
+    }
+}
+
+/**
+ * Persist an assessment explicitly marked as NOT an anti-rabies schedule.
+ *
+ * clinical_assessments already supports treatment_profile='OTHER', so no
+ * schedule is generated from it. d0_date is NOT NULL in the existing schema;
+ * the stored value is kept or today's date is used only as a placeholder.
+ */
+function assessmentSaveNonArvAssessment(
+    mysqli $conn,
+    array $visit,
+    int $visitId,
+    int $userId,
+    string $branchId,
+    array $payload
+): void {
+    $data = assessmentCollectExposure($payload);
+    assessmentArchiveVisitSchedule($conn, $visitId, $userId, $branchId);
+    $data += [
+        'visit_id' => $visitId,
+        'patient_id' => (int)$visit['patient_id'],
+        'case_id' => (int)$visit['case_id'],
+        'branch_id' => $branchId,
+        'nurse_id' => $userId,
+        'treatment_profile' => 'OTHER',
+        'route' => '',
+        'd0_date' => assessmentExistingD0($conn, $visitId),
+    ];
+    assessmentUpsert($conn, $data);
+    assessmentUpdateCaseAndVisit($conn, $data, $visitId, $userId, $branchId);
 }
 
 // ============================================================
@@ -641,30 +604,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 );
             }
 
-            $history = trim((string)($_POST['exposure_history'] ?? ''));
-            $exposureDate = (string)($_POST['date_of_exposure'] ?? '');
-            $site = trim((string)($_POST['exposure_site'] ?? ''));
-            $biteMarkers = assessmentBiteMarkers($_POST['bite_markers'] ?? '[]');
-            $animal = trim((string)($_POST['animal_type'] ?? ''));
-            $animalStatus = trim((string)($_POST['animal_status'] ?? ''));
-            $category = trim((string)($_POST['bite_category'] ?? ''));
+            $data = assessmentCollectExposure($_POST);
             $isNonRabies = isset($_POST['not_anti_rabies'])
                 && (string)$_POST['not_anti_rabies'] === '1';
 
-            $profile = (string)($_POST['treatment_profile'] ?? '');
-            $route = trim((string)($_POST['route'] ?? ''));
-            $regimen = trim((string)($_POST['active_regimen'] ?? ''));
-            $concerns = trim((string)($_POST['important_concerns'] ?? ''));
-            $instructions = trim((string)($_POST['instructions_given'] ?? ''));
-            $notes = trim((string)($_POST['chart_notes'] ?? ''));
+            $profile = strtoupper(trim((string)($_POST['treatment_profile'] ?? '')));
             $d0Date = (string)($_POST['d0_date'] ?? '');
+            $patientId = (int)$visit['patient_id'];
+            $caseId = (int)$visit['case_id'];
+            $warnings = [];
+            $outsideDoses = [];
+            $outsideClinic = '';
+            $previousVaccinationDate = '';
 
-            $profiles = ['PEP_ID', 'PEP_IM', 'PREP', 'BOOSTER'];
-
-            if ($history === '') {
-                throw new RuntimeException(
-                    'History of incident/exposure is required.'
-                );
+            // The route is defined by the Vaccination Regimen (item 6). Legacy
+            // PREP/BOOSTER records without a route keep their stored route.
+            $existingCaseProfile = workflowCaseProfile($conn, $caseId);
+            $legacyProfiles = [];
+            if (in_array((string)$existingCaseProfile['profile'], ['PREP', 'BOOSTER'], true)) {
+                $legacyProfiles[] = (string)$existingCaseProfile['profile'];
             }
 
             if ($isNonRabies) {
@@ -674,69 +632,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                  * does NOT generate the anti-rabies D0/D3/... schedule.
                  */
                 $profile = 'OTHER';
-
-                // d0_date is NOT NULL in the current schema. Preserve the
-                // existing technical value when present; otherwise use today.
-                $existingD0 = $conn->prepare(
-                    "SELECT d0_date
-                     FROM clinical_assessments
-                     WHERE visit_id = ?
-                     LIMIT 1"
-                );
-
-                if ($existingD0) {
-                    $existingD0->bind_param(
-                        'i',
-                        $visitId
-                    );
-
-                    $existingD0->execute();
-
-                    $existingD0Row =
-                        $existingD0
-                            ->get_result()
-                            ->fetch_assoc();
-
-                    $existingD0->close();
-
-                    $d0Date =
-                        !empty($existingD0Row['d0_date'])
-                            ? (string)$existingD0Row['d0_date']
-                            : date('Y-m-d');
-                } else {
-                    $d0Date = date('Y-m-d');
-                }
-            } elseif (
-                $d0Date === ''
-                || !in_array($profile, $profiles, true)
-            ) {
-                throw new RuntimeException(
-                    'Treatment profile and D0 date are required for an anti-rabies schedule.'
-                );
-            }
-
-            $datesToValidate = [$exposureDate];
-
-            if (!$isNonRabies) {
-                $datesToValidate[] = $d0Date;
-            }
-
-            foreach ($datesToValidate as $date) {
+                $route = '';
+                $d0Date = assessmentExistingD0($conn, $visitId);
+            } else {
                 if (
-                    $date !== ''
-                    && DateTime::createFromFormat(
-                        'Y-m-d',
-                        $date
-                    )?->format('Y-m-d') !== $date
+                    $d0Date === ''
+                    || (!array_key_exists($profile, workflowRegimenOptions()) && !in_array($profile, $legacyProfiles, true))
                 ) {
                     throw new RuntimeException(
-                        'Enter valid dates.'
+                        'Vaccination Regimen and D0 date are required for an anti-rabies schedule.'
                     );
                 }
-            }
+                assessmentValidDate($d0Date, 'Enter a valid D0 date.');
+                $route = workflowProfileRoute($profile, (string)($existingCaseProfile['route'] ?? ''));
 
-            $patientId = (int)$visit['patient_id'];
-            $caseId = (int)$visit['case_id'];
+                // Booster eligibility (item 8): previous anti-rabies vaccination within 5 years.
+                if (workflowIsBoosterProfile($profile)) {
+                    $previousVaccinationDate = trim((string)($_POST['previous_vaccination_date'] ?? ''));
+                    $previousUnknown = (string)($_POST['previous_vaccination_unknown'] ?? '') === '1';
+                    assessmentValidDate($previousVaccinationDate, 'Enter a valid previous vaccination date.');
+                    if ($previousVaccinationDate !== '' && $previousVaccinationDate > date('Y-m-d')) {
+                        throw new RuntimeException('The previous anti-rabies vaccination date cannot be in the future.');
+                    }
+                    if ($previousUnknown || $previousVaccinationDate === '') {
+                        $previousVaccinationDate = '';
+                        $warnings[] = 'Booster eligibility: the previous anti-rabies vaccination date is unknown. A full PEP is needed instead of a booster.';
+                    } elseif ($previousVaccinationDate < date('Y-m-d', strtotime($d0Date . ' -5 years'))) {
+                        $warnings[] = 'Booster eligibility: the previous anti-rabies vaccination (' . $previousVaccinationDate
+                            . ') was more than 5 years ago. A full PEP is needed instead of a booster.';
+                    }
+                }
+
+                // Follow-up from another clinic (item 9): doses already given elsewhere.
+                if ((string)($_POST['outside_follow_up'] ?? '') === '1') {
+                    $outsideClinic = mb_substr(trim((string)($_POST['outside_clinic_name'] ?? '')), 0, 255);
+                    if ($outsideClinic === '') {
+                        throw new RuntimeException('Enter the name of the clinic where the earlier doses were given.');
+                    }
+                    $stages = workflowScheduleStages($profile);
+                    $postedOutside = is_array($_POST['outside_dose'] ?? null) ? $_POST['outside_dose'] : [];
+                    $postedDates = is_array($_POST['outside_dose_date'] ?? null) ? $_POST['outside_dose_date'] : [];
+                    foreach ($postedOutside as $doseNumber => $flag) {
+                        $doseNumber = (int)$doseNumber;
+                        if ((string)$flag !== '1' || !isset($stages[$doseNumber])) continue;
+                        $outsideDoses[$doseNumber] = $doseNumber === 1
+                            ? $d0Date
+                            : trim((string)($postedDates[$doseNumber] ?? ''));
+                    }
+                    if (!isset($outsideDoses[1])) {
+                        throw new RuntimeException('For a follow-up from another clinic, mark D0 as given there. The original Day 0 is the base date for the remaining doses.');
+                    }
+                    if (count($outsideDoses) >= count($stages)) {
+                        throw new RuntimeException('Every dose of this regimen is marked as given elsewhere. Leave at least one remaining dose to schedule.');
+                    }
+                    ksort($outsideDoses);
+                    $previousDate = '';
+                    foreach ($outsideDoses as $doseNumber => $date) {
+                        assessmentValidDate($date, 'Enter the date ' . workflowDoseLabel($doseNumber) . ' was given at the other clinic.');
+                        if ($date === '' || $date > date('Y-m-d') || ($previousDate !== '' && $date < $previousDate)) {
+                            throw new RuntimeException('Enter past dates, in order, for the doses given at the other clinic (' . workflowDoseLabel($doseNumber) . ').');
+                        }
+                        $previousDate = $date;
+                    }
+                }
+            }
 
             $conn->begin_transaction();
 
@@ -749,10 +708,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
              * The clinical restart happens here, when the Nurse actually
              * reassesses the patient and confirms the new D0 date.
              *
-             * If the case still has an active Missed schedule that is
-             * more than the configured catch-up window overdue, retire
-             * the entire PREVIOUS active vaccination cycle before a new
-             * schedule is generated.
+             * If a dose of the case is still not given and is more than
+             * 7 days overdue, retire the entire PREVIOUS vaccination cycle
+             * before a new schedule is generated from Day 0.
              *
              * We archive instead of deleting so the previous cycle stays
              * available for history/audit.
@@ -761,248 +719,79 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $previousCycleRows = 0;
 
             if (!$isNonRabies) {
-
-            $restartCheck = $conn->prepare(
-                "SELECT
-                    MIN(scheduled_date) AS oldest_missed_date,
-                    MAX(DATEDIFF(CURDATE(), scheduled_date)) AS max_days_overdue
-                 FROM vaccination_records
-                 WHERE patient_id = ?
-                   AND case_id = ?
-                   AND branch_id = ?
-                   AND is_archived = 0
-                   AND vaccination_status = 'Missed'
-                   AND scheduled_date IS NOT NULL
-                   AND scheduled_date < CURDATE()"
-            );
-
-            $restartCheck->bind_param(
-                'iis',
-                $patientId,
-                $caseId,
-                $branchId
-            );
-
-            $restartCheck->execute();
-
-            $restartRow = $restartCheck
-                ->get_result()
-                ->fetch_assoc();
-
-            $restartCheck->close();
-
-            $maxDaysOverdue = (int)($restartRow['max_days_overdue'] ?? 0);
-
-            if ($maxDaysOverdue > $catchUpWindowDays) {
-                $restartRequired = true;
-
-                /*
-                 * Retire ALL active rows from the old vaccination cycle,
-                 * including Completed, Missed and Scheduled rows.
-                 *
-                 * This is what makes the new cycle behave as "back to D0"
-                 * without deleting the patient's old vaccination history.
-                 */
-                $archivePreviousCycle = $conn->prepare(
-                    "UPDATE vaccination_records
-                     SET
-                        is_archived = 1,
-                        archived_at = NOW(),
-                        archived_by = ?
+                $restartCheck = $conn->prepare(
+                    "SELECT MAX(DATEDIFF(CURDATE(), scheduled_date)) AS max_days_overdue
+                     FROM vaccination_records
                      WHERE patient_id = ?
                        AND case_id = ?
                        AND branch_id = ?
-                       AND is_archived = 0"
+                       AND is_archived = 0
+                       AND vaccination_status IN ('Scheduled', 'Missed')
+                       AND scheduled_date IS NOT NULL
+                       AND scheduled_date < CURDATE()"
                 );
+                $restartCheck->bind_param('iis', $patientId, $caseId, $branchId);
+                $restartCheck->execute();
+                $restartRow = $restartCheck->get_result()->fetch_assoc();
+                $restartCheck->close();
 
-                $archivePreviousCycle->bind_param(
-                    'iiis',
-                    $userId,
-                    $patientId,
-                    $caseId,
-                    $branchId
-                );
+                $maxDaysOverdue = (int)($restartRow['max_days_overdue'] ?? 0);
 
-                $archivePreviousCycle->execute();
-                $previousCycleRows = (int)$archivePreviousCycle->affected_rows;
-                $archivePreviousCycle->close();
+                if ($maxDaysOverdue > $catchUpWindowDays) {
+                    $restartRequired = true;
 
-                /*
-                 * Re-open the case for the new active treatment cycle.
-                 */
-                $reopenCase = $conn->prepare(
-                    "UPDATE animal_bite_cases
-                     SET case_status = 'Ongoing'
-                     WHERE case_id = ?
-                       AND branch_id = ?"
-                );
+                    /*
+                     * Retire ALL active rows from the old vaccination cycle,
+                     * including Completed, Missed and Scheduled rows. This is
+                     * what makes the new cycle start again from D0 without
+                     * deleting the patient's old vaccination history.
+                     */
+                    $archivePreviousCycle = $conn->prepare(
+                        "UPDATE vaccination_records
+                         SET is_archived = 1, archived_at = NOW(), archived_by = ?
+                         WHERE patient_id = ? AND case_id = ? AND branch_id = ? AND is_archived = 0"
+                    );
+                    $archivePreviousCycle->bind_param('iiis', $userId, $patientId, $caseId, $branchId);
+                    $archivePreviousCycle->execute();
+                    $previousCycleRows = (int)$archivePreviousCycle->affected_rows;
+                    $archivePreviousCycle->close();
 
-                $reopenCase->bind_param(
-                    'is',
-                    $caseId,
-                    $branchId
-                );
-
-                $reopenCase->execute();
-                $reopenCase->close();
-            }
-
+                    // Re-open the case for the new active treatment cycle.
+                    $reopenCase = $conn->prepare(
+                        "UPDATE animal_bite_cases SET case_status = 'Ongoing' WHERE case_id = ? AND branch_id = ?"
+                    );
+                    $reopenCase->bind_param('is', $caseId, $branchId);
+                    $reopenCase->execute();
+                    $reopenCase->close();
+                }
             } else {
                 /*
                  * Non-anti-rabies assessments must not leave a newly generated
-                 * anti-rabies schedule for this visit. Retire only the active
-                 * Scheduled placeholders tied to the current visit.
+                 * anti-rabies schedule for this visit.
                  */
-                $archiveCurrentVisitSchedule = $conn->prepare(
-                    "UPDATE vaccination_records
-                     SET
-                        is_archived = 1,
-                        archived_at = NOW(),
-                        archived_by = ?
-                     WHERE visit_id = ?
-                       AND branch_id = ?
-                       AND vaccination_status = 'Scheduled'
-                       AND is_archived = 0"
-                );
-
-                if ($archiveCurrentVisitSchedule) {
-                    $archiveCurrentVisitSchedule->bind_param(
-                        'iis',
-                        $userId,
-                        $visitId,
-                        $branchId
-                    );
-
-                    $archiveCurrentVisitSchedule->execute();
-                    $archiveCurrentVisitSchedule->close();
-                }
+                assessmentArchiveVisitSchedule($conn, $visitId, $userId, $branchId);
             }
 
-            $assessment = $conn->prepare(
-                "INSERT INTO clinical_assessments
-                 (
-                    visit_id,
-                    patient_id,
-                    case_id,
-                    branch_id,
-                    nurse_id,
-                    exposure_history,
-                    date_of_exposure,
-                    exposure_site,
-                    animal_type,
-                    animal_status,
-                    bite_category,
-                    treatment_profile,
-                    route,
-                    active_regimen,
-                    important_concerns,
-                    instructions_given,
-                    chart_notes,
-                    d0_date,
-                    bite_markers
-                 )
-                 VALUES (
-                    ?, ?, ?, ?, ?, ?, NULLIF(?, ''),
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-                 )
-                 ON DUPLICATE KEY UPDATE
-                    nurse_id = VALUES(nurse_id),
-                    exposure_history = VALUES(exposure_history),
-                    date_of_exposure = VALUES(date_of_exposure),
-                    exposure_site = VALUES(exposure_site),
-                    animal_type = VALUES(animal_type),
-                    animal_status = VALUES(animal_status),
-                    bite_category = VALUES(bite_category),
-                    treatment_profile = VALUES(treatment_profile),
-                    route = VALUES(route),
-                    active_regimen = VALUES(active_regimen),
-                    important_concerns = VALUES(important_concerns),
-                    instructions_given = VALUES(instructions_given),
-                    chart_notes = VALUES(chart_notes),
-                    d0_date = VALUES(d0_date),
-                    bite_markers = VALUES(bite_markers),
-                    updated_at = NOW()"
-            );
+            $data += [
+                'visit_id' => $visitId,
+                'patient_id' => $patientId,
+                'case_id' => $caseId,
+                'branch_id' => $branchId,
+                'nurse_id' => $userId,
+                'treatment_profile' => $isNonRabies ? 'OTHER' : workflowStoredProfile($conn, $profile),
+                'route' => $route,
+                'd0_date' => $d0Date,
+                'previous_vaccination_date' => $previousVaccinationDate,
+                'outside_clinic_name' => $outsideClinic,
+            ];
+            assessmentUpsert($conn, $data);
+            assessmentUpdateCaseAndVisit($conn, $data, $visitId, $userId, $branchId);
 
-            $assessment->bind_param(
-                'iiisissssssssssssss',
-                $visitId,
-                $patientId,
-                $caseId,
-                $branchId,
-                $userId,
-                $history,
-                $exposureDate,
-                $site,
-                $animal,
-                $animalStatus,
-                $category,
-                $profile,
-                $route,
-                $regimen,
-                $concerns,
-                $instructions,
-                $notes,
-                $d0Date,
-                $biteMarkers
-            );
-
-            $assessment->execute();
-            $assessment->close();
-
-            $caseUpdate = $conn->prepare(
-                "UPDATE animal_bite_cases
-                 SET
-                    animal_type = NULLIF(?, ''),
-                    bite_location = NULLIF(?, ''),
-                    bite_category = NULLIF(?, ''),
-                    animal_status = NULLIF(?, ''),
-                    date_of_bite = NULLIF(?, ''),
-                    remarks = NULLIF(?, '')
-                 WHERE case_id = ?
-                   AND branch_id = ?"
-            );
-
-            $caseUpdate->bind_param(
-                'ssssssis',
-                $animal,
-                $site,
-                $category,
-                $animalStatus,
-                $exposureDate,
-                $notes,
-                $caseId,
-                $branchId
-            );
-
-            $caseUpdate->execute();
-            $caseUpdate->close();
-
-            $visitUpdate = $conn->prepare(
-                "UPDATE patient_visits
-                 SET
-                    workflow_status = 'Under Assessment',
-                    assigned_nurse = ?,
-                    assessment_started_at = COALESCE(assessment_started_at, NOW()),
-                    updated_at = NOW()
-                 WHERE visit_id = ?
-                   AND branch_id = ?"
-            );
-
-            $visitUpdate->bind_param(
-                'iis',
-                $userId,
-                $visitId,
-                $branchId
-            );
-
-            $visitUpdate->execute();
-            $visitUpdate->close();
-
+            $outsideRecorded = 0;
             if (!$isNonRabies) {
                 /*
                  * Anti-rabies workflow only:
-                 * generate the configured D0/D3/... schedule.
+                 * generate the regimen's D0/D3/... schedule from Day 0.
                  */
                 workflowCreateSchedule(
                     $conn,
@@ -1014,6 +803,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $d0Date,
                     $userId
                 );
+
+                if ($outsideDoses) {
+                    $outsideRecorded = workflowRecordOutsideDoses(
+                        $conn, $patientId, $caseId, $branchId, $outsideDoses, $outsideClinic, $userId
+                    );
+                    workflowAudit(
+                        $conn,
+                        $userId,
+                        $branchId,
+                        'Recorded ' . $outsideRecorded . ' dose(s) given at ' . $outsideClinic
+                            . ' for case ' . $caseId . ' (no stock used); remaining doses scheduled from original D0 ' . $d0Date,
+                        'Clinical Assessment'
+                    );
+                }
 
                 if ($restartRequired) {
                     workflowAudit(
@@ -1040,6 +843,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'Clinical Assessment'
                     );
                 }
+                foreach ($warnings as $warning) {
+                    workflowAudit($conn, $userId, $branchId, $warning . ' (visit ' . $visitId . ')', 'Clinical Assessment');
+                }
             } else {
                 workflowAudit(
                     $conn,
@@ -1055,20 +861,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $conn->commit();
 
             if ($isNonRabies) {
-                workflowFlash(
-                    'success',
-                    'Assessment saved as Not Anti-Rabies Vaccine. No anti-rabies schedule was generated.'
-                );
+                $message = 'Assessment saved as Not Anti-Rabies Vaccine. No anti-rabies schedule was generated.';
             } elseif ($restartRequired) {
-                workflowFlash(
-                    'success',
-                    'Reassessment saved. The previous vaccination cycle was archived and a new schedule was generated from the confirmed D0 date.'
-                );
+                $message = 'Reassessment saved. The patient was more than ' . $catchUpWindowDays
+                    . ' days late, so the previous vaccination cycle was archived and a new schedule was generated from Day 0.';
             } else {
-                workflowFlash(
-                    'success',
-                    'Assessment saved. The anti-rabies schedule was generated from the confirmed D0 date.'
-                );
+                $message = 'Assessment saved. The anti-rabies schedule was generated from the confirmed D0 date.';
+            }
+            if ($outsideRecorded > 0) {
+                $message .= ' ' . $outsideRecorded . ' dose(s) given at ' . $outsideClinic
+                    . ' were recorded as completed (no stock used); only the remaining doses were scheduled.';
+            }
+            if ($warnings) {
+                workflowFlash('warning', $message . ' ' . implode(' ', $warnings));
+            } else {
+                workflowFlash('success', $message);
             }
 
         // ========================================================
@@ -1509,34 +1316,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
  * Completed/administered records are not touched.
  */
 try {
-    $markMissedStmt = $conn->prepare(
-        "UPDATE vaccination_records
-         SET vaccination_status = 'Missed'
-         WHERE branch_id = ?
-           AND is_archived = 0
-           AND vaccination_status = 'Scheduled'
-           AND scheduled_date IS NOT NULL
-           AND scheduled_date < CURDATE()"
-    );
-
-    $markMissedStmt->bind_param('s', $branchId);
-    $markMissedStmt->execute();
-
-    $newlyMarkedMissed = (int)$markMissedStmt->affected_rows;
-
-    $markMissedStmt->close();
-
-    if ($newlyMarkedMissed > 0) {
-        workflowAudit(
-            $conn,
-            $userId,
-            $branchId,
-            'Automatically marked '
-                . $newlyMarkedMissed
-                . ' overdue vaccination schedule(s) as Missed',
-            'Vaccination Follow-up'
-        );
-    }
+    workflowMarkMissedSchedules($conn, $branchId, $userId);
 } catch (Throwable $e) {
     /*
      * Do not prevent the Nurse Assessment page from loading just because
@@ -1717,15 +1497,13 @@ $followupOffset =
  * The oldest missed scheduled date for the case determines the
  * displayed overdue age.
  *
- * 1-30 days overdue:
- *      Missed - Catch-up Eligible
+ * 1-7 days overdue:
+ *      Missed - Catch-up Eligible (record late; remaining doses shift)
  *
- * More than 30 days overdue:
- *      Restart Assessment Required
+ * More than 7 days overdue:
+ *      New Cycle Required (Day 0) on the next reassessment
  *
- * This 30-day cutoff is a clinic-configured SmartBiteCare workflow
- * rule and should match the clinic supervisor's approved protocol.
- * Historical vaccination records are preserved.
+ * See workflowLateDoseStatus(). Historical vaccination records are preserved.
  */
 $overdueStmt = $conn->prepare(
     "SELECT
@@ -1777,26 +1555,11 @@ $overdueCases = $overdueStmt
 $overdueStmt->close();
 
 foreach ($overdueCases as &$overdue) {
-    $daysOverdue = (int)$overdue['days_overdue'];
-
-    if ($daysOverdue > $catchUpWindowDays) {
-        $overdue['workflow_classification'] = 'restart_required';
-        $overdue['workflow_label'] = 'Restart Assessment Required';
-        $overdue['workflow_description'] =
-            'More than '
-            . $catchUpWindowDays
-            . ' days overdue. Do not automatically continue the old schedule. '
-            . 'Nurse reassessment and a new treatment cycle are required '
-            . 'according to the clinic-approved workflow.';
-    } else {
-        $overdue['workflow_classification'] = 'catchup';
-        $overdue['workflow_label'] = 'Missed - Catch-up Eligible';
-        $overdue['workflow_description'] =
-            'The scheduled vaccination was missed, but the case is still '
-            . 'within the '
-            . $catchUpWindowDays
-            . '-day clinic catch-up window.';
-    }
+    $lateStatus = workflowLateDoseStatus((int)$overdue['days_overdue']);
+    $overdue['workflow_classification'] =
+        $lateStatus['classification'] === 'restart' ? 'restart_required' : 'catchup';
+    $overdue['workflow_label'] = $lateStatus['label'];
+    $overdue['workflow_description'] = $lateStatus['description'];
 }
 unset($overdue);
 
@@ -1805,17 +1568,25 @@ unset($overdue);
 $selected = null;
 
 if ($selectedId > 0) {
+    /*
+     * a.* comes first so a visit without an assessment yet does not overwrite
+     * the visit columns or the Admin Staff intake values with NULL. Intake
+     * details (biting animal, animal status, site and date of bite) fill the
+     * form until the Nurse saves her own assessment.
+     */
     $stmt = $conn->prepare(
         "SELECT
+            a.*,
+            a.updated_at AS assessment_updated_at,
             v.*,
             p.full_name,
             c.case_number,
-            c.animal_type,
             c.bite_location,
-            c.bite_category,
-            c.animal_status,
             c.date_of_bite,
-            a.*
+            COALESCE(NULLIF(a.animal_type, ''), c.animal_type) AS animal_type,
+            COALESCE(NULLIF(a.animal_status, ''), c.animal_status) AS animal_status,
+            COALESCE(NULLIF(a.bite_category, ''), c.bite_category) AS bite_category,
+            (a.assessment_id IS NOT NULL) AS has_assessment
          FROM patient_visits v
          INNER JOIN patients p
             ON p.patient_id = v.patient_id
@@ -1841,6 +1612,38 @@ if ($selectedId > 0) {
         ->fetch_assoc();
 
     $stmt->close();
+
+    /*
+     * A follow-up visit of the same case has no assessment of its own yet.
+     * Start from the case's latest assessment so the regimen, Day 0 and other
+     * clinical details are not retyped (and the schedule is not reset).
+     */
+    if ($selected && !(int)$selected['has_assessment']) {
+        $previousStmt = $conn->prepare(
+            "SELECT * FROM clinical_assessments
+             WHERE case_id = ? AND branch_id = ?
+             ORDER BY updated_at DESC, assessment_id DESC
+             LIMIT 1"
+        );
+        $caseForPrevious = (int)$selected['case_id'];
+        $previousStmt->bind_param('is', $caseForPrevious, $branchId);
+        $previousStmt->execute();
+        $previousAssessment = $previousStmt->get_result()->fetch_assoc();
+        $previousStmt->close();
+        if ($previousAssessment) {
+            foreach (['exposure_history', 'date_of_exposure', 'exposure_site', 'animal_type', 'animal_status',
+                      'bite_category', 'treatment_profile', 'route', 'active_regimen', 'important_concerns',
+                      'instructions_given', 'd0_date', 'bite_markers', 'previous_vaccination_date',
+                      'outside_clinic_name', 'wound_type', 'bite_type'] as $field) {
+                if (array_key_exists($field, $previousAssessment)
+                    && ($selected[$field] ?? null) === null
+                    && $previousAssessment[$field] !== null) {
+                    $selected[$field] = $previousAssessment[$field];
+                }
+            }
+            $selected['prefilled_from_previous'] = true;
+        }
+    }
 }
 
 $selectedNonRabies =
@@ -3153,26 +2956,26 @@ $flash = workflowTakeFlash();
                             style="color:var(--primary);"
                         ></i>
 
-                        <strong>Clinic-configured workflow:</strong>
+                        <strong>Clinic rule:</strong>
 
-                        missed schedules within
-
-                        <strong>
-                            <?= (int)$catchUpWindowDays ?> days
-                        </strong>
-
-                        remain in the catch-up workflow.
-
-                        Cases overdue for more than
+                        a patient up to
 
                         <strong>
                             <?= (int)$catchUpWindowDays ?> days
                         </strong>
 
-                        require nurse reassessment before a new schedule
-                        is created.
+                        late gets the dose on the actual date in Vaccination, and
+                        every remaining dose moves forward by the same number of days.
 
-                        Previous vaccination history is preserved.
+                        More than
+
+                        <strong>
+                            <?= (int)$catchUpWindowDays ?> days
+                        </strong>
+
+                        late: re-assess the patient to start a new cycle from Day 0.
+
+                        Previous vaccination records are archived, not deleted.
 
                     </div>
 
@@ -3591,7 +3394,7 @@ $flash = workflowTakeFlash();
 
                         <div class="content-card-body">
 
-                            <form method="post" class="row g-3">
+                            <form method="post" class="row g-3" id="assessmentForm">
 
                                 <input
                                     type="hidden"
@@ -3613,6 +3416,13 @@ $flash = workflowTakeFlash();
                                         Exposure Information
                                     </h3>
 
+                                    <?php if (!empty($selected['prefilled_from_previous'])): ?>
+                                        <p class="small text-muted mb-0">
+                                            <i class="bi bi-info-circle me-1"></i>
+                                            Follow-up visit: details were filled in from this case's latest assessment. Review them before saving.
+                                        </p>
+                                    <?php endif; ?>
+
                                 </div>
 
                                 <div class="col-12">
@@ -3633,6 +3443,32 @@ $flash = workflowTakeFlash();
                                     ><?= workflowH(
                                         (string)($selected['exposure_history'] ?? '')
                                     ) ?></textarea>
+
+                                </div>
+
+                                <?php
+                                $biteTypeValue = (string)($selected['bite_type'] ?? '');
+                                $woundTypeValue = (string)($selected['wound_type'] ?? '');
+                                ?>
+
+                                <div class="col-md-4">
+
+                                    <label class="form-label" for="bite_type">
+                                        Type of Bite
+                                    </label>
+
+                                    <select class="form-select" id="bite_type" name="bite_type">
+                                        <option value="">Select type</option>
+                                        <?php foreach (ASSESSMENT_BITE_TYPES as $option): ?>
+                                            <option value="<?= workflowH($option) ?>" <?= $biteTypeValue === $option ? 'selected' : '' ?>>
+                                                <?= workflowH($option) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+
+                                    <small class="text-muted d-block mt-1">
+                                        Non-Bite: e.g. puncture from a rusty object, or Hepa B, Flu and PPD services. Animal fields are optional.
+                                    </small>
 
                                 </div>
 
@@ -3663,17 +3499,36 @@ $flash = workflowTakeFlash();
 
                                 <div class="col-md-4">
 
+                                    <label class="form-label" for="wound_type">
+                                        Type of Wound
+                                    </label>
+
+                                    <select class="form-select" id="wound_type" name="wound_type">
+                                        <option value="">Select type</option>
+                                        <?php foreach (ASSESSMENT_WOUND_TYPES as $option): ?>
+                                            <option value="<?= workflowH($option) ?>" <?= $woundTypeValue === $option ? 'selected' : '' ?>>
+                                                <?= workflowH($option) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+
+                                </div>
+
+                                <div class="col-md-8">
+
                                     <label
                                         class="form-label"
                                         for="exposure_site"
                                     >
-                                        Exposure Site
+                                        Site of Bite
                                     </label>
 
                                     <input
                                         class="form-control"
                                         id="exposure_site"
                                         name="exposure_site"
+                                        maxlength="255"
+                                        placeholder="e.g. Left forearm, front"
                                         value="<?= workflowH(
                                             (string)(
                                                 $selected['exposure_site']
@@ -3683,31 +3538,6 @@ $flash = workflowTakeFlash();
                                         ) ?>"
                                     >
 
-                                </div>
-
-
-                                <div class="col-12">
-                                    <div class="bite-map-panel" id="biteMapPanel">
-                                        <h6 class="mb-2">Bite Location Diagram</h6>
-                                        <p class="small text-muted mb-3">Enter a location label, then click the body to mark a bite. Repeat for multiple bites. Click a numbered marker or its Remove button to delete it. Keep clinical details in Exposure Site.</p>
-                                        <input type="hidden" id="bite_markers" name="bite_markers" value="<?= workflowH((string)($selected['bite_markers'] ?? '[]')) ?>">
-                                        <div class="row g-3">
-                                            <div class="col-md-6">
-                                                <div class="bite-map-stage" id="biteMapStage">
-                                                    <img id="biteMapImage" src="images/human-figure.png" alt="Human silhouette for marking bite locations" draggable="false">
-                                                </div>
-                                                <p class="small text-muted text-center">Diagram shows the supplied view only. Include left/right and front/back in your location label.</p>
-                                            </div>
-                                            <div class="col-md-6">
-                                                <label for="biteMarkerLabel" class="form-label">Location label for the next marker</label>
-                                                <input id="biteMarkerLabel" class="form-control" maxlength="100" placeholder="e.g. Left forearm, front" autocomplete="off">
-                                                <p class="small text-muted mt-2">Labels are entered by the nurse; the image does not identify body regions automatically.</p>
-                                                <div id="biteMapStatus" role="status" aria-live="polite" class="small mb-2"></div>
-                                                <ol id="biteMapList" class="bite-map-list"></ol>
-                                                <button type="button" id="biteMapClear" class="btn btn-outline-danger btn-sm">Clear all markers</button>
-                                            </div>
-                                        </div>
-                                    </div>
                                 </div>
 
                                 <div class="col-md-4">
@@ -3757,25 +3587,60 @@ $flash = workflowTakeFlash();
 
                                 </div>
 
+                                <div class="col-12">
+                                    <div class="bite-map-panel" id="biteMapPanel">
+                                        <h6 class="mb-2">Bite Location Diagram</h6>
+                                        <p class="small text-muted mb-3">Click the body to place a dot on each bite location. Click a numbered dot or its Remove button to delete it. Write the site in Site of Bite above.</p>
+                                        <input type="hidden" id="bite_markers" name="bite_markers" value="<?= workflowH((string)($selected['bite_markers'] ?? '[]')) ?>">
+                                        <div class="row g-3">
+                                            <div class="col-md-6">
+                                                <div class="bite-map-stage" id="biteMapStage">
+                                                    <img id="biteMapImage" src="images/human-figure.png" alt="Human silhouette for marking bite locations" draggable="false">
+                                                </div>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <div id="biteMapStatus" role="status" aria-live="polite" class="small mb-2"></div>
+                                                <ol id="biteMapList" class="bite-map-list"></ol>
+                                                <button type="button" id="biteMapClear" class="btn btn-outline-danger btn-sm">Clear all markers</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <?php
+                                $animalValue = trim((string)($selected['animal_type'] ?? ''));
+                                $animalIsOther = $animalValue !== '' && !in_array($animalValue, ASSESSMENT_ANIMAL_OPTIONS, true);
+                                $animalStatusValue = trim((string)($selected['animal_status'] ?? ''));
+                                $animalStatusIsOther = $animalStatusValue !== '' && !in_array($animalStatusValue, ASSESSMENT_ANIMAL_STATUS_OPTIONS, true);
+                                ?>
+
                                 <div class="col-md-6">
 
                                     <label
                                         class="form-label"
                                         for="animal_type"
                                     >
-                                        Animal/Exposure Source
+                                        Biting Animal
                                     </label>
 
+                                    <select class="form-select" id="animal_type" name="animal_type" data-other-target="animal_type_other">
+                                        <option value="">Select animal</option>
+                                        <?php foreach (ASSESSMENT_ANIMAL_OPTIONS as $option): ?>
+                                            <option value="<?= workflowH($option) ?>" <?= $animalValue === $option ? 'selected' : '' ?>>
+                                                <?= workflowH($option) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                        <option value="Others" <?= $animalIsOther ? 'selected' : '' ?>>Others (specify)</option>
+                                    </select>
+
                                     <input
-                                        class="form-control"
-                                        id="animal_type"
-                                        name="animal_type"
-                                        value="<?= workflowH(
-                                            (string)(
-                                                $selected['animal_type']
-                                                ?? ''
-                                            )
-                                        ) ?>"
+                                        class="form-control mt-2"
+                                        id="animal_type_other"
+                                        name="animal_type_other"
+                                        maxlength="100"
+                                        placeholder="Specify the animal or exposure source"
+                                        value="<?= workflowH($animalIsOther ? $animalValue : '') ?>"
+                                        <?= $animalIsOther ? '' : 'style="display:none;"' ?>
                                     >
 
                                 </div>
@@ -3786,19 +3651,27 @@ $flash = workflowTakeFlash();
                                         class="form-label"
                                         for="animal_status"
                                     >
-                                        Animal Status
+                                        Status of the Biting Animal
                                     </label>
 
+                                    <select class="form-select" id="animal_status" name="animal_status" data-other-target="animal_status_other">
+                                        <option value="">Select status</option>
+                                        <?php foreach (ASSESSMENT_ANIMAL_STATUS_OPTIONS as $option): ?>
+                                            <option value="<?= workflowH($option) ?>" <?= $animalStatusValue === $option ? 'selected' : '' ?>>
+                                                <?= workflowH($option) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                        <option value="Others" <?= $animalStatusIsOther ? 'selected' : '' ?>>Others (specify)</option>
+                                    </select>
+
                                     <input
-                                        class="form-control"
-                                        id="animal_status"
-                                        name="animal_status"
-                                        value="<?= workflowH(
-                                            (string)(
-                                                $selected['animal_status']
-                                                ?? ''
-                                            )
-                                        ) ?>"
+                                        class="form-control mt-2"
+                                        id="animal_status_other"
+                                        name="animal_status_other"
+                                        maxlength="100"
+                                        placeholder="Specify the animal status"
+                                        value="<?= workflowH($animalStatusIsOther ? $animalStatusValue : '') ?>"
+                                        <?= $animalStatusIsOther ? '' : 'style="display:none;"' ?>
                                     >
 
                                 </div>
@@ -3846,13 +3719,36 @@ $flash = workflowTakeFlash();
                                     </div>
                                 </div>
 
-                                <div class="col-md-4">
+                                <?php
+                                $currentProfile = strtoupper(trim((string)($selected['treatment_profile'] ?? '')));
+                                $regimenChoices = workflowRegimenOptions();
+                                if (in_array($currentProfile, ['PREP', 'BOOSTER'], true)) {
+                                    // Legacy regimen without a recorded route stays selectable for this record.
+                                    $regimenChoices = [$currentProfile => workflowProfileLabel($currentProfile, (string)($selected['route'] ?? '')) . ' (saved earlier)'] + $regimenChoices;
+                                }
+                                $regimenStages = [];
+                                foreach (array_keys($regimenChoices) as $choice) {
+                                    $stageList = [];
+                                    $sequence = workflowDoseSequenceMap($choice);
+                                    foreach (workflowScheduleStages($choice) as $doseNumber => $offset) {
+                                        $stageList[] = ['dose' => (int)$doseNumber, 'offset' => (int)$offset,
+                                            'label' => workflowDoseDisplay((int)$doseNumber, $sequence)];
+                                    }
+                                    $regimenStages[$choice] = $stageList;
+                                }
+                                $activeRegimenValue = trim((string)($selected['active_regimen'] ?? ''));
+                                $activeRegimenIsOther = $activeRegimenValue !== '' && !in_array($activeRegimenValue, ASSESSMENT_ACTIVE_REGIMENS, true);
+                                $previousVaccinationValue = (string)($selected['previous_vaccination_date'] ?? '');
+                                $outsideClinicValue = (string)($selected['outside_clinic_name'] ?? '');
+                                ?>
+
+                                <div class="col-md-6">
 
                                     <label
                                         class="form-label required"
                                         for="treatment_profile"
                                     >
-                                        Treatment Profile
+                                        Vaccination Regimen
                                     </label>
 
                                     <select
@@ -3866,24 +3762,14 @@ $flash = workflowTakeFlash();
                                     >
 
                                         <option value="">
-                                            Select anti-rabies profile
+                                            Select anti-rabies regimen
                                         </option>
 
-                                        <?php
-                                        foreach (
-                                            [
-                                                'PEP_ID' => 'PEP - Intradermal',
-                                                'PEP_IM' => 'PEP - Intramuscular',
-                                                'PREP' => 'PrEP',
-                                                'BOOSTER' => 'Booster'
-                                            ]
-                                            as $value => $label
-                                        ):
-                                        ?>
+                                        <?php foreach ($regimenChoices as $value => $label): ?>
 
                                             <option
                                                 value="<?= workflowH($value) ?>"
-                                                <?= ($selected['treatment_profile'] ?? '') === $value
+                                                <?= $currentProfile === $value
                                                     ? 'selected'
                                                     : ''
                                                 ?>
@@ -3895,34 +3781,20 @@ $flash = workflowTakeFlash();
 
                                     </select>
 
-                                </div>
-
-                                <div class="col-md-4">
-
-                                    <label
-                                        class="form-label"
-                                        for="route"
-                                    >
-                                        Route
-                                    </label>
-
-                                    <input
-                                        class="form-control"
-                                        id="route"
-                                        name="route"
-                                        value="<?= workflowH(
-                                            (string)($selected['route'] ?? '')
-                                        ) ?>"
-                                        placeholder="ID, IM or N/A"
-                                    >
+                                    <!-- The route (ID/IM) comes from the selected regimen. -->
+                                    <small class="text-muted d-block mt-1" id="regimenRouteHint">
+                                        Route: <?= workflowH(workflowProfileRoute($currentProfile, (string)($selected['route'] ?? '')) ?: 'set by the regimen') ?>.
+                                        ID uses 2 sites per regular session (Booster ID: 1 site); IM uses a full vial each session.
+                                    </small>
 
                                 </div>
 
-                                <div class="col-md-4">
+                                <div class="col-md-6">
 
                                     <label
                                         class="form-label required"
                                         for="d0_date"
+                                        id="d0_date_label"
                                     >
                                         Actual D0 Date
                                     </label>
@@ -3932,6 +3804,7 @@ $flash = workflowTakeFlash();
                                         class="form-control"
                                         id="d0_date"
                                         name="d0_date"
+                                        max="<?= date('Y-m-d', strtotime('+30 days')) ?>"
                                         value="<?= $selectedNonRabies
                                             ? ''
                                             : workflowH(
@@ -3949,28 +3822,103 @@ $flash = workflowTakeFlash();
 
                                 </div>
 
-                                <div class="col-12">
+                                <!-- Booster eligibility -->
+                                <div class="col-12" id="boosterEligibilityPanel" style="display:none;">
+                                    <div class="non-arv-toggle">
+                                        <div class="row g-2 align-items-end w-100">
+                                            <div class="col-md-5">
+                                                <label class="form-label" for="previous_vaccination_date">
+                                                    Date of previous anti-rabies vaccination
+                                                </label>
+                                                <input
+                                                    type="date"
+                                                    class="form-control"
+                                                    id="previous_vaccination_date"
+                                                    name="previous_vaccination_date"
+                                                    max="<?= date('Y-m-d') ?>"
+                                                    value="<?= workflowH($previousVaccinationValue) ?>"
+                                                >
+                                            </div>
+                                            <div class="col-md-3">
+                                                <div class="form-check mb-2">
+                                                    <input class="form-check-input" type="checkbox" id="previous_vaccination_unknown" name="previous_vaccination_unknown" value="1">
+                                                    <label class="form-check-label" for="previous_vaccination_unknown">Unknown</label>
+                                                </div>
+                                            </div>
+                                            <div class="col-12">
+                                                <div class="alert alert-warning py-2 mb-0" id="boosterWarning" role="alert" style="display:none;"></div>
+                                                <small class="text-muted" id="boosterHint">A booster is only valid if the previous anti-rabies vaccination was within the last 5 years.</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Follow-up from another clinic -->
+                                <div class="col-12" id="outsideFollowUpPanel">
+                                    <div class="form-check">
+                                        <input
+                                            class="form-check-input"
+                                            type="checkbox"
+                                            id="outside_follow_up"
+                                            name="outside_follow_up"
+                                            value="1"
+                                            <?= $outsideClinicValue !== '' ? 'checked' : '' ?>
+                                        >
+                                        <label class="form-check-label" for="outside_follow_up">
+                                            Follow-up from another clinic (vaccination started elsewhere)
+                                        </label>
+                                    </div>
+                                    <div id="outsideFollowUpFields" class="mt-2" style="display:none;">
+                                        <div class="row g-2">
+                                            <div class="col-md-6">
+                                                <label class="form-label" for="outside_clinic_name">Clinic where the earlier doses were given</label>
+                                                <input class="form-control" id="outside_clinic_name" name="outside_clinic_name" maxlength="255" value="<?= workflowH($outsideClinicValue) ?>" placeholder="e.g. City Health Office ABTC">
+                                            </div>
+                                            <div class="col-12">
+                                                <small class="text-muted d-block mb-1">
+                                                    Tick the doses already given at the other clinic. "Actual D0 Date" above must be the original Day 0 there;
+                                                    only the remaining doses are scheduled here and no stock is used for outside doses.
+                                                </small>
+                                                <div id="outsideDoseRows" class="d-grid gap-1"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="col-md-6">
 
                                     <label
                                         class="form-label"
                                         for="active_regimen"
                                     >
-                                        Active Regimen/Product Plan
+                                        Active Regimen
                                     </label>
 
+                                    <select class="form-select" id="active_regimen" name="active_regimen" data-other-target="active_regimen_other">
+                                        <option value="">Select active regimen</option>
+                                        <?php foreach (ASSESSMENT_ACTIVE_REGIMENS as $option): ?>
+                                            <option value="<?= workflowH($option) ?>" <?= $activeRegimenValue === $option ? 'selected' : '' ?>>
+                                                <?= workflowH($option) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                        <option value="Other" <?= $activeRegimenIsOther ? 'selected' : '' ?>>Other (specify)</option>
+                                    </select>
+
                                     <input
-                                        class="form-control"
-                                        id="active_regimen"
-                                        name="active_regimen"
-                                        value="<?= workflowH(
-                                            (string)(
-                                                $selected['active_regimen']
-                                                ?? ''
-                                            )
-                                        ) ?>"
+                                        class="form-control mt-2"
+                                        id="active_regimen_other"
+                                        name="active_regimen_other"
+                                        maxlength="100"
+                                        placeholder="Specify the product plan"
+                                        value="<?= workflowH($activeRegimenIsOther ? $activeRegimenValue : '') ?>"
+                                        <?= $activeRegimenIsOther ? '' : 'style="display:none;"' ?>
                                     >
 
                                 </div>
+
+                                <script>
+                                    window.SBC_REGIMEN_STAGES = <?= json_encode($regimenStages, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+                                </script>
 
                                 <!-- Non-Anti-Rabies / One-Time Administration -->
                                 <div
@@ -4169,56 +4117,18 @@ $flash = workflowTakeFlash();
                                             class="bi bi-clipboard2-check-fill me-1"
                                         ></i>
 
-                                        Notes and Instructions
+                                        Notes
                                     </h3>
 
                                 </div>
 
-                                <div class="col-md-6">
-
-                                    <label
-                                        class="form-label"
-                                        for="important_concerns"
-                                    >
-                                        Important Concerns/Escalation
-                                    </label>
-
-                                    <textarea
-                                        class="form-control"
-                                        id="important_concerns"
-                                        name="important_concerns"
-                                        rows="2"
-                                    ><?= workflowH(
-                                        (string)(
-                                            $selected['important_concerns']
-                                            ?? ''
-                                        )
-                                    ) ?></textarea>
-
-                                </div>
-
-                                <div class="col-md-6">
-
-                                    <label
-                                        class="form-label"
-                                        for="instructions_given"
-                                    >
-                                        Instructions Given
-                                    </label>
-
-                                    <textarea
-                                        class="form-control"
-                                        id="instructions_given"
-                                        name="instructions_given"
-                                        rows="2"
-                                    ><?= workflowH(
-                                        (string)(
-                                            $selected['instructions_given']
-                                            ?? ''
-                                        )
-                                    ) ?></textarea>
-
-                                </div>
+                                <!--
+                                    "Important Concerns/Escalation" and "Instruction Given" are hidden
+                                    (redundant for the clinic). The columns are kept and existing values
+                                    are posted back unchanged so older charts are not cleared.
+                                -->
+                                <input type="hidden" name="important_concerns" value="<?= workflowH((string)($selected['important_concerns'] ?? '')) ?>">
+                                <input type="hidden" name="instructions_given" value="<?= workflowH((string)($selected['instructions_given'] ?? '')) ?>">
 
                                 <div class="col-12">
 
@@ -4515,6 +4425,258 @@ $flash = workflowTakeFlash();
 ></script>
 
 <script src="sources/sidebar.js"></script>
+<?php if ($selected): ?>
+<script>
+/*
+ * Assessment draft auto-save (per nurse and per visit, in this browser's
+ * localStorage) and clinical form behaviour. Registered before the other
+ * page scripts so a restored draft is in place before they read the form.
+ */
+document.addEventListener('DOMContentLoaded', function () {
+    const form = document.getElementById('assessmentForm');
+    if (!form) return;
+
+    const draftKey = 'sbc_assessment_draft_v1_<?= (int)$userId ?>_<?= (int)$selectedId ?>';
+    const pendingKey = 'sbc_assessment_pending_<?= (int)$userId ?>_<?= (int)$selectedId ?>';
+    const serverSavedAt = <?= !empty($selected['assessment_updated_at']) ? (int)strtotime((string)$selected['assessment_updated_at']) * 1000 : 0 ?>;
+    const lastSaveSucceeded = <?= ($flash && in_array($flash['type'], ['success', 'warning'], true)) ? 'true' : 'false' ?>;
+    const skipped = new Set(['csrf_token', 'visit_id', 'action']);
+
+    function storage(action, key, value) {
+        try {
+            if (action === 'get') return window.localStorage.getItem(key);
+            if (action === 'set') window.localStorage.setItem(key, value);
+            if (action === 'remove') window.localStorage.removeItem(key);
+        } catch (_) {}
+        return null;
+    }
+
+    function collect() {
+        const values = {};
+        Array.from(form.elements).forEach(function (el) {
+            if (!el.name || skipped.has(el.name) || el.name.startsWith('non_rabies_') || el.type === 'submit' || el.type === 'button') return;
+            values[el.name] = el.type === 'checkbox' ? el.checked : el.value;
+        });
+        return values;
+    }
+
+    function apply(values) {
+        Array.from(form.elements).forEach(function (el) {
+            if (!el.name || !(el.name in values) || el.name.startsWith('outside_dose')) return;
+            if (el.type === 'checkbox') el.checked = Boolean(values[el.name]);
+            else el.value = values[el.name];
+        });
+    }
+
+    // A successful save clears the draft for this visit.
+    let pending = null;
+    try { pending = window.sessionStorage.getItem(pendingKey); window.sessionStorage.removeItem(pendingKey); } catch (_) {}
+    if (pending && lastSaveSucceeded) storage('remove', draftKey);
+
+    let restored = null;
+    const rawDraft = storage('get', draftKey);
+    if (rawDraft) {
+        try {
+            const draft = JSON.parse(rawDraft);
+            if (draft && draft.values && Number(draft.savedAt || 0) > serverSavedAt) {
+                apply(draft.values);
+                restored = draft;
+            } else {
+                storage('remove', draftKey);
+            }
+        } catch (_) {
+            storage('remove', draftKey);
+        }
+    }
+
+    window.SBC_OUTSIDE_INITIAL = restored ? restored.values : null;
+    sbcInitClinicalForm(form);
+
+    if (restored) {
+        const banner = document.createElement('div');
+        banner.className = 'alert alert-info d-flex flex-wrap align-items-center gap-2 col-12';
+        banner.setAttribute('role', 'status');
+        const time = new Date(Number(restored.savedAt)).toLocaleString();
+        banner.innerHTML = '<i class="bi bi-cloud-check-fill"></i><span>Your unsaved draft from ' + time
+            + ' was restored. Review it, then save the assessment.</span>'
+            + '<button type="button" class="btn btn-sm btn-outline-secondary ms-auto" id="discardAssessmentDraft">Discard draft</button>';
+        form.prepend(banner);
+        document.getElementById('discardAssessmentDraft').addEventListener('click', function () {
+            storage('remove', draftKey);
+            window.location.reload();
+        });
+    }
+
+    let lastSerialized = '';
+    function saveDraft() {
+        const values = collect();
+        const serialized = JSON.stringify(values);
+        if (serialized === lastSerialized) return;
+        lastSerialized = serialized;
+        storage('set', draftKey, JSON.stringify({ savedAt: Date.now(), values: values }));
+    }
+    lastSerialized = JSON.stringify(collect());
+    let timer = null;
+    function scheduleSave() {
+        clearTimeout(timer);
+        timer = setTimeout(saveDraft, 400);
+    }
+    form.addEventListener('input', scheduleSave);
+    form.addEventListener('change', scheduleSave);
+    // Bite markers are written by script without input events.
+    setInterval(saveDraft, 5000);
+    window.addEventListener('pagehide', saveDraft);
+    document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'hidden') saveDraft();
+    });
+    form.addEventListener('submit', function () {
+        saveDraft();
+        try { window.sessionStorage.setItem(pendingKey, '1'); } catch (_) {}
+    });
+});
+
+function sbcInitClinicalForm(form) {
+    const stagesByRegimen = window.SBC_REGIMEN_STAGES || {};
+    const regimen = document.getElementById('treatment_profile');
+    const d0 = document.getElementById('d0_date');
+    const d0Label = document.getElementById('d0_date_label');
+    const routeHint = document.getElementById('regimenRouteHint');
+    const nonArv = document.getElementById('not_anti_rabies');
+    const boosterPanel = document.getElementById('boosterEligibilityPanel');
+    const previousDate = document.getElementById('previous_vaccination_date');
+    const previousUnknown = document.getElementById('previous_vaccination_unknown');
+    const boosterWarning = document.getElementById('boosterWarning');
+    const outsidePanel = document.getElementById('outsideFollowUpPanel');
+    const outsideToggle = document.getElementById('outside_follow_up');
+    const outsideFields = document.getElementById('outsideFollowUpFields');
+    const outsideRows = document.getElementById('outsideDoseRows');
+    const biteType = document.getElementById('bite_type');
+    let outsideValues = window.SBC_OUTSIDE_INITIAL || {};
+
+    // "Others (specify)" text boxes for dropdowns.
+    form.querySelectorAll('select[data-other-target]').forEach(function (select) {
+        const target = document.getElementById(select.dataset.otherTarget);
+        if (!target) return;
+        const sync = function () {
+            const isOther = select.value === 'Others' || select.value === 'Other';
+            target.style.display = isOther ? '' : 'none';
+            target.required = isOther;
+        };
+        select.addEventListener('change', sync);
+        sync();
+    });
+
+    // Non-bite and non-rabies services do not need animal details.
+    if (biteType) {
+        biteType.addEventListener('change', function () {
+            if (biteType.value !== 'Non-Bite') return;
+            [['animal_type', 'Not Applicable'], ['animal_status', 'Not Applicable'], ['bite_category', 'Not Applicable']]
+                .forEach(function (pair) {
+                    const field = document.getElementById(pair[0]);
+                    if (field && field.value === '') {
+                        field.value = pair[1];
+                        field.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                });
+        });
+    }
+
+    function routeOf(value) {
+        if (/_ID$/.test(value)) return 'Intradermal (ID)';
+        if (/_IM$/.test(value)) return 'Intramuscular (IM)';
+        return '';
+    }
+
+    function routeText(value) {
+        const route = routeOf(value);
+        if (!route) return 'Route: set by the regimen.';
+        if (route.indexOf('IM') !== -1) return 'Route: ' + route + '. IM uses a full vial each session.';
+        return 'Route: ' + route + '. ' + (/^BOOSTER/.test(value) ? 'Booster ID uses 1 site per session.' : 'Regular ID uses 2 sites per session (both arms).');
+    }
+
+    function rememberOutside() {
+        if (!outsideRows) return;
+        outsideRows.querySelectorAll('input').forEach(function (input) {
+            outsideValues[input.name] = input.type === 'checkbox' ? input.checked : input.value;
+        });
+    }
+
+    function buildOutsideRows() {
+        if (!outsideRows || !regimen) return;
+        rememberOutside();
+        const stages = stagesByRegimen[regimen.value] || [];
+        outsideRows.replaceChildren();
+        if (!stages.length) {
+            outsideRows.innerHTML = '<span class="text-muted small">Select a Vaccination Regimen first.</span>';
+            return;
+        }
+        stages.forEach(function (stage) {
+            const row = document.createElement('div');
+            row.className = 'd-flex flex-wrap align-items-center gap-2';
+            const checkName = 'outside_dose[' + stage.dose + ']';
+            const dateName = 'outside_dose_date[' + stage.dose + ']';
+            const checkId = 'outside_dose_' + stage.dose;
+            const isD0 = stage.dose === 1;
+            row.innerHTML = '<div class="form-check mb-0" style="min-width:210px">'
+                + '<input class="form-check-input" type="checkbox" value="1" id="' + checkId + '" name="' + checkName + '">'
+                + '<label class="form-check-label" for="' + checkId + '">' + stage.label + ' given at other clinic</label></div>'
+                + '<input type="date" class="form-control form-control-sm" style="max-width:180px" name="' + dateName + '"'
+                + (isD0 ? ' disabled title="Uses the original Day 0 above"' : '') + ' max="' + new Date().toISOString().slice(0, 10) + '">';
+            const check = row.querySelector('input[type="checkbox"]');
+            const date = row.querySelector('input[type="date"]');
+            check.checked = Boolean(outsideValues[checkName]);
+            date.value = isD0 ? (d0 ? d0.value : '') : (outsideValues[dateName] || '');
+            outsideRows.appendChild(row);
+        });
+    }
+
+    function syncBoosterWarning() {
+        if (!boosterWarning || !previousDate || !previousUnknown) return;
+        let message = '';
+        if (previousUnknown.checked || previousDate.value === '') {
+            message = 'Previous anti-rabies vaccination date unknown. A full PEP is needed instead of a booster.';
+        } else if (d0 && d0.value) {
+            const base = new Date(d0.value + 'T00:00:00');
+            const limit = new Date(base);
+            limit.setFullYear(base.getFullYear() - 5);
+            if (new Date(previousDate.value + 'T00:00:00') < limit) {
+                message = 'The previous anti-rabies vaccination was more than 5 years ago. A full PEP is needed instead of a booster.';
+            }
+        }
+        previousDate.disabled = previousUnknown.checked;
+        boosterWarning.textContent = message;
+        boosterWarning.style.display = message ? '' : 'none';
+    }
+
+    function syncRegimen() {
+        const antiRabies = !(nonArv && nonArv.checked);
+        const value = regimen ? regimen.value : '';
+        if (routeHint) routeHint.textContent = routeText(value);
+        if (boosterPanel) boosterPanel.style.display = antiRabies && /^BOOSTER/.test(value) ? '' : 'none';
+        if (outsidePanel) outsidePanel.style.display = antiRabies ? '' : 'none';
+        const outsideOn = antiRabies && outsideToggle && outsideToggle.checked;
+        if (outsideFields) outsideFields.style.display = outsideOn ? '' : 'none';
+        if (d0Label) d0Label.textContent = outsideOn ? 'Original Day 0 (first dose at the other clinic)' : 'Actual D0 Date';
+        buildOutsideRows();
+        syncBoosterWarning();
+    }
+
+    [regimen, nonArv, outsideToggle].forEach(function (el) {
+        // Deferred: the Not Anti-Rabies handler updates the regimen after this listener.
+        if (el) el.addEventListener('change', function () { setTimeout(syncRegimen, 0); });
+    });
+    if (d0) d0.addEventListener('change', function () {
+        const d0Row = outsideRows ? outsideRows.querySelector('input[name="outside_dose_date[1]"]') : null;
+        if (d0Row) d0Row.value = d0.value;
+        syncBoosterWarning();
+    });
+    [previousDate, previousUnknown].forEach(function (el) {
+        if (el) el.addEventListener('change', syncBoosterWarning);
+    });
+    syncRegimen();
+}
+</script>
+<?php endif; ?>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
 
@@ -4854,7 +5016,6 @@ document.addEventListener('DOMContentLoaded', function () {
     const stage = document.getElementById('biteMapStage');
     const image = document.getElementById('biteMapImage');
     const list = document.getElementById('biteMapList');
-    const label = document.getElementById('biteMarkerLabel');
     const status = document.getElementById('biteMapStatus');
     const clear = document.getElementById('biteMapClear');
     let markers;
@@ -4863,7 +5024,8 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!Array.isArray(markers) || markers.length > 30 || markers.some(m =>
             !m || typeof m.x !== 'number' || typeof m.y !== 'number' ||
             !Number.isFinite(m.x) || !Number.isFinite(m.y) ||
-            m.x < 0 || m.x > 100 || m.y < 0 || m.y > 100 || typeof m.label !== 'string'
+            m.x < 0 || m.x > 100 || m.y < 0 || m.y > 100 ||
+            (m.label !== undefined && typeof m.label !== 'string')
         )) throw new Error('Invalid saved markers');
     } catch (_) {
         status.textContent = 'Saved markers could not be read. Reload before saving this assessment.';
@@ -4883,7 +5045,8 @@ document.addEventListener('DOMContentLoaded', function () {
             pin.style.left = marker.x + '%';
             pin.style.top = marker.y + '%';
             pin.textContent = String(index + 1);
-            pin.setAttribute('aria-label', 'Remove bite marker ' + (index + 1) + ': ' + marker.label);
+            const markerName = (marker.label || '').trim() || ('Bite location ' + (index + 1));
+            pin.setAttribute('aria-label', 'Remove bite marker ' + (index + 1) + ': ' + markerName);
             pin.title = pin.getAttribute('aria-label');
             const remove = () => {
                 markers.splice(index, 1);
@@ -4893,7 +5056,7 @@ document.addEventListener('DOMContentLoaded', function () {
             stage.appendChild(pin);
             const item = document.createElement('li');
             const text = document.createElement('span');
-            text.textContent = marker.label + ' ';
+            text.textContent = markerName + ' ';
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'btn btn-outline-danger btn-sm ms-2';
@@ -4932,12 +5095,6 @@ document.addEventListener('DOMContentLoaded', function () {
             status.textContent = 'Maximum 30 markers. Remove a marker before adding another.';
             return;
         }
-        const name = label.value.trim();
-        if (!name) {
-            status.textContent = 'Enter a location label before placing a marker.';
-            label.focus();
-            return;
-        }
         const rect = image.getBoundingClientRect();
         const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
         const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
@@ -4947,21 +5104,13 @@ document.addEventListener('DOMContentLoaded', function () {
             status.textContent = 'Click on the human silhouette to place the marker.';
             return;
         }
-        // Server validates the UTF-8 byte length as well as coordinate bounds.
-        if (new TextEncoder().encode(name).length > 120) {
-            status.textContent = 'Please use a shorter location label.';
-            return;
-        }
-        markers.push({ x: Number((x * 100).toFixed(4)), y: Number((y * 100).toFixed(4)), label: name });
+        // The written site stays in Site of Bite; the dot only marks the location.
+        markers.push({ x: Number((x * 100).toFixed(4)), y: Number((y * 100).toFixed(4)), label: '' });
         render('Marker added.');
     });
     clear.addEventListener('click', () => {
         markers = [];
         render('All markers cleared.');
-    });
-    // A label is an auxiliary control; Enter must not submit the assessment.
-    label.addEventListener('keydown', event => {
-        if (event.key === 'Enter') event.preventDefault();
     });
     render();
     if (image.complete) {

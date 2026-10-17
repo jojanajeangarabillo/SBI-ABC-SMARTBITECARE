@@ -9,6 +9,8 @@ if (isset($_GET['download_generated'])) {
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/workflow_helpers.php';
+require_once 'sources/fit_to_work_certificate.php';
 
 // Check if user is logged in and is a nurse
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || $_SESSION['role_id'] != 3) {
@@ -112,14 +114,38 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'get_patient') {
                    AND v.branch_id = ?
                    AND v.is_archived = 0
                  ORDER BY
-                    COALESCE(v.date_administered, v.scheduled_date, v.created_at) DESC,
-                    v.dose_number ASC";
+                    v.case_id DESC,
+                    v.dose_number ASC,
+                    COALESCE(v.scheduled_date, v.date_administered, v.created_at) ASC,
+                    v.vaccination_id ASC";
 
     $stmt_vacc = $conn->prepare($sql_vacc);
     $stmt_vacc->bind_param("is", $patient_id, $branch_id);
     $stmt_vacc->execute();
     $vaccinations = $stmt_vacc->get_result()->fetch_all(MYSQLI_ASSOC);
     $stmt_vacc->close();
+
+    // Show doses in the order the patient receives them ("Dose 4 - D28"),
+    // using each case's vaccination regimen. Stored dose numbers are unchanged.
+    $byCase = [];
+    foreach ($vaccinations as $vaccination) {
+        $byCase[(int)$vaccination['case_id']][] = $vaccination;
+    }
+    $caseNumbers = [];
+    foreach ($cases as $caseRow) {
+        $caseNumbers[(int)$caseRow['case_id']] = (string)($caseRow['case_number'] ?? '');
+    }
+    $vaccinations = [];
+    foreach ($byCase as $caseId => $rows) {
+        $caseProfile = workflowCaseProfile($conn, (int)$caseId);
+        foreach (workflowAnnotateCaseDoses($rows, $caseProfile['profile']) as $row) {
+            $row['case_number'] = $caseNumbers[(int)$caseId] ?? '';
+            $row['regimen_label'] = $caseProfile['profile'] !== null
+                ? workflowProfileLabel($caseProfile['profile'], $caseProfile['route'])
+                : '';
+            $vaccinations[] = $row;
+        }
+    }
 
     echo json_encode([
         'success' => true,
@@ -186,6 +212,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_document']))
         $document_type = trim((string)($_POST['document_type'] ?? ''));
         $allowed_document_types = [
             'Medical Certificate',
+            FIT_TO_WORK_DOCUMENT_TYPE,
             'Referral Letter',
             'Vaccination Certificate'
         ];
@@ -271,10 +298,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_document']))
              (branch_id,document_type,document_name,file_name,file_path,file_type,file_size,uploaded_by,status)
              VALUES (?,?,?,?,?,?,?,?,?)"
         );
+        $stored_document_type = medicalDocumentStoredType($conn, $document_type);
         $insert->bind_param(
             'ssssssiis',
             $branch_id,
-            $document_type,
+            $stored_document_type,
             $document_name,
             $original_file_name,
             $database_file_path,
@@ -1105,7 +1133,7 @@ function drawMedicalCertificate(&$stream, $data, $hasLogo = false)
     $detailRows = [
         ['Date of Bite/Exposure', $data['bite_date']],
         ['Animal', $data['animal_type']],
-        ['Site of Bite/Exposure', $data['bite_location']],
+        ['Site of Bite', $data['bite_location']],
         ['Type / Category of Exposure', $data['bite_category']],
         ['Treatment Given', getTreatmentSummary($data)]
     ];
@@ -1222,7 +1250,7 @@ function drawReferralLetter(&$stream, $data, $hasLogo = false)
     $detailRows = [
         ['Date of Bite/Exposure', $data['bite_date']],
         ['Animal', $data['animal_type']],
-        ['Site of Exposure', $data['bite_location']],
+        ['Site of Bite', $data['bite_location']],
         ['Type / Category of Exposure', $data['bite_category']],
         ['Initial Assessment / Case Status', $data['case_status']],
         ['Treatment Given', getTreatmentSummary($data)]
@@ -1279,6 +1307,8 @@ function writePatientPdf($filePath, $documentType, $data)
         drawVaccinationCertificate($stream, $data, $hasLogo);
     } elseif ($documentType === 'Medical Certificate') {
         drawMedicalCertificate($stream, $data, $hasLogo);
+    } elseif ($documentType === FIT_TO_WORK_DOCUMENT_TYPE) {
+        drawFitToWorkCertificate($stream, $data, $hasLogo);
     } elseif ($documentType === 'Referral Letter') {
         drawReferralLetter($stream, $data, $hasLogo);
     } else {
@@ -1564,6 +1594,14 @@ function getStatusBadge($status)
         .status-badge.completed {
             background: #d4f0d4;
             color: #1a6e1a;
+        }
+        .status-badge.missed {
+            background: #fde2e1;
+            color: #b42318;
+        }
+        .status-badge.scheduled {
+            background: #e0ebff;
+            color: #1d4ed8;
         }
         .action-icon {
             font-size: 22px;
@@ -2179,6 +2217,16 @@ function getStatusBadge($status)
                             </div>
                         </div>
                     </div>
+
+                    <div class="document-option" onclick="selectDocument(this, 'Fit-to-Work Certificate')">
+                        <div class="d-flex align-items-center">
+                            <i class="bi bi-person-check"></i>
+                            <div>
+                                <div class="doc-title">Fit-to-Work Certificate</div>
+                                <div class="doc-desc">States the patient may return to work or school</div>
+                            </div>
+                        </div>
+                    </div>
                     
                     <div class="document-option" onclick="selectDocument(this, 'Referral Letter')">
                         <div class="d-flex align-items-center">
@@ -2414,7 +2462,7 @@ function viewPatient(patientId) {
                     '</div>' +
 
                     '<div class="col-md-3">' +
-                    '<strong>Bite Location:</strong> ' +
+                    '<strong>Site of Bite:</strong> ' +
                     escapeHtml(c.bite_location || 'N/A') +
                     '</div>' +
 
@@ -2439,89 +2487,64 @@ function viewPatient(patientId) {
                 'Vaccination History' +
                 '</h6>';
 
+            function formatHistoryDate(value) {
+                if (!value) return '—';
+                var parsed = new Date(String(value).slice(0, 10) + 'T00:00:00');
+                return isNaN(parsed)
+                    ? '—'
+                    : parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            }
+
+            // Completed = green, Missed = red, Scheduled = blue.
+            function historyStatusClass(status) {
+                var lower = String(status || '').toLowerCase();
+                if (lower === 'completed') return 'completed';
+                if (lower === 'missed') return 'missed';
+                if (lower === 'scheduled') return 'scheduled';
+                return 'ongoing';
+            }
+
             html += '<div class="table-responsive">';
-            html += '<table class="table table-sm table-bordered">';
+            html += '<table class="table table-sm table-bordered align-middle">';
             html +=
                 '<thead>' +
                 '<tr>' +
-                '<th>Vaccine</th>' +
+                '<th>Case</th>' +
                 '<th>Dose</th>' +
-                '<th>Date</th>' +
+                '<th>Vaccine</th>' +
+                '<th>Scheduled Date</th>' +
+                '<th>Date Given</th>' +
                 '<th>Status</th>' +
                 '</tr>' +
                 '</thead>';
             html += '<tbody>';
 
             vaccines.forEach(function(v) {
-                var status =
-                    v.vaccination_status ||
-                    'N/A';
-
-                var lowerStatus =
-                    status.toLowerCase();
-
-                var statusClass =
-                    (
-                        lowerStatus === 'scheduled' ||
-                        lowerStatus === 'ongoing'
-                    )
-                    ? 'ongoing'
-                    : 'completed';
-
-                var vaccinationDate =
-                    v.date_administered ||
-                    v.scheduled_date ||
-                    null;
-
-                var dateText = 'N/A';
-
-                if (vaccinationDate) {
-                    dateText =
-                        new Date(
-                            vaccinationDate
-                        ).toLocaleDateString(
-                            'en-US',
-                            {
-                                month: 'short',
-                                day: 'numeric',
-                                year: 'numeric'
-                            }
-                        );
-                }
+                var status = v.vaccination_status || 'Scheduled';
+                var caseLabel = v.case_number || ('#' + (v.case_id || ''));
 
                 html += '<tr>';
-
+                html +=
+                    '<td>' + escapeHtml(caseLabel) +
+                    (v.regimen_label ? '<div class="text-muted small">' + escapeHtml(v.regimen_label) + '</div>' : '') +
+                    '</td>';
+                html += '<td><strong>' + escapeHtml(v.dose_display || ('Dose ' + (v.dose_number || ''))) + '</strong></td>';
                 html +=
                     '<td>' +
                     escapeHtml(
-                        v.item_name ||
-                        v.vaccine_name ||
-                        'N/A'
+                        status === 'Completed'
+                            ? (v.item_name || v.vaccine_name || 'N/A')
+                            : '—'
                     ) +
                     '</td>';
-
+                html += '<td>' + escapeHtml(formatHistoryDate(v.scheduled_date)) + '</td>';
+                html += '<td>' + escapeHtml(formatHistoryDate(v.date_administered)) + '</td>';
                 html +=
                     '<td>' +
-                    escapeHtml(
-                        'Dose ' +
-                        (v.dose_number || '')
-                    ) +
-                    '</td>';
-
-                html +=
-                    '<td>' +
-                    escapeHtml(dateText) +
-                    '</td>';
-
-                html +=
-                    '<td>' +
-                    '<span class="status-badge ' +
-                    statusClass +
-                    '">' +
+                    '<span class="status-badge ' + historyStatusClass(status) + '">' +
                     escapeHtml(status) +
                     '</span>' +
                     '</td>';
-
                 html += '</tr>';
             });
 

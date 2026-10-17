@@ -3,6 +3,7 @@ session_start();
 
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/fit_to_work_certificate.php';
 
 /*
 |--------------------------------------------------------------------------
@@ -894,7 +895,7 @@ function drawMedicalCertificate(&$stream, $data, $hasLogo = false)
     $detailRows = [
         ['Date of Bite/Exposure', $data['bite_date']],
         ['Animal', $data['animal_type']],
-        ['Site of Bite/Exposure', $data['bite_location']],
+        ['Site of Bite', $data['bite_location']],
         ['Type / Category of Exposure', $data['bite_category']],
         ['Treatment Given', getTreatmentSummary($data)]
     ];
@@ -1011,7 +1012,7 @@ function drawReferralLetter(&$stream, $data, $hasLogo = false)
     $detailRows = [
         ['Date of Bite/Exposure', $data['bite_date']],
         ['Animal', $data['animal_type']],
-        ['Site of Exposure', $data['bite_location']],
+        ['Site of Bite', $data['bite_location']],
         ['Type / Category of Exposure', $data['bite_category']],
         ['Initial Assessment / Case Status', $data['case_status']],
         ['Treatment Given', getTreatmentSummary($data)]
@@ -1068,6 +1069,8 @@ function writePatientPdf($filePath, $documentType, $data)
         drawVaccinationCertificate($stream, $data, $hasLogo);
     } elseif ($documentType === 'Medical Certificate') {
         drawMedicalCertificate($stream, $data, $hasLogo);
+    } elseif ($documentType === FIT_TO_WORK_DOCUMENT_TYPE) {
+        drawFitToWorkCertificate($stream, $data, $hasLogo);
     } elseif ($documentType === 'Referral Letter') {
         drawReferralLetter($stream, $data, $hasLogo);
     } else {
@@ -1339,6 +1342,7 @@ if ($isAjax) {
             $documentType = trim((string)($_POST['document_type'] ?? ''));
             $allowedTemplates = [
                 'Medical Certificate',
+                FIT_TO_WORK_DOCUMENT_TYPE,
                 'Vaccination Certificate',
                 'Referral Letter'
             ];
@@ -1392,10 +1396,11 @@ if ($isAjax) {
                      (branch_id,document_type,document_name,file_name,file_path,file_type,file_size,uploaded_by,status)
                      VALUES (?,?,?,?,?,?,?,?,?)"
                 );
+                $storedDocumentType = medicalDocumentStoredType($conn, $documentType);
                 $insert->bind_param(
                     'ssssssiis',
                     $branch_id,
-                    $documentType,
+                    $storedDocumentType,
                     $documentName,
                     $originalFileName,
                     $filePath,
@@ -1513,6 +1518,7 @@ if ($isAjax) {
 
                 $validTypes = [
                     'Medical Certificate',
+                    FIT_TO_WORK_DOCUMENT_TYPE,
                     'Vaccination Certificate',
                     'Referral Letter',
                     'Other'
@@ -1522,7 +1528,12 @@ if ($isAjax) {
                     jsonResponse(false, 'Invalid document type.');
                 }
 
-                $where .= " AND md.document_type = ?";
+                if ($documentType === FIT_TO_WORK_DOCUMENT_TYPE) {
+                    // Before the migration these are stored as 'Other'; the name keeps the type.
+                    $where .= " AND (md.document_type = ? OR md.document_name LIKE 'Fit-to-Work Certificate%')";
+                } else {
+                    $where .= " AND md.document_type = ?";
+                }
 
                 $params[] = $documentType;
                 $types .= "s";
@@ -1686,11 +1697,16 @@ if ($isAjax) {
             }
 
             if ($documentType !== '') {
-                $validTypes = ['Medical Certificate', 'Vaccination Certificate', 'Referral Letter'];
+                $validTypes = ['Medical Certificate', FIT_TO_WORK_DOCUMENT_TYPE, 'Vaccination Certificate', 'Referral Letter'];
                 if (!in_array($documentType, $validTypes, true)) {
                     jsonResponse(false, 'Invalid document type.');
                 }
-                $where .= ' AND md.document_type = ?';
+                if ($documentType === FIT_TO_WORK_DOCUMENT_TYPE) {
+                    // Before the migration these are stored as 'Other'; the name keeps the type.
+                    $where .= " AND (md.document_type = ? OR md.document_name LIKE 'Fit-to-Work Certificate - %')";
+                } else {
+                    $where .= ' AND md.document_type = ?';
+                }
                 $params[] = $documentType;
                 $types .= 's';
             }
@@ -1793,6 +1809,7 @@ if ($isAjax) {
 
             $validTypes = [
                 'Medical Certificate',
+                FIT_TO_WORK_DOCUMENT_TYPE,
                 'Vaccination Certificate',
                 'Referral Letter',
                 'Other'
@@ -1801,6 +1818,8 @@ if ($isAjax) {
             if (!in_array($documentType, $validTypes, true)) {
                 throw new Exception('Please select a valid document type.');
             }
+            // Stored as 'Other' until migrate_fit_to_work_document.php is applied.
+            $documentType = medicalDocumentStoredType($conn, $documentType);
 
             if ($documentName === '') {
 
@@ -2052,6 +2071,7 @@ if ($isAjax) {
 
             $validTypes = [
                 'Medical Certificate',
+                FIT_TO_WORK_DOCUMENT_TYPE,
                 'Vaccination Certificate',
                 'Referral Letter',
                 'Other'
@@ -2060,6 +2080,8 @@ if ($isAjax) {
             if (!in_array($documentType, $validTypes, true)) {
                 throw new Exception('Invalid document type.');
             }
+            // Stored as 'Other' until migrate_fit_to_work_document.php is applied.
+            $documentType = medicalDocumentStoredType($conn, $documentType);
 
             if ($documentName === '') {
                 throw new Exception('Document name is required.');
@@ -3551,6 +3573,10 @@ if ($branch_id) {
                             Medical Certificate
                         </option>
 
+                        <option value="Fit-to-Work Certificate">
+                            Fit-to-Work Certificate
+                        </option>
+
                         <option value="Vaccination Certificate">
                             Vaccination Certificate
                         </option>
@@ -3911,6 +3937,7 @@ if ($branch_id) {
                         <select class="form-select-sm-custom" id="downloadTypeFilter">
                             <option value="">All Types</option>
                             <option value="Medical Certificate">Medical Certificate</option>
+                            <option value="Fit-to-Work Certificate">Fit-to-Work Certificate</option>
                             <option value="Vaccination Certificate">Vaccination Certificate</option>
                             <option value="Referral Letter">Referral Letter</option>
                         </select>
@@ -4023,6 +4050,10 @@ if ($branch_id) {
 
                             <option value="Medical Certificate">
                                 Medical Certificate
+                            </option>
+
+                            <option value="Fit-to-Work Certificate">
+                                Fit-to-Work Certificate
                             </option>
 
                             <option value="Vaccination Certificate">
@@ -4296,6 +4327,10 @@ if ($branch_id) {
                                 Medical Certificate
                             </option>
 
+                            <option value="Fit-to-Work Certificate">
+                                Fit-to-Work Certificate
+                            </option>
+
                             <option value="Vaccination Certificate">
                                 Vaccination Certificate
                             </option>
@@ -4561,6 +4596,15 @@ if ($branch_id) {
                         <div>
                             <strong>Medical Certificate</strong>
                             <span>Patient identity and the selected animal-bite case are filled automatically.</span>
+                        </div>
+                    </label>
+
+                    <label class="template-choice">
+                        <input type="radio" name="document_type" value="Fit-to-Work Certificate" required>
+                        <i class="bi bi-person-check"></i>
+                        <div>
+                            <strong>Fit-to-Work Certificate</strong>
+                            <span>States the patient may return to work or school; lists the doses given.</span>
                         </div>
                     </label>
 

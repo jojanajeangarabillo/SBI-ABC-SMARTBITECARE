@@ -7,6 +7,7 @@ $stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/forecast_training_helper.php';
+require_once 'sources/daily_inventory_helpers.php';
 require_once 'sources/notification_helper.php';
 
 /* ============================================================
@@ -240,69 +241,14 @@ function recordSupplyUsage(mysqli $conn, int $userId, string $branchId): string
             $patientLabel = ' | Patient ID: ' . $patientId;
         }
 
-        $stock = supplyStatement($conn,
-            "SELECT stock_id,batch_lot_no,quantity_available,expiration_date
-             FROM inventory_stocks
-             WHERE item_id=? AND branch_id=? AND quantity_available>0
-               AND (expiration_date IS NULL OR expiration_date>=CURDATE())
-             ORDER BY CASE WHEN expiration_date IS NULL THEN 1 ELSE 0 END,
-                      expiration_date,stock_id FOR UPDATE");
-        $stock->bind_param('is', $itemId, $branchId);
-        supplyExecute($stock);
-        $batches = $stock->get_result()->fetch_all(MYSQLI_ASSOC);
-        $stock->close();
-        $available = round(array_sum(array_map(fn($batch) => (float)$batch['quantity_available'], $batches)), 4);
-        if ($available + 0.00005 < $quantity) {
-            throw new RuntimeException('Insufficient usable stock. Available: '
-                . inventoryUsageDescription($available, $item) . '.');
-        }
-        $remaining = $quantity;
-        $batchDetails = [];
-        foreach ($batches as $batch) {
-            if ($remaining <= 0.00005) break;
-            $take = round(min((float)$batch['quantity_available'], $remaining), 4);
-            $stockId = (int)$batch['stock_id'];
-            $update = supplyStatement($conn,
-                'UPDATE inventory_stocks SET quantity_available=quantity_available-?,
-                 last_updated=CURRENT_TIMESTAMP WHERE stock_id=? AND item_id=? AND branch_id=?
-                 AND quantity_available>=?');
-            $update->bind_param('diisd', $take, $stockId, $itemId, $branchId, $take);
-            supplyExecute($update);
-            if ($update->affected_rows !== 1) throw new RuntimeException('Stock changed. Refresh and try again.');
-            $update->close();
-            $batchDetails[] = 'Stock #' . $stockId . ' / Lot '
-                . (trim((string)$batch['batch_lot_no']) ?: 'N/A') . ': '
-                . inventoryUsageDescription($take, $item);
-            $remaining = round($remaining - $take, 4);
-        }
-        if ($remaining > 0.00005) throw new RuntimeException('Unable to allocate the complete supply quantity.');
-
-        $patientsServed = $patientId > 0 ? 1 : 0;
-        $usage = supplyStatement($conn,
-            'INSERT INTO inventory_usage_history
-             (item_id,branch_id,usage_date,quantity_used,patient_count) VALUES (?,?,?,?,?)');
-        $usage->bind_param('issdi', $itemId, $branchId, $date, $quantity, $patientsServed);
-        supplyExecute($usage);
-        $usageId = (int)$conn->insert_id;
-        $usage->close();
-        $description = inventoryUsageDescription($quantity, $item);
-        $movementRemarks = $marker . 'Usage ID: ' . $usageId
-            . ' | Used: ' . $description . ' | Usage date: ' . $date . $patientLabel
-            . ' | Batches: ' . implode('; ', $batchDetails)
-            . ($remarks !== '' ? ' | Note: ' . $remarks : '');
-        $movement = supplyStatement($conn,
-            "INSERT INTO stock_transactions
-             (item_id,user_id,vaccination_id,branch_id,transaction_type,quantity,remarks,transaction_date)
-             VALUES (?,?,NULL,?,'OUT',?,?,CONCAT(?, ' ', TIME(NOW())))");
-        $movement->bind_param('iisdss', $itemId, $userId, $branchId, $quantity, $movementRemarks, $date);
-        supplyExecute($movement);
-        $movement->close();
-        $reopened = forecastTrainingUsageChanged($conn, $branchId, (int)$itemId, $date);
-        $staleReason = 'Actual medical-supply usage changed for ' . $date . '.';
-        $stale = supplyStatement($conn, 'UPDATE forecast_results SET stale_reason=? WHERE branch_id=?');
-        $stale->bind_param('ss', $staleReason, $branchId);
-        supplyExecute($stale);
-        $stale->close();
+        // Shared with Daily Inventory consumed entries (FEFO deduction, usage
+        // history, stock transaction and forecast training re-open).
+        $recorded = dailyInventoryRecordUsage(
+            $conn, $userId, $branchId, $item, $quantity, $date, $marker, $remarks, (int)$patientId
+        );
+        $usageId = $recorded['usage_id'];
+        $description = $recorded['description'];
+        $reopened = $recorded['reopened'];
         $auditText = 'Recorded supply usage: ' . $item['item_name'] . ' | ' . $description
             . ' | Date: ' . $date . $patientLabel . ' | Usage ID: ' . $usageId;
         $audit = supplyStatement($conn,

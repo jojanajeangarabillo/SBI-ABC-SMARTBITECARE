@@ -95,12 +95,12 @@ $allFollowUpsQuery = "
         v.unit_id,
         TIMESTAMPDIFF(YEAR, p.birthday, CURDATE()) as age,
         CASE 
-            WHEN v.dose_number = 1 THEN 'Day 0 (1st Dose)'
-            WHEN v.dose_number = 2 THEN 'Day 3 (2nd Dose)'
-            WHEN v.dose_number = 3 THEN 'Day 7 (3rd Dose)'
-            WHEN v.dose_number = 4 THEN 'Day 14 (4th Dose)'
-            WHEN v.dose_number = 5 THEN 'Day 21 (5th Dose)'
-            WHEN v.dose_number = 6 THEN 'Day 28 (6th Dose)'
+            WHEN v.dose_number = 1 THEN 'Day 0 (D0)'
+            WHEN v.dose_number = 2 THEN 'Day 3 (D3)'
+            WHEN v.dose_number = 3 THEN 'Day 7 (D7)'
+            WHEN v.dose_number = 4 THEN 'Day 14 (D14)'
+            WHEN v.dose_number = 5 THEN 'Day 21 (D21)'
+            WHEN v.dose_number = 6 THEN 'Day 28 (D28)'
             ELSE CONCAT('Day ', v.dose_number)
         END as dose_label,
         CASE 
@@ -125,6 +125,7 @@ $allFollowUpsQuery = "
                     SELECT MIN(vr.vaccination_id) AS vaccination_id
                     FROM vaccination_records vr
                     WHERE vr.scheduled_date IS NOT NULL
+                      AND vr.is_archived = 0
                     GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
                 ) vd ON 1 = 1
                 INNER JOIN vaccination_records v
@@ -224,6 +225,7 @@ $statsQuery = "
                     SELECT MIN(vr.vaccination_id) AS vaccination_id
                     FROM vaccination_records vr
                     WHERE vr.scheduled_date IS NOT NULL
+                      AND vr.is_archived = 0
                     GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
                 ) vd ON 1 = 1
                 INNER JOIN vaccination_records v
@@ -260,6 +262,7 @@ $calQuery = "
                     SELECT MIN(vr.vaccination_id) AS vaccination_id
                     FROM vaccination_records vr
                     WHERE vr.scheduled_date IS NOT NULL
+                      AND vr.is_archived = 0
                     GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
                 ) vd ON 1 = 1
                 INNER JOIN vaccination_records v
@@ -299,6 +302,7 @@ $upcomingQuery = "
                     SELECT MIN(vr.vaccination_id) AS vaccination_id
                     FROM vaccination_records vr
                     WHERE vr.scheduled_date IS NOT NULL
+                      AND vr.is_archived = 0
                     GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
                 ) vd ON 1 = 1
                 INNER JOIN vaccination_records v
@@ -357,6 +361,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
                     SELECT MIN(vr.vaccination_id) AS vaccination_id
                     FROM vaccination_records vr
                     WHERE vr.scheduled_date IS NOT NULL
+                      AND vr.is_archived = 0
                     GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
                 ) vd ON 1 = 1
                 INNER JOIN vaccination_records v
@@ -412,7 +417,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
     header('Content-Disposition: attachment; filename="' . $filename . '.csv"');
     
     $output = fopen('php://output', 'w');
-    fputcsv($output, ['Case No.', 'Case Number', 'Patient Name', 'Gender', 'Age', 'Contact', 'Animal Type', 'Bite Location', 'Vaccine', 'Dose', 'Scheduled Date', 'Administered Date', 'Status']);
+    fputcsv($output, ['Case No.', 'Case Number', 'Patient Name', 'Gender', 'Age', 'Contact', 'Animal Type', 'Site of Bite', 'Vaccine', 'Dose', 'Scheduled Date', 'Administered Date', 'Status']);
     
     while ($row = $exportResult->fetch_assoc()) {
         fputcsv($output, [
@@ -458,6 +463,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     SELECT MIN(vr.vaccination_id) AS vaccination_id
                     FROM vaccination_records vr
                     WHERE vr.scheduled_date IS NOT NULL
+                      AND vr.is_archived = 0
                     GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
                 ) vd ON 1 = 1
                 INNER JOIN vaccination_records v
@@ -499,6 +505,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     SELECT MIN(vr.vaccination_id) AS vaccination_id
                     FROM vaccination_records vr
                     WHERE vr.scheduled_date IS NOT NULL
+                      AND vr.is_archived = 0
                     GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
                 ) vd ON 1 = 1
                 INNER JOIN vaccination_records v
@@ -559,12 +566,12 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     v.is_final_dose,
                     TIMESTAMPDIFF(YEAR, p.birthday, CURDATE()) as age,
                     CASE 
-                        WHEN v.dose_number = 1 THEN 'Day 0 (1st Dose)'
-                        WHEN v.dose_number = 2 THEN 'Day 3 (2nd Dose)'
-                        WHEN v.dose_number = 3 THEN 'Day 7 (3rd Dose)'
-                        WHEN v.dose_number = 4 THEN 'Day 14 (4th Dose)'
-                        WHEN v.dose_number = 5 THEN 'Day 21 (5th Dose)'
-                        WHEN v.dose_number = 6 THEN 'Day 28 (6th Dose)'
+                        WHEN v.dose_number = 1 THEN 'Day 0 (D0)'
+                        WHEN v.dose_number = 2 THEN 'Day 3 (D3)'
+                        WHEN v.dose_number = 3 THEN 'Day 7 (D7)'
+                        WHEN v.dose_number = 4 THEN 'Day 14 (D14)'
+                        WHEN v.dose_number = 5 THEN 'Day 21 (D21)'
+                        WHEN v.dose_number = 6 THEN 'Day 28 (D28)'
                         ELSE CONCAT('Day ', v.dose_number)
                     END as dose_label,
                     CASE 
@@ -587,6 +594,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     SELECT MIN(vr.vaccination_id) AS vaccination_id
                     FROM vaccination_records vr
                     WHERE vr.scheduled_date IS NOT NULL
+                      AND vr.is_archived = 0
                     GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
                 ) vd ON 1 = 1
                 INNER JOIN vaccination_records v
@@ -693,6 +701,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     SELECT MIN(vr.vaccination_id) AS vaccination_id
                     FROM vaccination_records vr
                     WHERE vr.scheduled_date IS NOT NULL
+                      AND vr.is_archived = 0
                     GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
                 ) vd ON 1 = 1
                 INNER JOIN vaccination_records v
@@ -774,6 +783,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     SELECT MIN(vr.vaccination_id) AS vaccination_id
                     FROM vaccination_records vr
                     WHERE vr.scheduled_date IS NOT NULL
+                      AND vr.is_archived = 0
                     GROUP BY vr.case_id, vr.dose_number, DATE(vr.scheduled_date)
                 ) vd ON 1 = 1
                 INNER JOIN vaccination_records v
