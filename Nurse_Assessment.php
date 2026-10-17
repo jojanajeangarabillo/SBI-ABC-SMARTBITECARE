@@ -717,27 +717,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
              */
             $restartRequired = false;
             $previousCycleRows = 0;
+            $lateDecision = '';
 
             if (!$isNonRabies) {
-                $restartCheck = $conn->prepare(
-                    "SELECT MAX(DATEDIFF(CURDATE(), scheduled_date)) AS max_days_overdue
-                     FROM vaccination_records
-                     WHERE patient_id = ?
-                       AND case_id = ?
-                       AND branch_id = ?
-                       AND is_archived = 0
-                       AND vaccination_status IN ('Scheduled', 'Missed')
-                       AND scheduled_date IS NOT NULL
-                       AND scheduled_date < CURDATE()"
-                );
-                $restartCheck->bind_param('iis', $patientId, $caseId, $branchId);
-                $restartCheck->execute();
-                $restartRow = $restartCheck->get_result()->fetch_assoc();
-                $restartCheck->close();
+                /*
+                 * A dose more than 7 days overdue is NEVER restarted automatically.
+                 * The nurse chooses on this form: restart from Day 0 (archive the
+                 * old cycle) or continue the current schedule. A "continue" already
+                 * chosen on the Vaccination page is kept without asking again.
+                 */
+                $lateDoses = workflowCaseLateDoses($conn, $patientId, $caseId, $branchId);
+                if ($lateDoses['rows']) {
+                    $postedDecision = (string)($_POST['late_decision'] ?? '');
+                    $lateRemark = mb_substr(trim((string)($_POST['late_decision_remark'] ?? '')), 0, 500);
+                    $allContinue = true;
+                    foreach ($lateDoses['rows'] as $lateRow) {
+                        if ((string)$lateRow['late_decision'] !== 'continue') $allContinue = false;
+                    }
+                    if (!in_array($postedDecision, ['continue', 'restart'], true)) {
+                        if (!$allContinue) {
+                            throw new RuntimeException(
+                                'This patient has a dose ' . $lateDoses['max_days'] . ' days overdue (more than '
+                                . $catchUpWindowDays . ' days). Choose "Continue current schedule" or '
+                                . '"Restart from Day 0" in the Late Dose Decision box before saving.'
+                            );
+                        }
+                        $postedDecision = 'continue';
+                    }
+                    $lateDecision = $postedDecision;
+                    if ($lateDecision === 'restart') {
+                        $latestOverdue = (string)end($lateDoses['rows'])['scheduled_date'];
+                        if ($d0Date <= $latestOverdue) {
+                            throw new RuntimeException('Restart from Day 0: enter the new Day 0 date (the date of this re-assessment), not the old cycle\'s date.');
+                        }
+                    }
+                    $nurseName = (string)($user['username'] ?? '');
+                    foreach ($lateDoses['rows'] as $lateRow) {
+                        // Record the choice once per overdue dose (a choice already saved is not repeated).
+                        if ((string)$lateRow['late_decision'] === $lateDecision) continue;
+                        workflowRecordLateDecision($conn, (int)$lateRow['vaccination_id'], $lateDecision,
+                            (int)$lateRow['days_late'],
+                            $lateRemark !== '' ? $lateRemark : ($lateDecision === 'continue'
+                                ? 'Continued per nurse/physician decision (Assessment).' : 'Restart chosen on re-assessment.'),
+                            $userId, $branchId, [
+                                'patient_name' => $visit['full_name'], 'patient_id' => $patientId,
+                                'case_number' => $visit['case_number'], 'case_id' => $caseId,
+                                'dose_label' => workflowDoseLabel((int)$lateRow['dose_number']), 'nurse_name' => $nurseName,
+                            ]);
+                    }
+                }
 
-                $maxDaysOverdue = (int)($restartRow['max_days_overdue'] ?? 0);
-
-                if ($maxDaysOverdue > $catchUpWindowDays) {
+                if ($lateDecision === 'restart') {
                     $restartRequired = true;
 
                     /*
@@ -863,8 +893,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($isNonRabies) {
                 $message = 'Assessment saved as Not Anti-Rabies Vaccine. No anti-rabies schedule was generated.';
             } elseif ($restartRequired) {
-                $message = 'Reassessment saved. The patient was more than ' . $catchUpWindowDays
-                    . ' days late, so the previous vaccination cycle was archived and a new schedule was generated from Day 0.';
+                $message = 'Reassessment saved. As you chose, the previous vaccination cycle was archived and a new schedule was generated from Day 0.';
+            } elseif ($lateDecision === 'continue') {
+                $message = 'Assessment saved. As you chose, the current schedule continues (no restart). Record the late dose in Vaccination; the remaining doses move forward by the delay.';
             } else {
                 $message = 'Assessment saved. The anti-rabies schedule was generated from the confirmed D0 date.';
             }
@@ -1501,7 +1532,7 @@ $followupOffset =
  *      Missed - Catch-up Eligible (record late; remaining doses shift)
  *
  * More than 7 days overdue:
- *      New Cycle Required (Day 0) on the next reassessment
+ *      Nurse decision: continue the schedule or restart from Day 0
  *
  * See workflowLateDoseStatus(). Historical vaccination records are preserved.
  */
@@ -1557,7 +1588,7 @@ $overdueStmt->close();
 foreach ($overdueCases as &$overdue) {
     $lateStatus = workflowLateDoseStatus((int)$overdue['days_overdue']);
     $overdue['workflow_classification'] =
-        $lateStatus['classification'] === 'restart' ? 'restart_required' : 'catchup';
+        $lateStatus['classification'] === 'nurse_decision' ? 'restart_required' : 'catchup';
     $overdue['workflow_label'] = $lateStatus['label'];
     $overdue['workflow_description'] = $lateStatus['description'];
 }
@@ -1649,6 +1680,14 @@ if ($selectedId > 0) {
 $selectedNonRabies =
     $selected
     && (string)($selected['treatment_profile'] ?? '') === 'OTHER';
+
+// Doses of this case more than 7 days overdue: the form asks the nurse to choose.
+$selectedLateDoses = null;
+if ($selected && !$selectedNonRabies) {
+    $selectedLateDoses = workflowCaseLateDoses(
+        $conn, (int)$selected['patient_id'], (int)$selected['case_id'], $branchId
+    );
+}
 
 $nonRabiesItems = [];
 $nonRabiesAdministrations = [];
@@ -2973,7 +3012,9 @@ $flash = workflowTakeFlash();
                             <?= (int)$catchUpWindowDays ?> days
                         </strong>
 
-                        late: re-assess the patient to start a new cycle from Day 0.
+                        late: the nurse chooses to continue the current schedule (remaining
+                        doses move forward) or re-assess and restart from Day 0. The system
+                        never restarts a cycle by itself.
 
                         Previous vaccination records are archived, not deleted.
 
@@ -3086,8 +3127,8 @@ $flash = workflowTakeFlash();
                                             <?php if ($restartRequired): ?>
 
                                                 <span class="followup-status restart">
-                                                    <i class="bi bi-arrow-counterclockwise"></i>
-                                                    Restart Assessment Required
+                                                    <i class="bi bi-signpost-split"></i>
+                                                    Over <?= (int)$catchUpWindowDays ?> Days - Nurse Decision
                                                 </span>
 
                                             <?php else: ?>
@@ -3822,6 +3863,43 @@ $flash = workflowTakeFlash();
 
                                 </div>
 
+                                <?php if ($selectedLateDoses && $selectedLateDoses['rows']):
+                                    $lateChosen = (string)($_GET['late_decision'] ?? '');
+                                    $storedChoices = array_unique(array_map(static fn($r) => (string)$r['late_decision'], $selectedLateDoses['rows']));
+                                    if (!in_array($lateChosen, ['continue', 'restart'], true)) {
+                                        $lateChosen = count($storedChoices) === 1 ? (string)reset($storedChoices) : '';
+                                    }
+                                ?>
+                                <!-- Late dose (> 7 days): the nurse decides, never automatic -->
+                                <div class="col-12" id="lateDecisionPanel">
+                                    <div class="alert alert-warning mb-0">
+                                        <strong><i class="bi bi-signpost-split me-1"></i>Late Dose Decision</strong>
+                                        <p class="small mb-2">
+                                            <?php foreach ($selectedLateDoses['rows'] as $lateRow): ?>
+                                                <?= workflowH(workflowDoseLabel((int)$lateRow['dose_number'])) ?> was due
+                                                <?= workflowH(date('M d, Y', strtotime((string)$lateRow['scheduled_date']))) ?>
+                                                (<?= (int)$lateRow['days_late'] ?> days late<?= $lateRow['late_decision'] ? ', ' . workflowH(workflowLateDecisionLabel((string)$lateRow['late_decision'])) . ' chosen' : '' ?>).
+                                            <?php endforeach; ?>
+                                            This is more than <?= (int)$catchUpWindowDays ?> days. Choose how to proceed:
+                                        </p>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio" name="late_decision" id="lateDecisionContinue" value="continue" <?= $lateChosen === 'continue' ? 'checked' : '' ?> required>
+                                            <label class="form-check-label small" for="lateDecisionContinue">
+                                                <strong>Continue current schedule</strong> - keep the same Day 0; record the late dose in Vaccination and the remaining doses move forward by the delay.
+                                            </label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio" name="late_decision" id="lateDecisionRestart" value="restart" <?= $lateChosen === 'restart' ? 'checked' : '' ?>>
+                                            <label class="form-check-label small" for="lateDecisionRestart">
+                                                <strong>Restart from Day 0</strong> - set Actual D0 Date to today's re-assessment; the old cycle's records are archived (never deleted).
+                                            </label>
+                                        </div>
+                                        <input type="text" class="form-control form-control-sm mt-2" name="late_decision_remark" maxlength="500"
+                                               placeholder="Remark (optional), e.g. Continued per nurse/physician decision.">
+                                    </div>
+                                </div>
+                                <?php endif; ?>
+
                                 <!-- Booster eligibility -->
                                 <div class="col-12" id="boosterEligibilityPanel" style="display:none;">
                                     <div class="non-arv-toggle">
@@ -4533,6 +4611,23 @@ document.addEventListener('DOMContentLoaded', function () {
         saveDraft();
         try { window.sessionStorage.setItem(pendingKey, '1'); } catch (_) {}
     });
+});
+
+// Late Dose Decision: "Restart from Day 0" uses today's re-assessment as the new D0.
+document.addEventListener('DOMContentLoaded', function () {
+    const restart = document.getElementById('lateDecisionRestart');
+    const d0 = document.getElementById('d0_date');
+    if (!restart || !d0) return;
+    const originalD0 = d0.value;
+    const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    function sync() {
+        if (restart.checked && (!d0.value || d0.value < today)) d0.value = today;
+        if (!restart.checked && d0.value === today && originalD0) d0.value = originalD0;
+    }
+    document.querySelectorAll('input[name="late_decision"]').forEach(function (radio) {
+        radio.addEventListener('change', sync);
+    });
+    sync();
 });
 
 function sbcInitClinicalForm(form) {

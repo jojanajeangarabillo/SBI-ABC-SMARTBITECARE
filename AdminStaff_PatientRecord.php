@@ -216,6 +216,10 @@ function archiveAdminScheduleRows(
 }
 
 function loadDoseStageData(mysqli $conn, int $caseId, string $branchId): array {
+    // Nurse's late-dose choice (continue / restart), after migrate_late_dose_decision.php.
+    $lateSql = workflowLateDecisionReady($conn)
+        ? 'vr.late_decision, vr.late_days'
+        : 'NULL AS late_decision, NULL AS late_days';
     $stmt = $conn->prepare("
         SELECT
             vr.dose_number,
@@ -223,7 +227,8 @@ function loadDoseStageData(mysqli $conn, int $caseId, string $branchId): array {
             vr.date_administered,
             vr.vaccination_status,
             vr.remarks,
-            vr.nurse_id
+            vr.nurse_id,
+            $lateSql
         FROM vaccination_records vr
         WHERE vr.case_id = ?
           AND vr.branch_id = ?
@@ -255,8 +260,12 @@ function loadDoseStageData(mysqli $conn, int $caseId, string $branchId): array {
                 'scheduled_date' => '',
                 'administered_date' => '',
                 'status' => '',
-                'locked' => false
+                'locked' => false,
+                'late_note' => ''
             ];
+        }
+        if (!empty($row['late_decision'])) {
+            $stages[$key]['late_note'] = workflowLateDecisionLabel((string)$row['late_decision'], $row['late_days']);
         }
 
         $status = (string)($row['vaccination_status'] ?? 'Scheduled');
@@ -5072,7 +5081,7 @@ body.sidebar-collapsed .main {
                                                 <td class="patient-view-dose">${escapeHtml((data.dose_labels && data.dose_labels[d.key]) || d.label)}</td>
                                                 <td>${displayDate(stage.scheduled_date, '—')}</td>
                                                 <td>${displayDate(stage.administered_date, 'Not administered')}</td>
-                                                <td>${scheduleStatusBadge(stage.status || 'Scheduled')}</td>
+                                                <td>${scheduleStatusBadge(stage.status || 'Scheduled')}${stage.late_note ? `<div class="small text-muted mt-1">${escapeHtml(stage.late_note)}</div>` : ''}</td>
                                             </tr>
                                         `;
                                     }).join('')}

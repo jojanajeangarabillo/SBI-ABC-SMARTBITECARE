@@ -1000,7 +1000,7 @@ if (isset($_POST['submit_vaccination'])) {
     }
 
     // Validate that patient and case belong to the nurse's branch.
-    $caseCheck = $conn->prepare("SELECT p.full_name
+    $caseCheck = $conn->prepare("SELECT p.full_name, a.case_number
                                 FROM patients p
                                 INNER JOIN animal_bite_cases a ON p.patient_id = a.patient_id
                                 WHERE p.patient_id = ?
@@ -1032,6 +1032,13 @@ if (isset($_POST['submit_vaccination'])) {
     }
 
     $patient_name = $caseData['full_name'];
+    $case_number = (string)($caseData['case_number'] ?? '');
+
+    // Nurse's choice for a dose more than 7 days late (Option A: continue).
+    $late_decision = (string)($_POST['late_decision'] ?? '');
+    $late_confirmed = (string)($_POST['late_confirm'] ?? '') === '1';
+    $late_remark = mb_substr(trim((string)($_POST['late_remark'] ?? '')), 0, 500);
+    $late_decision_pending = null;
 
     $conn->begin_transaction();
 
@@ -1256,10 +1263,12 @@ if (isset($_POST['submit_vaccination'])) {
 
             /*
              * Clinic missed-dose rule: up to 7 days late, record the dose on the
-             * actual date and move the remaining doses forward by the delay.
-             * More than 7 days late, the schedule goes back to Day 0, which is
-             * done by re-assessing the patient (old records are archived).
+             * actual date and move the remaining doses forward by the delay
+             * (automatic, no prompt). More than 7 days late, the nurse chooses:
+             * Option A continue (same shift, confirmed) or Option B re-assess and
+             * restart from Day 0 (late_dose_restart below). Nothing restarts by itself.
              */
+            $late_continue_days = 0;
             if (
                 $admin_schedule_id !== null
                 && $vaccination_status === 'Completed'
@@ -1268,17 +1277,39 @@ if (isset($_POST['submit_vaccination'])) {
                 $days_late = (int)(new DateTimeImmutable((string)$scheduleRow['scheduled_date']))
                     ->diff(new DateTimeImmutable($date_administered))->format('%r%a');
                 if ($days_late > WORKFLOW_LATE_DOSE_WINDOW_DAYS) {
-                    throw new Exception(
-                        getDoseLabel($dose_number) . ' was due ' . $scheduleRow['scheduled_date'] . ' and is '
-                        . $days_late . ' days late. The clinic allows up to ' . WORKFLOW_LATE_DOSE_WINDOW_DAYS
-                        . ' days; a new vaccination cycle from Day 0 is required. Re-assess the patient in the '
-                        . 'Assessment Queue to start the new cycle (the old records are kept as history).'
-                    );
+                    // A "continue" already chosen on the Assessment page counts as confirmed.
+                    $preChosen = '';
+                    if (workflowLateDecisionReady($conn)) {
+                        $pre = $conn->prepare('SELECT late_decision FROM vaccination_records WHERE vaccination_id = ?');
+                        $pre->bind_param('i', $admin_schedule_id);
+                        $pre->execute();
+                        $preChosen = (string)($pre->get_result()->fetch_assoc()['late_decision'] ?? '');
+                        $pre->close();
+                    }
+                    if ($preChosen !== 'continue' && !($late_decision === 'continue' && $late_confirmed)) {
+                        $late_decision_pending = [
+                            'patient_id' => $patient_id,
+                            'case_id' => $case_id,
+                            'dose_number' => $dose_number,
+                            'dose_label' => getDoseLabel($dose_number),
+                            'scheduled_date' => (string)$scheduleRow['scheduled_date'],
+                            'date_administered' => $date_administered,
+                            'days_late' => $days_late,
+                        ];
+                        throw new Exception(
+                            getDoseLabel($dose_number) . ' was due ' . $scheduleRow['scheduled_date'] . ' and is '
+                            . $days_late . ' days late (more than ' . WORKFLOW_LATE_DOSE_WINDOW_DAYS
+                            . ' days). Choose Continue current schedule or Re-assess and restart from Day 0.'
+                        );
+                    }
+                    // Record the decision now unless it was already chosen on the Assessment page.
+                    $late_continue_days = $preChosen === 'continue' ? 0 : $days_late;
                 }
                 if ($days_late >= 1 && !isset($late_stage_shifts[$dose_number])) {
                     $late_stage_shifts[$dose_number] = [
                         'scheduled' => (string)$scheduleRow['scheduled_date'],
                         'days' => $days_late,
+                        'nurse_continue' => $days_late > WORKFLOW_LATE_DOSE_WINDOW_DAYS,
                     ];
                 }
             }
@@ -1328,6 +1359,15 @@ if (isset($_POST['submit_vaccination'])) {
                 }
                 $updateVaccination->close();
                 $vaccination_id = $admin_schedule_id;
+                if ($late_continue_days > 0) {
+                    workflowRecordLateDecision($conn, $admin_schedule_id, 'continue', $late_continue_days,
+                        $late_remark !== '' ? $late_remark : 'Continued per nurse/physician decision.',
+                        $user_id, $branch_id, [
+                            'patient_name' => $patient_name, 'patient_id' => $patient_id,
+                            'case_number' => $case_number, 'case_id' => $case_id,
+                            'dose_label' => getDoseLabel($dose_number), 'nurse_name' => $username,
+                        ]);
+                }
             } elseif ($admin_schedule_id !== null && $vaccination_status === 'Missed') {
                 // Keep the scheduled date and turn the existing placeholder
                 // into a missed appointment instead of creating a duplicate.
@@ -1620,7 +1660,8 @@ if (isset($_POST['submit_vaccination'])) {
                 $branch_id,
                 $shift['scheduled'],
                 (int)$shift['days'],
-                $user_id
+                $user_id,
+                !empty($shift['nurse_continue'])
             );
         }
 
@@ -1685,10 +1726,89 @@ if (isset($_POST['submit_vaccination'])) {
 
     } catch (Throwable $e) {
         $conn->rollback();
+        if ($late_decision_pending !== null) {
+            // Nothing was saved: the page shows the Continue / Restart choice.
+            echo json_encode([
+                'success' => false,
+                'late_decision_required' => true,
+                'late' => $late_decision_pending,
+                'message' => $e->getMessage(),
+            ]);
+            exit;
+        }
         error_log('Vaccination submission error: ' . $e->getMessage());
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
         exit;
     }
+}
+
+// ============================================================
+// LATE DOSE OPTION B: RE-ASSESS AND RESTART FROM DAY 0
+// ============================================================
+// Records the nurse's choice and sends her to the Assessment page. The old
+// cycle is archived there (never deleted) when she saves the re-assessment
+// with the new Day 0, exactly like the existing restart logic.
+if (isset($_POST['late_dose_restart'])) {
+    header('Content-Type: application/json');
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', (string)($_POST['csrf_token'] ?? ''))) {
+        echo json_encode(['success' => false, 'message' => 'Invalid request token. Please refresh the page and try again.']);
+        exit;
+    }
+    $patient_id = (int)($_POST['patient_id'] ?? 0);
+    $case_id = (int)($_POST['case_id'] ?? 0);
+    $dose_number = (int)($_POST['dose_number'] ?? 0);
+    $remark = mb_substr(trim((string)($_POST['late_remark'] ?? '')), 0, 500);
+    try {
+        $check = $conn->prepare("SELECT p.full_name, c.case_number
+            FROM patients p INNER JOIN animal_bite_cases c ON c.patient_id = p.patient_id
+            WHERE p.patient_id = ? AND c.case_id = ? AND c.branch_id = ? AND c.is_archived = 0 LIMIT 1");
+        $check->bind_param('iis', $patient_id, $case_id, $branch_id);
+        $check->execute();
+        $caseRow = $check->get_result()->fetch_assoc();
+        $check->close();
+        if (!$caseRow || $dose_number < 1 || $dose_number > 6) {
+            throw new RuntimeException('The selected patient/case is not an active case in your branch.');
+        }
+        $late = workflowCaseLateDoses($conn, $patient_id, $case_id, $branch_id);
+        $target = null;
+        foreach ($late['rows'] as $row) {
+            if ((int)$row['dose_number'] === $dose_number) { $target = $row; break; }
+        }
+        if ($target === null) {
+            throw new RuntimeException(getDoseLabel($dose_number) . ' is not more than ' . WORKFLOW_LATE_DOSE_WINDOW_DAYS
+                . ' days late, so no restart is needed. Record the dose normally.');
+        }
+        $conn->begin_transaction();
+        workflowRecordLateDecision($conn, (int)$target['vaccination_id'], 'restart', (int)$target['days_late'],
+            $remark, $user_id, $branch_id, [
+                'patient_name' => $caseRow['full_name'], 'patient_id' => $patient_id,
+                'case_number' => $caseRow['case_number'], 'case_id' => $case_id,
+                'dose_label' => getDoseLabel($dose_number), 'nurse_name' => $username,
+            ]);
+        $conn->commit();
+
+        $visit = $conn->prepare("SELECT visit_id FROM patient_visits
+            WHERE case_id = ? AND branch_id = ?
+              AND workflow_status IN ('Waiting for Nurse', 'Under Assessment', 'Treatment Completed')
+            ORDER BY visit_date DESC, visit_id DESC LIMIT 1");
+        $visit->bind_param('is', $case_id, $branch_id);
+        $visit->execute();
+        $visitId = (int)($visit->get_result()->fetch_assoc()['visit_id'] ?? 0);
+        $visit->close();
+        echo json_encode([
+            'success' => true,
+            'redirect' => $visitId > 0
+                ? 'Nurse_Assessment.php?visit_id=' . $visitId . '&late_decision=restart'
+                : 'Nurse_Assessment.php',
+            'message' => $visitId > 0
+                ? 'Opening the re-assessment. Save it with the new Day 0 to start the new cycle; the old records will be archived.'
+                : 'Restart chosen. The patient has no open visit yet: ask Administrative Staff to check the patient in, then re-assess from the Assessment Queue.',
+        ]);
+    } catch (Throwable $e) {
+        try { $conn->rollback(); } catch (Throwable $ignored) {}
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
 }
 
 // ============================================================
@@ -2920,6 +3040,58 @@ function getStatusBadge($status)
     </div>
 </div>
 
+<!-- Dose more than 7 days late: nurse chooses Continue or Restart -->
+<div class="modal fade" id="lateDoseModal" tabindex="-1" aria-labelledby="lateDoseModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title fs-5" id="lateDoseModalLabel">
+                    <i class="bi bi-exclamation-triangle-fill text-warning me-1"></i>
+                    Dose more than 7 days late - choose how to proceed
+                </h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-3" id="lateDoseSummary"></p>
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="border rounded p-3 h-100">
+                            <h3 class="fs-6 fw-bold">Option A - Continue the current schedule</h3>
+                            <p class="small text-muted mb-2">
+                                The dose is recorded on the actual date and every remaining scheduled dose of this case
+                                moves <strong><span id="lateContinueDays"></span> days</strong> later. No restart.
+                            </p>
+                            <label class="form-label small" for="lateDoseRemark">Remark (optional)</label>
+                            <input type="text" class="form-control form-control-sm mb-2" id="lateDoseRemark" maxlength="500">
+                            <div class="form-check small mb-2">
+                                <input class="form-check-input" type="checkbox" id="lateContinueConfirm">
+                                <label class="form-check-label" for="lateContinueConfirm">
+                                    I confirm continuing the current schedule (nurse/physician decision).
+                                </label>
+                            </div>
+                            <button type="button" class="btn btn-primary btn-sm" id="lateContinueBtn" disabled>
+                                <i class="bi bi-check2-circle me-1"></i>Continue and Record Dose
+                            </button>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="border rounded p-3 h-100">
+                            <h3 class="fs-6 fw-bold">Option B - Re-assess and restart from Day 0</h3>
+                            <p class="small text-muted mb-2">
+                                Opens the patient's re-assessment. When you save it with the new Day 0, a new cycle
+                                starts and the old cycle's records are archived for history (never deleted).
+                            </p>
+                            <button type="button" class="btn btn-outline-danger btn-sm" id="lateRestartBtn">
+                                <i class="bi bi-arrow-counterclockwise me-1"></i>Go to Re-assessment
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="modal fade confirm-modal" id="logoutConfirmModal" tabindex="-1"
      aria-labelledby="logoutConfirmModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
@@ -3924,18 +4096,36 @@ function submitVaccination() {
         return;
     }
     
+    lastVaccinationSubmission = { pid: pid, cid: cid, items: vaccineItems };
+    postVaccination(null);
+}
+
+// Payload of the last save, reused when the nurse confirms a late-dose choice.
+let lastVaccinationSubmission = null;
+
+function postVaccination(lateChoice) {
+    var sub = lastVaccinationSubmission;
+    if (!sub) return;
     var btn = document.getElementById('submitVaccinationBtn');
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Saving...'; }
-    
     var formData = new FormData();
     formData.append('submit_vaccination', '1');
     formData.append('csrf_token', csrfToken);
-    formData.append('patient_id', pid);
-    formData.append('case_id', cid);
-    formData.append('vaccine_items', JSON.stringify(vaccineItems));
-    
+    formData.append('patient_id', sub.pid);
+    formData.append('case_id', sub.cid);
+    formData.append('vaccine_items', JSON.stringify(sub.items));
+    if (lateChoice) {
+        formData.append('late_decision', 'continue');
+        formData.append('late_confirm', '1');
+        formData.append('late_remark', lateChoice.remark || '');
+    }
+
     fetch('Nurse_Vaccination.php', { method: 'POST', body: formData })
         .then(r => r.json()).then(data => {
+            if (data.late_decision_required && data.late) {
+                openLateDoseModal(data.late);
+                return;
+            }
             if (data.success) {
                 showAlert(data.message, 'success');
                 setTimeout(() => { 
@@ -3948,6 +4138,53 @@ function submitVaccination() {
         }).catch(e => { showAlert('Error saving vaccination records. Please try again.', 'danger'); console.error(e); })
         .finally(() => { if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-check-circle me-2"></i> Save Vaccination'; } });
 }
+
+// Dose more than 7 days late: Option A continue (confirm + optional remark)
+// or Option B re-assess and restart from Day 0. Nothing is saved until chosen.
+let lateDoseModal = null;
+let pendingLateDose = null;
+function openLateDoseModal(late) {
+    pendingLateDose = late;
+    document.getElementById('lateDoseSummary').textContent =
+        late.dose_label + ' was due ' + late.scheduled_date + ' and is being given on ' + late.date_administered
+        + ': ' + late.days_late + ' days late (more than 7 days).';
+    document.getElementById('lateContinueDays').textContent = late.days_late;
+    document.getElementById('lateContinueConfirm').checked = false;
+    document.getElementById('lateDoseRemark').value = 'Continued per nurse/physician decision.';
+    document.getElementById('lateContinueBtn').disabled = true;
+    lateDoseModal = lateDoseModal || new bootstrap.Modal(document.getElementById('lateDoseModal'));
+    lateDoseModal.show();
+}
+document.addEventListener('DOMContentLoaded', function () {
+    const confirmBox = document.getElementById('lateContinueConfirm');
+    if (!confirmBox) return;
+    confirmBox.addEventListener('change', function () {
+        document.getElementById('lateContinueBtn').disabled = !confirmBox.checked;
+    });
+    document.getElementById('lateContinueBtn').addEventListener('click', function () {
+        if (!confirmBox.checked) return;
+        lateDoseModal.hide();
+        postVaccination({ remark: document.getElementById('lateDoseRemark').value.trim() });
+    });
+    document.getElementById('lateRestartBtn').addEventListener('click', function () {
+        if (!pendingLateDose) return;
+        if (!confirm('Re-assess this patient and restart the vaccination cycle from Day 0? The old records will be archived (not deleted) when you save the re-assessment.')) return;
+        const fd = new FormData();
+        fd.append('late_dose_restart', '1');
+        fd.append('csrf_token', csrfToken);
+        fd.append('patient_id', pendingLateDose.patient_id);
+        fd.append('case_id', pendingLateDose.case_id);
+        fd.append('dose_number', pendingLateDose.dose_number);
+        fd.append('late_remark', document.getElementById('lateDoseRemark').value.trim());
+        fetch('Nurse_Vaccination.php', { method: 'POST', body: fd })
+            .then(r => r.json()).then(data => {
+                lateDoseModal.hide();
+                if (!data.success) { showAlert(data.message || 'Unable to record the restart choice.', 'danger'); return; }
+                showAlert(data.message, 'info');
+                setTimeout(() => { window.location.href = data.redirect; }, 1200);
+            }).catch(() => showAlert('Unable to record the restart choice. Please try again.', 'danger'));
+    });
+});
 
 function resetForm() {
     document.getElementById('patientSelect').value = '';

@@ -1474,7 +1474,7 @@ $todayDisplay = date('l, F j, Y');
                                                 $followupDays = (int)$followup['days_overdue'];
                                                 $followupBadge = $followupDays <= 0
                                                     ? 'Due Today'
-                                                    : ($followupDays <= WORKFLOW_LATE_DOSE_WINDOW_DAYS ? 'Catch-up (≤' . WORKFLOW_LATE_DOSE_WINDOW_DAYS . 'd)' : 'New cycle (Day 0)');
+                                                    : ($followupDays <= WORKFLOW_LATE_DOSE_WINDOW_DAYS ? 'Catch-up (≤' . WORKFLOW_LATE_DOSE_WINDOW_DAYS . 'd)' : 'Over ' . WORKFLOW_LATE_DOSE_WINDOW_DAYS . 'd - nurse decides');
                                             ?>
                                             <span class="mini-badge danger" title="<?php echo htmlspecialchars(workflowLateDoseStatus($followupDays)['description']); ?>"><?php echo htmlspecialchars($followupBadge); ?></span>
                                         </div>

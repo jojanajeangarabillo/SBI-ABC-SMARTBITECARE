@@ -71,8 +71,10 @@ function workflowNotifyRole(mysqli $conn, string $branchId, int $roleId, string 
 /**
  * Clinic rule: a patient may return up to 7 days late for a dose. Within that
  * window the dose is recorded on the actual date and every remaining dose moves
- * forward by the same delay. More than 7 days late starts a new cycle from Day 0
- * (old records are archived, never deleted).
+ * forward by the same delay, automatically. More than 7 days late, the nurse
+ * chooses: continue the current schedule (same shift, confirmed with an optional
+ * remark) or re-assess and restart from Day 0 (old records are archived, never
+ * deleted). The system never restarts a cycle by itself.
  */
 const WORKFLOW_LATE_DOSE_WINDOW_DAYS = 7;
 
@@ -295,7 +297,11 @@ function workflowStoredProfile(mysqli $conn, string $profile): string
 
 /**
  * Classify a dose that is $daysLate days past its scheduled date.
- * 'on_time' (0 or early), 'catchup' (1-7 days), 'restart' (more than 7 days).
+ * 'on_time' (0 or early), 'catchup' (1-7 days), 'nurse_decision' (more than 7 days).
+ *
+ * More than 7 days late is never restarted automatically: the nurse chooses to
+ * continue the current schedule (remaining doses shift by the delay) or to
+ * re-assess and restart from Day 0. See workflowRecordLateDecision().
  */
 function workflowLateDoseStatus(int $daysLate): array
 {
@@ -309,9 +315,110 @@ function workflowLateDoseStatus(int $daysLate): array
             'description' => $daysLate . ' day' . ($daysLate === 1 ? '' : 's') . ' late. Record the dose on the actual date; '
                 . 'the remaining doses move forward by the same number of days (allowed up to ' . $window . ' days late).'];
     }
-    return ['classification' => 'restart', 'label' => 'New Cycle Required (Day 0)',
-        'description' => $daysLate . ' days late, more than the ' . $window . '-day limit. Re-assess the patient: '
-            . 'a new vaccination cycle starts from Day 0 and the old records are archived for history.'];
+    return ['classification' => 'nurse_decision', 'label' => 'Over ' . $window . ' Days Late - Nurse Decision',
+        'description' => $daysLate . ' days late, more than the ' . $window . '-day limit. The nurse chooses: continue the '
+            . 'current schedule (the dose is recorded on the actual date and the remaining doses move forward), or re-assess '
+            . 'and restart from Day 0 (the old records are archived for history).'];
+}
+
+/** True once sources/migrate_late_dose_decision.php has added the decision columns. */
+function workflowLateDecisionReady(mysqli $conn): bool
+{
+    return workflowColumnExists($conn, 'vaccination_records', 'late_decision');
+}
+
+/** Display text for a stored decision, e.g. "Continued current schedule (12 days late)". */
+function workflowLateDecisionLabel(?string $decision, $days = null): string
+{
+    $decision = strtolower(trim((string)$decision));
+    if ($decision === '') return '';
+    $text = $decision === 'continue' ? 'Continued current schedule' : 'Restarted from Day 0';
+    return $text . ((int)$days > 0 ? ' (' . (int)$days . ' days late)' : '');
+}
+
+/**
+ * Unfinished dose placeholders of the ACTIVE cycle that are more than the
+ * 7-day window overdue (as of $asOf, default today). Outside doses and
+ * archived cycles are excluded. Returns ['max_days' => int, 'rows' => [...]]
+ * where each row has vaccination_id, dose_number, scheduled_date, days_late
+ * and late_decision (NULL before the migration or when not chosen yet).
+ */
+function workflowCaseLateDoses(mysqli $conn, int $patientId, int $caseId, string $branchId, ?string $asOf = null): array
+{
+    $asOf = $asOf ?? date('Y-m-d');
+    $decisionSql = workflowLateDecisionReady($conn) ? 'late_decision' : 'NULL';
+    $stmt = $conn->prepare(
+        "SELECT vaccination_id, dose_number, scheduled_date,
+                DATEDIFF(?, scheduled_date) AS days_late, $decisionSql AS late_decision
+         FROM vaccination_records
+         WHERE patient_id = ? AND case_id = ? AND branch_id = ? AND is_archived = 0
+           AND vaccination_status IN ('Scheduled', 'Missed')
+           AND scheduled_date IS NOT NULL
+           AND DATEDIFF(?, scheduled_date) > ?
+         ORDER BY scheduled_date ASC, vaccination_id ASC"
+    );
+    $window = WORKFLOW_LATE_DOSE_WINDOW_DAYS;
+    $stmt->bind_param('siissi', $asOf, $patientId, $caseId, $branchId, $asOf, $window);
+    $stmt->execute();
+    $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+    $max = 0;
+    foreach ($rows as $row) $max = max($max, (int)$row['days_late']);
+    return ['max_days' => $max, 'rows' => $rows];
+}
+
+/**
+ * Store the nurse's choice for a dose more than 7 days late on its
+ * vaccination record and write the audit entry (patient, case, dose, days
+ * late, option chosen, nurse). The choice is also appended to remarks so
+ * pages that only show remarks display it. $context holds patient_name,
+ * patient_id, case_number, case_id, dose_label and nurse_name.
+ */
+function workflowRecordLateDecision(
+    mysqli $conn,
+    int $vaccinationId,
+    string $decision,
+    int $daysLate,
+    string $remark,
+    int $userId,
+    string $branchId,
+    array $context
+): void {
+    if (!in_array($decision, ['continue', 'restart'], true)) {
+        throw new RuntimeException('Choose Continue current schedule or Restart from Day 0.');
+    }
+    $remark = mb_substr(trim($remark), 0, 500);
+    $note = 'Late dose (' . $daysLate . ' days): ' . ($decision === 'continue'
+        ? 'nurse chose to continue the current schedule'
+        : 'nurse chose to re-assess and restart from Day 0')
+        . ($remark !== '' ? ' - ' . $remark : '');
+    if (workflowLateDecisionReady($conn)) {
+        $stmt = $conn->prepare(
+            "UPDATE vaccination_records
+             SET late_decision = ?, late_days = ?, late_decision_remark = NULLIF(?, ''),
+                 late_decision_by = ?, late_decision_at = NOW(),
+                 remarks = CONCAT_WS(' | ', NULLIF(remarks, ''), ?)
+             WHERE vaccination_id = ? AND branch_id = ?"
+        );
+        $stmt->bind_param('sisisis', $decision, $daysLate, $remark, $userId, $note, $vaccinationId, $branchId);
+    } else {
+        $stmt = $conn->prepare(
+            "UPDATE vaccination_records SET remarks = CONCAT_WS(' | ', NULLIF(remarks, ''), ?)
+             WHERE vaccination_id = ? AND branch_id = ?"
+        );
+        $stmt->bind_param('sis', $note, $vaccinationId, $branchId);
+    }
+    $stmt->execute();
+    $stmt->close();
+    workflowAudit($conn, $userId, $branchId,
+        'Late dose decision: ' . strtoupper($decision === 'continue' ? 'Continue current schedule' : 'Restart from Day 0')
+            . ' | Patient: ' . ($context['patient_name'] ?? '') . ' (ID: ' . (int)($context['patient_id'] ?? 0) . ')'
+            . ' | Case: ' . ($context['case_number'] ?? '') . ' (ID: ' . (int)($context['case_id'] ?? 0) . ')'
+            . ' | Dose: ' . ($context['dose_label'] ?? '')
+            . ' | Days late: ' . $daysLate
+            . ' | Nurse: ' . ($context['nurse_name'] ?? ('User ' . $userId))
+            . ($remark !== '' ? ' | Remark: ' . $remark : ''),
+        'Vaccination Follow-up');
 }
 
 /** Scheduled dates that have passed become Missed. Completed records are not touched. */
@@ -341,6 +448,8 @@ function workflowMarkMissedSchedules(mysqli $conn, string $branchId, int $userId
  * Move every remaining (not yet given) dose of a case forward by $delayDays
  * after a dose scheduled on $originalDate was given late. Shifted dates that
  * are still in the past stay Missed; the others become Scheduled again.
+ * Up to 7 days this is automatic; beyond that only when the nurse chose to
+ * continue the current schedule ($nurseChoseContinue).
  * Returns the number of dose rows moved.
  */
 function workflowShiftRemainingSchedule(
@@ -350,9 +459,11 @@ function workflowShiftRemainingSchedule(
     string $branchId,
     string $originalDate,
     int $delayDays,
-    int $userId
+    int $userId,
+    bool $nurseChoseContinue = false
 ): int {
-    if ($delayDays < 1 || $delayDays > WORKFLOW_LATE_DOSE_WINDOW_DAYS) {
+    // More than 7 days is shifted only after the nurse chose "Continue current schedule".
+    if ($delayDays < 1 || ($delayDays > WORKFLOW_LATE_DOSE_WINDOW_DAYS && !$nurseChoseContinue)) {
         return 0;
     }
     $note = 'Moved ' . $delayDays . ' day' . ($delayDays === 1 ? '' : 's') . ' later because the dose due '

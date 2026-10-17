@@ -216,7 +216,7 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
             $ruleText = 'Can still come back until ' . date('M d, Y', strtotime($row['next_schedule'] . ' +' . WORKFLOW_LATE_DOSE_WINDOW_DAYS . ' days'))
                 . '; the remaining doses will move forward.';
         } else {
-            $ruleText = 'More than ' . WORKFLOW_LATE_DOSE_WINDOW_DAYS . ' days late: a new vaccination cycle from Day 0 is needed after nurse re-assessment.';
+            $ruleText = 'More than ' . WORKFLOW_LATE_DOSE_WINDOW_DAYS . ' days late: when the patient returns, the nurse decides to continue the current schedule or re-assess and restart from Day 0.';
         }
         $message = "🚨 <strong>{$patientInfo}</strong> is {$daysOverdue} day" . ($daysOverdue > 1 ? 's' : '') . " overdue for {$row['dose_label']} (scheduled {$missedScheduleLabel}) (Case: {$row['case_no']}). {$ruleText}";
         $type = 'overdue';
