@@ -234,15 +234,16 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
         FROM animal_bite_cases c
         INNER JOIN vaccination_records v ON c.case_id = v.case_id AND c.branch_id = v.branch_id
         INNER JOIN patients p ON c.patient_id = p.patient_id
-        LEFT JOIN registry_records r ON c.case_id = r.case_id
+        LEFT JOIN registry_records r ON c.case_id = r.case_id AND r.is_archived = 0
         WHERE c.branch_id = ?
-        AND c.is_archived = 0
-        AND c.case_status <> 'Completed'
-        AND v.is_archived = 0
-        AND v.item_id IS NULL
-        AND v.scheduled_date IS NOT NULL
-        AND v.vaccination_status IN ('Scheduled', 'Missed')
-        AND v.scheduled_date < CURDATE()
+        AND c.patient_id = v.patient_id
+        AND " . workflowMissedDoseCondition('v', 'c', 'p') . "
+        -- one alert per missed dose (same rule as every dashboard count)
+        AND v.vaccination_id = (
+            SELECT MIN(one.vaccination_id) FROM vaccination_records one
+            WHERE one.case_id = v.case_id AND one.dose_number = v.dose_number
+              AND one.is_archived = 0 AND one.vaccination_status IN ('Scheduled', 'Missed')
+        )
         ORDER BY v.scheduled_date ASC
     ";
     $stmt = $conn->prepare($overdueQuery);

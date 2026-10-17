@@ -676,7 +676,8 @@ function generateVaccinationReport($branchId, $startDate = null, $endDate = null
     $scheduled = array_reduce($vaccinations, function($carry, $v) {
         return $carry + ($v['vaccination_status'] == 'Scheduled' ? 1 : 0);
     }, 0);
-    $missed = $total - $completed - $scheduled;
+    // Missed doses use the one shared definition (same number as the dashboards).
+    $missed = workflowMissedDoseCounts($conn, (string)$branchId)['doses'];
     $finalDoses = array_reduce($vaccinations, function($carry, $v) {
         return $carry + ($v['is_final_dose'] ? 1 : 0);
     }, 0);
@@ -685,7 +686,7 @@ function generateVaccinationReport($branchId, $startDate = null, $endDate = null
         'Total Vaccinations' => $total,
         'Completed' => $completed,
         'Scheduled' => $scheduled,
-        'Missed' => $missed,
+        'Missed doses (today)' => $missed,
         'Final Doses' => $finalDoses
     ]);
     

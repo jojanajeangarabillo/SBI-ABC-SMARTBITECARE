@@ -502,6 +502,91 @@ function workflowRecordLateDecision(
         'Vaccination Follow-up');
 }
 
+/**
+ * ONE definition of a "missed dose", used by every calendar, dashboard,
+ * report and notification count:
+ *   a dose (dose_number >= 1) of an active, non-archived vaccination cycle
+ *   (case not archived and still Ongoing, patient not archived) whose
+ *   scheduled date is before today and that is marked Missed or still
+ *   Scheduled, and was never completed (no Completed row for the same case
+ *   and dose). Archived/restarted cycles and doses given at another clinic
+ *   (stored as Completed) never count.
+ * The number means DOSES (one per case + dose); the patient count is also
+ * returned for pages that show "N patients".
+ * Aliases: $v vaccination_records, $c animal_bite_cases, $p patients.
+ */
+function workflowMissedDoseCondition(string $v = 'vr', string $c = 'c', string $p = 'p'): string
+{
+    return "($v.is_archived = 0
+        AND $v.dose_number >= 1
+        AND $v.scheduled_date IS NOT NULL
+        AND $v.scheduled_date < CURDATE()
+        AND $v.vaccination_status IN ('Scheduled', 'Missed')
+        AND COALESCE($v.vaccine_name, '') NOT LIKE '%Default%'
+        AND COALESCE($c.is_archived, 0) = 0
+        AND $c.case_status = 'Ongoing'
+        AND COALESCE($p.is_archived, 0) = 0
+        AND NOT EXISTS (
+            SELECT 1 FROM vaccination_records missed_done
+            WHERE missed_done.case_id = $v.case_id
+              AND missed_done.dose_number = $v.dose_number
+              AND missed_done.is_archived = 0
+              AND missed_done.vaccination_status = 'Completed'
+        ))";
+}
+
+/** FROM/JOIN clause matching workflowMissedDoseCondition('vr', 'c', 'p'). */
+function workflowMissedDoseFromSql(): string
+{
+    return "FROM vaccination_records vr
+        INNER JOIN animal_bite_cases c ON c.case_id = vr.case_id
+            AND c.patient_id = vr.patient_id AND c.branch_id = vr.branch_id
+        INNER JOIN patients p ON p.patient_id = vr.patient_id";
+}
+
+/** Missed doses and patients for one branch: ['doses' => int, 'patients' => int]. */
+function workflowMissedDoseCounts(mysqli $conn, string $branchId): array
+{
+    $stmt = $conn->prepare(
+        'SELECT COUNT(DISTINCT vr.case_id, vr.dose_number) AS doses, COUNT(DISTINCT vr.patient_id) AS patients '
+        . workflowMissedDoseFromSql() . ' WHERE vr.branch_id = ? AND ' . workflowMissedDoseCondition()
+    );
+    $stmt->bind_param('s', $branchId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc() ?: [];
+    $stmt->close();
+    return ['doses' => (int)($row['doses'] ?? 0), 'patients' => (int)($row['patients'] ?? 0)];
+}
+
+/**
+ * Missed doses per branch (every branch listed, zero included) plus the
+ * all-branch total, which is always the sum of the branches.
+ */
+function workflowMissedDoseCountsByBranch(mysqli $conn): array
+{
+    $branches = [];
+    $result = $conn->query('SELECT branch_id, branch_name FROM branches ORDER BY branch_id');
+    while ($row = $result->fetch_assoc()) {
+        $branches[(string)$row['branch_id']] = ['branch_name' => (string)$row['branch_name'], 'doses' => 0, 'patients' => 0];
+    }
+    $result = $conn->query(
+        'SELECT vr.branch_id, COUNT(DISTINCT vr.case_id, vr.dose_number) AS doses, COUNT(DISTINCT vr.patient_id) AS patients '
+        . workflowMissedDoseFromSql() . ' WHERE ' . workflowMissedDoseCondition() . ' GROUP BY vr.branch_id'
+    );
+    while ($row = $result->fetch_assoc()) {
+        $id = (string)$row['branch_id'];
+        $branches[$id] = ($branches[$id] ?? ['branch_name' => $id]) + ['doses' => 0, 'patients' => 0];
+        $branches[$id]['doses'] = (int)$row['doses'];
+        $branches[$id]['patients'] = (int)$row['patients'];
+    }
+    $total = ['doses' => 0, 'patients' => 0];
+    foreach ($branches as $branch) {
+        $total['doses'] += $branch['doses'];
+        $total['patients'] += $branch['patients'];
+    }
+    return ['branches' => $branches, 'total' => $total];
+}
+
 /** Scheduled dates that have passed become Missed. Completed records are not touched. */
 function workflowMarkMissedSchedules(mysqli $conn, string $branchId, int $userId): int
 {

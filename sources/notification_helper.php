@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/forecast_notification_helper.php';
+require_once __DIR__ . '/workflow_helpers.php';
 
 function getUnreadNotificationCount($conn, $user_id)
 {
@@ -88,35 +89,9 @@ function getAdminStaffNotificationCount(mysqli $conn, $branch_id, ?int $user_id 
         $stmt->close();
     }
 
-    // 2. Overdue vaccinations
-    $query = "
-        SELECT COUNT(*) AS total
-        FROM animal_bite_cases c
-        INNER JOIN vaccination_records v
-            ON c.case_id = v.case_id
-           AND c.branch_id = v.branch_id
-        WHERE c.branch_id = ?
-          AND c.is_archived = 0
-          AND c.case_status <> 'Completed'
-          AND v.is_archived = 0
-          AND v.item_id IS NULL
-          AND v.scheduled_date IS NOT NULL
-          AND v.vaccination_status IN ('Scheduled', 'Missed')
-          AND v.scheduled_date < CURDATE()
-    ";
-
-    $stmt = $conn->prepare($query);
-
-    if ($stmt) {
-        $stmt->bind_param("s", $branch_id);
-
-        if ($stmt->execute()) {
-            $row = $stmt->get_result()->fetch_assoc();
-            $count += (int)($row['total'] ?? 0);
-        }
-
-        $stmt->close();
-    }
+    // 2. Missed doses - the one shared definition used by every calendar,
+    //    dashboard and report (workflowMissedDoseCondition).
+    $count += workflowMissedDoseCounts($conn, (string)$branch_id)['doses'];
 
     // 3. Incomplete patient records
     $query = "

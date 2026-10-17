@@ -2,6 +2,7 @@
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/workflow_helpers.php';
 
 // Check if user is logged in and is an admin staff
 if (
@@ -44,6 +45,11 @@ if (!$branch_id) {
 
 // Get Admin Staff notification count
 $notification_count = getAdminStaffNotificationCount($conn, $branch_id);
+
+// One shared definition of a missed dose (sources/workflow_helpers.php), so the
+// Calendar shows the same number as every dashboard for this branch.
+$missedCond = workflowMissedDoseCondition('v', 'c', 'p');
+$missedShared = workflowMissedDoseCounts($conn, (string)$branch_id);
 
 
 // ----------------------------------------------------------------------
@@ -105,15 +111,15 @@ $allFollowUpsQuery = "
         END as dose_label,
         CASE 
             WHEN v.vaccination_status = 'Completed' THEN 'Completed'
-            WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 'Overdue'
+            WHEN {$missedCond} THEN 'Missed'
             WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 'Today'
             WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 'Pending'
-            WHEN v.vaccination_status = 'Missed' THEN 'Missing'
+            WHEN v.vaccination_status = 'Missed' THEN 'Missed'
             ELSE v.vaccination_status
         END as display_status,
         CASE 
             WHEN v.vaccination_status = 'Completed' THEN 1
-            WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 2
+            WHEN {$missedCond} THEN 2
             WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 3
             WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 4
             ELSE 5
@@ -169,13 +175,13 @@ if ($filterStatus != 'all') {
     if ($filterStatus == 'completed') {
         $whereConditions[] = "v.vaccination_status = 'Completed'";
     } elseif ($filterStatus == 'overdue') {
-        $whereConditions[] = "v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled'";
+        $whereConditions[] = "{$missedCond}";
     } elseif ($filterStatus == 'today') {
         $whereConditions[] = "v.scheduled_date = CURDATE() AND v.vaccination_status = 'Scheduled'";
     } elseif ($filterStatus == 'pending') {
         $whereConditions[] = "v.scheduled_date > CURDATE() AND v.vaccination_status = 'Scheduled'";
     } elseif ($filterStatus == 'missing') {
-        $whereConditions[] = "v.vaccination_status = 'Missed'";
+        $whereConditions[] = "{$missedCond}";
     }
 }
 
@@ -216,7 +222,7 @@ $statsQuery = "
     SELECT 
         COUNT(DISTINCT c.case_id) as total,
         SUM(CASE WHEN v.vaccination_status = 'Completed' THEN 1 ELSE 0 END) as completed,
-        SUM(CASE WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue,
+        SUM(CASE WHEN {$missedCond} THEN 1 ELSE 0 END) as overdue,
         SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 1 ELSE 0 END) as today,
         SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 1 ELSE 0 END) as pending,
         SUM(CASE WHEN v.vaccination_status = 'Missed' THEN 1 ELSE 0 END) as missing
@@ -232,6 +238,7 @@ $statsQuery = "
                     ON v.vaccination_id = vd.vaccination_id
                     AND c.case_id = v.case_id
                     AND c.branch_id = v.branch_id
+    INNER JOIN patients p ON p.patient_id = c.patient_id
     WHERE c.branch_id = ?
     AND v.scheduled_date IS NOT NULL
 ";
@@ -243,10 +250,10 @@ $stats = $statsResult->fetch_assoc();
 
 $totalCount = $stats['total'] ?? 0;
 $completedCount = $stats['completed'] ?? 0;
-$overdueCount = $stats['overdue'] ?? 0;
+$overdueCount = $missedShared['doses'];
 $todayCount = $stats['today'] ?? 0;
 $pendingCount = $stats['pending'] ?? 0;
-$missingCount = $stats['missing'] ?? 0;
+$missingCount = $missedShared['doses'];
 
 // ----------------------------------------------------------------------
 // GET CALENDAR DATA FOR CURRENT MONTH
@@ -255,7 +262,7 @@ $calQuery = "
     SELECT 
         DATE(v.scheduled_date) as schedule_date,
         COUNT(DISTINCT c.case_id) as count,
-        SUM(CASE WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue_count,
+        SUM(CASE WHEN {$missedCond} THEN 1 ELSE 0 END) as overdue_count,
         SUM(CASE WHEN v.vaccination_status = 'Completed' THEN 1 ELSE 0 END) as completed_count
     FROM animal_bite_cases c
     INNER JOIN (
@@ -269,6 +276,7 @@ $calQuery = "
                     ON v.vaccination_id = vd.vaccination_id
                     AND c.case_id = v.case_id
                     AND c.branch_id = v.branch_id
+    INNER JOIN patients p ON p.patient_id = c.patient_id
     WHERE c.branch_id = ?
     AND v.scheduled_date IS NOT NULL
     AND YEAR(v.scheduled_date) = ?
@@ -309,6 +317,7 @@ $upcomingQuery = "
                     ON v.vaccination_id = vd.vaccination_id
                     AND c.case_id = v.case_id
                     AND c.branch_id = v.branch_id
+    INNER JOIN patients p ON p.patient_id = c.patient_id
     WHERE c.branch_id = ?
     AND v.scheduled_date IS NOT NULL
     AND v.vaccination_status = 'Scheduled'
@@ -350,10 +359,10 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
             v.vaccination_status,
             CASE 
                 WHEN v.vaccination_status = 'Completed' THEN 'Completed'
-                WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 'Overdue'
+                WHEN {$missedCond} THEN 'Missed'
                 WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 'Today'
                 WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 'Pending'
-                WHEN v.vaccination_status = 'Missed' THEN 'Missing'
+                WHEN v.vaccination_status = 'Missed' THEN 'Missed'
                 ELSE v.vaccination_status
             END as display_status
         FROM animal_bite_cases c
@@ -391,13 +400,13 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
         if ($exportStatus == 'completed') {
             $exportQuery .= " AND v.vaccination_status = 'Completed'";
         } elseif ($exportStatus == 'overdue') {
-            $exportQuery .= " AND v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled'";
+            $exportQuery .= " AND {$missedCond}";
         } elseif ($exportStatus == 'today') {
             $exportQuery .= " AND v.scheduled_date = CURDATE() AND v.vaccination_status = 'Scheduled'";
         } elseif ($exportStatus == 'pending') {
             $exportQuery .= " AND v.scheduled_date > CURDATE() AND v.vaccination_status = 'Scheduled'";
         } elseif ($exportStatus == 'missing') {
-            $exportQuery .= " AND v.vaccination_status = 'Missed'";
+            $exportQuery .= " AND {$missedCond}";
         }
     }
     
@@ -454,7 +463,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 SELECT 
                     COUNT(DISTINCT c.case_id) as total,
                     SUM(CASE WHEN v.vaccination_status = 'Completed' THEN 1 ELSE 0 END) as completed,
-                    SUM(CASE WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue,
+                    SUM(CASE WHEN {$missedCond} THEN 1 ELSE 0 END) as overdue,
                     SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 1 ELSE 0 END) as today,
                     SUM(CASE WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 1 ELSE 0 END) as pending,
                     SUM(CASE WHEN v.vaccination_status = 'Missed' THEN 1 ELSE 0 END) as missing
@@ -470,6 +479,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     ON v.vaccination_id = vd.vaccination_id
                     AND c.case_id = v.case_id
                     AND c.branch_id = v.branch_id
+                INNER JOIN patients p ON p.patient_id = c.patient_id
                 WHERE c.branch_id = ?
                 AND v.scheduled_date IS NOT NULL
             ";
@@ -483,10 +493,11 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 'success' => true,
                 'total' => $stats['total'] ?? 0,
                 'completed' => $stats['completed'] ?? 0,
-                'overdue' => $stats['overdue'] ?? 0,
+                'overdue' => $missedShared['doses'],
                 'today' => $stats['today'] ?? 0,
                 'pending' => $stats['pending'] ?? 0,
-                'missing' => $stats['missing'] ?? 0
+                'missing' => $missedShared['doses'],
+                'missed_patients' => $missedShared['patients']
             ]);
             break;
             
@@ -498,7 +509,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 SELECT 
                     DATE(v.scheduled_date) as schedule_date,
                     COUNT(DISTINCT c.case_id) as count,
-                    SUM(CASE WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 1 ELSE 0 END) as overdue_count,
+                    SUM(CASE WHEN {$missedCond} THEN 1 ELSE 0 END) as overdue_count,
                     SUM(CASE WHEN v.vaccination_status = 'Completed' THEN 1 ELSE 0 END) as completed_count
                 FROM animal_bite_cases c
                 INNER JOIN (
@@ -512,6 +523,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     ON v.vaccination_id = vd.vaccination_id
                     AND c.case_id = v.case_id
                     AND c.branch_id = v.branch_id
+                INNER JOIN patients p ON p.patient_id = c.patient_id
                 WHERE c.branch_id = ?
                 AND v.scheduled_date IS NOT NULL
                 AND YEAR(v.scheduled_date) = ?
@@ -576,15 +588,15 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     END as dose_label,
                     CASE 
                         WHEN v.vaccination_status = 'Completed' THEN 'Completed'
-                        WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 'Overdue'
+                        WHEN {$missedCond} THEN 'Missed'
                         WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 'Today'
                         WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 'Pending'
-                        WHEN v.vaccination_status = 'Missed' THEN 'Missing'
+                        WHEN v.vaccination_status = 'Missed' THEN 'Missed'
                         ELSE v.vaccination_status
                     END as display_status,
                     CASE 
                         WHEN v.vaccination_status = 'Completed' THEN 1
-                        WHEN v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled' THEN 2
+                        WHEN {$missedCond} THEN 2
                         WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date = CURDATE() THEN 3
                         WHEN v.vaccination_status = 'Scheduled' AND v.scheduled_date > CURDATE() THEN 4
                         ELSE 5
@@ -629,13 +641,13 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 if ($status == 'completed') {
                     $query .= " AND v.vaccination_status = 'Completed'";
                 } elseif ($status == 'overdue') {
-                    $query .= " AND v.scheduled_date < CURDATE() AND v.vaccination_status = 'Scheduled'";
+                    $query .= " AND {$missedCond}";
                 } elseif ($status == 'today') {
                     $query .= " AND v.scheduled_date = CURDATE() AND v.vaccination_status = 'Scheduled'";
                 } elseif ($status == 'pending') {
                     $query .= " AND v.scheduled_date > CURDATE() AND v.vaccination_status = 'Scheduled'";
                 } elseif ($status == 'missing') {
-                    $query .= " AND v.vaccination_status = 'Missed'";
+                    $query .= " AND {$missedCond}";
                 }
             }
             
@@ -2460,8 +2472,8 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
 
                 <div class="stat-card overdue" onclick="applyStatusFilter('overdue')">
                     <div class="stat-number" id="overdueCount"><?php echo $overdueCount; ?></div>
-                    <div class="stat-label">Overdue</div>
-                    <div class="stat-sub">Missed schedule</div>
+                    <div class="stat-label">Missed Doses</div>
+                    <div class="stat-sub"><?php echo (int)$missedShared['patients']; ?> patient(s) - past due, not given</div>
                     <i class="bi bi-exclamation-triangle-fill stat-icon"></i>
                 </div>
 
@@ -2605,13 +2617,10 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                             Pending <span class="badge-count pending-badge" id="filterPendingCount"><?php echo $pendingCount; ?></span>
                         </button>
                         <button class="tab-btn <?php echo $filterStatus == 'overdue' ? 'active' : ''; ?>" data-filter="overdue" onclick="applyStatusFilter('overdue')">
-                            Overdue <span class="badge-count overdue-badge" id="filterOverdueCount"><?php echo $overdueCount; ?></span>
+                            Missed <span class="badge-count overdue-badge" id="filterOverdueCount"><?php echo $overdueCount; ?></span>
                         </button>
                         <button class="tab-btn <?php echo $filterStatus == 'completed' ? 'active' : ''; ?>" data-filter="completed" onclick="applyStatusFilter('completed')">
                             Completed <span class="badge-count" style="background:var(--success);" id="filterCompletedCount"><?php echo $completedCount; ?></span>
-                        </button>
-                        <button class="tab-btn <?php echo $filterStatus == 'missing' ? 'active' : ''; ?>" data-filter="missing" onclick="applyStatusFilter('missing')">
-                            Missing <span class="badge-count" style="background:#6c757d;" id="filterMissingCount"><?php echo $missingCount; ?></span>
                         </button>
                     </div>
                     <div class="record-info">
@@ -2654,7 +2663,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                                 $statusLabel = $record['display_status'] ?? 'Pending';
                                 if ($statusLabel == 'Completed') $statusClass = 'completed-badge';
                                 elseif ($statusLabel == 'Missing') $statusClass = 'missing-badge';
-                                elseif ($statusLabel == 'Overdue') $statusClass = 'overdue-badge';
+                                elseif ($statusLabel == 'Missed') $statusClass = 'overdue-badge';
                                 elseif ($statusLabel == 'Today') $statusClass = 'today-badge';
                                 
                                 $patientInfo = $record['patient_name'] . ' (' . ($record['age'] ?? 'N/A') . 'y)';
@@ -3200,7 +3209,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         records.forEach(record => {
             const statusClass = record.display_status === 'Completed' ? 'completed-badge' :
                                record.display_status === 'Missing' ? 'missing-badge' :
-                               record.display_status === 'Overdue' ? 'overdue-badge' :
+                               record.display_status === 'Missed' ? 'overdue-badge' :
                                record.display_status === 'Today' ? 'today-badge' : 'pending-badge';
             
             const patientInfo = record.patient_name + ' (' + (record.age || 'N/A') + 'y)';
