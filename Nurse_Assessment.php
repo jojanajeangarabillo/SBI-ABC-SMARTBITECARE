@@ -1207,6 +1207,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // ========================================================
         // COMPLETE CHART + SEND TO REGISTRY
         // ========================================================
+        } elseif ($action === 'send_registry' && in_array($visit['workflow_status'], ['For Registry', 'Registered'], true)) {
+            // Second click or resubmitted form: nothing is sent again.
+            workflowFlash('info', 'This chart was already sent to Administrative Staff for registry.');
+
         } elseif ($action === 'send_registry') {
             if (!in_array(
                 $visit['workflow_status'],
@@ -1273,26 +1277,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $update->execute();
             $update->close();
 
-            $message =
-                $visit['full_name']
-                . ' (Case '
-                . $visit['case_number']
-                . ') is ready for registry verification.';
-
-            workflowNotifyRole(
+            // One notification per active Admin Staff of this branch; the
+            // source key makes a double click or a resubmitted form harmless.
+            $visitDateStmt = $conn->prepare('SELECT visit_date FROM patient_visits WHERE visit_id = ?');
+            $visitDateStmt->bind_param('i', $visitId);
+            $visitDateStmt->execute();
+            $visitDate = (string)($visitDateStmt->get_result()->fetch_assoc()['visit_date'] ?? date('Y-m-d'));
+            $visitDateStmt->close();
+            $doseLabel = workflowVisitDoseLabel($conn, (int)$visit['case_id'], $branchId, $visitDate);
+            $nurseName = (string)($user['username'] ?? 'Nurse');
+            $message = 'Chart ready for registry: ' . $visit['full_name']
+                . ' – Case ' . ($visit['case_number'] ?: 'N/A')
+                . ' – Dose ' . preg_replace('/^Dose\s+/', '', $doseLabel)
+                . ', sent by Nurse ' . $nurseName . '.';
+            $notified = workflowNotifyRoleOnce(
                 $conn,
                 $branchId,
                 4,
                 'Chart Ready for Registry',
                 $message,
-                'registry'
+                'registry',
+                'registry_visit_' . $visitId
             );
 
             workflowAudit(
                 $conn,
                 $userId,
                 $branchId,
-                'Signed chart and sent visit ' . $visitId . ' for registry',
+                'Signed chart and sent visit ' . $visitId . ' for registry | Patient: ' . $visit['full_name']
+                    . ' | Case: ' . ($visit['case_number'] ?: 'N/A') . ' | Dose: ' . $doseLabel
+                    . ' | Admin Staff notified: ' . $notified,
                 'Clinical Assessment'
             );
 

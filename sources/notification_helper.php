@@ -33,13 +33,31 @@ function getUnreadNotificationCount($conn, $user_id)
 
     return (int)($row['unread_count'] ?? 0);
 }
-function getAdminStaffNotificationCount(mysqli $conn, $branch_id):int
+function getAdminStaffNotificationCount(mysqli $conn, $branch_id, ?int $user_id = null):int
 {
     if ($branch_id === null || $branch_id === '') {
         return 0;
     }
 
     $count = 0;
+
+    // 0. Unread stored notifications sent to this Admin Staff member
+    //    (e.g. "Chart Ready for Registry" from the Nurse).
+    $user_id = $user_id ?? (int)($_SESSION['user_id'] ?? 0);
+    if ($user_id > 0) {
+        $stmt = $conn->prepare(
+            "SELECT COUNT(*) AS total FROM notifications
+             WHERE user_id = ? AND is_read = 0 AND notification_type = 'registry'
+               AND source_key LIKE 'registry_visit_%'"
+        );
+        if ($stmt) {
+            $stmt->bind_param('i', $user_id);
+            if ($stmt->execute()) {
+                $count += (int)($stmt->get_result()->fetch_assoc()['total'] ?? 0);
+            }
+            $stmt->close();
+        }
+    }
 
     // 1. Upcoming vaccination schedules
     $query = "

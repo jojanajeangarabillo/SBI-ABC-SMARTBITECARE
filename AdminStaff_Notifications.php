@@ -67,6 +67,50 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
     $today = date('Y-m-d');
     $now = date('Y-m-d H:i:s');
 
+    // ------------------------------------------------------------------
+    // 0. CHARTS SENT FOR REGISTRY BY THE NURSE (stored notifications)
+    // ------------------------------------------------------------------
+    // Unread ones always show; read ones stay visible for 30 days.
+    $currentUserId = (int)($_SESSION['user_id'] ?? 0);
+    $registryStmt = $conn->prepare(
+        "SELECT notification_id, title, message, source_key, is_read, created_at
+         FROM notifications
+         WHERE user_id = ? AND notification_type = 'registry'
+           AND source_key LIKE 'registry_visit_%'
+           AND (is_read = 0 OR created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY))
+         ORDER BY created_at DESC
+         LIMIT 100"
+    );
+    if ($registryStmt) {
+        $registryStmt->bind_param('i', $currentUserId);
+        $registryStmt->execute();
+        foreach ($registryStmt->get_result()->fetch_all(MYSQLI_ASSOC) as $row) {
+            $visitId = preg_match('/^registry_visit_(\d+)$/', (string)$row['source_key'], $m) ? (int)$m[1] : 0;
+            $notifId = 'db_' . (int)$row['notification_id'];
+            $notifications[] = [
+                'id' => $notifId,
+                'type' => 'registry',
+                'icon' => 'bi-journal-check',
+                'icon_class' => 'info',
+                'title' => htmlspecialchars((string)$row['title'], ENT_QUOTES, 'UTF-8'),
+                'message' => htmlspecialchars((string)$row['message'], ENT_QUOTES, 'UTF-8'),
+                'date' => $row['created_at'],
+                'time' => date('h:i A', strtotime((string)$row['created_at'])),
+                'link' => 'AdminStaff_Registry.php?' . http_build_query(array_filter([
+                    'visit_id' => $visitId ?: null,
+                    'notification' => $notifId,
+                ])),
+                'link_text' => 'Open Registry',
+                'read' => (int)$row['is_read'] === 1,
+                'badge' => (int)$row['is_read'] === 1 ? 'Read' : 'For Registry',
+                'badge_class' => 'info',
+                'action' => 'open_registry',
+                'case_id' => null
+            ];
+        }
+        $registryStmt->close();
+    }
+
     // IMPORTANT:
     // $notification['date'] is the date the notification should appear in the
     // notification feed. Future appointment/schedule dates must NOT be used
@@ -522,7 +566,7 @@ $totalPages = ceil($totalNotifications / $limit);
 $paginatedNotifications = array_slice($allNotifications, $offset, $limit);
 
 // Count unread notifications (all are considered unread since we're generating them dynamically)
-$unreadCount = count($allNotifications);
+$unreadCount = count(array_filter($allNotifications, static fn($n) => empty($n['read'])));
 
 // ----------------------------------------------------------------------
 // HANDLE AJAX REQUESTS FOR REAL-TIME UPDATES
@@ -546,7 +590,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             $paginated = array_slice($notifs, $notifOffset, $notifLimit);
             
             // Count unread
-            $unread = count($notifs);
+            $unread = count(array_filter($notifs, static fn($n) => empty($n['read'])));
             
             echo json_encode([
                 'success' => true,
@@ -559,13 +603,28 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             break;
             
         case 'mark_all_read':
-            // Since notifications are generated dynamically, we just return success
+            // Generated notifications are tracked per session; stored registry
+            // notifications are marked read in the database.
+            $markAll = $conn->prepare("UPDATE notifications SET is_read = 1
+                WHERE user_id = ? AND notification_type = 'registry' AND is_read = 0");
+            $markAllUser = (int)$user_id;
+            $markAll->bind_param('i', $markAllUser);
+            $markAll->execute();
+            $markAll->close();
             echo json_encode(['success' => true, 'message' => 'All notifications marked as read']);
             break;
             
         case 'mark_read':
             // Mark a single notification as read (for dynamic notifications, we just track in session)
-            $notifId = isset($_GET['id']) ? $_GET['id'] : '';
+            $notifId = isset($_GET['id']) ? (string)$_GET['id'] : '';
+            if (preg_match('/^db_(\d+)$/', $notifId, $dbMatch)) {
+                $markOne = $conn->prepare('UPDATE notifications SET is_read = 1 WHERE notification_id = ? AND user_id = ?');
+                $dbNotificationId = (int)$dbMatch[1];
+                $markUser = (int)$user_id;
+                $markOne->bind_param('ii', $dbNotificationId, $markUser);
+                $markOne->execute();
+                $markOne->close();
+            }
             if (!isset($_SESSION['read_notifications'])) {
                 $_SESSION['read_notifications'] = [];
             }
@@ -1811,6 +1870,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                         </button>
                         <ul class="dropdown-menu" id="filterMenu">
                             <li><a class="dropdown-item <?php echo $filter == 'all' ? 'active' : ''; ?>" data-filter="all" href="#">All</a></li>
+                            <li><a class="dropdown-item <?php echo $filter == 'registry' ? 'active' : ''; ?>" data-filter="registry" href="#">🗂️ For Registry</a></li>
                             <li><a class="dropdown-item <?php echo $filter == 'urgent' ? 'active' : ''; ?>" data-filter="urgent" href="#">⚠️ Urgent</a></li>
                             <li><a class="dropdown-item <?php echo $filter == 'upcoming' ? 'active' : ''; ?>" data-filter="upcoming" href="#">📅 Upcoming</a></li>
                             <li><a class="dropdown-item <?php echo $filter == 'overdue' ? 'active' : ''; ?>" data-filter="overdue" href="#">🚨 Overdue</a></li>
@@ -1856,7 +1916,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                         }
                         echo '<div class="notification-day"><h5>' . $displayDate . '</h5></div>';
                     }
-                    $isRead = in_array($notification['id'], $readNotifications);
+                    $isRead = !empty($notification['read']) || in_array($notification['id'], $readNotifications);
                 ?>
                 <div class="notification-card <?php echo $isRead ? 'read' : 'unread'; ?>"
                      data-id="<?php echo htmlspecialchars($notification['id'], ENT_QUOTES, 'UTF-8'); ?>"
@@ -2088,7 +2148,8 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             edit_patient: fallbackLabel && fallbackLabel.toLowerCase().includes('schedule')
                 ? 'Continue to Add Schedule'
                 : 'Continue to Update Record',
-            view_philhealth: 'Open PhilHealth Workflow'
+            view_philhealth: 'Open PhilHealth Workflow',
+            open_registry: 'Open Registry Queue'
         };
         return labels[action] || (fallbackLabel ? 'Open ' + fallbackLabel.replace(/^View\s+/i, '') : 'Open Record');
     }
@@ -2370,7 +2431,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                                                new Date(notif.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
                             html += `<div class="notification-day"><h5>${displayDate}</h5></div>`;
                         }
-                        const isRead = readNotifications.includes(notif.id);
+                        const isRead = notif.read === true || readNotifications.includes(notif.id);
                         const cardClass = isRead ? 'read' : 'unread';
                         const btnClass = isRead ? 'marked' : '';
                         const btnText = isRead ? 'Read' : 'Mark Read';

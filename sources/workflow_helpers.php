@@ -69,6 +69,87 @@ function workflowNotifyRole(mysqli $conn, string $branchId, int $roleId, string 
 }
 
 /**
+ * Notify every active Admin Staff of the branch once per $sourceKey. The
+ * notifications table has a unique (user_id, source_key) key, so a double
+ * click or a resubmitted form never creates a second row. Returns the number
+ * of notifications created by this call.
+ */
+function workflowNotifyRoleOnce(
+    mysqli $conn,
+    string $branchId,
+    int $roleId,
+    string $title,
+    string $message,
+    string $type,
+    string $sourceKey
+): int {
+    $hasKey = workflowColumnExists($conn, 'notifications', 'source_key');
+    $find = $conn->prepare('SELECT user_id FROM users WHERE branch_id = ? AND role_id = ? AND status = "Active"');
+    $find->bind_param('si', $branchId, $roleId);
+    $find->execute();
+    $users = $find->get_result()->fetch_all(MYSQLI_ASSOC);
+    $find->close();
+    if ($hasKey) {
+        $insert = $conn->prepare(
+            'INSERT IGNORE INTO notifications (user_id, title, message, notification_type, source_key, is_read, created_at)
+             VALUES (?, ?, ?, ?, ?, 0, NOW())'
+        );
+    } else {
+        // Without the source_key column, skip users who already have this exact message.
+        $insert = $conn->prepare(
+            'INSERT INTO notifications (user_id, title, message, notification_type, is_read, created_at)
+             SELECT ?, ?, ?, ?, 0, NOW() FROM DUAL
+             WHERE NOT EXISTS (SELECT 1 FROM notifications WHERE user_id = ? AND notification_type = ? AND message = ?)'
+        );
+    }
+    $created = 0;
+    foreach ($users as $row) {
+        $uid = (int)$row['user_id'];
+        if ($hasKey) {
+            $insert->bind_param('issss', $uid, $title, $message, $type, $sourceKey);
+        } else {
+            $insert->bind_param('isssiss', $uid, $title, $message, $type, $uid, $type, $message);
+        }
+        $insert->execute();
+        $created += max(0, (int)$insert->affected_rows);
+    }
+    $insert->close();
+    return $created;
+}
+
+/**
+ * Patient-facing label of the dose(s) handled on a visit, for example
+ * "Dose 2 - D3". Uses the doses completed on the visit date; otherwise the
+ * next dose still to give; "One-time" for non-anti-rabies products.
+ */
+function workflowVisitDoseLabel(mysqli $conn, int $caseId, string $branchId, string $visitDate): string
+{
+    $profile = workflowCaseProfile($conn, $caseId);
+    $stmt = $conn->prepare(
+        "SELECT dose_number, vaccination_status, date_administered, scheduled_date
+         FROM vaccination_records
+         WHERE case_id = ? AND branch_id = ? AND is_archived = 0
+         ORDER BY dose_number, vaccination_id"
+    );
+    $stmt->bind_param('is', $caseId, $branchId);
+    $stmt->execute();
+    $rows = workflowAnnotateCaseDoses($stmt->get_result()->fetch_all(MYSQLI_ASSOC), $profile['profile']);
+    $stmt->close();
+    $given = [];
+    $next = '';
+    foreach ($rows as $row) {
+        if ($row['vaccination_status'] === 'Completed' && (string)$row['date_administered'] === $visitDate) {
+            $given[$row['dose_display']] = true;
+        } elseif ($next === '' && in_array($row['vaccination_status'], ['Scheduled', 'Missed'], true)) {
+            $next = (string)$row['dose_display'];
+        }
+    }
+    if ($given) return implode(', ', array_keys($given));
+    if (($profile['profile'] ?? '') === 'OTHER') return 'One-time';
+    return $next !== '' ? $next . ' (next due)' : 'Not recorded';
+}
+
+/**
  * Clinic rule: a patient may return up to 7 days late for a dose. Within that
  * window the dose is recorded on the actual date and every remaining dose moves
  * forward by the same delay, automatically. More than 7 days late, the nurse
