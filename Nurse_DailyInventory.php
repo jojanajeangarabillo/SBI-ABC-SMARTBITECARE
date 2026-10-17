@@ -452,142 +452,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $itemId = dailyInventoryItemId($_POST['item_id'] ?? '');
         $inventoryDate = is_string($_POST['inventory_date'] ?? null) ? trim($_POST['inventory_date']) : '';
-        dailyInventoryAssertDate($conn, $inventoryDate);
-        $quantities = [];
-        foreach (['beginning_stock' => 'Beginning stock', 'delivery' => 'Delivery',
-                  'pull_out' => 'Pull-out', 'actual_count' => 'Actual physical count'] as $field => $label) {
-            try {
-                $quantities[$field] = stockQuantityParse($_POST[$field] ?? '', true);
-            } catch (InvalidArgumentException $e) {
-                throw new RuntimeException($label . ': ' . $e->getMessage());
-            }
+        $values = [];
+        foreach (['beginning_stock', 'delivery', 'pull_out', 'actual_count'] as $field) {
+            $values[$field] = is_string($_POST[$field] ?? null) ? $_POST[$field] : '';
         }
-        $remarks = is_string($_POST['remarks'] ?? null) ? trim($_POST['remarks']) : '';
-        if (strlen($remarks) > 2000) {
-            throw new RuntimeException('The remarks are too long. Keep the note within 500 characters.');
-        }
+        $remarks = is_string($_POST['remarks'] ?? null) ? $_POST['remarks'] : '';
         $contextToken = is_string($_POST['closing_context_token'] ?? null) ? $_POST['closing_context_token'] : '';
-        if (!preg_match('/\A[a-f0-9]{64}\z/', $contextToken)) {
-            throw new RuntimeException('Load the selected item and date before submitting the closing.');
-        }
-
-        $conn->begin_transaction();
-        forecastTrainingRevision($conn, $branchId, true);
-        $context = dailyInventoryContext($conn, $branchId, $itemId, $inventoryDate, true);
-        if (!hash_equals($context['context_token'], $contextToken)) {
+        try {
+            // Same validation, closing and training_dataset sync as the whole-day sheet.
+            $saved = dailyInventorySaveClosing(
+                $conn, $branchId, $userId, $itemId, $inventoryDate, $values, $remarks, $contextToken,
+                is_string($_POST['extra_consumed'] ?? null) ? $_POST['extra_consumed'] : '',
+                is_string($_POST['extra_consumed_remarks'] ?? null) ? $_POST['extra_consumed_remarks'] : ''
+            );
+        } catch (DailyInventoryStaleContextException $stale) {
             $needsNewCount = true;
-            throw new RuntimeException('Recorded usage or a closing changed. Reload the selected item and date, verify the opening and movements, and enter a fresh physical count.');
+            throw $stale;
         }
-        $item = $context['item'];
-        $consumedScaled = stockQuantityParse($context['consumed'], true);
-        $computedScaled = $quantities['beginning_stock'] + $quantities['delivery']
-            - $consumedScaled - $quantities['pull_out'];
-        if ($computedScaled < 0) {
-            throw new RuntimeException('Computed ending cannot be negative. Check beginning stock, delivery, recorded usage, and pull-out.');
-        }
-        if ($computedScaled > STOCK_QUANTITY_MAX_SCALED) {
-            throw new RuntimeException('The resulting stock quantity exceeds the supported range.');
-        }
-        $varianceScaled = $quantities['actual_count'] - $computedScaled;
-        if ($varianceScaled !== 0 && $remarks === '') {
-            throw new RuntimeException('Explain the difference between physical and computed stock in Remarks.');
-        }
-        // Counts may contain legacy fractions, including sites; never round them.
-        $beginning = stockQuantityDecimal($quantities['beginning_stock']);
-        $delivery = stockQuantityDecimal($quantities['delivery']);
-        $pullOut = stockQuantityDecimal($quantities['pull_out']);
-        $actual = stockQuantityDecimal($quantities['actual_count']);
-        $consumed = stockQuantityDecimal($consumedScaled);
-        $computed = stockQuantityDecimal($computedScaled);
-        $variance = stockQuantityDecimal($varianceScaled);
-
-        $stmt = $conn->prepare(
-            "INSERT INTO daily_inventory_closings
-             (
-                branch_id,
-                item_id,
-                inventory_date,
-                beginning_stock,
-                delivery,
-                consumed,
-                pull_out,
-                computed_ending,
-                actual_count,
-                variance,
-                remarks,
-                status,
-                submitted_by,
-                submitted_at
-             )
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,'Submitted',?,NOW())
-             ON DUPLICATE KEY UPDATE
-                beginning_stock=VALUES(beginning_stock),
-                delivery=VALUES(delivery),
-                consumed=VALUES(consumed),
-                pull_out=VALUES(pull_out),
-                computed_ending=VALUES(computed_ending),
-                actual_count=VALUES(actual_count),
-                variance=VALUES(variance),
-                remarks=VALUES(remarks),
-                status='Submitted',
-                submitted_by=VALUES(submitted_by),
-                submitted_at=NOW(),
-                reviewed_by=NULL,
-                reviewed_at=NULL"
-        );
-
-        $stmt->bind_param(
-            'sisssssssssi',
-            $branchId,
-            $itemId,
-            $inventoryDate,
-            $beginning,
-            $delivery,
-            $consumed,
-            $pullOut,
-            $computed,
-            $actual,
-            $variance,
-            $remarks,
-            $userId
-        );
-
-        $stmt->execute();
-        $stmt->close();
-
-        $trainingSynced = forecastTrainingSyncClosing(
-            $conn,
-            $branchId,
-            $itemId,
-            $inventoryDate
-        );
-
-        workflowAudit(
-            $conn,
-            $userId,
-            $branchId,
-            'Submitted daily inventory for ' .
-                $item['item_name'] . ' on ' . $inventoryDate .
-                ' | Beginning: ' .
-                inventoryUsageDescription((float)$beginning, $item) .
-                ' | Delivery: ' .
-                inventoryUsageDescription((float)$delivery, $item) .
-                ' | Consumed: ' .
-                inventoryUsageDescription((float)$consumed, $item) .
-                ' | Pull-out: ' .
-                inventoryUsageDescription((float)$pullOut, $item) .
-                ' | Actual: ' .
-                inventoryUsageDescription((float)$actual, $item),
-            'Daily Inventory'
-        );
-
-        $conn->commit();
+        $trainingSynced = $saved['training_synced'];
         unset($_SESSION['daily_inventory_form']);
 
         workflowFlash(
             'success',
             'Daily inventory submitted. Consumption came from recorded usage. ' .
-                'This closing records counts; it does not deduct stock again.' .
+                ($saved['manual_usage'] !== null
+                    ? 'The consumed quantity you entered (' . $saved['manual_usage']['description']
+                      . ') was recorded as usage and deducted from stock once. '
+                    : 'This closing records counts; it does not deduct stock again.') .
                 (
                     $trainingSynced
                         ? ' The forecasting dataset was updated; forecasts ' .
@@ -603,7 +494,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $_SESSION['daily_inventory_form'] = [];
-        foreach (['item_id', 'inventory_date', 'beginning_stock', 'delivery', 'pull_out', 'actual_count', 'remarks'] as $field) {
+        foreach (['item_id', 'inventory_date', 'beginning_stock', 'delivery', 'pull_out', 'actual_count', 'remarks',
+                  'extra_consumed', 'extra_consumed_remarks'] as $field) {
             $_SESSION['daily_inventory_form'][$field] = is_string($_POST[$field] ?? null) ? $_POST[$field] : '';
         }
         if (!empty($needsNewCount)) {
@@ -1643,7 +1535,9 @@ $flash = workflowTakeFlash();
                     </h2>
 
                     <p>
-                        Record the physical count for one consumable item.
+                        Record the physical count for one consumable item, or
+                        <a href="Nurse_DailyInventorySheet.php?date=<?= workflowH($formDate) ?>">open the whole-day sheet</a>
+                        to enter all items at once.
                     </p>
                 </div>
             </div>
@@ -1784,6 +1678,39 @@ $flash = workflowTakeFlash();
                         <small class="text-muted">
                             From completed vaccination / usage records.
                         </small>
+                    </div>
+
+                    <div class="col-xl-2 col-md-6">
+                        <label class="form-label" for="extra_consumed">
+                            Add Consumed
+                            <span class="inventory-unit-label"></span>
+                        </label>
+
+                        <input
+                            type="number"
+                            step="0.0001"
+                            min="0"
+                            class="form-control inventory-number"
+                            id="extra_consumed"
+                            name="extra_consumed"
+                            placeholder="0"
+                        >
+
+                        <small class="text-muted">
+                            Sold or given without a vaccination record (e.g. Mefenamic). Recorded as usage and deducted from stock once.
+                        </small>
+                    </div>
+
+                    <div class="col-xl-4 col-md-6" id="extraConsumedRemarksBox">
+                        <label class="form-label" for="extra_consumed_remarks">Remark for Added Consumed</label>
+                        <input
+                            type="text"
+                            class="form-control"
+                            id="extra_consumed_remarks"
+                            name="extra_consumed_remarks"
+                            maxlength="500"
+                            placeholder="Required when Add Consumed is entered"
+                        >
                     </div>
 
                     <div class="col-xl-2 col-md-6">
@@ -2400,7 +2327,10 @@ function formatClosingNumber(scaled) {
 function dailyComputed() {
     const fields = ['beginning_stock', 'delivery', 'consumed_numeric', 'pull_out'];
     const numbers = fields.map(id => dailyScaled(document.getElementById(id)?.value ?? ''));
-    return numbers.includes(null) ? null : numbers[0] + numbers[1] - numbers[2] - numbers[3];
+    // Optional consumed entered without a vaccination record (blank = 0).
+    const extraValue = document.getElementById('extra_consumed')?.value ?? '';
+    const extra = extraValue === '' ? 0 : dailyScaled(extraValue);
+    return numbers.includes(null) || extra === null ? null : numbers[0] + numbers[1] - numbers[2] - extra - numbers[3];
 }
 
 function refreshClosingPreview() {
@@ -2435,7 +2365,7 @@ function refreshClosingPreview() {
 }
 
 function resetDailyFields() {
-    for (const id of ['beginning_stock', 'actual_count', 'remarks']) document.getElementById(id).value = '';
+    for (const id of ['beginning_stock', 'actual_count', 'remarks', 'extra_consumed', 'extra_consumed_remarks']) document.getElementById(id).value = '';
     for (const id of ['delivery', 'pull_out']) document.getElementById(id).value = '0';
     document.getElementById('consumed_numeric').value = '0';
     document.getElementById('closing_context_token').value = '';
@@ -2459,6 +2389,7 @@ async function refreshAutomaticConsumption(restore = null) {
     document.querySelectorAll('.inventory-unit-label').forEach(el => { el.textContent = selected ? `(${baseUnit})` : ''; });
     document.querySelectorAll('.inventory-number').forEach(el => { el.step = '0.0001'; el.disabled = true; });
     document.getElementById('remarks').disabled = true;
+    document.getElementById('extra_consumed_remarks').disabled = true;
     consumedInput.value = selected && date ? 'Loading...' : '0';
     help.textContent = selected && date ? 'Loading the selected day...' : 'Select an item and date. Beginning stock is the opening count, not the current remaining stock.';
     unitHelp.style.display = 'none';
@@ -2478,7 +2409,7 @@ async function refreshAutomaticConsumption(restore = null) {
         document.getElementById('closing_context_token').value = data.context_token;
         help.textContent = data.opening_message;
         if (restore && restore.item_id === selected && restore.inventory_date === date) {
-            for (const id of ['beginning_stock', 'delivery', 'pull_out', 'remarks']) {
+            for (const id of ['beginning_stock', 'delivery', 'pull_out', 'remarks', 'extra_consumed', 'extra_consumed_remarks']) {
                 if (typeof restore[id] === 'string') document.getElementById(id).value = restore[id];
             }
             if (!data.needs_physical_count && typeof restore.actual_count === 'string') document.getElementById('actual_count').value = restore.actual_count;
@@ -2492,6 +2423,7 @@ async function refreshAutomaticConsumption(restore = null) {
         unitHelp.style.display = 'block';
         document.querySelectorAll('.inventory-number').forEach(el => { el.disabled = false; });
         document.getElementById('remarks').disabled = false;
+        document.getElementById('extra_consumed_remarks').disabled = false;
         dailyContextReady = true;
         refreshClosingPreview();
     } catch (error) {
@@ -2505,7 +2437,7 @@ async function refreshAutomaticConsumption(restore = null) {
 
 document.getElementById('item_id').addEventListener('change', () => refreshAutomaticConsumption());
 document.getElementById('inventory_date').addEventListener('change', () => refreshAutomaticConsumption());
-for (const id of ['beginning_stock', 'delivery', 'pull_out', 'actual_count']) {
+for (const id of ['beginning_stock', 'delivery', 'pull_out', 'actual_count', 'extra_consumed']) {
     document.getElementById(id).addEventListener('input', refreshClosingPreview);
 }
 document.getElementById('useComputedBtn').addEventListener('click', () => {
