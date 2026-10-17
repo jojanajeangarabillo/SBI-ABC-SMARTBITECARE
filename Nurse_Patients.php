@@ -10,6 +10,7 @@ session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/workflow_helpers.php';
+require_once 'sources/fit_to_work_certificate.php';
 
 // Check if user is logged in and is a nurse
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || $_SESSION['role_id'] != 3) {
@@ -211,6 +212,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_document']))
         $document_type = trim((string)($_POST['document_type'] ?? ''));
         $allowed_document_types = [
             'Medical Certificate',
+            FIT_TO_WORK_DOCUMENT_TYPE,
             'Referral Letter',
             'Vaccination Certificate'
         ];
@@ -296,10 +298,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_document']))
              (branch_id,document_type,document_name,file_name,file_path,file_type,file_size,uploaded_by,status)
              VALUES (?,?,?,?,?,?,?,?,?)"
         );
+        $stored_document_type = medicalDocumentStoredType($conn, $document_type);
         $insert->bind_param(
             'ssssssiis',
             $branch_id,
-            $document_type,
+            $stored_document_type,
             $document_name,
             $original_file_name,
             $database_file_path,
@@ -1304,6 +1307,8 @@ function writePatientPdf($filePath, $documentType, $data)
         drawVaccinationCertificate($stream, $data, $hasLogo);
     } elseif ($documentType === 'Medical Certificate') {
         drawMedicalCertificate($stream, $data, $hasLogo);
+    } elseif ($documentType === FIT_TO_WORK_DOCUMENT_TYPE) {
+        drawFitToWorkCertificate($stream, $data, $hasLogo);
     } elseif ($documentType === 'Referral Letter') {
         drawReferralLetter($stream, $data, $hasLogo);
     } else {
@@ -2209,6 +2214,16 @@ function getStatusBadge($status)
                             <div>
                                 <div class="doc-title">Medical Certificate</div>
                                 <div class="doc-desc">Certificate for medical treatment and fitness</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="document-option" onclick="selectDocument(this, 'Fit-to-Work Certificate')">
+                        <div class="d-flex align-items-center">
+                            <i class="bi bi-person-check"></i>
+                            <div>
+                                <div class="doc-title">Fit-to-Work Certificate</div>
+                                <div class="doc-desc">States the patient may return to work or school</div>
                             </div>
                         </div>
                     </div>
