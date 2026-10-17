@@ -28,6 +28,126 @@ function dailyInventoryAssertDate(mysqli $conn, string $date): void
     }
 }
 
+/** True once sources/migrate_usage_wastage.php labelled inventory_usage_history. */
+function dailyInventoryUsageLabelsReady(mysqli $conn): bool
+{
+    return workflowColumnExists($conn, 'inventory_usage_history', 'usage_type')
+        && workflowColumnExists($conn, 'inventory_usage_history', 'usage_source');
+}
+
+/** Reasons a nurse can pick for a Consumed adjustment (recorded as wastage). */
+function dailyInventoryWastageReasons(): array
+{
+    return ['Leakage', 'Broken vial/ampule', 'Expired/contaminated', 'Other'];
+}
+
+/**
+ * Write ONE inventory_usage_history row: the single ledger that Daily Inventory
+ * "Consumed" and the training_dataset check both read, so every use is counted
+ * exactly once. $source is Assessment, Vaccination, Supplies or Daily Inventory;
+ * $usageType is Usage (patient/clinic use) or Wastage. Labels are written only
+ * after the migration; quantities are identical either way.
+ */
+function dailyInventoryInsertUsage(
+    mysqli $conn,
+    int $itemId,
+    string $branchId,
+    string $date,
+    float $quantity,
+    int $patientCount,
+    string $source,
+    ?int $vaccinationId,
+    int $userId,
+    string $usageType = 'Usage',
+    string $reason = ''
+): int {
+    if (dailyInventoryUsageLabelsReady($conn)) {
+        $stmt = $conn->prepare(
+            "INSERT INTO inventory_usage_history
+             (item_id, branch_id, usage_date, quantity_used, patient_count,
+              usage_type, usage_source, source_vaccination_id, wastage_reason, recorded_by, recorded_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, NOW())"
+        );
+        $stmt->bind_param('issdissisi', $itemId, $branchId, $date, $quantity, $patientCount,
+            $usageType, $source, $vaccinationId, $reason, $userId);
+    } else {
+        if ($usageType === 'Wastage') {
+            throw new RuntimeException('Wastage adjustments need the database update sources/migrate_usage_wastage.php. Ask the administrator to apply it.');
+        }
+        $stmt = $conn->prepare(
+            'INSERT INTO inventory_usage_history (item_id, branch_id, usage_date, quantity_used, patient_count)
+             VALUES (?, ?, ?, ?, ?)'
+        );
+        $stmt->bind_param('issdi', $itemId, $branchId, $date, $quantity, $patientCount);
+    }
+    if (!$stmt->execute()) {
+        $error = $stmt->error;
+        $stmt->close();
+        throw new RuntimeException('Unable to save usage history: ' . $error);
+    }
+    $usageId = (int)$conn->insert_id;
+    $stmt->close();
+    return $usageId;
+}
+
+/**
+ * Where the day's Consumed comes from (base unit, scaled ten-thousandths):
+ * assessment, vaccination, supplies (Medical Supplies / earlier consumed
+ * entries), older (unlabelled rows recorded before the migration) and wastage.
+ * total is the same SUM(quantity_used) used by the closing and training sync.
+ */
+function dailyInventoryUsageBreakdown(mysqli $conn, string $branchId, int $itemId, string $date): array
+{
+    $parts = ['assessment' => 0, 'vaccination' => 0, 'supplies' => 0, 'older' => 0, 'wastage' => 0, 'total' => 0];
+    $wastage = [];
+    if (dailyInventoryUsageLabelsReady($conn)) {
+        $stmt = $conn->prepare(
+            "SELECT usage_type, usage_source, wastage_reason, quantity_used
+             FROM inventory_usage_history WHERE branch_id = ? AND item_id = ? AND usage_date = ?"
+        );
+    } else {
+        $stmt = $conn->prepare(
+            "SELECT 'Usage' AS usage_type, NULL AS usage_source, NULL AS wastage_reason, quantity_used
+             FROM inventory_usage_history WHERE branch_id = ? AND item_id = ? AND usage_date = ?"
+        );
+    }
+    $stmt->bind_param('sis', $branchId, $itemId, $date);
+    $stmt->execute();
+    foreach ($stmt->get_result()->fetch_all(MYSQLI_ASSOC) as $row) {
+        $quantity = stockQuantityParse((string)$row['quantity_used'], true);
+        $parts['total'] += $quantity;
+        if ($row['usage_type'] === 'Wastage') {
+            $parts['wastage'] += $quantity;
+            $wastage[] = ['quantity' => $quantity, 'reason' => (string)($row['wastage_reason'] ?? '')];
+            continue;
+        }
+        $key = match ((string)$row['usage_source']) {
+            'Assessment' => 'assessment',
+            'Vaccination' => 'vaccination',
+            'Supplies', 'Daily Inventory' => 'supplies',
+            default => 'older',
+        };
+        $parts[$key] += $quantity;
+    }
+    $stmt->close();
+    $parts['wastage_entries'] = $wastage;
+    return $parts;
+}
+
+/** Short text such as "Vaccination 4 sites + Assessment 1 Vial + Wastage 6 sites". */
+function dailyInventoryBreakdownText(array $breakdown, array $item): string
+{
+    $labels = ['assessment' => 'Assessment', 'vaccination' => 'Vaccination', 'supplies' => 'Medical Supplies',
+        'older' => 'Earlier records', 'wastage' => 'Wastage'];
+    $parts = [];
+    foreach ($labels as $key => $label) {
+        if (($breakdown[$key] ?? 0) > 0) {
+            $parts[] = $label . ' ' . inventoryUsageDescription((float)stockQuantityDecimal($breakdown[$key]), $item);
+        }
+    }
+    return $parts ? implode(' + ', $parts) : 'No usage recorded for this date';
+}
+
 /**
  * Current stock is a reference, never an opening balance. A saved closing is
  * loaded for correction. Otherwise the clinic rule fills Beginning (Inv.
@@ -143,10 +263,20 @@ function dailyInventoryContext(
     // A snapshot fingerprint detects usage changes and overlapping corrections.
     // Authorization and quantity validation remain entirely server-side.
     $token = hash('sha256', json_encode([$branchId, $itemId, $date, $consumed, $closing, $previous, $previousConsumedScaled], JSON_THROW_ON_ERROR));
+    $breakdown = dailyInventoryUsageBreakdown($conn, $branchId, $itemId, $date);
+    // A closing whose Consumed no longer matches the recorded usage is out of date.
+    $outOfDate = $closing !== null && ($closing['status'] === 'Draft'
+        || stockQuantityParse((string)$closing['consumed'], true) !== $consumedScaled);
     return [
         'success' => true,
         'inventory_date' => $date,
         'consumed' => $consumed,
+        'consumed_breakdown' => dailyInventoryBreakdownText($breakdown, $item),
+        'consumed_wastage' => stockQuantityDecimal($breakdown['wastage']),
+        'consumed_auto' => stockQuantityDecimal($consumedScaled - $breakdown['wastage']),
+        'closing_out_of_date' => $outOfDate,
+        'closing_saved_consumed' => $closing !== null ? stockQuantityDecimal(stockQuantityParse((string)$closing['consumed'], true)) : null,
+        'closing_saved_actual' => $closing !== null ? (string)$closing['actual_count'] : null,
         'base_unit' => inventoryBaseUnitLabel($item),
         'display' => inventoryUsageDescription((float)$consumed, $item),
         'current_stock' => (string)$item['current_stock'],
@@ -167,12 +297,16 @@ function dailyInventoryContext(
 }
 
 /**
- * Record consumption that has no vaccination record (for example medicines
- * dispensed or sold): FEFO stock deduction, inventory_usage_history,
- * stock_transactions and audit. Daily Inventory "Consumed" is the day's
- * recorded usage, so this keeps the closing and training_dataset consistent.
- * The caller owns the transaction and already holds the branch revision lock
- * (forecastTrainingRevision). Returns usage_id, description and reopened.
+ * Record consumption that has no vaccination record (Medical Supplies usage)
+ * or a Daily Inventory wastage adjustment: FEFO stock deduction, ONE
+ * inventory_usage_history row, a stock_transactions OUT and the training
+ * re-open. Daily Inventory "Consumed" is the day's recorded usage, so this
+ * keeps the closing and training_dataset consistent (wastage is real supply
+ * consumption and is included once). Wastage is labelled usage_type='Wastage'
+ * and its stock transaction starts with "Reason: Lost / Wastage", the same
+ * reason the Stock Out page uses. "Expired/contaminated" may take expired
+ * batches first. The caller owns the transaction and already holds the branch
+ * revision lock (forecastTrainingRevision). Returns usage_id, description, reopened.
  */
 function dailyInventoryRecordUsage(
     mysqli $conn,
@@ -183,7 +317,10 @@ function dailyInventoryRecordUsage(
     string $date,
     string $movementPrefix,
     string $remarks,
-    int $patientId = 0
+    int $patientId = 0,
+    string $source = 'Supplies',
+    string $usageType = 'Usage',
+    string $wastageReason = ''
 ): array {
     $itemId = (int)$item['item_id'];
     if ($quantity <= 0 || !is_finite($quantity)) {
@@ -192,15 +329,18 @@ function dailyInventoryRecordUsage(
     if (inventoryIsSiteBased($item) && abs($quantity - round($quantity)) > 0.00001) {
         throw new RuntimeException('Site-based consumption must be entered in whole sites.');
     }
+    // Expired/contaminated wastage may remove expired batches (oldest first).
+    $includeExpired = $usageType === 'Wastage' && $wastageReason === 'Expired/contaminated';
     $stock = $conn->prepare(
         "SELECT stock_id,batch_lot_no,quantity_available,expiration_date
          FROM inventory_stocks
          WHERE item_id=? AND branch_id=? AND quantity_available>0
-           AND (expiration_date IS NULL OR expiration_date>=CURDATE())
+           AND (? = 1 OR expiration_date IS NULL OR expiration_date>=CURDATE())
          ORDER BY CASE WHEN expiration_date IS NULL THEN 1 ELSE 0 END,
                   expiration_date,stock_id FOR UPDATE"
     );
-    $stock->bind_param('is', $itemId, $branchId);
+    $expiredFlag = $includeExpired ? 1 : 0;
+    $stock->bind_param('isi', $itemId, $branchId, $expiredFlag);
     $stock->execute();
     $batches = $stock->get_result()->fetch_all(MYSQLI_ASSOC);
     $stock->close();
@@ -232,15 +372,12 @@ function dailyInventoryRecordUsage(
     if ($remaining > 0.00005) throw new RuntimeException('Unable to allocate the complete supply quantity.');
 
     $patientsServed = $patientId > 0 ? 1 : 0;
-    $usage = $conn->prepare(
-        'INSERT INTO inventory_usage_history
-         (item_id,branch_id,usage_date,quantity_used,patient_count) VALUES (?,?,?,?,?)'
-    );
-    $usage->bind_param('issdi', $itemId, $branchId, $date, $quantity, $patientsServed);
-    $usage->execute();
-    $usageId = (int)$conn->insert_id;
-    $usage->close();
+    $usageId = dailyInventoryInsertUsage($conn, $itemId, $branchId, $date, $quantity, $patientsServed,
+        $source, null, $userId, $usageType, $wastageReason);
     $description = inventoryUsageDescription($quantity, $item);
+    if ($usageType === 'Wastage') {
+        $movementPrefix = 'Reason: Lost / Wastage | Wastage: ' . $wastageReason . ' | ' . $movementPrefix;
+    }
     $movementRemarks = $movementPrefix . 'Usage ID: ' . $usageId
         . ' | Used: ' . $description . ' | Usage date: ' . $date
         . ($patientId > 0 ? ' | Patient ID: ' . $patientId : '')
@@ -266,8 +403,12 @@ function dailyInventoryRecordUsage(
 /**
  * Save one daily closing (single-item form and whole-day sheet share it).
  * $values holds beginning_stock, delivery, pull_out and actual_count as posted
- * strings. $extraConsumed (optional, base unit) is usage with no vaccination
- * record; it is recorded as real usage first and then included in Consumed.
+ * strings. Consumed is never typed: it is the day's recorded usage
+ * (Assessment + Vaccination + Medical Supplies). The only way to adjust it is
+ * the "Edit / Adjust" wastage entry: $wastageQuantity (base unit) with a
+ * reason from dailyInventoryWastageReasons() ($wastageOther when "Other").
+ * It is recorded as wastage (stock deducted once, labelled Wastage) and is then
+ * part of Consumed, so final Consumed = auto-computed usage + adjustment.
  * Everything runs in one transaction under the branch revision lock.
  */
 function dailyInventorySaveClosing(
@@ -279,8 +420,9 @@ function dailyInventorySaveClosing(
     array $values,
     string $remarks,
     string $contextToken,
-    string $extraConsumed = '',
-    string $extraConsumedRemarks = ''
+    string $wastageQuantity = '',
+    string $wastageReason = '',
+    string $wastageOther = ''
 ): array {
     dailyInventoryAssertDate($conn, $inventoryDate);
     $quantities = [];
@@ -297,20 +439,28 @@ function dailyInventorySaveClosing(
         throw new RuntimeException('The remarks are too long. Keep the note within 500 characters.');
     }
     $extraScaled = 0;
-    $extraConsumed = trim($extraConsumed);
-    $extraConsumedRemarks = trim($extraConsumedRemarks);
-    if ($extraConsumed !== '' && $extraConsumed !== '0') {
+    $wastageQuantity = trim($wastageQuantity);
+    $wastageReason = trim($wastageReason);
+    $wastageOther = trim($wastageOther);
+    $wastageLabel = '';
+    if ($wastageQuantity !== '') {
         try {
-            $extraScaled = stockQuantityParse($extraConsumed, true);
+            $extraScaled = stockQuantityParse($wastageQuantity, true);
         } catch (InvalidArgumentException $e) {
-            throw new RuntimeException('Additional consumed: ' . $e->getMessage());
+            throw new RuntimeException('Consumed adjustment: ' . $e->getMessage());
         }
-        if ($extraScaled > 0 && $extraConsumedRemarks === '') {
-            throw new RuntimeException('Add a remark for the consumed quantity entered without a vaccination record (for example "Mefenamic dispensed").');
+    }
+    if ($extraScaled > 0) {
+        if (!in_array($wastageReason, dailyInventoryWastageReasons(), true)) {
+            throw new RuntimeException('Pick a reason for the Consumed adjustment: Leakage, Broken vial/ampule, Expired/contaminated or Other.');
         }
-        if (strlen($extraConsumedRemarks) > 500) {
-            throw new RuntimeException('The consumed remark must not exceed 500 characters.');
+        if ($wastageReason === 'Other' && $wastageOther === '') {
+            throw new RuntimeException('Specify the reason for the Consumed adjustment ("Other").');
         }
+        if (strlen($wastageOther) > 200) {
+            throw new RuntimeException('The adjustment reason must not exceed 200 characters.');
+        }
+        $wastageLabel = $wastageReason === 'Other' ? 'Other: ' . $wastageOther : $wastageReason;
     }
     if (!preg_match('/\A[a-f0-9]{64}\z/', $contextToken)) {
         throw new RuntimeException('Load the selected item and date before submitting the closing.');
@@ -327,9 +477,10 @@ function dailyInventorySaveClosing(
         if ($extraScaled > 0) {
             $manualUsage = dailyInventoryRecordUsage(
                 $conn, $userId, $branchId, $context['item'], (float)stockQuantityDecimal($extraScaled),
-                $inventoryDate, 'Daily inventory consumed entry | ', $extraConsumedRemarks
+                $inventoryDate, 'Daily inventory adjustment | ', $wastageLabel, 0,
+                'Daily Inventory', 'Wastage', $wastageReason === 'Other' ? 'Other: ' . $wastageOther : $wastageReason
             );
-            // Consumed now includes the usage just recorded.
+            // Consumed now includes the wastage just recorded (counted once).
             $context = dailyInventoryContext($conn, $branchId, $itemId, $inventoryDate, true);
         }
         $item = $context['item'];
@@ -347,8 +498,8 @@ function dailyInventorySaveClosing(
             throw new RuntimeException($item['item_name'] . ': explain the difference between physical and computed stock in Remarks.');
         }
         if ($manualUsage !== null) {
-            $remarks = trim($remarks . ($remarks !== '' ? ' | ' : '') . 'Consumed entry: '
-                . $manualUsage['description'] . ' - ' . $extraConsumedRemarks);
+            $remarks = trim($remarks . ($remarks !== '' ? ' | ' : '') . 'Wastage: '
+                . $manualUsage['description'] . ' - ' . $wastageLabel);
         }
         // Counts may contain legacy fractions, including sites; never round them.
         $beginning = stockQuantityDecimal($quantities['beginning_stock']);
@@ -395,7 +546,7 @@ function dailyInventorySaveClosing(
                 . ' (' . $context['opening_source'] . ')'
                 . ' | Delivery: ' . inventoryUsageDescription((float)$delivery, $item)
                 . ' | Consumed: ' . inventoryUsageDescription((float)$consumed, $item)
-                . ($manualUsage !== null ? ' (incl. entered ' . $manualUsage['description'] . ')' : '')
+                . ($manualUsage !== null ? ' (incl. wastage ' . $manualUsage['description'] . ' - ' . $wastageLabel . ')' : '')
                 . ' | Pull-out: ' . inventoryUsageDescription((float)$pullOut, $item)
                 . ' | Actual: ' . inventoryUsageDescription((float)$actual, $item),
             'Daily Inventory'

@@ -8,6 +8,7 @@ require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/forecast_training_helper.php';
+require_once 'sources/daily_inventory_helpers.php';
 
 // ============================================================
 // AUTHENTICATED NURSE
@@ -1125,26 +1126,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 $stockTransaction->close();
 
-                $usage = $conn->prepare(
-                    "INSERT INTO inventory_usage_history
-                     (item_id, branch_id, usage_date, quantity_used, patient_count)
-                     VALUES (?, ?, ?, ?, 1)"
+                // One usage-ledger row per product given during assessment.
+                dailyInventoryInsertUsage(
+                    $conn, $itemId, $branchId, $administeredDate, $quantityBase,
+                    1, 'Assessment', $vaccinationId, $userId
                 );
-                if (!$usage) {
-                    throw new RuntimeException('Unable to prepare inventory usage.');
-                }
-                $usage->bind_param(
-                    'issd', $itemId, $branchId, $administeredDate, $quantityBase
-                );
-                if (!$usage->execute()) {
-                    $error = $usage->error;
-                    $usage->close();
-                    throw new RuntimeException(
-                        'Unable to save inventory usage for '
-                        . $vaccineName . ': ' . $error
-                    );
-                }
-                $usage->close();
 
                 // Usage is included once when the nurse submits the daily closing.
                 // A previously submitted count must be verified again after new usage.

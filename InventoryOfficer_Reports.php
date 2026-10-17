@@ -242,8 +242,18 @@ AND s.usable_stock<=i.minimum_stock ORDER BY s.usable_stock,i.item_name";
             break;
 
         case 'stock_usage':
+            // Patient/clinic use vs wastage (labels from sources/migrate_usage_wastage.php).
+            $labelCheck = $conn->query("SELECT COUNT(*) AS total FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'inventory_usage_history'
+                  AND COLUMN_NAME IN ('usage_type', 'usage_source', 'wastage_reason')");
+            $usageTypeSql = ((int)($labelCheck ? $labelCheck->fetch_assoc()['total'] : 0) === 3)
+                ? "CASE WHEN h.usage_type = 'Wastage'
+                        THEN CONCAT('Wastage', IF(COALESCE(h.wastage_reason, '') = '', '', CONCAT(' - ', h.wastage_reason)))
+                        ELSE CONCAT('Patient use', IF(h.usage_source IS NULL, '', CONCAT(' (', h.usage_source, ')'))) END"
+                : "'Patient use'";
             $sql = "
                 SELECT
+                    $usageTypeSql AS usage_type_label,
                     h.usage_id,
                     h.usage_date,
                     i.item_name,
@@ -665,7 +675,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
     } elseif ($report_type === 'stock_usage') {
         fputcsv($output, [
             'Usage ID', 'Usage Date', 'Item', 'Category', 'Unit',
-            'Quantity Used', 'Patient Count', 'Stock Received'
+            'Quantity Used', 'Usage Type', 'Patient Count', 'Stock Received'
         ]);
 
         foreach ($exportRows as $row) {
@@ -676,6 +686,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                 $row['category_name'],
                 $row['unit_name'],
                 $row['quantity_used'],
+                $row['usage_type_label'],
                 $row['patient_count'],
                 $row['stock_received']
             ]);
@@ -1709,7 +1720,7 @@ No usage data for the selected date range.
 <?php elseif ($report_type === 'expiring_stock'): ?>
 <tr><th>Item</th><th>Category</th><th>Batch / Lot No.</th><th>Unit</th><th>Stock</th><th>Manufacturing Date</th><th>Expiration Date</th><th>Days Remaining</th><th>Status</th></tr>
 <?php elseif ($report_type === 'stock_usage'): ?>
-<tr><th>Usage Date</th><th>Item</th><th>Category</th><th>Unit</th><th>Qty Used</th><th>Patients</th><th>Stock Received</th></tr>
+<tr><th>Usage Date</th><th>Item</th><th>Category</th><th>Unit</th><th>Qty Used</th><th>Usage Type</th><th>Patients</th><th>Stock Received</th></tr>
 <?php elseif ($report_type === 'transactions'): ?>
 <tr><th>Trx No.</th><th>Type</th><th>Item</th><th>Unit</th><th>Qty</th><th>Date</th><th>By</th><th>Remarks</th></tr>
 <?php elseif ($report_type === 'returns'): ?>
@@ -1767,6 +1778,7 @@ No usage data for the selected date range.
 <td><?php echo h($row['category_name']); ?></td>
 <td><?php echo h($row['unit_name']); ?></td>
 <td><strong><?php echo moneylessNumber($row['quantity_used']); ?></strong></td>
+<td><span class="report-status <?php echo str_starts_with((string)$row['usage_type_label'], 'Wastage') ? 'status-warning' : 'status-neutral'; ?>"><?php echo h($row['usage_type_label']); ?></span></td>
 <td><?php echo moneylessNumber($row['patient_count']); ?></td>
 <td><?php echo moneylessNumber($row['stock_received']); ?></td>
 </tr>

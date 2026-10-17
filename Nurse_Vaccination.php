@@ -12,6 +12,7 @@ require_once 'sources/forecast_training_helper.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/daily_inventory_helpers.php';
 
 // ============================================================
 // NURSE ACCESS CONTROL
@@ -1554,23 +1555,10 @@ if (isset($_POST['submit_vaccination'])) {
                 }
                 $stmt->close();
 
-                $insertUsage = "
-                    INSERT INTO inventory_usage_history
-                    (
-                        item_id,
-                        branch_id,
-                        usage_date,
-                        quantity_used,
-                        patient_count
-                    )
-                    VALUES (?, ?, ?, ?, 1)
-                ";
-                $stmt = $conn->prepare($insertUsage);
-                $stmt->bind_param("issd", $item_id, $branch_id, $date_administered, $quantity);
-                if (!$stmt->execute()) {
-                    throw new Exception('Failed to save usage history.');
-                }
-                $stmt->close();
+                // One usage-ledger row per administered product: Daily Inventory
+                // "Consumed" and forecasting training read this ledger.
+                dailyInventoryInsertUsage($conn, $item_id, $branch_id, $date_administered, (float)$quantity,
+                    1, 'Vaccination', (int)$vaccination_id, $user_id);
                 $reopened_closings += forecastTrainingUsageChanged($conn, $branch_id, $item_id, $date_administered);
 
                 // Registry dose flags represent completed doses only.

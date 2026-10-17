@@ -64,7 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // A saved closing posted back unchanged is skipped (no duplicate audit entry).
                 $current = dailyInventoryContext($conn, $branchId, $itemId, $sheetDate);
                 if ($current['opening_source'] === 'saved_closing' && !$current['needs_physical_count']
-                    && $text('extra_consumed') === '' && $text('remarks') === trim($current['fields']['remarks'])) {
+                    && $text('wastage_quantity') === '' && $text('remarks') === trim($current['fields']['remarks'])) {
                     $unchanged = true;
                     foreach (['beginning_stock', 'delivery', 'pull_out', 'actual_count'] as $field) {
                         try {
@@ -92,8 +92,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ],
                     $text('remarks'),
                     $text('context_token'),
-                    $text('extra_consumed'),
-                    $text('extra_consumed_remarks')
+                    $text('wastage_quantity'),
+                    $text('wastage_reason'),
+                    $text('wastage_other')
                 );
                 $saved[] = (string)$result['item']['item_name'];
             } catch (Throwable $e) {
@@ -112,7 +113,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($failed) {
             workflowFlash('warning', $message . ' Not saved: ' . implode(' | ', $failed));
         } else {
-            workflowFlash('success', $message . ' Consumption came from recorded usage; forecasting data was updated for forecastable items.');
+            workflowFlash('success', $message . ' Consumed came from the Assessment and Vaccination usage of the day (plus any wastage adjustment); forecasting data was updated for forecastable items.');
         }
     } catch (Throwable $e) {
         workflowFlash('danger', $e->getMessage());
@@ -161,8 +162,9 @@ foreach ($itemList as $listed) {
             'pull_out' => $value('pull_out'),
             'actual_count' => $value('actual_count'),
             'remarks' => $value('remarks'),
-            'extra_consumed' => is_array($restore) ? (string)($restore['extra_consumed'] ?? '') : '',
-            'extra_consumed_remarks' => is_array($restore) ? (string)($restore['extra_consumed_remarks'] ?? '') : '',
+            'wastage_quantity' => is_array($restore) ? (string)($restore['wastage_quantity'] ?? '') : '',
+            'wastage_reason' => is_array($restore) ? (string)($restore['wastage_reason'] ?? '') : '',
+            'wastage_other' => is_array($restore) ? (string)($restore['wastage_other'] ?? '') : '',
         ],
     ];
 }
@@ -265,7 +267,9 @@ $flash = workflowTakeFlash();
                 <div>
                     <h5><i class="bi bi-table me-1"></i>Whole-day sheet</h5>
                     <p>
-                        Inv. End = Beginning + Delivery - Consumed - Pull-out. Beginning is filled from yesterday's Actual count
+                        Inv. End = Beginning + Delivery - Consumed - Pull-out. Consumed is auto-computed from the day's Assessment and
+                        Vaccination records (each use counted once; doses given at another clinic are not counted); Edit / Adjust adds
+                        wastage with a reason. Beginning is filled from yesterday's Actual count
                         (or yesterday's Inv. End when there was no actual count) and stays editable. Only rows with an Actual count are saved.
                         Quantities use each item's base unit.
                     </p>
@@ -290,8 +294,8 @@ $flash = workflowTakeFlash();
                                 <th>Item</th>
                                 <th>Beginning</th>
                                 <th>Delivery</th>
-                                <th>Consumed</th>
-                                <th>Add Consumed<br><span class="fw-normal">(no vaccination record)</span></th>
+                                <th>Consumed (Auto)</th>
+                                <th>Edit / Adjust<br><span class="fw-normal">(wastage)</span></th>
                                 <th>Pull-out</th>
                                 <th>Inv. End</th>
                                 <th>Actual</th>
@@ -322,10 +326,25 @@ $flash = workflowTakeFlash();
                                     </span>
                                 </td>
                                 <td><input type="number" step="0.0001" min="0" class="form-control sheet-number" data-field="delivery" name="<?= $name ?>[delivery]" value="<?= workflowH($row['values']['delivery']) ?>"></td>
-                                <td class="computed"><?= workflowH(inventoryFormatNumber((float)$context['consumed'])) ?></td>
                                 <td>
-                                    <input type="number" step="0.0001" min="0" class="form-control sheet-number" data-field="extra" name="<?= $name ?>[extra_consumed]" value="<?= workflowH($row['values']['extra_consumed']) ?>" placeholder="0">
-                                    <input type="text" class="form-control mt-1 remarks-input" maxlength="500" name="<?= $name ?>[extra_consumed_remarks]" value="<?= workflowH($row['values']['extra_consumed_remarks']) ?>" placeholder="Remark (required if added)">
+                                    <span class="computed"><?= workflowH(inventoryFormatNumber((float)$context['consumed'])) ?></span>
+                                    <span class="source-note" title="Auto-computed from Assessment and Vaccination records"><?= workflowH((string)$context['consumed_breakdown']) ?></span>
+                                    <?php if (!empty($context['closing_out_of_date'])): ?>
+                                        <span class="badge text-bg-warning mt-1">Closing out of date</span>
+                                        <button type="button" class="btn btn-link btn-sm p-0 d-block refresh-closing"
+                                                data-saved-actual="<?= workflowH((string)$context['closing_saved_actual']) ?>"
+                                                title="Usage was recorded after the closing. Reload the saved Actual count, verify it and save again.">Refresh closing</button>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <input type="number" step="0.0001" min="0" class="form-control sheet-number" data-field="extra" name="<?= $name ?>[wastage_quantity]" value="<?= workflowH($row['values']['wastage_quantity']) ?>" placeholder="0" title="Extra quantity lost (wastage)">
+                                    <select class="form-select form-select-sm mt-1 wastage-reason" name="<?= $name ?>[wastage_reason]">
+                                        <option value="">Reason</option>
+                                        <?php foreach (dailyInventoryWastageReasons() as $reason): ?>
+                                            <option value="<?= workflowH($reason) ?>" <?= $row['values']['wastage_reason'] === $reason ? 'selected' : '' ?>><?= workflowH($reason === 'Other' ? 'Other (specify)' : $reason) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <input type="text" class="form-control mt-1 remarks-input wastage-other" maxlength="200" name="<?= $name ?>[wastage_other]" value="<?= workflowH($row['values']['wastage_other']) ?>" placeholder="Specify (if Other)">
                                 </td>
                                 <td><input type="number" step="0.0001" min="0" class="form-control sheet-number" data-field="pullout" name="<?= $name ?>[pull_out]" value="<?= workflowH($row['values']['pull_out']) ?>"></td>
                                 <td class="computed" data-output="end">-</td>
@@ -398,6 +417,11 @@ function refreshRow(row) {
 }
 document.querySelectorAll('.sheet-row').forEach(row => {
     row.addEventListener('input', () => refreshRow(row));
+    row.querySelector('.refresh-closing')?.addEventListener('click', event => {
+        row.querySelector('[data-field="actual"]').value = event.currentTarget.dataset.savedActual || '';
+        refreshRow(row);
+        row.querySelector('[data-field="actual"]').focus();
+    });
     row.querySelector('.use-end')?.addEventListener('click', () => {
         if (row.dataset.end === '' || Number(row.dataset.end) < 0) return;
         row.querySelector('[data-field="actual"]').value = sheetDecimal(Number(row.dataset.end));
