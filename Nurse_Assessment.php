@@ -731,16 +731,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($lateDoses['rows']) {
                     $postedDecision = (string)($_POST['late_decision'] ?? '');
                     $lateRemark = mb_substr(trim((string)($_POST['late_decision_remark'] ?? '')), 0, 500);
-                    $allContinue = true;
-                    foreach ($lateDoses['rows'] as $lateRow) {
-                        if ((string)$lateRow['late_decision'] !== 'continue') $allContinue = false;
-                    }
                     if (!in_array($postedDecision, ['continue', 'restart'], true)) {
-                        if (!$allContinue) {
+                        // Same shared function as the Late Dose Decision box on this page.
+                        if (workflowLateDoseDecisionNeeded($lateDoses)) {
                             throw new RuntimeException(
                                 'This patient has a dose ' . $lateDoses['max_days'] . ' days overdue (more than '
                                 . $catchUpWindowDays . ' days). Choose "Continue current schedule" or '
-                                . '"Restart from Day 0" in the Late Dose Decision box before saving.'
+                                . '"Restart from Day 0" in the Late Dose Decision box at the top of the form before saving.'
                             );
                         }
                         $postedDecision = 'continue';
@@ -1682,8 +1679,10 @@ $selectedNonRabies =
     && (string)($selected['treatment_profile'] ?? '') === 'OTHER';
 
 // Doses of this case more than 7 days overdue: the form asks the nurse to choose.
+// Same function as the save check, and independent of the "not anti-rabies"
+// flag, so whenever the save can ask for a choice the box is on the page.
 $selectedLateDoses = null;
-if ($selected && !$selectedNonRabies) {
+if ($selected) {
     $selectedLateDoses = workflowCaseLateDoses(
         $conn, (int)$selected['patient_id'], (int)$selected['case_id'], $branchId
     );
@@ -3449,6 +3448,46 @@ $flash = workflowTakeFlash();
                                     value="<?= $selectedId ?>"
                                 >
 
+                                <?php if ($selectedLateDoses && $selectedLateDoses['rows']):
+                                    $lateChosen = (string)($_GET['late_decision'] ?? '');
+                                    $storedChoices = array_unique(array_map(static fn($r) => (string)$r['late_decision'], $selectedLateDoses['rows']));
+                                    if (!in_array($lateChosen, ['continue', 'restart'], true)) {
+                                        $lateChosen = count($storedChoices) === 1 ? (string)reset($storedChoices) : '';
+                                    }
+                                ?>
+                                <!-- Late dose (> 7 days): the nurse decides, never automatic.
+                                     Top of the form, right below the page alert; never hidden by script. -->
+                                <div class="col-12" id="lateDecisionPanel" data-late-decision-panel="1"
+                                     data-all-continue="<?= workflowLateDoseDecisionNeeded($selectedLateDoses) ? '0' : '1' ?>">
+                                    <div class="alert alert-warning mb-0">
+                                        <strong><i class="bi bi-signpost-split me-1"></i>Late Dose Decision</strong>
+                                        <p class="small mb-2">
+                                            <?php foreach ($selectedLateDoses['rows'] as $lateRow): ?>
+                                                <?= workflowH(workflowDoseLabel((int)$lateRow['dose_number'])) ?> was due
+                                                <?= workflowH(date('M d, Y', strtotime((string)$lateRow['scheduled_date']))) ?>
+                                                (<?= (int)$lateRow['days_late'] ?> days late<?= $lateRow['late_decision'] ? ', ' . workflowH(workflowLateDecisionLabel((string)$lateRow['late_decision'])) . ' chosen' : '' ?>).
+                                            <?php endforeach; ?>
+                                            This is more than <?= (int)$catchUpWindowDays ?> days. Choose how to proceed before saving the anti-rabies assessment:
+                                        </p>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio" name="late_decision" id="lateDecisionContinue" value="continue" <?= $lateChosen === 'continue' ? 'checked' : '' ?>>
+                                            <label class="form-check-label small" for="lateDecisionContinue">
+                                                <strong>Continue current schedule</strong> - keep the same Day 0; record the late dose in Vaccination and the remaining doses move forward by the delay.
+                                            </label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio" name="late_decision" id="lateDecisionRestart" value="restart" <?= $lateChosen === 'restart' ? 'checked' : '' ?>>
+                                            <label class="form-check-label small" for="lateDecisionRestart">
+                                                <strong>Restart from Day 0</strong> - set Actual D0 Date to today's re-assessment; the old cycle's records are archived (never deleted).
+                                            </label>
+                                        </div>
+                                        <input type="text" class="form-control form-control-sm mt-2" name="late_decision_remark" maxlength="500"
+                                               placeholder="Remark (optional), e.g. Continued per nurse/physician decision.">
+                                    </div>
+                                </div>
+                                <?php endif; ?>
+
+
                                 <!-- Exposure Information -->
                                 <div class="col-12 form-section">
 
@@ -3862,43 +3901,6 @@ $flash = workflowTakeFlash();
                                     >
 
                                 </div>
-
-                                <?php if ($selectedLateDoses && $selectedLateDoses['rows']):
-                                    $lateChosen = (string)($_GET['late_decision'] ?? '');
-                                    $storedChoices = array_unique(array_map(static fn($r) => (string)$r['late_decision'], $selectedLateDoses['rows']));
-                                    if (!in_array($lateChosen, ['continue', 'restart'], true)) {
-                                        $lateChosen = count($storedChoices) === 1 ? (string)reset($storedChoices) : '';
-                                    }
-                                ?>
-                                <!-- Late dose (> 7 days): the nurse decides, never automatic -->
-                                <div class="col-12" id="lateDecisionPanel">
-                                    <div class="alert alert-warning mb-0">
-                                        <strong><i class="bi bi-signpost-split me-1"></i>Late Dose Decision</strong>
-                                        <p class="small mb-2">
-                                            <?php foreach ($selectedLateDoses['rows'] as $lateRow): ?>
-                                                <?= workflowH(workflowDoseLabel((int)$lateRow['dose_number'])) ?> was due
-                                                <?= workflowH(date('M d, Y', strtotime((string)$lateRow['scheduled_date']))) ?>
-                                                (<?= (int)$lateRow['days_late'] ?> days late<?= $lateRow['late_decision'] ? ', ' . workflowH(workflowLateDecisionLabel((string)$lateRow['late_decision'])) . ' chosen' : '' ?>).
-                                            <?php endforeach; ?>
-                                            This is more than <?= (int)$catchUpWindowDays ?> days. Choose how to proceed:
-                                        </p>
-                                        <div class="form-check">
-                                            <input class="form-check-input" type="radio" name="late_decision" id="lateDecisionContinue" value="continue" <?= $lateChosen === 'continue' ? 'checked' : '' ?> required>
-                                            <label class="form-check-label small" for="lateDecisionContinue">
-                                                <strong>Continue current schedule</strong> - keep the same Day 0; record the late dose in Vaccination and the remaining doses move forward by the delay.
-                                            </label>
-                                        </div>
-                                        <div class="form-check">
-                                            <input class="form-check-input" type="radio" name="late_decision" id="lateDecisionRestart" value="restart" <?= $lateChosen === 'restart' ? 'checked' : '' ?>>
-                                            <label class="form-check-label small" for="lateDecisionRestart">
-                                                <strong>Restart from Day 0</strong> - set Actual D0 Date to today's re-assessment; the old cycle's records are archived (never deleted).
-                                            </label>
-                                        </div>
-                                        <input type="text" class="form-control form-control-sm mt-2" name="late_decision_remark" maxlength="500"
-                                               placeholder="Remark (optional), e.g. Continued per nurse/physician decision.">
-                                    </div>
-                                </div>
-                                <?php endif; ?>
 
                                 <!-- Booster eligibility -->
                                 <div class="col-12" id="boosterEligibilityPanel" style="display:none;">
@@ -4518,7 +4520,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const pendingKey = 'sbc_assessment_pending_<?= (int)$userId ?>_<?= (int)$selectedId ?>';
     const serverSavedAt = <?= !empty($selected['assessment_updated_at']) ? (int)strtotime((string)$selected['assessment_updated_at']) * 1000 : 0 ?>;
     const lastSaveSucceeded = <?= ($flash && in_array($flash['type'], ['success', 'warning'], true)) ? 'true' : 'false' ?>;
-    const skipped = new Set(['csrf_token', 'visit_id', 'action']);
+    // The late-dose choice is never drafted: it must be made explicitly each time,
+    // and a restored draft can never uncheck, change or hide it.
+    const skipped = new Set(['csrf_token', 'visit_id', 'action', 'late_decision', 'late_decision_remark']);
 
     function storage(action, key, value) {
         try {
@@ -4533,6 +4537,10 @@ document.addEventListener('DOMContentLoaded', function () {
         const values = {};
         Array.from(form.elements).forEach(function (el) {
             if (!el.name || skipped.has(el.name) || el.name.startsWith('non_rabies_') || el.type === 'submit' || el.type === 'button') return;
+            if (el.type === 'radio') {
+                if (el.checked) values[el.name] = el.value;
+                return;
+            }
             values[el.name] = el.type === 'checkbox' ? el.checked : el.value;
         });
         return values;
@@ -4540,7 +4548,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function apply(values) {
         Array.from(form.elements).forEach(function (el) {
-            if (!el.name || !(el.name in values) || el.name.startsWith('outside_dose')) return;
+            if (!el.name || skipped.has(el.name) || !(el.name in values) || el.name.startsWith('outside_dose')) return;
+            if (el.type === 'radio') { el.checked = el.value === values[el.name]; return; }
             if (el.type === 'checkbox') el.checked = Boolean(values[el.name]);
             else el.value = values[el.name];
         });
@@ -4611,6 +4620,27 @@ document.addEventListener('DOMContentLoaded', function () {
         saveDraft();
         try { window.sessionStorage.setItem(pendingKey, '1'); } catch (_) {}
     });
+});
+
+// Late Dose Decision: an anti-rabies save needs a choice; show the box instead of submitting.
+document.addEventListener('DOMContentLoaded', function () {
+    const form = document.getElementById('assessmentForm');
+    const panel = document.getElementById('lateDecisionPanel');
+    if (!form || !panel) return;
+    panel.hidden = false;
+    panel.style.removeProperty('display');
+    form.addEventListener('submit', function (event) {
+        const submitter = event.submitter;
+        if (submitter && submitter.value && submitter.value !== 'save_assessment') return;
+        const nonArv = document.getElementById('not_anti_rabies');
+        if (nonArv && nonArv.checked) return;
+        if (form.querySelector('input[name="late_decision"]:checked')) return;
+        if (panel.dataset.allContinue === '1') return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        panel.querySelector('.alert').classList.add('border', 'border-danger', 'border-2');
+    }, true);
 });
 
 // Late Dose Decision: "Restart from Day 0" uses today's re-assessment as the new D0.
