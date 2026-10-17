@@ -3,6 +3,7 @@ session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/philhealth_requirements_helper.php';
 
 $user = workflowRequireUser($conn, 2);
 $userId = (int)$user['user_id'];
@@ -928,6 +929,11 @@ $flash = workflowTakeFlash();
                                     </td>
                                     <td>
                                         <span class="badge-status <?php echo workflowH(mainPhilhealthStatusClass($currentStatus)); ?>"><?php echo workflowH($currentStatus); ?></span>
+                                        <?php if (philhealthRequirementsReady($conn)): ?>
+                                            <div class="status-remarks"><span class="detail-label">Requirements Received</span>
+                                                <?php echo workflowH(implode(', ', philhealthRequirementsReceived($row)) ?: 'None recorded'); ?>
+                                            </div>
+                                        <?php endif; ?>
                                         <?php if (!empty($row['remarks'])): ?>
                                             <div class="status-remarks"><span class="detail-label">Latest Remarks</span><?php echo workflowH($row['remarks']); ?></div>
                                         <?php endif; ?>
