@@ -11,6 +11,9 @@ if (!empty($_GET['action']) || !empty($_POST['action'])) {
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/workflow_helpers.php';
+require_once 'sources/case_number_helper.php';
+require_once 'sources/philhealth_requirements_helper.php';
 
 // Check if user is logged in and is an admin staff
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || $_SESSION['role_id'] != 4) {
@@ -311,6 +314,15 @@ function loadDoseStageData(mysqli $conn, int $caseId, string $branchId): array {
     $doseNumbers = array_values(array_unique($doseNumbers));
     sort($doseNumbers);
 
+    // Patient-facing dose order from the nurse-confirmed vaccination regimen
+    // ("Dose 4 - D28"); stored dose numbers keep their day-slot meaning.
+    $caseProfile = workflowCaseProfile($conn, $caseId);
+    $sequenceMap = workflowDoseSequenceMap($caseProfile['profile'], $doseNumbers);
+    $doseLabels = [];
+    foreach ($doseNumbers as $doseNumber) {
+        $doseLabels[doseNumberToKey($doseNumber)] = workflowDoseDisplay($doseNumber, $sequenceMap);
+    }
+
     $total = count($stages);
     $completed = 0;
     foreach ($stages as $stage) {
@@ -330,6 +342,10 @@ function loadDoseStageData(mysqli $conn, int $caseId, string $branchId): array {
         'stages' => $stages,
         'dose_numbers' => $doseNumbers,
         'profile' => inferScheduleProfile($doseNumbers),
+        'regimen_label' => $caseProfile['profile'] !== null
+            ? workflowProfileLabel($caseProfile['profile'], $caseProfile['route'])
+            : '',
+        'dose_labels' => $doseLabels,
         'overall_status' => $overall,
         'completed_count' => $completed,
         'total_count' => $total,
@@ -920,7 +936,8 @@ if ($action) {
                         ph.has_philhealth,
                         ph.philhealth_membership,
                         ph.status AS philhealth_status,
-                        ph.remarks AS philhealth_remarks
+                        ph.remarks AS philhealth_remarks,
+                        ph.philhealth_record_id
 
                     FROM animal_bite_cases c
                     INNER JOIN patients p
@@ -948,6 +965,21 @@ if ($action) {
                 }
 
                 $doseInfo = loadDoseStageData($conn, $caseId, (string)$logged_branch_id);
+
+                // PhilHealth requirements received at intake (after the migration).
+                $requirements = [];
+                if (philhealthRequirementsReady($conn) && !empty($row['philhealth_record_id'])) {
+                    $reqStmt = $conn->prepare('SELECT ' . implode(', ', array_keys(philhealthRequirementFields()))
+                        . ' FROM philhealth_records WHERE philhealth_record_id = ?');
+                    $phRecordId = (int)$row['philhealth_record_id'];
+                    $reqStmt->bind_param('i', $phRecordId);
+                    $reqStmt->execute();
+                    $reqRow = $reqStmt->get_result()->fetch_assoc() ?: [];
+                    $reqStmt->close();
+                    foreach (array_keys(philhealthRequirementFields()) as $field) {
+                        $requirements[$field] = !empty($reqRow[$field]);
+                    }
+                }
 
                 $historyStmt = $conn->prepare("
                     SELECT
@@ -1008,9 +1040,13 @@ if ($action) {
                     'route' => $doseInfo['profile']['route'],
                     'vacc_category' => $doseInfo['profile']['category'],
                     'vaccination_doses' => $doseInfo['stages'],
+                    'dose_labels' => $doseInfo['dose_labels'],
+                    'regimen_label' => $doseInfo['regimen_label'],
                     'vaccination_status' => $doseInfo['overall_status'],
                     'vaccination_remarks' => $doseInfo['remarks'],
                     'status' => $row['philhealth_status'] ?? '',
+                    'philhealth_requirements' => $requirements,
+                    'philhealth_requirements_ready' => philhealthRequirementsReady($conn),
                     'remarks' => $row['case_remarks'] ?: ($row['philhealth_remarks'] ?? ''),
                     'history' => $history,
                 ];
@@ -1021,7 +1057,18 @@ if ($action) {
             }
             break;
 
+        case 'next_case_no':
+            try {
+                // Suggested YY-NNNN number for a new case; the save re-checks it under a lock.
+                $date = frontToDbDate((string)($_GET['date'] ?? '')) ?: date('Y-m-d');
+                jsonResponse(['case_no' => caseNumberNext($conn, (string)$logged_branch_id, $date)]);
+            } catch (Throwable $e) {
+                jsonResponse(['error' => 'Unable to suggest a case number: ' . $e->getMessage()], 500);
+            }
+            break;
+
         case 'save':
+            $caseNumberLocked = false;
             try {
                 $rawInput = file_get_contents('php://input');
                 $input = json_decode($rawInput, true);
@@ -1044,6 +1091,7 @@ if ($action) {
                 $patientId = !empty($input['patient_id']) ? (int)$input['patient_id'] : null;
 
                 $caseNo = trim((string)($input['case_no'] ?? ''));
+                $caseNoAuto = !$caseId && !empty($input['case_no_auto']);
                 $fullName = trim((string)($input['patient_name'] ?? ''));
                 $dob = frontToDbDate((string)($input['dob'] ?? ''));
                 $gender = trim((string)($input['gender'] ?? ''));
@@ -1073,6 +1121,15 @@ if ($action) {
                     ? $input['vaccination_doses']
                     : [];
                 $scheduleRemarks = trim((string)($input['vaccination_remarks'] ?? ''));
+
+                // One case number allocation at a time per branch, held until commit.
+                caseNumberLock($conn, (string)$logged_branch_id);
+                $caseNumberLocked = true;
+                if ($caseNoAuto) {
+                    // An untouched suggestion is re-generated here, so two staff
+                    // saving at the same time receive consecutive numbers.
+                    $caseNo = caseNumberNext($conn, (string)$logged_branch_id, $admissionDate ?: date('Y-m-d'));
+                }
 
                 if (caseNoExists($conn, $caseNo, (string)$logged_branch_id, $caseId)) {
                     throw new Exception("Case number '{$caseNo}' already exists in this branch.");
@@ -1402,6 +1459,28 @@ if ($action) {
                     $insPh->close();
                 }
 
+                // Requirements received at intake (checklist). The status flow
+                // and the 6-month eligibility rule are unchanged.
+                if (philhealthRequirementsReady($conn)) {
+                    $postedRequirements = is_array($input['philhealth_requirements'] ?? null)
+                        ? $input['philhealth_requirements']
+                        : [];
+                    $sets = [];
+                    $values = [];
+                    foreach (array_keys(philhealthRequirementFields()) as $field) {
+                        $sets[] = "$field = ?";
+                        $values[] = ($dbHasPhilhealth === 'Yes' && !empty($postedRequirements[$field])) ? 1 : 0;
+                    }
+                    $values[] = (int)$caseId;
+                    $reqUpdate = $conn->prepare('UPDATE philhealth_records SET ' . implode(', ', $sets)
+                        . ' WHERE case_id = ? AND is_archived = 0');
+                    $reqUpdate->bind_param(str_repeat('i', count($values)), ...$values);
+                    if (!$reqUpdate->execute()) {
+                        throw new Exception('Unable to save the PhilHealth requirements checklist.');
+                    }
+                    $reqUpdate->close();
+                }
+
                 /* -----------------------------------------------------
                    5. VACCINATION SCHEDULE ONLY
                    IMPORTANT:
@@ -1571,6 +1650,8 @@ if ($action) {
                 );
 
                 $conn->commit();
+                caseNumberUnlock($conn, (string)$logged_branch_id);
+                $caseNumberLocked = false;
 
                 jsonResponse([
                     'success' => true,
@@ -1582,6 +1663,12 @@ if ($action) {
                 try {
                     $conn->rollback();
                 } catch (Throwable $ignored) {
+                }
+                if ($caseNumberLocked) {
+                    try {
+                        caseNumberUnlock($conn, (string)$logged_branch_id);
+                    } catch (Throwable $ignored) {
+                    }
                 }
 
                 error_log("Error saving patient record: " . $e->getMessage());
@@ -3807,7 +3894,7 @@ body.sidebar-collapsed .main {
                                     <label class="form-label">Case No. <span class="text-danger">*</span></label>
                                     <input type="text" class="form-control" id="caseNo" required>
                                     <div id="caseNoFeedback" class="invalid-feedback" style="display:none;"></div>
-                                    <small class="text-muted">Enter a unique case number</small>
+                                    <small class="text-muted" id="caseNoHint">Generated automatically as YY-NNNN (for example 26-0001). You may edit it.</small>
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">Patient's Name <span class="text-danger">*</span></label>
@@ -3851,7 +3938,34 @@ body.sidebar-collapsed .main {
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">PhilHealth Membership Type</label>
-                                    <input type="text" class="form-control" id="philhealthType" placeholder="e.g., Sponsored, Indigent, etc.">
+                                    <select class="form-select" id="philhealthTypeSelect">
+                                        <option value="">Select membership</option>
+                                        <option value="Employed">Employed</option>
+                                        <option value="Self-Earning / Individually Paying">Self-Earning / Individually Paying</option>
+                                        <option value="OFW">OFW</option>
+                                        <option value="Kasambahay">Kasambahay</option>
+                                        <option value="Indigent">Indigent</option>
+                                        <option value="Sponsored">Sponsored</option>
+                                        <option value="Senior Citizen">Senior Citizen</option>
+                                        <option value="Lifetime Member">Lifetime Member</option>
+                                        <option value="Dependent">Dependent</option>
+                                        <option value="Other">Other (specify)</option>
+                                    </select>
+                                    <input type="text" class="form-control mt-2" id="philhealthType" maxlength="50" placeholder="Specify membership type" style="display:none;">
+                                </div>
+                                <div class="mb-3" id="philhealthRequirementsBox">
+                                    <label class="form-label">PhilHealth Requirements Received</label>
+                                    <div class="d-flex flex-wrap gap-3">
+                                        <?php foreach (philhealthRequirementFields() as $reqField => $reqLabel): ?>
+                                            <div class="form-check">
+                                                <input class="form-check-input philhealth-requirement" type="checkbox" id="<?php echo htmlspecialchars($reqField); ?>" data-requirement="<?php echo htmlspecialchars($reqField); ?>">
+                                                <label class="form-check-label" for="<?php echo htmlspecialchars($reqField); ?>"><?php echo htmlspecialchars($reqLabel); ?></label>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                    <?php if (!philhealthRequirementsReady($conn)): ?>
+                                        <small class="text-danger">Run sources/migrate_philhealth_requirements.php --apply to save this checklist.</small>
+                                    <?php endif; ?>
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">Contact Number <span class="text-danger">*</span></label>
@@ -3884,11 +3998,19 @@ body.sidebar-collapsed .main {
                                 <div class="mb-3">
                                     <label class="form-label">Biting Animal</label>
                                     <select class="form-select" id="bitingAnimal">
+                                        <option value="">Not stated / Non-bite visit</option>
                                         <option value="Dog">Dog</option>
                                         <option value="Cat">Cat</option>
+                                        <option value="Monkey">Monkey</option>
+                                        <option value="Cow">Cow</option>
+                                        <option value="Carabao">Carabao</option>
+                                        <option value="Bat">Bat</option>
+                                        <option value="Pig">Pig</option>
+                                        <option value="Rat">Rat</option>
                                         <option value="Not Applicable">Not Applicable</option>
                                         <option value="Others">Others</option>
                                     </select>
+                                    <small class="text-muted">Optional for non-bite services (e.g. rusty nail puncture, Hepa B, Flu, PPD).</small>
                                 </div>
                                 <div id="customAnimalContainer" style="display:none;">
                                     <label class="form-label">Specify Animal</label>
@@ -3897,6 +4019,7 @@ body.sidebar-collapsed .main {
                                 <div class="mb-3">
                                     <label class="form-label">Status of the Biting Animal</label>
                                     <select class="form-select" id="animalStatus">
+                                        <option value="">Not stated</option>
                                         <option value="Alive/Healthy">Alive/Healthy</option>
                                         <option value="Sick">Sick</option>
                                         <option value="Died">Died</option>
@@ -4142,6 +4265,11 @@ body.sidebar-collapsed .main {
             .replace(/'/g, '&#039;');
     }
     const todayAdmissionDate = '<?php echo date('m/d/Y'); ?>';
+    const PHILHEALTH_REQUIREMENTS = <?php echo json_encode(array_map(
+        static fn($key, $label) => ['key' => $key, 'label' => $label],
+        array_keys(philhealthRequirementFields()),
+        philhealthRequirementFields()
+    )); ?>;
 
     // Empty = no admission-date restriction.
     // "All Patients" therefore shows every active patient/case in this branch.
@@ -4166,7 +4294,7 @@ body.sidebar-collapsed .main {
         { key: 'd7', label: 'D7', doseNum: 3 },
         { key: 'd14', label: 'D14', doseNum: 4 },
         { key: 'd21', label: 'D21', doseNum: 5 },
-        { key: 'd28', label: 'D28/30', doseNum: 6 }
+        { key: 'd28', label: 'D28', doseNum: 6 }
     ];
 
     let currentDoseData = {};
@@ -4547,9 +4675,39 @@ body.sidebar-collapsed .main {
         }
     }
 
+    // Suggested case number (YY-NNNN). An untouched suggestion is confirmed
+    // by the server when saving, so simultaneous saves get different numbers.
+    async function suggestCaseNumber() {
+        const caseInput = document.getElementById('caseNo');
+        const date = document.getElementById('admissionDate').value || '';
+        try {
+            const res = await fetch(`${apiBase}?action=next_case_no&date=${encodeURIComponent(date)}`);
+            const data = await res.json();
+            if (data.case_no) {
+                caseInput.value = data.case_no;
+                caseInput.dataset.auto = '1';
+                caseInput.classList.remove('is-valid', 'is-invalid');
+                document.getElementById('caseNoFeedback').style.display = 'none';
+            }
+        } catch (e) {
+            caseInput.dataset.auto = '0';
+        }
+    }
+
+    document.getElementById('caseNo').addEventListener('input', function() {
+        this.dataset.auto = '0';
+    });
+
+    document.getElementById('admissionDate').addEventListener('change', function() {
+        if (document.getElementById('caseNo').dataset.auto === '1' && !document.getElementById('editId').value) {
+            suggestCaseNumber();
+        }
+    });
+
     document.getElementById('caseNo').addEventListener('blur', async function() {
         const caseNo = this.value.trim();
         const excludeId = parseInt(document.getElementById('editId').value) || null;
+        if (this.dataset.auto === '1') return;
         if (!caseNo) {
             this.classList.remove('is-valid', 'is-invalid');
             document.getElementById('caseNoFeedback').style.display = 'none';
@@ -4677,6 +4835,7 @@ body.sidebar-collapsed .main {
                                 <div class="action-icons">
                                     <i class="bi bi-eye" data-action="view" data-case="${p.case_id}" title="View"></i>
                                     <i class="bi bi-pencil" data-action="edit" data-case="${p.case_id}" title="Edit"></i>
+                                    <i class="bi bi-file-earmark-plus" data-action="newcase" data-case="${p.case_id}" title="New case for this returning patient"></i>
                                     <i class="bi bi-archive" data-action="archive" data-case="${p.case_id}" title="Archive"></i>
                                 </div>
                             </td>
@@ -4691,6 +4850,7 @@ body.sidebar-collapsed .main {
                         const caseId = parseInt(this.dataset.case);
                         if (action === 'view') viewPatient(caseId);
                         else if (action === 'edit') editPatient(caseId);
+                        else if (action === 'newcase') newCaseForPatient(caseId);
                         else if (action === 'archive') confirmArchive(caseId);
                     });
                 });
@@ -4819,6 +4979,13 @@ body.sidebar-collapsed .main {
                             <span class="patient-view-label">PhilHealth Type</span>
                             <span class="patient-view-value">${value(data.philhealth_membership)}</span>
                         </div>
+                        ${data.has_philhealth === 'Yes' ? `
+                        <div class="patient-view-field">
+                            <span class="patient-view-label">PhilHealth Requirements</span>
+                            <span class="patient-view-value">${PHILHEALTH_REQUIREMENTS.map(r =>
+                                `<span class="d-inline-block me-2">${(data.philhealth_requirements || {})[r.key] ? '<i class="bi bi-check-square-fill text-success"></i>' : '<i class="bi bi-square text-muted"></i>'} ${escapeHtml(r.label)}</span>`
+                            ).join('')}</span>
+                        </div>` : ''}
                         <div class="patient-view-field">
                             <span class="patient-view-label">Address</span>
                             <span class="patient-view-value address">${value(data.address)}</span>
@@ -4866,8 +5033,8 @@ body.sidebar-collapsed .main {
                             <span class="patient-view-value">${value(data.active_regimen)}</span>
                         </div>
                         <div class="patient-view-field">
-                            <span class="patient-view-label">Vaccination Category</span>
-                            <span class="patient-view-value">${value(data.vacc_category)}</span>
+                            <span class="patient-view-label">Vaccination Regimen</span>
+                            <span class="patient-view-value">${value(data.regimen_label, 'Not yet assessed by Nurse')}</span>
                         </div>
                         <div class="patient-view-field">
                             <span class="patient-view-label">Vaccination Status</span>
@@ -4902,13 +5069,39 @@ body.sidebar-collapsed .main {
                                         if (!stage) return '';
                                         return `
                                             <tr>
-                                                <td class="patient-view-dose">${escapeHtml(d.label)}</td>
+                                                <td class="patient-view-dose">${escapeHtml((data.dose_labels && data.dose_labels[d.key]) || d.label)}</td>
                                                 <td>${displayDate(stage.scheduled_date, '—')}</td>
                                                 <td>${displayDate(stage.administered_date, 'Not administered')}</td>
                                                 <td>${scheduleStatusBadge(stage.status || 'Scheduled')}</td>
                                             </tr>
                                         `;
                                     }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                ` : ''}
+
+                ${Array.isArray(data.history) && data.history.length > 0 ? `
+                    <section class="patient-view-section">
+                        <div class="patient-view-section-header">
+                            <i class="bi bi-clock-history"></i>
+                            Other Cases of this Patient
+                        </div>
+                        <div class="patient-view-schedule-wrap">
+                            <table class="patient-view-schedule">
+                                <thead>
+                                    <tr><th>Case No.</th><th>Admission Date</th><th>Status</th><th></th></tr>
+                                </thead>
+                                <tbody>
+                                    ${data.history.map(h => `
+                                        <tr>
+                                            <td>${escapeHtml(h.case_no || 'N/A')}</td>
+                                            <td>${displayDate(h.admit_date, '—')}</td>
+                                            <td>${escapeHtml(h.status || 'Ongoing')}</td>
+                                            <td><button type="button" class="btn btn-sm btn-outline-primary" data-history-case="${Number(h.case_id)}">View</button></td>
+                                        </tr>
+                                    `).join('')}
                                 </tbody>
                             </table>
                         </div>
@@ -4930,6 +5123,10 @@ body.sidebar-collapsed .main {
             if (subtitle) {
                 subtitle.textContent = `${data.patient_name || 'Patient'} • Case ${data.case_no || 'N/A'}`;
             }
+
+            body.querySelectorAll('[data-history-case]').forEach(button => {
+                button.addEventListener('click', () => viewPatient(parseInt(button.dataset.historyCase, 10)));
+            });
         } catch (e) {
             console.error('Error viewing patient:', e);
             body.innerHTML = `
@@ -4950,6 +5147,7 @@ body.sidebar-collapsed .main {
             document.getElementById('editPatientId').value = data.patient_id;
             document.getElementById('modalTitle').textContent = 'Edit Patient';
             document.getElementById('caseNo').value = data.case_no || '';
+            document.getElementById('caseNo').dataset.auto = '0';
             document.getElementById('caseNo').classList.remove('is-valid', 'is-invalid');
             document.getElementById('caseNoFeedback').style.display = 'none';
             
@@ -4963,14 +5161,17 @@ body.sidebar-collapsed .main {
             });
             
             document.getElementById('philhealth').value = data.has_philhealth === 'Yes' ? 'Yes' : 'No';
-            document.getElementById('philhealthType').value = data.philhealth_membership || '';
+            setPhilhealthType(data.philhealth_membership || '');
+            document.querySelectorAll('.philhealth-requirement').forEach(box => {
+                box.checked = Boolean((data.philhealth_requirements || {})[box.dataset.requirement]);
+            });
             document.getElementById('contactNumber').value = data.contact_number || '';
             document.getElementById('admissionDate').value = data.admission_date || '';
             document.getElementById('dateOfBite').value = data.date_of_bite || '';
             document.getElementById('siteOfBite').value = data.site_of_bite || '';
-            const knownAnimals = ['Dog', 'Cat', 'Not Applicable'];
-            if (knownAnimals.includes(data.biting_animal)) {
-                document.getElementById('bitingAnimal').value = data.biting_animal;
+            const knownAnimals = ['', 'Dog', 'Cat', 'Monkey', 'Cow', 'Carabao', 'Bat', 'Pig', 'Rat', 'Not Applicable'];
+            if (knownAnimals.includes(data.biting_animal || '')) {
+                document.getElementById('bitingAnimal').value = data.biting_animal || '';
                 document.getElementById('customAnimal').value = '';
                 document.getElementById('customAnimalContainer').style.display = 'none';
             } else {
@@ -5041,6 +5242,71 @@ body.sidebar-collapsed .main {
         }
     }
 
+    function renderPatientHistory(hist, note) {
+        if (Array.isArray(hist) && hist.length > 0) {
+            let histHtml = '';
+            hist.forEach(h => {
+                histHtml += `
+                    <div class="history-item">
+                        <span>${escapeHtml(h.case_no || 'N/A')} (${escapeHtml(h.admit_date || '')})</span>
+                        <span class="badge bg-${h.status === 'Completed' ? 'success' : 'warning'}">${escapeHtml(h.status || 'Ongoing')}</span>
+                    </div>
+                `;
+            });
+            if (note) {
+                histHtml += `<div class="mt-2 small text-muted">${escapeHtml(note)}</div>`;
+            }
+            document.getElementById('historyList').innerHTML = histHtml;
+            document.getElementById('historyPanel').style.display = 'block';
+        } else {
+            document.getElementById('historyPanel').style.display = 'none';
+        }
+    }
+
+    /*
+     * Returning patient: open a NEW case under the SAME patient record, so the
+     * old case(s) and the new one stay together in one patient file.
+     */
+    async function newCaseForPatient(caseId) {
+        try {
+            const res = await fetch(`${apiBase}?action=view&case_id=${encodeURIComponent(caseId)}`);
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+
+            document.getElementById('patientForm').reset();
+            setPhilhealthType('');
+            document.getElementById('editId').value = '';
+            document.getElementById('editPatientId').value = data.patient_id;
+            document.getElementById('modalTitle').textContent = 'New Case for Returning Patient';
+            document.getElementById('patientName').value = data.patient_name || '';
+            document.getElementById('address').value = data.address || '';
+            document.getElementById('dob').value = data.dob || '';
+            document.getElementById('age').value = data.age ?? '';
+            document.querySelectorAll('input[name="gender"]').forEach(el => {
+                el.checked = el.value === data.gender;
+            });
+            document.getElementById('contactNumber').value = data.contact_number || '';
+            document.getElementById('philhealth').value = data.has_philhealth === 'Yes' ? 'Yes' : 'No';
+            setPhilhealthType(data.philhealth_membership || '');
+            document.getElementById('admissionDate').value = todayAdmissionDate;
+            document.getElementById('customAnimal').value = '';
+            document.getElementById('customAnimalContainer').style.display = 'none';
+            togglePhilhealthStatus();
+            initNewSchedule();
+
+            const histRes = await fetch(`${apiBase}?action=patient_history&patient_id=${encodeURIComponent(data.patient_id)}`);
+            renderPatientHistory(
+                await histRes.json(),
+                'Saving creates a new case for this same patient. The earlier cases stay in this patient\'s record.'
+            );
+
+            await suggestCaseNumber();
+            new bootstrap.Modal(document.getElementById('patientModal')).show();
+        } catch (e) {
+            showToast('Error preparing the new case', e.message, true);
+        }
+    }
+
     function confirmArchive(caseId) {
         archiveTargetCaseId = caseId;
         const patient = Array.isArray(allPatients)
@@ -5094,9 +5360,38 @@ body.sidebar-collapsed .main {
         }
     });
 
+    // PhilHealth membership: fixed choices plus "Other (specify)". The text
+    // box #philhealthType always holds the value that is saved.
+    function setPhilhealthType(value) {
+        const select = document.getElementById('philhealthTypeSelect');
+        const input = document.getElementById('philhealthType');
+        const known = Array.from(select.options).map(o => o.value).filter(v => v !== '' && v !== 'Other');
+        if (value === '' || known.includes(value)) {
+            select.value = value;
+            input.style.display = 'none';
+        } else {
+            select.value = 'Other';
+            input.style.display = 'block';
+        }
+        input.value = value;
+    }
+
+    document.getElementById('philhealthTypeSelect').addEventListener('change', function() {
+        const input = document.getElementById('philhealthType');
+        if (this.value === 'Other') {
+            input.value = '';
+            input.style.display = 'block';
+            input.focus();
+        } else {
+            input.value = this.value;
+            input.style.display = 'none';
+        }
+    });
+
     function togglePhilhealthStatus() {
         const philhealth = document.getElementById('philhealth').value;
         const statusSelect = document.getElementById('status');
+        document.getElementById('philhealthRequirementsBox').style.display = philhealth === 'Yes' ? '' : 'none';
 
         if (philhealth === 'No') {
             statusSelect.disabled = true;
@@ -5118,7 +5413,8 @@ body.sidebar-collapsed .main {
         }
         
         const excludeId = parseInt(document.getElementById('editId').value) || null;
-        const exists = await checkCaseNo(caseNo, excludeId);
+        const caseNoAuto = !excludeId && document.getElementById('caseNo').dataset.auto === '1';
+        const exists = caseNoAuto ? false : await checkCaseNo(caseNo, excludeId);
         if (exists) {
             showToast('Error', 'Case number already exists.', true);
             document.getElementById('caseNo').focus();
@@ -5130,6 +5426,11 @@ body.sidebar-collapsed .main {
             case_id: parseInt(document.getElementById('editId').value) || null,
             patient_id: parseInt(document.getElementById('editPatientId').value) || null,
             case_no: caseNo,
+            case_no_auto: caseNoAuto,
+            philhealth_requirements: Object.fromEntries(
+                Array.from(document.querySelectorAll('.philhealth-requirement'))
+                    .map(box => [box.dataset.requirement, box.checked])
+            ),
             patient_name: document.getElementById('patientName').value.trim(),
             address: document.getElementById('address').value.trim(),
             dob: document.getElementById('dob').value,
@@ -5217,12 +5518,14 @@ body.sidebar-collapsed .main {
         document.getElementById('editPatientId').value = '';
         document.getElementById('modalTitle').textContent = 'Add New Patient';
         document.getElementById('patientForm').reset();
+        setPhilhealthType('');
         document.getElementById('caseNo').value = '';
         document.getElementById('caseNo').classList.remove('is-valid', 'is-invalid');
         document.getElementById('caseNoFeedback').style.display = 'none';
         document.getElementById('admissionDate').value =
             currentAdmissionDate || todayAdmissionDate;
         document.getElementById('historyPanel').style.display = 'none';
+        suggestCaseNumber();
         
         document.querySelectorAll('input[name="gender"]').forEach(el => {
             el.checked = false;
@@ -5389,8 +5692,9 @@ body.sidebar-collapsed .main {
     document.getElementById('philhealth').addEventListener('change', function() {
         togglePhilhealthStatus();
         document.getElementById('philhealthType').disabled = this.value === 'No';
+        document.getElementById('philhealthTypeSelect').disabled = this.value === 'No';
         if (this.value === 'No') {
-            document.getElementById('philhealthType').value = '';
+            setPhilhealthType('');
         }
     });
 

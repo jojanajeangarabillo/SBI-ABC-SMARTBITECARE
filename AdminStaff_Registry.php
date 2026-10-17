@@ -121,7 +121,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $queueStmt = $conn->prepare(
     "SELECT v.visit_id,v.visit_date,v.workflow_status,p.full_name,p.contact_number,c.case_id,c.case_number,
-            c.animal_status,a.bite_category,a.treatment_profile,a.active_regimen,a.chart_signed_at,
+            c.animal_status,a.bite_category,a.treatment_profile,a.route,a.active_regimen,a.chart_signed_at,
             r.registry_number,r.erig,r.ats,r.tt,r.remarks
      FROM patient_visits v INNER JOIN patients p ON p.patient_id=v.patient_id
      INNER JOIN animal_bite_cases c ON c.case_id=v.case_id
@@ -847,9 +847,14 @@ $flash = workflowTakeFlash();
                         <h5><span class="section-icon"><i class="bi bi-journal-medical"></i></span>Registry Verification Queue</h5>
                         <p>Charts appear here after the Nurse completes and signs the clinical assessment.</p>
                     </div>
-                    <span class="badge rounded-pill text-bg-light border">
-                        <?php echo number_format(count($records)); ?> records
-                    </span>
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <a class="btn btn-sm btn-outline-primary" href="AdminStaff_RegistryLogbook.php">
+                            <i class="bi bi-journal-text me-1"></i>Logbook View &amp; Excel Export
+                        </a>
+                        <span class="badge rounded-pill text-bg-light border">
+                            <?php echo number_format(count($records)); ?> records
+                        </span>
+                    </div>
                 </div>
 
                 <div class="table-responsive">
@@ -891,8 +896,8 @@ $flash = workflowTakeFlash();
                                     <td>
                                         <div class="detail-label">Bite Category</div>
                                         <div><?php echo workflowH($row['bite_category'] ?: 'Unspecified'); ?></div>
-                                        <div class="detail-label mt-2">Treatment Profile</div>
-                                        <div><?php echo workflowH($row['treatment_profile']); ?></div>
+                                        <div class="detail-label mt-2">Vaccination Regimen</div>
+                                        <div><?php echo workflowH(workflowProfileLabel($row['treatment_profile'] ?? null, $row['route'] ?? null)); ?></div>
                                         <div class="detail-label mt-2">Chart Signed</div>
                                         <div class="small">
                                             <?php

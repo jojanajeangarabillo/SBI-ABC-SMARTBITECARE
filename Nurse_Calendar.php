@@ -20,32 +20,14 @@ function nurseCalendarH($value): string
     return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
 }
 
-function nurseCalendarDoseLabel(int $doseNumber): string
+function nurseCalendarDoseLabel(int $doseNumber, array $sequenceMap = []): string
 {
-    $map = [
-        1 => 'D0',
-        2 => 'D3',
-        3 => 'D7',
-        4 => 'D14',
-        5 => 'D21',
-        6 => 'D28/30',
-    ];
-
-    return $map[$doseNumber] ?? ('Dose ' . $doseNumber);
+    return workflowDoseDisplay($doseNumber, $sequenceMap);
 }
 
-function nurseCalendarProfileLabel(?string $profile): string
+function nurseCalendarProfileLabel(?string $profile, ?string $route = null): string
 {
-    $profile = strtoupper(trim((string)$profile));
-
-    $labels = [
-        'PEP_ID' => 'PEP - Intradermal',
-        'PEP_IM' => 'PEP - Intramuscular',
-        'PREP' => 'PrEP',
-        'BOOSTER' => 'Booster',
-    ];
-
-    return $labels[$profile] ?? ($profile !== '' ? $profile : 'Not set');
+    return workflowProfileLabel($profile, $route);
 }
 
 
@@ -202,6 +184,14 @@ $scheduleSql = "
             ORDER BY ca.updated_at DESC, ca.assessment_id DESC
             LIMIT 1
         ) AS treatment_profile,
+        (
+            SELECT ca.route
+            FROM clinical_assessments ca
+            WHERE ca.case_id = vr.case_id
+              AND ca.branch_id = vr.branch_id
+            ORDER BY ca.updated_at DESC, ca.assessment_id DESC
+            LIMIT 1
+        ) AS treatment_route,
         DATEDIFF(vr.scheduled_date, CURDATE()) AS days_until
     FROM vaccination_records vr
     INNER JOIN patients p
@@ -226,6 +216,30 @@ nurseCalendarBind($scheduleStmt, $scheduleTypes, $scheduleParams);
 $scheduleStmt->execute();
 $schedules = $scheduleStmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $scheduleStmt->close();
+
+// Dose order per case ("Dose 4 - D28") uses every active dose of the case.
+$caseDoseNumbers = [];
+$caseIds = array_values(array_unique(array_map(static fn($row) => (int)$row['case_id'], $schedules)));
+if ($caseIds) {
+    $doseStmt = $conn->prepare(
+        'SELECT case_id, dose_number FROM vaccination_records
+         WHERE is_archived = 0 AND dose_number >= 1 AND case_id IN (' . implode(',', array_fill(0, count($caseIds), '?')) . ')'
+    );
+    $doseStmt->bind_param(str_repeat('i', count($caseIds)), ...$caseIds);
+    $doseStmt->execute();
+    foreach ($doseStmt->get_result()->fetch_all(MYSQLI_ASSOC) as $doseRow) {
+        $caseDoseNumbers[(int)$doseRow['case_id']][] = (int)$doseRow['dose_number'];
+    }
+    $doseStmt->close();
+}
+foreach ($schedules as &$scheduleRow) {
+    $sequenceMap = workflowDoseSequenceMap(
+        $scheduleRow['treatment_profile'] ?? null,
+        $caseDoseNumbers[(int)$scheduleRow['case_id']] ?? []
+    );
+    $scheduleRow['dose_display'] = nurseCalendarDoseLabel((int)$scheduleRow['dose_number'], $sequenceMap);
+}
+unset($scheduleRow);
 
 function nurseCalendarUrl(string $range, string $search, int $page = 1): string
 {
@@ -816,7 +830,7 @@ function nurseCalendarUrl(string $range, string $search, int $page = 1): string
                                 <th>Patient</th>
                                 <th>Case</th>
                                 <th>Dose</th>
-                                <th>Treatment Profile</th>
+                                <th>Vaccination Regimen</th>
                                 <th>Contact</th>
                                 <th>Status</th>
                                 <th class="text-center">Action</th>
@@ -847,8 +861,8 @@ function nurseCalendarUrl(string $range, string $search, int $page = 1): string
                                         <div class="fw-semibold"><?= nurseCalendarH($caseNumber) ?></div>
                                         <div class="subtext"><?= nurseCalendarH($row['animal_type'] ?: 'Animal not specified') ?></div>
                                     </td>
-                                    <td><span class="dose-badge"><?= nurseCalendarH(nurseCalendarDoseLabel((int)$row['dose_number'])) ?></span></td>
-                                    <td><span class="profile-badge"><?= nurseCalendarH(nurseCalendarProfileLabel($row['treatment_profile'] ?? null)) ?></span></td>
+                                    <td><span class="dose-badge"><?= nurseCalendarH($row['dose_display']) ?></span></td>
+                                    <td><span class="profile-badge"><?= nurseCalendarH(nurseCalendarProfileLabel($row['treatment_profile'] ?? null, $row['treatment_route'] ?? null)) ?></span></td>
                                     <td>
                                         <div class="fw-semibold"><?= nurseCalendarH($row['contact_number'] ?: 'No contact') ?></div>
                                         <?php if (!empty($row['email'])): ?>
@@ -857,7 +871,7 @@ function nurseCalendarUrl(string $range, string $search, int $page = 1): string
                                     </td>
                                     <td><span class="schedule-badge <?= nurseCalendarH($badgeClass) ?>"><?= nurseCalendarH($badgeText) ?></span></td>
                                     <td class="text-center">
-                                        <a class="btn-open" href="Nurse_Vaccination.php?tab=vaccination&amp;patient_id=<?= (int)$row['patient_id'] ?>&amp;case_id=<?= (int)$row['case_id'] ?>">
+                                        <a class="btn-open" href="Nurse_Vaccination.php?tab=vaccination&amp;patient_id=<?= (int)$row['patient_id'] ?>&amp;case_id=<?= (int)$row['case_id'] ?>&amp;dose=<?= (int)$row['dose_number'] ?>" title="Open Vaccination with this patient, case and dose filled in">
                                             <i class="bi bi-shield-plus"></i>Vaccination
                                         </a>
                                     </td>
