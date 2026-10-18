@@ -86,12 +86,14 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'get_patient') {
     }
 
     // Complete case history for this patient in the current branch.
-    $sql_cases = "SELECT *
-                  FROM animal_bite_cases
-                  WHERE patient_id = ?
-                    AND branch_id = ?
-                    AND is_archived = 0
-                  ORDER BY created_at DESC";
+    // Case status uses the shared rule (one-time / Not Anti-Rabies cases are
+    // Completed once their products are recorded).
+    $sql_cases = "SELECT c.*, " . patientCaseStatusSql('c') . " AS shared_case_status
+                  FROM animal_bite_cases c
+                  WHERE c.patient_id = ?
+                    AND c.branch_id = ?
+                    AND c.is_archived = 0
+                  ORDER BY c.created_at DESC";
 
     $stmt_cases = $conn->prepare($sql_cases);
     $stmt_cases->bind_param("is", $patient_id, $branch_id);
@@ -105,6 +107,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'get_patient') {
             if ($value !== null && $value !== '') $caseRow[$key] = $value;
         }
         $caseRow['regimen_label'] = patientRegimenLabel($clinical['treatment_profile'] ?? null, $clinical['regimen_route'] ?? null);
+        $caseRow['case_status'] = $caseRow['shared_case_status'];
+        $caseRow['case_number'] = patientDisplayCaseNumber($caseRow['case_number'] ?? null);
     }
     unset($caseRow);
 
@@ -244,7 +248,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_document']))
                     p.patient_id,p.full_name,p.email,p.contact_number,p.birthday,p.gender,p.address,
                     a.case_id,a.case_number,
                     " . patientClinicalSelectSql($conn, 'a', 'la') . ",
-                    a.case_status,a.remarks AS case_remarks
+                    " . patientCaseStatusSql('a') . " AS case_status,a.remarks AS case_remarks
                 FROM patients p
                 INNER JOIN animal_bite_cases a
                     ON a.patient_id=p.patient_id AND a.branch_id=p.branch_id
@@ -470,17 +474,17 @@ $sql_patients = "SELECT
                  FROM patients p
                  LEFT JOIN (
                      SELECT
-                         patient_id,
-                         branch_id,
-                         case_id,
-                         case_status,
-                         date_of_bite,
+                         abc_s.patient_id,
+                         abc_s.branch_id,
+                         abc_s.case_id,
+                         " . patientCaseStatusSql('abc_s') . " AS case_status,
+                         abc_s.date_of_bite,
                          ROW_NUMBER() OVER (
-                             PARTITION BY patient_id
-                             ORDER BY created_at DESC
+                             PARTITION BY abc_s.patient_id
+                             ORDER BY abc_s.created_at DESC
                          ) AS rn
-                     FROM animal_bite_cases
-                     WHERE is_archived = 0
+                     FROM animal_bite_cases abc_s
+                     WHERE abc_s.is_archived = 0
                  ) a
                     ON p.patient_id = a.patient_id
                    AND p.branch_id = a.branch_id
@@ -746,7 +750,7 @@ function buildPatientDocumentContent(
         'address' => $patientCase['address'] ?? 'N/A',
         'contact_number' => $patientCase['contact_number'] ?? 'N/A',
         'email' => $patientCase['email'] ?? 'N/A',
-        'case_number' => trim((string)($patientCase['case_number'] ?? '')) !== '' ? $patientCase['case_number'] : ('C' . str_pad((string)$caseId, 4, '0', STR_PAD_LEFT)),
+        'case_number' => patientCaseNumberById($conn, (int)$caseId),
         'bite_type' => $patientCase['bite_type'] ?? '',
         'wound_type' => $patientCase['wound_type'] ?? '',
         'regimen' => patientRegimenLabel($patientCase['treatment_profile'] ?? null, $patientCase['regimen_route'] ?? null),
@@ -2454,11 +2458,8 @@ function viewPatient(patientId) {
                     '<div class="row">' +
 
                     '<div class="col-md-3">' +
-                    '<strong>Case ID:</strong> C' +
-                    escapeHtml(
-                        String(c.case_id || '')
-                        .padStart(4, '0')
-                    ) +
+                    '<strong>Case No.:</strong> ' +
+                    escapeHtml(c.case_number || 'N/A') +
                     '</div>' +
 
                     '<div class="col-md-3">' +
@@ -2526,7 +2527,7 @@ function viewPatient(patientId) {
 
             vaccines.forEach(function(v) {
                 var status = v.vaccination_status || 'Scheduled';
-                var caseLabel = v.case_number || ('#' + (v.case_id || ''));
+                var caseLabel = v.case_number || 'N/A';
 
                 html += '<tr>';
                 html +=

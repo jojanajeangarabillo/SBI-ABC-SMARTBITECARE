@@ -1034,6 +1034,7 @@ if (isset($_POST['submit_vaccination'])) {
 
     $patient_name = $caseData['full_name'];
     $case_number = (string)($caseData['case_number'] ?? '');
+    $case_label = patientCaseNumberById($conn, (int)$case_id); // shown to users instead of the internal case ID
 
     // Nurse's choice for a dose more than 7 days late (Option A: continue).
     $late_decision = (string)($_POST['late_decision'] ?? '');
@@ -1522,7 +1523,7 @@ if (isset($_POST['submit_vaccination'])) {
                     );
 
                 $transactionRemarks = "Vaccination | Patient ID: {$patient_id}" .
-                                      " | Case ID: {$case_id}" .
+                                      " | Case No.: {$case_label}" .
                                       " | Vaccine: {$vaccine_name}" .
                                       " | Dose #: {$dose_number}" .
                                       " | Used: {$usageDescription}" .
@@ -1616,7 +1617,7 @@ if (isset($_POST['submit_vaccination'])) {
                            ' Dose #' . $dose_number .
                            ' (' . getDoseLabel($dose_number) . ')' .
                            " | Patient: {$patient_name} (ID: {$patient_id})" .
-                           " | Case ID: {$case_id}" .
+                           " | Case: {$case_label} (ID: {$case_id})" .
                            " | Used: " . inventoryUsageDescription($quantity, $vaccine) .
                            " | Status: {$vaccination_status}" .
                            " | Batch(es): {$batch_summary}" .
@@ -1675,7 +1676,7 @@ if (isset($_POST['submit_vaccination'])) {
             $notification_message =
                 "Vaccination information was recorded by Nurse {$username} at {$branch_name}.\n\n" .
                 "Patient: {$patient_name} (ID: P" . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . ")\n" .
-                "Case ID: C" . str_pad($case_id, 4, '0', STR_PAD_LEFT) . "\n" .
+                "Case No.: {$case_label}\n" .
                 'Date: ' . date('F d, Y H:i:s') . "\n\n" .
                 "Vaccination Entries:\n" .
                 $doseList .
@@ -2925,7 +2926,7 @@ function getStatusBadge($status)
                                                         <?php
                                                         $caseLabel = !empty($patient['case_number'])
                                                             ? $patient['case_number']
-                                                            : 'Case #' . $patient['case_id'];
+                                                            : patientDisplayCaseNumber(null, $patient['registry_number'] ?? null);
                                                         ?>
                                                         <?php echo htmlspecialchars($caseLabel, ENT_QUOTES, 'UTF-8'); ?>
                                                     <?php else: ?>
@@ -3370,7 +3371,7 @@ function loadPatientData() {
                 data.data.forEach(function(row) {
                     if (row.case_id) {
                         hasCases = true;
-                        cs.innerHTML += `<option value="${Number(row.case_id)}">Case ${escapeHtml(row.case_number || ('#' + row.case_id))} - ${escapeHtml(row.animal_type || 'Unknown')} (${escapeHtml(row.case_status || 'N/A')})</option>`;
+                        cs.innerHTML += `<option value="${Number(row.case_id)}">Case ${escapeHtml(row.case_number || 'N/A')} - ${escapeHtml(row.animal_type || 'Unknown')} (${escapeHtml(row.case_status || 'N/A')})</option>`;
                     }
                 });
                 if (!hasCases) cs.innerHTML += '<option value="">No active cases found</option>';

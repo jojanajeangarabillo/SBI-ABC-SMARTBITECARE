@@ -852,7 +852,7 @@ function nurseCalendarUrl(string $range, string $search, int $page = 1): string
                                     $badgeText = $daysUntil === 0 ? 'Today' : ($daysUntil === 1 ? 'Tomorrow' : 'In ' . $daysUntil . ' days');
                                     $caseNumber = trim((string)($row['case_number'] ?? ''));
                                     if ($caseNumber === '') {
-                                        $caseNumber = 'C' . str_pad((string)$row['case_id'], 4, '0', STR_PAD_LEFT);
+                                        $caseNumber = 'N/A'; // never show the internal case ID
                                     }
                                 ?>
                                 <tr class="<?= $daysUntil === 0 ? 'today-row' : '' ?>">

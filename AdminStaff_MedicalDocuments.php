@@ -489,7 +489,7 @@ function buildPatientDocumentContent(
         'address' => $patientCase['address'] ?? 'N/A',
         'contact_number' => $patientCase['contact_number'] ?? 'N/A',
         'email' => $patientCase['email'] ?? 'N/A',
-        'case_number' => trim((string)($patientCase['case_number'] ?? '')) !== '' ? $patientCase['case_number'] : ('C' . str_pad((string)$caseId, 4, '0', STR_PAD_LEFT)),
+        'case_number' => patientCaseNumberById($conn, (int)$caseId),
         'bite_type' => $patientCase['bite_type'] ?? '',
         'wound_type' => $patientCase['wound_type'] ?? '',
         'regimen' => patientRegimenLabel($patientCase['treatment_profile'] ?? null, $patientCase['regimen_route'] ?? null),
@@ -6628,7 +6628,7 @@ function renderPatients(patients) {
                 </td>
                 <td class="case-cell">
                     ${hasCase
-                        ? `<strong>${escapeHtml(patient.case_number || ('C' + patient.case_id))}</strong>
+                        ? `<strong>${escapeHtml(patient.case_number || 'N/A')}</strong>
                            <small>Bite date: ${escapeHtml(biteDate)}</small>`
                         : '<span class="text-muted">No animal-bite case</span>'}
                 </td>
@@ -6843,7 +6843,7 @@ document.getElementById('patientsTableBody').addEventListener('click', function(
 
         caseSelect.innerHTML = data.cases.map(item => {
             const details = [
-                item.case_number || ('C' + item.case_id),
+                item.case_number || 'N/A',
                 item.date_of_bite || 'No bite date',
                 item.case_status || 'No status'
             ].join(' · ');
