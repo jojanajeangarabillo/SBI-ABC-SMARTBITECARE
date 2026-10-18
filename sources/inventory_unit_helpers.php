@@ -107,3 +107,67 @@ function inventoryUsageDescription(float $baseQuantity, array $item): string
 
     return $description;
 }
+
+/** True when the item is counted in a larger display unit (e.g. vials of 6 sites). */
+function inventoryHasDisplayUnit(array $item): bool
+{
+    return inventoryConversionToBase($item) > 1.0
+        && strcasecmp(inventoryBaseUnitLabel($item), inventoryDisplayUnitLabel($item)) !== 0;
+}
+
+/** Unit label in the clinic's wording: "vial"/"vials", "site"/"sites", "mL" stays "mL". */
+function inventoryUnitWord(string $unit, float $quantity): string
+{
+    $unit = trim($unit);
+    if ($unit === '') {
+        return '';
+    }
+    // Abbreviations such as mL, IU or pcs keep their spelling.
+    if (preg_match('/^(ml|l|mg|g|iu|cc|pcs|pc)$/i', $unit)) {
+        return strtolower($unit) === 'ml' ? 'mL' : $unit;
+    }
+    $word = strtolower($unit);
+    if (abs($quantity - 1.0) < 0.00005 || str_ends_with($word, 's')) {
+        return $word;
+    }
+    return $word . 's';
+}
+
+/**
+ * A base-unit quantity in the clinic's format: "67 vials + 3 sites",
+ * "12 vials + 3 mL", "4 ampules", "30 vials". Items without a larger display
+ * unit show the base unit ("150 pcs"). Negative values (variance) keep the sign.
+ */
+function inventoryQuantityText(float $baseQuantity, array $item): string
+{
+    $sign = $baseQuantity < -0.00005 ? '-' : '';
+    $baseQuantity = abs($baseQuantity);
+    $baseUnit = inventoryBaseUnitLabel($item);
+    if (!inventoryHasDisplayUnit($item)) {
+        // Display unit with conversion 1 (e.g. ATS: 1 ampule = 1 mL) reads in the display unit.
+        $unit = inventoryConversionToBase($item) === 1.0 ? inventoryDisplayUnitLabel($item) : $baseUnit;
+        return $sign . inventoryFormatNumber($baseQuantity) . ' ' . inventoryUnitWord($unit, $baseQuantity);
+    }
+    $conversion = inventoryConversionToBase($item);
+    $full = (int)floor(($baseQuantity + 0.0000001) / $conversion);
+    $remainder = round($baseQuantity - $full * $conversion, 4);
+    if (abs($remainder) < 0.00005) {
+        $remainder = 0.0;
+    }
+    $parts = [];
+    if ($full > 0 || $remainder === 0.0) {
+        $parts[] = $full . ' ' . inventoryUnitWord(inventoryDisplayUnitLabel($item), (float)$full);
+    }
+    if ($remainder > 0) {
+        $parts[] = inventoryFormatNumber($remainder) . ' ' . inventoryUnitWord($baseUnit, $remainder);
+    }
+    return $sign . implode(' + ', $parts);
+}
+
+/** A base-unit quantity as display units with one decimal: "67.5 vials", "3.0 ampules". */
+function inventoryDisplayQuantityText(float $baseQuantity, array $item, int $decimals = 1): string
+{
+    $unit = inventoryDisplayUnitLabel($item);
+    $value = $baseQuantity / inventoryConversionToBase($item);
+    return number_format($value, $decimals, '.', ',') . ' ' . inventoryUnitWord($unit, round($value, $decimals));
+}
