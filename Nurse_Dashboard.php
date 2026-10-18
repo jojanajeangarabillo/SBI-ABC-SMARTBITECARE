@@ -148,6 +148,8 @@ $upcomingQuery = "SELECT COUNT(*) AS upcoming
                   FROM (
                       SELECT vr.patient_id, vr.case_id, vr.dose_number
                       FROM vaccination_records vr
+                      INNER JOIN animal_bite_cases c ON c.case_id = vr.case_id AND c.is_archived = 0
+                      INNER JOIN patients p ON p.patient_id = vr.patient_id AND p.is_archived = 0
                       LEFT JOIN inventory_items ii ON vr.item_id = ii.item_id
                       WHERE vr.branch_id = ?
                         AND vr.is_archived = 0

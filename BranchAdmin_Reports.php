@@ -654,7 +654,10 @@ function generateVaccinationReport($branchId, $startDate = null, $endDate = null
               LEFT JOIN patients p ON vr.patient_id = p.patient_id 
               LEFT JOIN inventory_items i ON vr.item_id = i.item_id 
               LEFT JOIN animal_bite_cases abc ON vr.case_id = abc.case_id 
-              WHERE vr.branch_id = ?";
+              WHERE vr.branch_id = ?
+                AND vr.is_archived = 0
+                AND COALESCE(abc.is_archived, 0) = 0
+                AND COALESCE(p.is_archived, 0) = 0";
     $params[] = $branchId;
     
     if ($startDate && $endDate) {

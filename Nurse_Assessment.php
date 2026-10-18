@@ -1477,21 +1477,17 @@ $queueStmt->close();
 // ============================================================
 // MISSED / OVERDUE FOLLOW-UP — COUNT
 // ============================================================
+// Shared missed-dose rule (workflowMissedDoseCondition): past due, not given,
+// and never for an archived patient, case or vaccination record, so archived
+// patients leave this tab and come back when restored.
 $followupCountStmt = $conn->prepare(
     "SELECT COUNT(*) AS total
      FROM (
-        SELECT
-            vr.patient_id,
-            vr.case_id
-        FROM vaccination_records vr
+        SELECT vr.patient_id, vr.case_id
+        " . workflowMissedDoseFromSql() . "
         WHERE vr.branch_id = ?
-          AND vr.is_archived = 0
-          AND vr.vaccination_status = 'Missed'
-          AND vr.scheduled_date IS NOT NULL
-          AND vr.scheduled_date < CURDATE()
-        GROUP BY
-            vr.patient_id,
-            vr.case_id
+          AND " . workflowMissedDoseCondition('vr', 'c', 'p') . "
+        GROUP BY vr.patient_id, vr.case_id
      ) AS missed_cases"
 );
 
@@ -1538,32 +1534,16 @@ $overdueStmt = $conn->prepare(
     "SELECT
         vr.patient_id,
         vr.case_id,
-        p.full_name,
-        c.case_number,
+        MAX(p.full_name) AS full_name,
+        MAX(c.case_number) AS case_number,
         MIN(vr.scheduled_date) AS oldest_due,
-        DATEDIFF(
-            CURDATE(),
-            MIN(vr.scheduled_date)
-        ) AS days_overdue,
-        COUNT(*) AS missed_dose_count
-     FROM vaccination_records vr
-     INNER JOIN patients p
-        ON p.patient_id = vr.patient_id
-     INNER JOIN animal_bite_cases c
-        ON c.case_id = vr.case_id
+        DATEDIFF(CURDATE(), MIN(vr.scheduled_date)) AS days_overdue,
+        COUNT(DISTINCT vr.dose_number) AS missed_dose_count
+     " . workflowMissedDoseFromSql() . "
      WHERE vr.branch_id = ?
-       AND vr.is_archived = 0
-       AND vr.vaccination_status = 'Missed'
-       AND vr.scheduled_date IS NOT NULL
-       AND vr.scheduled_date < CURDATE()
-     GROUP BY
-        vr.patient_id,
-        vr.case_id,
-        p.full_name,
-        c.case_number
-     ORDER BY
-        days_overdue DESC,
-        p.full_name ASC
+       AND " . workflowMissedDoseCondition('vr', 'c', 'p') . "
+     GROUP BY vr.patient_id, vr.case_id
+     ORDER BY days_overdue DESC, full_name ASC
      LIMIT ?
      OFFSET ?"
 );

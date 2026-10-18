@@ -102,6 +102,8 @@ function getAdminStaffNotificationCount(mysqli $conn, $branch_id, ?int $user_id 
         LEFT JOIN registry_records r
             ON c.case_id = r.case_id
         WHERE c.branch_id = ?
+          AND c.is_archived = 0
+          AND COALESCE(p.is_archived, 0) = 0
           AND (
               p.birthday IS NULL
               OR p.gender IS NULL
@@ -135,6 +137,7 @@ function getAdminStaffNotificationCount(mysqli $conn, $branch_id, ?int $user_id 
         SELECT COUNT(*) AS total
         FROM animal_bite_cases c
         WHERE c.branch_id = ?
+          AND c.is_archived = 0
           AND c.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
     ";
 
@@ -160,6 +163,8 @@ function getAdminStaffNotificationCount(mysqli $conn, $branch_id, ?int $user_id 
             INNER JOIN patients p
                 ON c.patient_id = p.patient_id
             WHERE c.branch_id = ?
+              AND c.is_archived = 0
+              AND COALESCE(p.is_archived, 0) = 0
               AND c.case_status != 'Completed'
               AND NOT EXISTS (
                   SELECT 1

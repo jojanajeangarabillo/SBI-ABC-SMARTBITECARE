@@ -317,6 +317,7 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
         INNER JOIN patients p ON c.patient_id = p.patient_id
         LEFT JOIN registry_records r ON c.case_id = r.case_id
         WHERE c.branch_id = ?
+        AND c.is_archived = 0 AND COALESCE(p.is_archived, 0) = 0
         AND (
             p.birthday IS NULL 
             OR p.gender IS NULL 
@@ -381,6 +382,7 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
         INNER JOIN patients p ON c.patient_id = p.patient_id
         LEFT JOIN registry_records r ON c.case_id = r.case_id
         WHERE c.branch_id = ?
+        AND c.is_archived = 0 AND COALESCE(p.is_archived, 0) = 0
         AND c.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
         ORDER BY c.created_at DESC
     ";
@@ -445,6 +447,7 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
         INNER JOIN patients p ON c.patient_id = p.patient_id
         LEFT JOIN registry_records r ON c.case_id = r.case_id
         WHERE c.branch_id = ?
+        AND c.is_archived = 0 AND COALESCE(p.is_archived, 0) = 0
         AND c.case_status != 'Completed'
         AND NOT EXISTS (
             SELECT 1 FROM vaccination_records v 
@@ -500,6 +503,7 @@ function generateNotifications($conn, $branch_id, $filter = 'all', $search = '')
         INNER JOIN patients p ON c.patient_id = p.patient_id
         LEFT JOIN registry_records r ON c.case_id = r.case_id
         WHERE c.branch_id = ?
+        AND c.is_archived = 0 AND COALESCE(p.is_archived, 0) = 0
         AND ph.status IN ('For Writing', 'For Screening', 'For Signing')
         ORDER BY ph.updated_at ASC
         LIMIT 10
