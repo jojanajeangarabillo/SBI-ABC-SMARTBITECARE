@@ -221,7 +221,10 @@ $stmt->close();
 // 13. LOW STOCK MEDICAL SUPPLIES
 // Only non-expired stock is usable. Expired batches are not counted.
 $lowStockQuery = "SELECT ii.item_id,ii.item_name,s.usable_stock AS quantity_available,ii.minimum_stock,
-    COALESCE(NULLIF(TRIM(ii.base_unit_label),''),u.unit_name) AS unit_name
+    COALESCE(NULLIF(TRIM(ii.base_unit_label),''),u.unit_name) AS unit_name,
+    COALESCE(NULLIF(TRIM(ii.base_unit_label),''),u.unit_name) AS base_unit_label,
+    COALESCE(NULLIF(TRIM(ii.display_unit_label),''),u.unit_name) AS display_unit_label,
+    COALESCE(NULLIF(ii.conversion_to_base,0),1) AS conversion_to_base
 FROM inventory_items ii JOIN inventory_categories c ON c.category_id=ii.category_id
 JOIN units u ON u.unit_id=ii.unit_id
 JOIN ($stockTotalsSql) s ON s.item_id=ii.item_id AND s.branch_id=?
@@ -1577,7 +1580,6 @@ $todayDisplay = date('l, F j, Y');
                                     <?php
                                         $qty = (float)$item['quantity_available'];
                                         $min = (float)$item['minimum_stock'];
-                                        $unit = (string)$item['unit_name'];
                                         $isOut = $qty <= 0;
                                         $isCritical = !$isOut && $min > 0 && $qty <= ($min * 0.5);
                                     ?>
@@ -1589,8 +1591,9 @@ $todayDisplay = date('l, F j, Y');
                                         <div class="list-main">
                                             <span class="list-title"><?php echo htmlspecialchars($item['item_name']); ?></span>
                                             <div class="list-meta">
-                                                <?php echo inventoryFormatNumber($qty); ?> <?php echo htmlspecialchars($unit); ?>
-                                                available · Minimum <?php echo inventoryFormatNumber($min); ?>
+                                                <?php /* Display only: stock stays in base units (sites/mL). */ ?>
+                                                <?php echo htmlspecialchars(inventoryStockBreakdown($qty, $item)); ?>
+                                                available · Minimum <?php echo htmlspecialchars(inventoryQuantityText($min, $item)); ?>
                                             </div>
                                         </div>
 
@@ -1651,9 +1654,7 @@ $todayDisplay = date('l, F j, Y');
                                         $riskPercent = $risk * 100;
                                         $riskLabel = $forecast['forecast_status'];
                                         $riskClass = forecastStatusColor($riskLabel);
-                                        $reorder = max(0, (int)$forecast['recommended_reorder']);
-                                        $unit = trim((string)($forecast['base_unit_label'] ?? ''))
-                                            ?: (trim((string)($forecast['unit_name'] ?? '')) ?: 'unit(s)');
+                                        $reorder = max(0.0, (float)$forecast['recommended_reorder']);
                                     ?>
                                     <div class="forecast-item">
                                         <span class="list-marker <?php echo $riskClass === 'danger' ? 'danger' : ($riskClass === 'warning' ? 'warning' : ''); ?>">
@@ -1663,10 +1664,10 @@ $todayDisplay = date('l, F j, Y');
                                         <div class="list-main">
                                             <span class="list-title"><?php echo htmlspecialchars($forecast['item_name']); ?></span>
                                             <div class="list-meta">
-                                                Stock <?php echo inventoryFormatNumber((float)$forecast['current_stock_snapshot']); ?>
-                                                · Min <?php echo inventoryFormatNumber((float)$forecast['minimum_stock_snapshot']); ?>
+                                                Stock <?php echo htmlspecialchars(inventoryStockBreakdown((float)$forecast['current_stock_snapshot'], $forecast)); ?>
+                                                · Min <?php echo htmlspecialchars(inventoryQuantityText((float)$forecast['minimum_stock_snapshot'], $forecast)); ?>
                                                 <?php if ($reorder > 0): ?>
-                                                    · Reorder <?php echo number_format($reorder); ?> <?php echo htmlspecialchars($unit); ?>
+                                                    · Reorder <?php echo htmlspecialchars(inventoryReorderText($reorder, $forecast)); ?>
                                                 <?php endif; ?>
                                             </div>
                                         </div>

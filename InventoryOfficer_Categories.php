@@ -2288,6 +2288,9 @@ if ($view_category) {
             i.item_id,
             i.item_name,
             COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+            COALESCE(NULLIF(i.base_unit_label,''),u.unit_name) AS base_unit_label,
+            COALESCE(NULLIF(i.display_unit_label,''),u.unit_name) AS display_unit_label,
+            COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base,
 
             COALESCE(
                 stock.total_quantity,
@@ -4530,12 +4533,12 @@ if ($view_category) {
                                         <strong>
 
                                             <?php
-                                            echo inventoryFormatNumber((float)$item['total_quantity']);
-                                            ?>
-
-                                            <?php
+                                            // Display only: "67 vials + 3 sites"; stored stock stays in base units.
                                             echo h(
-                                                $item['unit_name']
+                                                inventoryQuantityText(
+                                                    (float)$item['total_quantity'],
+                                                    $item
+                                                )
                                             );
                                             ?>
 

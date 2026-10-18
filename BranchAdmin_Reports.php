@@ -543,6 +543,9 @@ function generateInventoryReport($branchId, $startDate = null, $endDate = null) 
     
     $params = [];
     $query = "SELECT i.item_id,i.item_name,ic.category_name,COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS base_unit_label,
+    COALESCE(NULLIF(TRIM(i.display_unit_label), ''), u.unit_name) AS display_unit_label,
+    COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base,
     s.usable_stock AS quantity_available,s.nearest_expiration AS expiration_date,s.last_updated,
     i.minimum_stock,
     (SELECT SUM(quantity_used) FROM inventory_usage_history WHERE item_id=i.item_id AND branch_id=?
@@ -587,17 +590,22 @@ JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=? WHERE s.branch
         }
         return $carry;
     }, 0);
-    $totalStock = array_sum(array_column($items, 'quantity_available'));
+    // Display only: each item's stock counted in its counting unit (vials, ampules, pcs)
+    // instead of summing raw base units such as sites or mL.
+    $totalStock = inventoryFormatNumber(array_reduce($items, function($carry, $item) {
+        return $carry + (float)$item['quantity_available'] / inventoryConversionToBase($item);
+    }, 0.0), 1);
     
     $pdf->CreateStatsBox([
         'Total Items' => $totalItems,
         'Low Stock' => $lowStock,
         'Expiring Soon' => $expiring,
-        'Total Stock' => $totalStock
+        'Total Stock (mixed units)' => $totalStock
     ]);
     
     $headers = ['Item', 'Category', 'Qty', 'Min', 'Status', 'Expiry'];
-    $columnWidths = [45, 30, 18, 16, 22, 25];
+    // Qty/Min hold text such as "67 vials + 3 sites", so they get wider columns.
+    $columnWidths = [40, 30, 36, 30, 18, 22];
     
     $data = array_map(function($item) {
         $status = $item['quantity_available'] <= $item['minimum_stock'] ? 'Low Stock' : 'OK';
@@ -613,8 +621,8 @@ JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=? WHERE s.branch
         return [
             substr($item['item_name'] ?: 'N/A', 0, 25),
             $item['category_name'] ?: 'N/A',
-            $item['quantity_available'] ?: 0,
-            $item['minimum_stock'] ?: 0,
+            inventoryQuantityText((float)$item['quantity_available'], $item),
+            inventoryQuantityText((float)$item['minimum_stock'], $item),
             $status,
             $expiry
         ];

@@ -39,6 +39,23 @@ function moneylessNumber($value): string
     return inventoryFormatNumber((float)$value);
 }
 
+/** Unit column text: "Vial (6 sites)" for vial/ampule items, else the base unit ("pcs"). */
+function reportUnitText(array $row): string
+{
+    if (!inventoryHasDisplayUnit($row)) {
+        return inventoryCountingUnit($row);
+    }
+    $conversion = inventoryConversionToBase($row);
+    return inventoryCountingUnit($row) . ' (' . inventoryFormatNumber($conversion) . ' '
+        . inventoryUnitWord(inventoryBaseUnitLabel($row), $conversion) . ')';
+}
+
+/** A base-unit quantity in counting units (vials, ampules, pcs) for totals and charts. */
+function reportCountingValue(float $baseQuantity, array $row): float
+{
+    return $baseQuantity / inventoryConversionToBase($row);
+}
+
 function reportLabel(string $type): string
 {
     $labels = [
@@ -164,6 +181,9 @@ function fetchReportRows(
 
         case 'low_stock':
             $sql = "SELECT i.item_id,i.item_name,c.category_name,COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,i.minimum_stock,
+    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS base_unit_label,
+    COALESCE(NULLIF(TRIM(i.display_unit_label), ''), u.unit_name) AS display_unit_label,
+    COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base,
     s.usable_stock AS current_stock,s.usable_stock AS positive_stock
 FROM inventory_items i JOIN inventory_categories c ON c.category_id=i.category_id
 JOIN units u ON u.unit_id=i.unit_id
@@ -192,6 +212,9 @@ AND s.usable_stock<=i.minimum_stock ORDER BY s.usable_stock,i.item_name";
                     i.item_name,
                     c.category_name,
                     COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+                    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS base_unit_label,
+                    COALESCE(NULLIF(TRIM(i.display_unit_label), ''), u.unit_name) AS display_unit_label,
+                    COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base,
                     s.batch_lot_no,
                     s.manufacturing_date,
                     s.expiration_date,
@@ -259,6 +282,9 @@ AND s.usable_stock<=i.minimum_stock ORDER BY s.usable_stock,i.item_name";
                     i.item_name,
                     c.category_name,
                     COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+                    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS base_unit_label,
+                    COALESCE(NULLIF(TRIM(i.display_unit_label), ''), u.unit_name) AS display_unit_label,
+                    COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base,
                     h.quantity_used,
                     h.patient_count,
                     h.stock_received
@@ -303,6 +329,9 @@ AND s.usable_stock<=i.minimum_stock ORDER BY s.usable_stock,i.item_name";
                     i.item_name,
                     c.category_name,
                     COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+                    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS base_unit_label,
+                    COALESCE(NULLIF(TRIM(i.display_unit_label), ''), u.unit_name) AS display_unit_label,
+                    COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base,
                     st.quantity,
                     st.transaction_date,
                     usr.username,
@@ -428,6 +457,9 @@ AND s.usable_stock<=i.minimum_stock ORDER BY s.usable_stock,i.item_name";
                     i.item_name,
                     c.category_name,
                     COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+                    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS base_unit_label,
+                    COALESCE(NULLIF(TRIM(i.display_unit_label), ''), u.unit_name) AS display_unit_label,
+                    COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base,
                     p.shortage_probability,
                     p.forecast_status,
                     p.recommended_reorder,
@@ -523,10 +555,15 @@ try {
     $usageChartSql = "
         SELECT
             i.item_name AS label,
-            COALESCE(SUM(h.quantity_used), 0) AS value
+            COALESCE(SUM(h.quantity_used), 0) AS value,
+            MAX(COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name)) AS base_unit_label,
+            MAX(COALESCE(NULLIF(TRIM(i.display_unit_label), ''), u.unit_name)) AS display_unit_label,
+            MAX(COALESCE(NULLIF(i.conversion_to_base, 0), 1)) AS conversion_to_base
         FROM inventory_usage_history h
         INNER JOIN inventory_items i
             ON i.item_id = h.item_id
+        LEFT JOIN units u
+            ON u.unit_id = i.unit_id
         WHERE h.branch_id = ?
           AND h.usage_date BETWEEN ? AND ?
         GROUP BY i.item_id, i.item_name
@@ -542,9 +579,12 @@ try {
         if ($chartStmt->execute()) {
             $chartResult = $chartStmt->get_result();
             while ($row = $chartResult->fetch_assoc()) {
+                // Bars are in counting units (vials, ampules, pcs) so items are comparable.
                 $barData[] = [
                     'label' => $row['label'],
-                    'value' => (int)$row['value']
+                    'value' => round(reportCountingValue((float)$row['value'], $row), 1),
+                    'unit' => inventoryUnitWord(inventoryCountingUnit($row), reportCountingValue((float)$row['value'], $row)),
+                    'title' => inventoryQuantityText((float)$row['value'], $row)
                 ];
             }
         }
@@ -554,7 +594,7 @@ try {
     $pieSql = "
         SELECT
             c.category_name AS label,
-            COALESCE(SUM(h.quantity_used), 0) AS value
+            COALESCE(SUM(h.quantity_used / COALESCE(NULLIF(i.conversion_to_base, 0), 1)), 0) AS value
         FROM inventory_usage_history h
         INNER JOIN inventory_items i
             ON i.item_id = h.item_id
@@ -576,7 +616,7 @@ try {
             while ($row = $pieResult->fetch_assoc()) {
                 $pieData[] = [
                     'label' => $row['label'],
-                    'value' => (int)$row['value']
+                    'value' => (float)$row['value']
                 ];
             }
         }
@@ -634,7 +674,8 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
 
     if ($report_type === 'low_stock') {
         fputcsv($output, [
-            'Item', 'Category', 'Unit', 'Minimum Stock', 'Current Stock', 'Status'
+            'Item', 'Category', 'Unit', 'Minimum Stock', 'Current Stock', 'Status',
+            'Minimum Stock (Display)', 'Current Stock (Display)'
         ]);
 
         foreach ($exportRows as $row) {
@@ -648,14 +689,17 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                 $row['unit_name'],
                 $row['minimum_stock'],
                 $row['current_stock'],
-                $status
+                $status,
+                inventoryQuantityText((float)$row['minimum_stock'], $row),
+                inventoryQuantityText((float)$row['current_stock'], $row)
             ]);
         }
 
     } elseif ($report_type === 'expiring_stock') {
         fputcsv($output, [
             'Item', 'Category', 'Unit', 'Batch/Lot No.', 'Manufacturing Date',
-            'Expiration Date', 'Quantity', 'Days Remaining', 'Status'
+            'Expiration Date', 'Quantity', 'Days Remaining', 'Status',
+            'Quantity (Display)'
         ]);
 
         foreach ($exportRows as $row) {
@@ -668,14 +712,16 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                 $row['expiration_date'],
                 $row['quantity_available'],
                 $row['days_remaining'],
-                $row['expiry_status']
+                $row['expiry_status'],
+                inventoryQuantityText((float)$row['quantity_available'], $row)
             ]);
         }
 
     } elseif ($report_type === 'stock_usage') {
         fputcsv($output, [
             'Usage ID', 'Usage Date', 'Item', 'Category', 'Unit',
-            'Quantity Used', 'Usage Type', 'Patient Count', 'Stock Received'
+            'Quantity Used', 'Usage Type', 'Patient Count', 'Stock Received',
+            'Quantity Used (Display)', 'Stock Received (Display)'
         ]);
 
         foreach ($exportRows as $row) {
@@ -688,14 +734,17 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                 $row['quantity_used'],
                 $row['usage_type_label'],
                 $row['patient_count'],
-                $row['stock_received']
+                $row['stock_received'],
+                inventoryQuantityText((float)$row['quantity_used'], $row),
+                inventoryQuantityText((float)$row['stock_received'], $row)
             ]);
         }
 
     } elseif ($report_type === 'transactions') {
         fputcsv($output, [
             'Transaction No.', 'Type', 'Item', 'Category', 'Unit',
-            'Quantity', 'Transaction Date', 'By', 'Remarks'
+            'Quantity', 'Transaction Date', 'By', 'Remarks',
+            'Quantity (Display)'
         ]);
 
         foreach ($exportRows as $row) {
@@ -708,7 +757,8 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                 $row['quantity'],
                 $row['transaction_date'],
                 $row['username'],
-                $row['remarks']
+                $row['remarks'],
+                inventoryQuantityText((float)$row['quantity'], $row)
             ]);
         }
 
@@ -745,7 +795,8 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
         fputcsv($output, [
             'Forecast ID', 'Forecast Date', 'Item', 'Category', 'Unit',
             'Probability Score', 'Status', 'Recommended Reorder',
-            'Forecasted Consumption', 'Forecast Days', 'Generated By'
+            'Forecasted Consumption', 'Forecast Days', 'Generated By',
+            'Recommended Reorder (Display)', 'Forecasted Consumption (Display)'
         ]);
 
         foreach ($exportRows as $row) {
@@ -760,7 +811,9 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                 $row['recommended_reorder'],
                 $row['forecasted_consumption'],
                 $row['forecast_days'],
-                $row['generated_by_name']
+                $row['generated_by_name'],
+                inventoryReorderText((float)$row['recommended_reorder'], $row),
+                inventoryForecastQuantityText((float)$row['forecasted_consumption'], $row)
             ]);
         }
     }
@@ -781,17 +834,18 @@ $summary = [
     'returns_in_transit' => 0
 ];
 
+// Quantity totals are in counting units (vials, ampules, pcs), not base sites/mL.
 foreach ($reportRows as $row) {
     if ($report_type === 'stock_usage') {
-        $summary['quantity'] += (int)$row['quantity_used'];
+        $summary['quantity'] += reportCountingValue((float)$row['quantity_used'], $row);
         $summary['patients'] += (int)$row['patient_count'];
     } elseif ($report_type === 'transactions') {
-        $summary['quantity'] += (int)$row['quantity'];
+        $summary['quantity'] += reportCountingValue((float)$row['quantity'], $row);
         $summary['transactions']++;
     } elseif ($report_type === 'low_stock') {
-        $summary['quantity'] += (float)$row['current_stock'];
+        $summary['quantity'] += reportCountingValue((float)$row['current_stock'], $row);
     } elseif ($report_type === 'expiring_stock') {
-        $summary['quantity'] += (float)$row['quantity_available'];
+        $summary['quantity'] += reportCountingValue((float)$row['quantity_available'], $row);
     } elseif ($report_type === 'returns') {
         $summary['quantity'] += (float)$row['quantity'];
 
@@ -801,8 +855,11 @@ foreach ($reportRows as $row) {
             $summary['returns_in_transit']++;
         }
     } elseif ($report_type === 'shortage') {
-        $summary['quantity'] += (int)$row['recommended_reorder'];
+        $summary['quantity'] += inventoryReorderUnits((float)$row['recommended_reorder'], $row);
     }
+}
+if ($report_type !== 'returns') {
+    $summary['quantity'] = round($summary['quantity'], 1);
 }
 
 /* Pie CSS gradient. */
@@ -821,7 +878,7 @@ $conicGradient = $gradientParts
 
 $maxBarValue = 1;
 foreach ($barData as $bar) {
-    $maxBarValue = max($maxBarValue, (int)$bar['value']);
+    $maxBarValue = max($maxBarValue, (float)$bar['value']);
 }
 
 function statusClass(string $status): string
@@ -1644,7 +1701,7 @@ margin-left:90px;
 
 <div class="summary-cards">
 <div class="summary-card"><span>Report Rows</span><strong><?php echo moneylessNumber($summary['rows']); ?></strong></div>
-<div class="summary-card"><span>Quantity</span><strong><?php echo moneylessNumber($summary['quantity']); ?></strong></div>
+<div class="summary-card" title="<?php echo $report_type === 'returns' ? 'Total of returned quantities' : 'Total in counting units (vials, ampules, pcs)'; ?>"><span>Quantity</span><strong><?php echo moneylessNumber($summary['quantity']); ?></strong></div>
 <?php if ($report_type === 'stock_usage'): ?>
 <div class="summary-card"><span>Patients</span><strong><?php echo moneylessNumber($summary['patients']); ?></strong></div>
 <?php elseif ($report_type === 'transactions'): ?>
@@ -1663,13 +1720,13 @@ margin-left:90px;
 
 <div class="col-lg-6">
 <div class="large-card">
-<div class="section-title">Top Supply Usage (Units Consumed)</div>
+<div class="section-title">Top Supply Usage (Vials / Ampules / Units Consumed)</div>
 <div class="bar-chart">
 <?php if (!empty($barData)): ?>
 <?php foreach ($barData as $bar): ?>
-<div class="bar-col">
-<div class="bar-value"><?php echo (int)$bar['value']; ?></div>
-<div class="bar" style="height:<?php echo max(8, round(((int)$bar['value'] / $maxBarValue) * 100)); ?>%;"></div>
+<div class="bar-col" title="<?php echo h($bar['label'] . ': ' . $bar['title']); ?>">
+<div class="bar-value"><?php echo h(moneylessNumber($bar['value']) . ' ' . $bar['unit']); ?></div>
+<div class="bar" style="height:<?php echo max(8, round(((float)$bar['value'] / $maxBarValue) * 100)); ?>%;"></div>
 <div class="bar-label"><?php echo h($bar['label']); ?></div>
 </div>
 <?php endforeach; ?>
@@ -1754,9 +1811,9 @@ No usage data for the selected date range.
 <tr>
 <td><?php echo h($row['category_name']); ?></td>
 <td><?php echo h($row['item_name']); ?></td>
-<td><?php echo h($row['unit_name']); ?></td>
-<td><?php echo moneylessNumber($row['minimum_stock']); ?></td>
-<td><strong><?php echo moneylessNumber($row['current_stock']); ?></strong></td>
+<td><?php echo h(reportUnitText($row)); ?></td>
+<td><?php echo h(inventoryQuantityText((float)$row['minimum_stock'], $row)); ?></td>
+<td><strong><?php echo h(inventoryQuantityText((float)$row['current_stock'], $row)); ?></strong></td>
 <td><span class="report-status <?php echo (float)$row['current_stock'] <= 0 ? 'status-critical' : 'status-warning'; ?>"><?php echo (float)$row['current_stock'] <= 0 ? 'Critical' : 'Low'; ?></span></td>
 </tr>
 <?php elseif ($report_type === 'expiring_stock'): ?>
@@ -1764,8 +1821,8 @@ No usage data for the selected date range.
 <td><?php echo h($row['item_name']); ?></td>
 <td><?php echo h($row['category_name']); ?></td>
 <td><?php echo h($row['batch_lot_no'] ?: '—'); ?></td>
-<td><?php echo h($row['unit_name']); ?></td>
-<td><?php echo moneylessNumber($row['quantity_available']); ?></td>
+<td><?php echo h(reportUnitText($row)); ?></td>
+<td><?php echo h(inventoryQuantityText((float)$row['quantity_available'], $row)); ?></td>
 <td><?php echo h($row['manufacturing_date'] ?: '—'); ?></td>
 <td><?php echo h($row['expiration_date']); ?></td>
 <td><?php echo h($row['days_remaining']); ?></td>
@@ -1776,19 +1833,19 @@ No usage data for the selected date range.
 <td><?php echo h($row['usage_date']); ?></td>
 <td><?php echo h($row['item_name']); ?></td>
 <td><?php echo h($row['category_name']); ?></td>
-<td><?php echo h($row['unit_name']); ?></td>
-<td><strong><?php echo moneylessNumber($row['quantity_used']); ?></strong></td>
+<td><?php echo h(reportUnitText($row)); ?></td>
+<td><strong><?php echo h(inventoryQuantityText((float)$row['quantity_used'], $row)); ?></strong></td>
 <td><span class="report-status <?php echo str_starts_with((string)$row['usage_type_label'], 'Wastage') ? 'status-warning' : 'status-neutral'; ?>"><?php echo h($row['usage_type_label']); ?></span></td>
 <td><?php echo moneylessNumber($row['patient_count']); ?></td>
-<td><?php echo moneylessNumber($row['stock_received']); ?></td>
+<td><?php echo h(inventoryQuantityText((float)$row['stock_received'], $row)); ?></td>
 </tr>
 <?php elseif ($report_type === 'transactions'): ?>
 <tr>
 <td>TRX-<?php echo str_pad((string)$row['transaction_id'], 4, '0', STR_PAD_LEFT); ?></td>
 <td><span class="report-status <?php echo $row['transaction_type'] === 'OUT' ? 'status-warning' : ($row['transaction_type'] === 'IN' ? 'status-good' : 'status-neutral'); ?>"><?php echo h($row['transaction_type']); ?></span></td>
 <td><?php echo h($row['item_name']); ?></td>
-<td><?php echo h($row['unit_name']); ?></td>
-<td><?php echo moneylessNumber($row['quantity']); ?></td>
+<td><?php echo h(reportUnitText($row)); ?></td>
+<td><?php echo h(inventoryQuantityText((float)$row['quantity'], $row)); ?></td>
 <td><?php echo h(date('m/d/Y H:i', strtotime($row['transaction_date']))); ?></td>
 <td><?php echo h($row['username']); ?></td>
 <td><?php echo h($row['remarks'] ?: '—'); ?></td>
@@ -1826,11 +1883,11 @@ No usage data for the selected date range.
 <td><?php echo h($row['forecast_date']); ?></td>
 <td><?php echo h($row['item_name']); ?></td>
 <td><?php echo h($row['category_name']); ?></td>
-<td><?php echo h($row['unit_name']); ?></td>
+<td><?php echo h(reportUnitText($row)); ?></td>
 <td><?php echo $row['shortage_probability'] !== null ? h($row['shortage_probability']) . '%' : '—'; ?></td>
 <td><span class="report-status <?php echo h(statusClass($row['forecast_status'] ?? '')); ?>"><?php echo h($row['forecast_status'] ?: '—'); ?></span></td>
-<td><?php echo moneylessNumber($row['recommended_reorder']); ?></td>
-<td><?php echo moneylessNumber($row['forecasted_consumption']); ?></td>
+<td><?php echo h(inventoryReorderText((float)$row['recommended_reorder'], $row)); ?></td>
+<td><?php echo h(inventoryForecastQuantityText((float)$row['forecasted_consumption'], $row)); ?></td>
 <td><?php echo $row['forecast_days'] !== null ? moneylessNumber($row['forecast_days']) : '—'; ?></td>
 <td><?php echo h($row['generated_by_name'] ?: '—'); ?></td>
 </tr>

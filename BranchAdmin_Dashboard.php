@@ -175,7 +175,10 @@ while ($row = $caseTrendResult->fetch_assoc()) {
 // Fetch top 5 low stock items for this branch
 $lowStockItems = [];
 $lowStockItemsQuery = "SELECT i.item_id,i.item_name,s.usable_stock AS quantity_available,i.minimum_stock,
-    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
+    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS base_unit_label,
+    COALESCE(NULLIF(TRIM(i.display_unit_label), ''), u.unit_name) AS display_unit_label,
+    COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base
 FROM inventory_items i JOIN units u ON u.unit_id=i.unit_id
 JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
 WHERE s.usable_stock<=i.minimum_stock
@@ -1553,7 +1556,7 @@ $username = $userInfo['username'] ?? 'Admin';
                                     <div>
                                         <strong><?php echo htmlspecialchars($item['item_name']); ?></strong>
                                         <br>
-                                        <small>Stock: <?php echo inventoryFormatNumber((float)$item['quantity_available']); ?> <?php echo htmlspecialchars($item['unit_name']); ?> / Min: <?php echo $item['minimum_stock']; ?></small>
+                                        <small>Stock: <?php echo htmlspecialchars(inventoryQuantityText((float)$item['quantity_available'], $item)); ?> / Min: <?php echo htmlspecialchars(inventoryQuantityText((float)$item['minimum_stock'], $item)); ?></small>
                                     </div>
                                 </div>
                             <?php endforeach; ?>

@@ -274,7 +274,10 @@ JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?";
        One row per item. Uses non-expired usable stock only.
        --------------------------------------------------------- */
     $lowStockQuery = "SELECT i.item_id,i.item_name,i.minimum_stock,c.category_name,
-    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,s.usable_stock,s.expired_stock
+    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,s.usable_stock,s.expired_stock,
+    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS base_unit_label,
+    COALESCE(NULLIF(TRIM(i.display_unit_label), ''), u.unit_name) AS display_unit_label,
+    COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base
 FROM inventory_items i
 JOIN inventory_categories c ON c.category_id=i.category_id
 JOIN units u ON u.unit_id=i.unit_id
@@ -299,9 +302,10 @@ ORDER BY s.usable_stock<=0 DESC,s.usable_stock,i.item_name LIMIT 10";
 
         $row['status'] = $status;
         $row['item_id_formatted'] = 'ITM-' . str_pad((string)$row['item_id'], 4, '0', STR_PAD_LEFT);
-        $row['stock_display'] = inventoryFormatNumber($usable) . ' ' . $row['unit_name'];
-        $row['minimum_display'] = $minimum . ' ' . $row['unit_name'];
-        $row['expired_display'] = $expired > 0 ? inventoryFormatNumber($expired) . ' ' . $row['unit_name'] : '';
+        // Display only: stock stays in base units; vaccines read as "67 vials + 3 sites".
+        $row['stock_display'] = inventoryQuantityText($usable, $row);
+        $row['minimum_display'] = inventoryQuantityText((float)$minimum, $row);
+        $row['expired_display'] = $expired > 0 ? inventoryQuantityText($expired, $row) : '';
 
         $lowStockItems[] = $row;
     }
@@ -319,7 +323,10 @@ ORDER BY s.usable_stock<=0 DESC,s.usable_stock,i.item_name LIMIT 10";
             s.quantity_available,
             s.expiration_date,
             i.item_name,
-            COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
+            COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+            COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS base_unit_label,
+            COALESCE(NULLIF(TRIM(i.display_unit_label), ''), u.unit_name) AS display_unit_label,
+            COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base
         FROM inventory_stocks s
         INNER JOIN inventory_items i
           ON i.item_id = s.item_id
@@ -349,6 +356,7 @@ ORDER BY s.usable_stock<=0 DESC,s.usable_stock,i.item_name LIMIT 10";
         $row['status'] = $status;
         $row['days'] = $days;
         $row['badge_class'] = $badgeClass;
+        $row['quantity_display'] = inventoryQuantityText((float)$row['quantity_available'], $row);
         $expirationAlerts[] = $row;
     }
     $stmt->close();
@@ -365,6 +373,9 @@ ORDER BY s.usable_stock<=0 DESC,s.usable_stock,i.item_name LIMIT 10";
             st.remarks,
             ii.item_name,
             COALESCE(NULLIF(TRIM(ii.base_unit_label), ''), u.unit_name) AS unit_name,
+            COALESCE(NULLIF(TRIM(ii.base_unit_label), ''), u.unit_name) AS base_unit_label,
+            COALESCE(NULLIF(TRIM(ii.display_unit_label), ''), u.unit_name) AS display_unit_label,
+            COALESCE(NULLIF(ii.conversion_to_base, 0), 1) AS conversion_to_base,
             usr.username
         FROM stock_transactions st
         INNER JOIN inventory_items ii
@@ -402,7 +413,7 @@ ORDER BY s.usable_stock<=0 DESC,s.usable_stock,i.item_name LIMIT 10";
             'trx' => 'TRX-' . str_pad((string)$row['transaction_id'], 4, '0', STR_PAD_LEFT),
             'type' => $displayType,
             'item' => $row['item_name'] ?? 'Unknown Item',
-            'qty' => $sign . inventoryFormatNumber($quantity) . ($unitName !== '' ? ' ' . $unitName : ''),
+            'qty' => $sign . ($unitName !== '' ? inventoryQuantityText($quantity, $row) : inventoryFormatNumber($quantity)),
             'date' => date('M d, Y', strtotime($row['transaction_date'])),
             'date_full' => date('M d, Y h:i A', strtotime($row['transaction_date'])),
             'by' => $row['username'] ?? 'Unknown User',
@@ -1209,7 +1220,7 @@ body{
                                     <tr>
                                         <td><span class="item-name"><?php echo h($alert['item_name']); ?></span></td>
                                         <td><?php echo h($alert['batch_lot_no'] ?: 'N/A'); ?></td>
-                                        <td><?php echo h($alert['quantity_available'] . ' ' . $alert['unit_name']); ?></td>
+                                        <td><?php echo h($alert['quantity_display']); ?></td>
                                         <td>
                                             <?php echo h(date('M d, Y', strtotime($alert['expiration_date']))); ?>
                                             <span class="subtext">
