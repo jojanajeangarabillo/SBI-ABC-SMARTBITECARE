@@ -193,7 +193,7 @@ while ($row = $lowStockItemsResult->fetch_assoc()) {
 
 // Fetch recent cases for this branch
 $recentCases = [];
-$recentCasesQuery = "SELECT abc.case_id, p.full_name, abc.case_status, abc.created_at 
+$recentCasesQuery = "SELECT abc.case_id, p.full_name, " . patientCaseStatusSql('abc') . " AS case_status, abc.created_at 
                      FROM animal_bite_cases abc 
                      JOIN patients p ON abc.patient_id = p.patient_id 
                      WHERE abc.branch_id = ? 

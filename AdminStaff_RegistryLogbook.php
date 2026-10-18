@@ -42,6 +42,7 @@ $casesStmt = $conn->prepare(
     "SELECT c.case_id, c.case_number, DATE(c.created_at) AS logbook_date,
             " . patientClinicalSelectSql($conn, 'c', 'la') . ",
             c.remarks AS case_remarks,
+            " . patientCaseVaccinationStatusSql('c') . " AS treatment_status,
             p.full_name, p.address, p.gender, p.contact_number, p.birthday,
             " . patientDisplayAgeSql('p') . " AS age,
             r.registry_number, r.status_of_biting_animal, r.erig, r.ats, r.tt, r.active_regimen,
@@ -157,6 +158,8 @@ foreach ($cases as $case) {
         'Active Regimen' => (string)(($case['assessment_active_regimen'] ?? '') ?: ($case['active_regimen'] ?? '')),
     ] + $doses + [
         'Contact No.' => (string)($case['contact_number'] ?? ''),
+        // Shared rule: a one-time / Not Anti-Rabies case is Completed once its products are recorded.
+        'Status' => (string)$case['treatment_status'],
         'Remarks' => $remarks,
     ];
 }
@@ -164,7 +167,7 @@ $columns = $rows ? array_keys($rows[0]) : array_merge(
     ['Date', 'Case No.', 'Patient Name', 'Address', 'Age', 'Gender', 'Date of Bite', 'Site of Bite',
      'Biting Animal', 'Status of Animal', 'Category', 'ERIG (mL)', 'ATS (mL)', 'TT', 'Active Regimen'],
     array_keys($doseColumns),
-    ['Contact No.', 'Remarks']
+    ['Contact No.', 'Status', 'Remarks']
 );
 
 if (($_GET['export'] ?? '') === 'csv') {

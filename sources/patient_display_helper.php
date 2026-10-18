@@ -273,9 +273,10 @@ function patientNormalizeScheduleRow(mysqli $conn, array $row): array
  * dashboards and the missed-dose count:
  *  - a dose stage is done when the active cycle has a Completed row for that
  *    case and dose (doses given at another clinic are stored as Completed);
- *  - a case is "completed" when case_status is Completed, or its active cycle
- *    has doses and every dose stage is done; otherwise it is "active" (doses
- *    remain, or it has not been assessed/scheduled yet).
+ *  - a case is "completed" when patientCaseVaccinationStatusSql() says
+ *    Completed (every dose stage done, or a one-time / Not Anti-Rabies
+ *    treatment recorded); otherwise it is "active" (doses remain, or it has
+ *    not been assessed/scheduled yet).
  * Each row has patient_id, full_name, case_id, case_number, case_status,
  * total_doses, remaining_doses, next_dose (dose_number), next_date, state,
  * visit_today (today's non-cancelled visit status or null).
@@ -284,6 +285,7 @@ function patientCheckInCases(mysqli $conn, string $branchId): array
 {
     $stmt = $conn->prepare(
         "SELECT p.patient_id, p.full_name, c.case_id, c.case_number, c.case_status, c.created_at,
+                " . patientCaseVaccinationStatusSql('c') . " AS vaccination_status,
                 COALESCE(d.total_doses, 0) AS total_doses,
                 COALESCE(d.remaining_doses, 0) AS remaining_doses,
                 d.next_dose, d.next_date,
@@ -316,9 +318,9 @@ function patientCheckInCases(mysqli $conn, string $branchId): array
     $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
     $stmt->close();
     foreach ($rows as &$row) {
-        $total = (int)$row['total_doses'];
-        $remaining = (int)$row['remaining_doses'];
-        $row['state'] = ($row['case_status'] === 'Completed' || ($total > 0 && $remaining === 0)) ? 'completed' : 'active';
+        // Shared rule (patientCaseVaccinationStatusSql): a one-time / Not
+        // Anti-Rabies case is completed once its products are recorded.
+        $row['state'] = $row['vaccination_status'] === 'Completed' ? 'completed' : 'active';
     }
     unset($row);
     return $rows;
@@ -328,4 +330,69 @@ function patientCheckInCases(mysqli $conn, string $branchId): array
 function patientVisitDoneStatuses(): array
 {
     return ['Treatment Completed', 'Registered', 'Visit Completed', 'Cancelled'];
+}
+
+/*
+ * ONE status per case, used by every page that shows a case's vaccination or
+ * case status (Patient Record, Visit Check-in, Registry, Registry Logbook,
+ * calendars, dashboards, Nurse Patients, Patient Monitoring):
+ *  - With an anti-rabies schedule (active-cycle doses D0..D28): Completed when
+ *    every dose stage has a Completed record (as the Vaccination page decides
+ *    when it completes a case), In Progress when at least one has, Pending
+ *    otherwise. Remaining doses keep the case In Progress.
+ *  - Without an anti-rabies schedule (Not Anti-Rabies / one-time treatment
+ *    such as ATS, TT, Hepa B, Flu, PPD): Completed once a one-time product is
+ *    recorded Completed (dose_number 0), or when the case itself is Completed;
+ *    Pending otherwise.
+ * Archived/restarted doses never count.
+ */
+function patientCaseVaccinationStatusSql(string $c = 'c'): string
+{
+    $active = "vaccination_records %s WHERE %s.case_id = $c.case_id AND %s.is_archived = 0";
+    $stage = sprintf($active, 'cs_s', 'cs_s', 'cs_s') . ' AND cs_s.dose_number >= 1';
+    $open = sprintf($active, 'cs_p', 'cs_p', 'cs_p') . " AND cs_p.dose_number >= 1
+        AND NOT EXISTS (SELECT 1 FROM vaccination_records cs_d WHERE cs_d.case_id = cs_p.case_id
+            AND cs_d.dose_number = cs_p.dose_number AND cs_d.is_archived = 0 AND cs_d.vaccination_status = 'Completed')";
+    $doneStage = sprintf($active, 'cs_c', 'cs_c', 'cs_c') . " AND cs_c.dose_number >= 1 AND cs_c.vaccination_status = 'Completed'";
+    $oneTime = sprintf($active, 'cs_o', 'cs_o', 'cs_o') . " AND cs_o.dose_number <= 0 AND cs_o.vaccination_status = 'Completed'";
+    return "(CASE
+        WHEN EXISTS (SELECT 1 FROM $stage) THEN
+            CASE WHEN NOT EXISTS (SELECT 1 FROM $open) THEN 'Completed'
+                 WHEN EXISTS (SELECT 1 FROM $doneStage) THEN 'In Progress'
+                 ELSE 'Pending' END
+        WHEN EXISTS (SELECT 1 FROM $oneTime) THEN 'Completed'
+        WHEN $c.case_status = 'Completed' THEN 'Completed'
+        ELSE 'Pending' END)";
+}
+
+/** Case status from the same rule: Completed, or Ongoing while treatment remains. */
+function patientCaseStatusSql(string $c = 'c'): string
+{
+    return "(CASE WHEN " . patientCaseVaccinationStatusSql($c) . " = 'Completed' THEN 'Completed' ELSE 'Ongoing' END)";
+}
+
+/** Vaccination status of one case: Completed, In Progress or Pending. */
+function patientCaseVaccinationStatus(mysqli $conn, int $caseId): string
+{
+    $stmt = $conn->prepare('SELECT ' . patientCaseVaccinationStatusSql('c') . ' AS status FROM animal_bite_cases c WHERE c.case_id = ?');
+    $stmt->bind_param('i', $caseId);
+    $stmt->execute();
+    $status = (string)($stmt->get_result()->fetch_assoc()['status'] ?? 'Pending');
+    $stmt->close();
+    return $status;
+}
+
+/** Case number shown to users for one case (registry number for old records without one). */
+function patientCaseNumberById(mysqli $conn, int $caseId): string
+{
+    $stmt = $conn->prepare("SELECT c.case_number,
+            (SELECT r.registry_number FROM registry_records r
+             WHERE r.case_id = c.case_id AND TRIM(COALESCE(r.registry_number, '')) <> ''
+             ORDER BY r.registry_id DESC LIMIT 1) AS registry_number
+        FROM animal_bite_cases c WHERE c.case_id = ?");
+    $stmt->bind_param('i', $caseId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc() ?: [];
+    $stmt->close();
+    return patientDisplayCaseNumber($row['case_number'] ?? null, $row['registry_number'] ?? null);
 }

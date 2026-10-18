@@ -87,7 +87,7 @@ $allFollowUpsQuery = "
         c.bite_location,
         c.bite_category,
         c.date_of_bite,
-        c.case_status,
+        " . patientCaseStatusSql('c') . " AS case_status,
         COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
         v.vaccination_id,
         v.dose_number,
@@ -771,7 +771,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     c.bite_category,
                     c.animal_status,
                     c.date_of_bite,
-                    c.case_status,
+                    " . patientCaseStatusSql('c') . " AS case_status,
                     c.remarks as case_remarks,
                     p.patient_id,
                     p.full_name as patient_name,
@@ -2637,7 +2637,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                         <thead>
                             <tr>
                                 <th>#</th>
-                                <th>Case ID</th>
+                                <th>Case No.</th>
                                 <th>Patient Name</th>
                                 <th>Vaccine</th>
                                 <th>Dose</th>
@@ -3518,7 +3518,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 </div>
                 <div class="patient-detail-grid">
                     <div class="patient-detail-item"><span class="patient-detail-label">Case No.</span><span class="patient-detail-value">${value(record.case_no || record.case_number)}</span></div>
-                    <div class="patient-detail-item"><span class="patient-detail-label">Case ID</span><span class="patient-detail-value">${value(record.case_id)}</span></div>
                     <div class="patient-detail-item"><span class="patient-detail-label">Date of Bite</span><span class="patient-detail-value">${value(record.date_of_bite ? formatDisplayDate(record.date_of_bite) : null)}</span></div>
                     <div class="patient-detail-item"><span class="patient-detail-label">Site of Bite</span><span class="patient-detail-value">${value(record.bite_location)}</span></div>
                     <div class="patient-detail-item"><span class="patient-detail-label">Biting Animal</span><span class="patient-detail-value">${value(record.animal_type)}</span></div>

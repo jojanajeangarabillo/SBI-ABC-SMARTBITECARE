@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/workflow_helpers.php';
+require_once __DIR__ . '/patient_display_helper.php';
 
 // Read-only dashboard definitions. Dates use db_connect.php's Manila session.
 // A visit belongs to a branch only when its patient AND case agree with it.
@@ -68,8 +69,8 @@ function dashboardPatientMetrics(mysqli $conn, string $branchId): array
         ) today
         CROSS JOIN (
             SELECT COUNT(*) AS total_cases,
-                COALESCE(SUM(c.case_status = 'Ongoing'), 0) AS ongoing_cases,
-                COALESCE(SUM(c.case_status = 'Completed'), 0) AS completed_cases
+                COALESCE(SUM(" . patientCaseStatusSql('c') . " = 'Ongoing'), 0) AS ongoing_cases,
+                COALESCE(SUM(" . patientCaseStatusSql('c') . " = 'Completed'), 0) AS completed_cases
             FROM animal_bite_cases c
             INNER JOIN patients p ON p.patient_id = c.patient_id
                 AND p.branch_id = c.branch_id AND p.is_archived = 0
