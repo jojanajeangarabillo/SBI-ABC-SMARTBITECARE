@@ -7,6 +7,14 @@
   plus per-user notification preferences for low stock / expiring stock
   / prediction alerts described in the Notification System.
 */
+// The page escapes output with h(); it was never defined, which stopped the page.
+if (!function_exists('h')) {
+    function h($value): string
+    {
+        return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+    }
+}
+$branch_name = $branch_name ?? '';
 ?>
 <!DOCTYPE html>
 <html lang="en">
