@@ -359,11 +359,16 @@ $stmt->close();
 
 // 19. CASE STATUS DISTRIBUTION
 // Shared rule: a one-time / Not Anti-Rabies case is Completed once its products are recorded.
-$caseStatusQuery = "SELECT " . patientCaseStatusSql('c') . " AS case_status, COUNT(*) AS count
-                    FROM animal_bite_cases c
-                    WHERE c.branch_id = ?
-                      AND c.is_archived = 0
-                    GROUP BY case_status";
+// Grouped in an outer query: MySQL ONLY_FULL_GROUP_BY rejects GROUP BY on an
+// alias whose expression has correlated subqueries on c.case_id.
+$caseStatusQuery = "SELECT s.case_status, COUNT(*) AS count
+                    FROM (
+                        SELECT " . patientCaseStatusSql('c') . " AS case_status
+                        FROM animal_bite_cases c
+                        WHERE c.branch_id = ?
+                          AND c.is_archived = 0
+                    ) s
+                    GROUP BY s.case_status";
 $stmt = $conn->prepare($caseStatusQuery);
 $stmt->bind_param("s", $branch_id);
 $stmt->execute();

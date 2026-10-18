@@ -169,7 +169,7 @@ $branch_performance_sql = "SELECT
                           FROM branches b
                           LEFT JOIN animal_bite_cases abc ON b.branch_id = abc.branch_id
                           WHERE b.status = 'Active'
-                          GROUP BY b.branch_id
+                          GROUP BY b.branch_id, b.branch_name
                           ORDER BY total_cases DESC
                           LIMIT 5";
 $branch_performance_result = $conn->query($branch_performance_sql);
