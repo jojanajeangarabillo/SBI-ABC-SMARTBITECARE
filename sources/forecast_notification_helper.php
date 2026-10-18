@@ -41,15 +41,16 @@ function forecastNotificationContent(array $row): array
 {
     $days = (int)$row['forecast_days'];
     $status = (string)$row['forecast_status'];
-    $unit = trim((string)($row['base_unit_label'] ?? '')) ?: (string)($row['unit_name'] ?? 'unit');
+    // Display only: quantities are stored in base units (sites/mL) and shown in
+    // the clinic's counting unit (vials/ampules), like the forecasting pages.
     return [
         'title' => $days . '-day Supply Forecast: ' . $status,
         'message' => $status . ' for ' . $row['item_name'] . '. '
             . 'Forecast period: ' . $days . ' days. '
             . 'Forecast generated: ' . $row['forecast_date'] . '. '
             . 'Estimated stockout risk: ' . number_format((float)$row['shortage_probability'] * 100, 1) . '%. '
-            . 'Forecasted consumption: ' . inventoryFormatNumber((float)$row['forecasted_consumption'], 4) . ' ' . $unit . '. '
-            . 'Recommended reorder: ' . inventoryFormatNumber((float)$row['recommended_reorder'], 4) . ' ' . $unit . '.',
+            . 'Forecasted consumption: ' . inventoryForecastQuantityText((float)$row['forecasted_consumption'], $row) . '. '
+            . 'Recommended reorder: ' . inventoryReorderText((float)$row['recommended_reorder'], $row) . '.',
         'priority' => forecastStatusPriority($status),
     ];
 }

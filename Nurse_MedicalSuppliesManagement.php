@@ -239,6 +239,21 @@ function recordSupplyUsage(mysqli $conn, int $userId, string $branchId): string
             $patient->close();
             if (!$foundPatient) throw new RuntimeException('The patient was not found in your branch.');
             $patientLabel = ' | Patient ID: ' . $patientId;
+            // The same use must not be recorded on two pages: a product already
+            // given to this patient on this date through Vaccination or Assessment
+            // is already in that day's Consumed.
+            $given = supplyStatement($conn,
+                "SELECT vaccination_id FROM vaccination_records
+                 WHERE patient_id=? AND branch_id=? AND item_id=? AND date_administered=?
+                   AND vaccination_status='Completed' AND is_archived=0 LIMIT 1");
+            $given->bind_param('isis', $patientId, $branchId, $itemId, $date);
+            supplyExecute($given);
+            $alreadyGiven = $given->get_result()->fetch_assoc();
+            $given->close();
+            if ($alreadyGiven) {
+                throw new RuntimeException($item['item_name'] . ' was already recorded for this patient on ' . $date
+                    . ' on the Vaccination or Assessment page, so it is already in that day\'s Consumed. Do not record it twice.');
+            }
         }
 
         // Shared with Daily Inventory consumed entries (FEFO deduction, usage

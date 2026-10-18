@@ -129,18 +129,52 @@ function requiresBatchTracking($categoryName) {
     return in_array($normalized, ['medical supplies', 'medical supply', 'vaccine', 'vaccines'], true);
 }
 
+/* True when the item is counted in a unit other than its base unit (vials of sites, ampules of mL). */
+function stockManagementHasCountingUnit(array $item): bool {
+    return strcasecmp(inventoryBaseUnitLabel($item), inventoryDisplayUnitLabel($item)) !== 0;
+}
+
+/* "1 vial = 6 sites" for counting-unit items, '' otherwise. Display only. */
+function stockManagementConversionText(array $item): string {
+    if (!stockManagementHasCountingUnit($item)) return '';
+    return '1 ' . strtolower(inventoryDisplayUnitLabel($item)) . ' = '
+        . inventoryQuantityText(inventoryConversionToBase($item), ['base_unit_label' => inventoryBaseUnitLabel($item)]);
+}
+
+/*
+ * Quantity text next to forms whose inputs take BASE units:
+ * "67 vials + 3 sites (405 sites)". Items without a counting unit: "12 pcs".
+ */
+function stockManagementFormQuantityText(float $baseQuantity, array $item): string {
+    $text = inventoryQuantityText($baseQuantity, $item);
+    if (!stockManagementHasCountingUnit($item)) return $text;
+    return $text . ' (' . inventoryFormatNumber($baseQuantity) . ' '
+        . inventoryUnitWord(inventoryBaseUnitLabel($item), $baseQuantity) . ')';
+}
+
+/* Unit wording for quantity-input help text: "sites (1 vial = 6 sites)". */
+function stockManagementInputUnitText(array $item): string {
+    $unit = inventoryUnitWord(inventoryBaseUnitLabel($item), 2);
+    $conversion = stockManagementConversionText($item);
+    return $conversion !== '' ? $unit . ' (' . $conversion . ')' : $unit;
+}
+
 function itemOptions($items) {
     foreach ($items as $item) {
         echo '<option value="' . h($item['item_id']) . '"'
             . ' data-stock="' . h($item['quantity_available']) . '"'
+            . ' data-stock-text="' . h(stockManagementFormQuantityText((float)$item['quantity_available'], $item)) . '"'
             . ' data-expired-stock="' . h($item['expired_stock'] ?? 0) . '"'
+            . ' data-expired-stock-text="' . h(stockManagementFormQuantityText((float)($item['expired_stock'] ?? 0), $item)) . '"'
             . ' data-total-stock="' . h($item['total_stock'] ?? $item['quantity_available']) . '"'
             . ' data-unit-id="' . h($item['unit_id']) . '"'
             . ' data-unit-name="' . h($item['unit_name']) . '"'
+            . ' data-unit-hint="' . h(stockManagementInputUnitText($item)) . '"'
             . ' data-quantity-step="' . inventoryInputStep($item) . '"'
             . ' data-category-id="' . h($item['category_id']) . '"'
             . ' data-category-name="' . h($item['category_name']) . '"'
             . ' data-minimum-stock="' . h($item['minimum_stock']) . '"'
+            . ' data-minimum-stock-text="' . h(stockManagementFormQuantityText((float)$item['minimum_stock'], $item)) . '"'
             . ' data-batch-tracked="' . (requiresBatchTracking($item['category_name']) ? '1' : '0') . '"'
             . '>' . h($item['item_name']) . '</option>';
     }
@@ -821,6 +855,7 @@ if ($branch_id) {
      */
     $itemsQuery = "SELECT i.item_id,i.item_name,i.minimum_stock,i.category_id,c.category_name,
     u.unit_id,COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+    COALESCE(NULLIF(i.base_unit_label,''),u.unit_name) AS base_unit_label, COALESCE(NULLIF(i.display_unit_label,''),u.unit_name) AS display_unit_label, COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base,
     COALESCE(s.usable_stock,0) AS quantity_available,
     COALESCE(s.expired_stock,0) AS expired_stock,
     COALESCE(s.total_stock,0) AS total_stock
@@ -846,7 +881,8 @@ ORDER BY i.item_name";
 $batchesByItem = [];
 if ($branch_id) {
     $batchQuery = "SELECT s.stock_id, s.item_id, s.batch_lot_no, s.quantity_available, s.manufacturing_date, s.expiration_date,
-                          i.item_name, c.category_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
+                          i.item_name, c.category_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+                          COALESCE(NULLIF(i.base_unit_label,''),u.unit_name) AS base_unit_label, COALESCE(NULLIF(i.display_unit_label,''),u.unit_name) AS display_unit_label, COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base
                    FROM inventory_stocks s
                    INNER JOIN inventory_items i ON s.item_id = i.item_id
                    INNER JOIN inventory_categories c ON i.category_id = c.category_id
@@ -862,6 +898,8 @@ if ($branch_id) {
         while ($row = $result->fetch_assoc()) {
             $itemKey = (string)$row['item_id'];
             if (!isset($batchesByItem[$itemKey])) $batchesByItem[$itemKey] = [];
+            // Display-only text; quantity_available stays the numeric base value.
+            $row['quantity_text'] = stockManagementFormQuantityText((float)$row['quantity_available'], $row);
             $batchesByItem[$itemKey][] = $row;
         }
         $stmt->close();
@@ -881,7 +919,8 @@ if ($branch_id) {
                             s.manufacturing_date,
                             s.expiration_date,
                             i.item_name,
-                            COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
+                            COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+                            COALESCE(NULLIF(i.base_unit_label,''),u.unit_name) AS base_unit_label, COALESCE(NULLIF(i.display_unit_label,''),u.unit_name) AS display_unit_label, COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base
                         FROM inventory_stocks s
                         INNER JOIN inventory_items i ON s.item_id = i.item_id
                         INNER JOIN units u ON i.unit_id = u.unit_id
@@ -918,6 +957,7 @@ if ($branch_id) {
                           a.archive_reason,
                           i.item_name,
                           COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+                          COALESCE(NULLIF(i.base_unit_label,''),u.unit_name) AS base_unit_label, COALESCE(NULLIF(i.display_unit_label,''),u.unit_name) AS display_unit_label, COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base,
                           COALESCE(au.username, 'Unknown User') AS archived_by_name
                       FROM inventory_stocks_archive a
                       INNER JOIN inventory_items i ON a.item_id = i.item_id
@@ -952,6 +992,7 @@ if (isset($_GET['view_stock_id']) && ctype_digit((string)$_GET['view_stock_id'])
                       i.item_name,
                       i.minimum_stock,
                       COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+                      COALESCE(NULLIF(i.base_unit_label,''),u.unit_name) AS base_unit_label, COALESCE(NULLIF(i.display_unit_label,''),u.unit_name) AS display_unit_label, COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base,
                       c.category_name
                   FROM inventory_stocks s
                   INNER JOIN inventory_items i ON s.item_id = i.item_id
@@ -1827,7 +1868,7 @@ body{
                                 <tr class="expiration-row" data-days="<?php echo h($days); ?>" data-expired="<?php echo $days !== null && $days < 0 ? '1' : '0'; ?>">
                                     <td><?php echo h($row['item_name']); ?></td>
                                     <td><?php echo h($row['batch_lot_no'] ?: '—'); ?></td>
-                                    <td><?php echo h($row['quantity_available'] . ' ' . $row['unit_name']); ?></td>
+                                    <td><?php echo h(inventoryQuantityText((float)$row['quantity_available'], $row)); ?></td>
                                     <td><?php echo $row['manufacturing_date'] ? h(date('m/d/Y', strtotime($row['manufacturing_date']))) : '—'; ?></td>
                                     <td><?php echo h(date('m/d/Y', strtotime($row['expiration_date']))); ?></td>
                                     <td><?php echo $days === null ? '—' : ($days < 0 ? abs($days) . ' days ago' : $days . ' days'); ?></td>
@@ -1897,7 +1938,7 @@ body{
                                 <tr>
                                     <td><?php echo h($archived['item_name']); ?></td>
                                     <td><?php echo h($archived['batch_lot_no'] ?: '—'); ?></td>
-                                    <td><?php echo h($archived['quantity_available'] . ' ' . $archived['unit_name']); ?></td>
+                                    <td><?php echo h(inventoryQuantityText((float)$archived['quantity_available'], $archived)); ?></td>
                                     <td><?php echo $archived['expiration_date'] ? h(date('m/d/Y', strtotime($archived['expiration_date']))) : '—'; ?></td>
                                     <td><?php echo $archived['archived_at'] ? h(date('m/d/Y h:i A', strtotime($archived['archived_at']))) : '—'; ?></td>
                                     <td><?php echo h($archived['archived_by_name']); ?></td>
@@ -1927,9 +1968,9 @@ body{
                     <div class="row g-3">
                         <div class="col-12"><strong>Item</strong><div><?php echo h($viewStock['item_name']); ?></div></div>
                         <div class="col-md-6"><strong>Category</strong><div><?php echo h($viewStock['category_name']); ?></div></div>
-                        <div class="col-md-6"><strong>Unit</strong><div><?php echo h($viewStock['unit_name']); ?></div></div>
-                        <div class="col-md-6"><strong>Current Stock</strong><div><?php echo h($viewStock['quantity_available']); ?></div></div>
-                        <div class="col-md-6"><strong>Minimum Stock</strong><div><?php echo h($viewStock['minimum_stock']); ?></div></div>
+                        <div class="col-md-6"><strong>Unit</strong><div><?php $viewConversion = stockManagementConversionText($viewStock); echo h(stockManagementHasCountingUnit($viewStock) ? inventoryDisplayUnitLabel($viewStock) . ' (' . $viewConversion . ')' : $viewStock['unit_name']); ?></div></div>
+                        <div class="col-md-6"><strong>Current Stock</strong><div><?php echo h(inventoryQuantityText((float)$viewStock['quantity_available'], $viewStock)); ?></div></div>
+                        <div class="col-md-6"><strong>Minimum Stock</strong><div><?php echo h(inventoryQuantityText((float)$viewStock['minimum_stock'], $viewStock)); ?></div></div>
                         <div class="col-md-6"><strong>Batch/Lot No.</strong><div><?php echo h($viewStock['batch_lot_no'] ?: '—'); ?></div></div>
                         <div class="col-md-6"><strong>Manufacturing Date</strong><div><?php echo $viewStock['manufacturing_date'] ? h(date('m/d/Y', strtotime($viewStock['manufacturing_date']))) : '—'; ?></div></div>
                         <div class="col-md-6"><strong>Expiration Date</strong><div><?php echo $viewStock['expiration_date'] ? h(date('m/d/Y', strtotime($viewStock['expiration_date']))) : '—'; ?></div></div>
@@ -2104,7 +2145,7 @@ function updateQuantityInput(selectId, quantityId, helpId, allowZero) {
     quantity.min = allowZero ? '0' : step;
     quantity.max = step === '1' ? '99999999' : '99999999.9999';
     if (help) {
-        var unit = selected ? option.getAttribute('data-unit-name') : '';
+        var unit = selected ? (option.getAttribute('data-unit-hint') || option.getAttribute('data-unit-name')) : '';
         help.textContent = selected
             ? 'Enter ' + (allowZero ? 'remaining stock' : 'quantity') + ' in ' + unit + '. '
                 + (step === '1' ? 'Use whole numbers.' : 'Up to four decimal places are allowed.')
@@ -2262,11 +2303,12 @@ function updateStockDisplay(selectId, displayId, prefix) {
 
     var stock = option.getAttribute('data-stock') || '0';
     var unit = option.getAttribute('data-unit-name') || '';
+    var stockText = option.getAttribute('data-stock-text') || (stock + ' ' + unit);
 
     if (prefix === 'current') {
-        display.value = stock + ' ' + unit;
+        display.value = stockText;
     } else {
-        display.textContent = 'Usable stock available: ' + stock + ' ' + unit;
+        display.textContent = 'Usable stock available: ' + stockText;
     }
 }
 
@@ -2288,10 +2330,12 @@ function updateStockOutDisplay() {
 
     if (reason === 'Expired') {
         var expiredStock = option.getAttribute('data-expired-stock') || '0';
-        display.textContent = 'Expired stock available for disposal: ' + expiredStock + ' ' + unit;
+        display.textContent = 'Expired stock available for disposal: '
+            + (option.getAttribute('data-expired-stock-text') || (expiredStock + ' ' + unit));
     } else {
         var usableStock = option.getAttribute('data-stock') || '0';
-        display.textContent = 'Usable stock available: ' + usableStock + ' ' + unit;
+        display.textContent = 'Usable stock available: '
+            + (option.getAttribute('data-stock-text') || (usableStock + ' ' + unit));
     }
 }
 
@@ -2334,9 +2378,10 @@ function updateAdjustmentItemDetails() {
         opt.value = batch.stock_id;
         opt.setAttribute('data-stock', batch.quantity_available);
         opt.setAttribute('data-unit', batch.unit_name || unit);
+        opt.setAttribute('data-stock-text', batch.quantity_text || (batch.quantity_available + ' ' + (batch.unit_name || unit)));
         opt.setAttribute('data-expiration', batch.expiration_date || '');
         var label = batch.batch_lot_no || ('Unlabelled stock #' + batch.stock_id);
-        label += ' — ' + batch.quantity_available + ' ' + (batch.unit_name || unit);
+        label += ' — ' + (batch.quantity_text || (batch.quantity_available + ' ' + (batch.unit_name || unit)));
         if (batch.expiration_date) label += ' — Exp: ' + batch.expiration_date;
         opt.textContent = label;
         batchSelect.appendChild(opt);
@@ -2364,7 +2409,7 @@ function updateAdjustmentBatchStock() {
     var stock = option.getAttribute('data-stock') || '0';
     var unit = option.getAttribute('data-unit') || '';
     var expiration = option.getAttribute('data-expiration') || '';
-    currentStock.value = stock + ' ' + unit;
+    currentStock.value = option.getAttribute('data-stock-text') || (stock + ' ' + unit);
     if (stockHelp) stockHelp.textContent = expiration ? 'Expiration: ' + expiration : 'No expiration date.';
 }
 
@@ -2396,7 +2441,8 @@ function updateStockOutWarning() {
             ? 'Warning: quantity exceeds the expired stock available for disposal.'
             : 'Warning: quantity exceeds usable stock.';
     } else if (reason !== 'Expired' && requested > 0 && remaining < minimum) {
-        warning.textContent = 'Warning: this transaction will leave usable stock below the minimum level (' + minimum + ').';
+        warning.textContent = 'Warning: this transaction will leave usable stock below the minimum level ('
+            + (option.getAttribute('data-minimum-stock-text') || minimum) + ').';
     } else {
         warning.textContent = '';
     }
