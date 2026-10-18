@@ -14,6 +14,10 @@ Live inventory stock is never changed by this importer.
 Usage:
     python import_training_dataset.py database/data/inventory_clean_forecasting_revised.csv --csv-units display --dry-run
     python import_training_dataset.py database/data/inventory_clean_forecasting_revised.csv --csv-units display
+
+Add --compare-existing to report, per item, how far the converted CSV values
+are from the rows already in training_dataset (read-only; combine with
+--dry-run to check a file before importing it).
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ import os
 import re
 from collections import Counter
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -108,12 +112,68 @@ def find_id(name: str, choices: list[tuple[Any, str]], kind: str, line_number: i
     raise ValueError(f"Line {line_number}: {kind} {name!r} matches more than one master record.")
 
 
+COMPARED_COLUMNS = ("beginning_stock", "quantity_used", "stock_received", "ending_stock", "minimum_stock_level")
+
+
+def compare_with_existing(cursor, records: list[tuple], metadata: dict) -> dict:
+    """Largest absolute difference per item and column against stored rows.
+
+    Read-only. Values are compared in the database base unit after the CSV
+    conversion, rounded to each column's stored scale (training_dataset keeps
+    DECIMAL(12,1)), i.e. exactly what an import would store. A vials CSV
+    imported with --csv-units display must match a base-unit history.
+    """
+    cursor.execute(
+        "SELECT COLUMN_NAME, NUMERIC_SCALE FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'training_dataset'")
+    scales = {name: int(scale) for name, scale in cursor.fetchall() if scale is not None}
+    steps = {column: Decimal(1).scaleb(-scales.get(column, 4)) for column in COMPARED_COLUMNS}
+    existing = {}
+    for branch_id in sorted({row[0] for row in records}):
+        cursor.execute(
+            "SELECT item_id, record_date, beginning_stock, quantity_used, stock_received, "
+            "ending_stock, minimum_stock_level FROM training_dataset WHERE branch_id = %s", (branch_id,))
+        for item_id, record_date, *values in cursor.fetchall():
+            existing[(branch_id, int(item_id), record_date.isoformat())] = [Decimal(str(v)) for v in values]
+    per_item = {}
+    rows_matched = rows_missing = 0
+    overall = Decimal("0")
+    for row in records:
+        name = str(metadata[row[1]][1]).strip()
+        entry = per_item.setdefault(name, {"rows": 0, "missing": 0,
+                                           **{column: "0" for column in COMPARED_COLUMNS}})
+        stored = existing.get(row[:3])
+        if stored is None:
+            entry["missing"] += 1
+            rows_missing += 1
+            continue
+        entry["rows"] += 1
+        rows_matched += 1
+        new_values = (row[4], row[5], row[6], row[7], row[10])
+        for column, new, old in zip(COMPARED_COLUMNS, new_values, stored):
+            difference = abs(new.quantize(steps[column], rounding=ROUND_HALF_UP) - old)
+            if difference > Decimal(entry[column]):
+                entry[column] = str(difference.normalize() if difference else Decimal("0"))
+            overall = max(overall, difference)
+    return {
+        "rows_compared": rows_matched,
+        "rows_not_in_database": rows_missing,
+        "max_abs_difference": str(overall.normalize() if overall else Decimal("0")),
+        "within_0_01": overall <= Decimal("0.01"),
+        "compared_as_stored_scale": {column: scales.get(column) for column in COMPARED_COLUMNS},
+        "per_item_max_abs_difference": dict(sorted(per_item.items())),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("csv_path", type=Path)
     parser.add_argument("--csv-units", choices=("base", "display"), required=True,
                         help="Unit convention of all five stock quantity columns in the CSV.")
     parser.add_argument("--dry-run", action="store_true", help="Validate without writing records.")
+    parser.add_argument("--compare-existing", action="store_true",
+                        help="Report the largest difference per item between the converted CSV values "
+                             "and the training_dataset rows already stored (read-only).")
     args = parser.parse_args()
     csv_path = args.csv_path.expanduser().resolve()
     connection = None
@@ -249,6 +309,9 @@ def main() -> None:
                 "WHERE branch_id = %s AND source_type = 'daily_closing'"
                 + (" FOR UPDATE" if not args.dry_run else ""), (branch_id,))
             protected.update((row[0], int(row[1]), row[2].isoformat()) for row in cursor.fetchall())
+        comparison = None
+        if args.compare_existing:
+            comparison = compare_with_existing(cursor, records, metadata)
         imported = inserted = updated = unchanged = skipped_closings = 0
         changed_branches = set()
         for row in records:
@@ -288,6 +351,7 @@ def main() -> None:
             "file": str(csv_path), "csv_units": args.csv_units,
             "unit_conversions": conversions,
             "forecast_branches_invalidated": sorted(changed_branches),
+            **({"comparison_with_existing": comparison} if comparison is not None else {}),
         }))
     except Exception as exc:
         if connection is not None and connection.is_connected():
