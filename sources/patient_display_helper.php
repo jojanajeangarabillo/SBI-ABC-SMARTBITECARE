@@ -267,3 +267,65 @@ function patientNormalizeScheduleRow(mysqli $conn, array $row): array
     }
     return $row;
 }
+
+/**
+ * Check-in state of every active case of a branch, from the same rules as the
+ * dashboards and the missed-dose count:
+ *  - a dose stage is done when the active cycle has a Completed row for that
+ *    case and dose (doses given at another clinic are stored as Completed);
+ *  - a case is "completed" when case_status is Completed, or its active cycle
+ *    has doses and every dose stage is done; otherwise it is "active" (doses
+ *    remain, or it has not been assessed/scheduled yet).
+ * Each row has patient_id, full_name, case_id, case_number, case_status,
+ * total_doses, remaining_doses, next_dose (dose_number), next_date, state,
+ * visit_today (today's non-cancelled visit status or null).
+ */
+function patientCheckInCases(mysqli $conn, string $branchId): array
+{
+    $stmt = $conn->prepare(
+        "SELECT p.patient_id, p.full_name, c.case_id, c.case_number, c.case_status, c.created_at,
+                COALESCE(d.total_doses, 0) AS total_doses,
+                COALESCE(d.remaining_doses, 0) AS remaining_doses,
+                d.next_dose, d.next_date,
+                (SELECT v.workflow_status FROM patient_visits v
+                  WHERE v.case_id = c.case_id AND v.visit_date = CURDATE() AND v.workflow_status <> 'Cancelled'
+                  ORDER BY v.visit_id DESC LIMIT 1) AS visit_today
+         FROM patients p
+         INNER JOIN animal_bite_cases c ON c.patient_id = p.patient_id AND c.branch_id = p.branch_id
+         LEFT JOIN (
+             SELECT stage.case_id,
+                    COUNT(*) AS total_doses,
+                    SUM(stage.done = 0) AS remaining_doses,
+                    MIN(CASE WHEN stage.done = 0 THEN stage.dose_number END) AS next_dose,
+                    MIN(CASE WHEN stage.done = 0 THEN stage.scheduled_date END) AS next_date
+             FROM (
+                 SELECT vr.case_id, vr.dose_number,
+                        MAX(vr.vaccination_status = 'Completed') AS done,
+                        MIN(CASE WHEN vr.vaccination_status <> 'Completed' THEN vr.scheduled_date END) AS scheduled_date
+                 FROM vaccination_records vr
+                 WHERE vr.branch_id = ? AND vr.is_archived = 0 AND vr.dose_number >= 1
+                 GROUP BY vr.case_id, vr.dose_number
+             ) stage
+             GROUP BY stage.case_id
+         ) d ON d.case_id = c.case_id
+         WHERE p.branch_id = ? AND p.is_archived = 0 AND c.is_archived = 0
+         ORDER BY p.full_name, c.created_at DESC"
+    );
+    $stmt->bind_param('ss', $branchId, $branchId);
+    $stmt->execute();
+    $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+    foreach ($rows as &$row) {
+        $total = (int)$row['total_doses'];
+        $remaining = (int)$row['remaining_doses'];
+        $row['state'] = ($row['case_status'] === 'Completed' || ($total > 0 && $remaining === 0)) ? 'completed' : 'active';
+    }
+    unset($row);
+    return $rows;
+}
+
+/** Visit statuses that end a visit: it leaves the active check-in queue. */
+function patientVisitDoneStatuses(): array
+{
+    return ['Treatment Completed', 'Registered', 'Visit Completed', 'Cancelled'];
+}

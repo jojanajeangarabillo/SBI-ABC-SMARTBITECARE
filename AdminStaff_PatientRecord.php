@@ -5821,6 +5821,12 @@ body.sidebar-collapsed .main {
     document.addEventListener('DOMContentLoaded', () => {
         initFlatpickrs();
         initCalendar();
+        // ?search=Name (e.g. from the Visit Check-in hint) pre-fills the search box.
+        const initialSearch = new URLSearchParams(window.location.search).get('search');
+        if (initialSearch) {
+            document.getElementById('searchInput').value = initialSearch;
+            searchTerm = initialSearch;
+        }
         renderTable();
         
         const category = document.getElementById('vaccCategory').value;
