@@ -175,13 +175,28 @@ function restoreCase(mysqli $conn, int $caseId, int $userId, string $branchId): 
         }
         $stmt->close();
 
+        // Restore only the doses this archive took (its snapshot). Doses of a
+        // restarted cycle were archived earlier and stay archived as history.
+        // Cases archived before snapshots were limited to active rows have a
+        // snapshot of every row, so they restore exactly as before.
         $stmt = $conn->prepare("
-            UPDATE vaccination_records
-            SET is_archived = 0,
-                archived_at = NULL,
-                archived_by = NULL
-            WHERE case_id = ?
-              AND branch_id = ?
+            UPDATE vaccination_records vr
+            SET vr.is_archived = 0,
+                vr.archived_at = NULL,
+                vr.archived_by = NULL
+            WHERE vr.case_id = ?
+              AND vr.branch_id = ?
+              AND (
+                    EXISTS (
+                        SELECT 1 FROM vaccination_records_archive va
+                        WHERE va.case_id = vr.case_id
+                          AND va.vaccination_id = vr.vaccination_id
+                    )
+                    OR NOT EXISTS (
+                        SELECT 1 FROM vaccination_records_archive va2
+                        WHERE va2.case_id = vr.case_id
+                    )
+              )
         ");
         $stmt->bind_param("is", $caseId, $branchId);
         if (!$stmt->execute()) {

@@ -492,9 +492,33 @@ function notifyNursesOnNewPatient(mysqli $conn, int $caseId, string $patientName
     }
 }
 
+/**
+ * True when an archive-table column accepts NULL. Scheduled doses that were not
+ * given yet have no vaccine (item_id NULL); older databases created
+ * vaccination_records_archive.item_id as NOT NULL, which made archiving fail
+ * until sources/migrate_archive_tables.php is applied.
+ */
+function archiveColumnAllowsNull(mysqli $conn, string $table, string $column): bool
+{
+    static $cache = [];
+    $key = $table . '.' . $column;
+    if (!array_key_exists($key, $cache)) {
+        $stmt = $conn->prepare("SELECT IS_NULLABLE FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?");
+        $stmt->bind_param('ss', $table, $column);
+        $stmt->execute();
+        $cache[$key] = (($stmt->get_result()->fetch_assoc()['IS_NULLABLE'] ?? 'YES') === 'YES');
+        $stmt->close();
+    }
+    return $cache[$key];
+}
+
 // Function to archive a case with all related records
 function archiveCase(mysqli $conn, int $caseId, int $userId, string $branchId, string $archiveReason = 'Archived by user'): bool {
     try {
+        $itemExpr = archiveColumnAllowsNull($conn, 'vaccination_records_archive', 'item_id')
+            ? 'item_id'
+            : 'COALESCE(item_id, 0)';
         $conn->begin_transaction();
         
         // 1. Archive animal_bite_cases
@@ -529,19 +553,21 @@ function archiveCase(mysqli $conn, int $caseId, int $userId, string $branchId, s
         $stmt->bind_param("isi", $userId, $archiveReason, $caseId);
         $stmt->execute();
         
-        // 3. Archive vaccination_records
+        // 3. Archive vaccination_records. Only the active rows: doses of a
+        // restarted cycle are already archived (is_archived = 1) and must stay
+        // archived history after a restore, so they are not part of this snapshot.
         $stmt = $conn->prepare("
             INSERT INTO vaccination_records_archive 
             (vaccination_id, patient_id, case_id, item_id, vaccine_name, unit_id, branch_id,
              dose_number, date_administered, scheduled_date, administered_at, next_schedule,
              vaccination_status, is_final_dose, remarks, nurse_id, created_at,
              archived_at, archived_by, archive_reason, original_vaccination_id)
-            SELECT vaccination_id, patient_id, case_id, item_id, vaccine_name, unit_id, branch_id,
+            SELECT vaccination_id, patient_id, case_id, $itemExpr, vaccine_name, unit_id, branch_id,
                    dose_number, date_administered, scheduled_date, CAST(administered_datetime AS CHAR), next_schedule,
                    vaccination_status, is_final_dose, remarks, nurse_id, created_at,
                    NOW(), ?, ?, vaccination_id
             FROM vaccination_records 
-            WHERE case_id = ? AND branch_id = ?
+            WHERE case_id = ? AND branch_id = ? AND is_archived = 0
         ");
         $stmt->bind_param("isis", $userId, $archiveReason, $caseId, $branchId);
         $stmt->execute();
@@ -683,11 +709,12 @@ function archiveCase(mysqli $conn, int $caseId, int $userId, string $branchId, s
         $updateStmt->bind_param("ii", $userId, $caseId);
         $updateStmt->execute();
         
-        // Update vaccination_records
+        // Update vaccination_records (active rows only; restarted-cycle rows keep
+        // their own archive date)
         $updateStmt = $conn->prepare("
             UPDATE vaccination_records 
             SET is_archived = 1, archived_at = NOW(), archived_by = ? 
-            WHERE case_id = ? AND branch_id = ?
+            WHERE case_id = ? AND branch_id = ? AND is_archived = 0
         ");
         $updateStmt->bind_param("iis", $userId, $caseId, $branchId);
         $updateStmt->execute();
@@ -4232,6 +4259,8 @@ body.sidebar-collapsed .main {
         <i class="bi bi-archive-fill me-1"></i> Archive
     </button>
 </div>
+            </div>
+        </div>
     </div>
 
         <div class="modal fade confirm-modal" id="logoutConfirmModal" tabindex="-1"
@@ -5415,6 +5444,9 @@ body.sidebar-collapsed .main {
             const data = await res.json();
 
             if (data.success) {
+                // Forget the selection only after a successful archive. On an
+                // error the modal stays open, so Archive can be retried.
+                archiveTargetCaseId = null;
                 showSuccessAfterModal('archiveModal', 'Record archived successfully');
                 renderTable();
             } else {
@@ -5425,8 +5457,11 @@ body.sidebar-collapsed .main {
         } finally {
             btn.disabled = false;
             btn.innerHTML = originalText;
-            archiveTargetCaseId = null;
         }
+    });
+
+    document.getElementById('archiveModal').addEventListener('hidden.bs.modal', function() {
+        archiveTargetCaseId = null;
     });
 
     // PhilHealth membership: fixed choices plus "Other (specify)". The text
