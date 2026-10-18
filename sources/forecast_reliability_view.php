@@ -3,6 +3,7 @@ declare(strict_types=1);
 require_once __DIR__.'/forecast_reliability_helper.php';
 require_once __DIR__.'/forecast_metrics_summary.php';
 require_once __DIR__.'/forecast_accuracy_units.php';
+require_once __DIR__.'/forecast_auto_evaluation.php';
 
 function forecastReliabilityUrl(array $changes=[]): string
 {
@@ -16,12 +17,21 @@ function forecastReliabilityUrl(array $changes=[]): string
 
 function forecastReliabilityLoad(mysqli $conn,string $branch,string $search,string $horizon,int $size,int $page): array
 {
-    $data=['problems'=>forecastReliabilitySchemaProblems($conn),'runs'=>[],'run'=>null,'rows'=>[],
+    $data=['problems'=>forecastReliabilitySchemaProblems($conn),'runs'=>[],'run'=>null,'rows'=>[],'auto_revisions'=>[],
         'total'=>0,'pages'=>1,'page'=>1,'details'=>[],'overall_metrics'=>['overall'=>[],'by_unit'=>[]],
         'summary'=>['better'=>0,'mixed'=>0,'baseline'=>0,'limited'=>0]];
     if($data['problems']||$branch==='')return $data;
-    $stmt=accuracyQuery($conn,'SELECT * FROM forecast_reliability_runs WHERE branch_id=? ORDER BY reliability_id DESC LIMIT 50','s',[$branch]);
+    $stmt=accuracyQuery($conn,'SELECT * FROM forecast_reliability_runs WHERE branch_id=? ORDER BY reliability_id DESC LIMIT 200','s',[$branch]);
     $data['runs']=$stmt->get_result()->fetch_all(MYSQLI_ASSOC);$stmt->close();
+    // Runs saved by hand (e.g. the one quoted in the paper) always stay selectable,
+    // however many automatic runs follow them.
+    $data['auto_revisions']=forecastAutoEvaluationRevisions($conn,$branch,'reliability_id');
+    $listed=array_flip(array_map(static fn($r)=>(int)$r['reliability_id'],$data['runs']));
+    $stmt=accuracyQuery($conn,'SELECT * FROM forecast_reliability_runs WHERE branch_id=? ORDER BY reliability_id DESC','s',[$branch]);
+    foreach($stmt->get_result()->fetch_all(MYSQLI_ASSOC) as $r){
+        if(!isset($listed[(int)$r['reliability_id']])&&!isset($data['auto_revisions'][(int)$r['reliability_id']]))$data['runs'][]=$r;
+    }
+    $stmt->close();
     $id=$_GET['rolling_run']??($data['runs'][0]['reliability_id']??null);
     if($id===null)return $data;
     if(!preg_match('/^[1-9][0-9]*$/D',(string)$id)||strlen((string)$id)>18){http_response_code(400);exit('Invalid rolling evaluation selection.');}
@@ -107,7 +117,7 @@ function forecastReliabilityRender(array $data,array $branches,string $branchId,
     <form class="panel filters" method="get" id="accuracyFilters" action="ForecastAccuracy.php">
         <input type="hidden" name="view" value="rolling">
         <?php if($role===1): ?><div class="field"><label for="branch">Branch</label><select id="branch" name="branch"><?php foreach($branches as $b): ?><option value="<?= accuracyH($b['branch_id']) ?>" <?= $b['branch_id']===$branchId?'selected':'' ?>><?= accuracyH($b['branch_name']) ?></option><?php endforeach; ?></select></div><?php else: ?><input type="hidden" name="branch" value="<?= accuracyH($branchId) ?>"><?php endif; ?>
-        <div class="field field-wide"><label for="run">Saved rolling evaluation</label><select id="run" name="rolling_run" <?= !$data['runs']?'disabled':'' ?>><?php if(!$data['runs']): ?><option>No rolling evaluations yet</option><?php endif; ?><?php foreach($data['runs'] as $r): ?><option value="<?= (int)$r['reliability_id'] ?>" <?= $run&&(int)$r['reliability_id']===(int)$run['reliability_id']?'selected':'' ?>>#<?= (int)$r['reliability_id'] ?> · <?= accuracyH(date('M j, Y · g:i a',strtotime($r['generated_at']))) ?> · <?= (int)$r['requested_windows'] ?> windows</option><?php endforeach; ?></select></div>
+        <div class="field field-wide"><label for="run">Saved rolling evaluation</label><select id="run" name="rolling_run" <?= !$data['runs']?'disabled':'' ?>><?php if(!$data['runs']): ?><option>No rolling evaluations yet</option><?php endif; ?><?php foreach($data['runs'] as $r): $autoRevision=$data['auto_revisions'][(int)$r['reliability_id']]??null; ?><option value="<?= (int)$r['reliability_id'] ?>" <?= $run&&(int)$r['reliability_id']===(int)$run['reliability_id']?'selected':'' ?>>#<?= (int)$r['reliability_id'] ?> · <?= accuracyH(date('M j, Y · g:i a',strtotime($r['generated_at']))) ?> · <?= (int)$r['requested_windows'] ?> windows · <?= $autoRevision!==null?'automatic, data revision '.(int)$autoRevision:'saved by hand' ?></option><?php endforeach; ?></select></div>
         <div class="field"><label for="horizon">Test horizon</label><select id="horizon" name="horizon"><?php foreach(['all'=>'All horizons','7'=>'7 days','14'=>'14 days','30'=>'30 days'] as $v=>$label): ?><option value="<?= accuracyH($v) ?>" <?= $horizon===(string)$v?'selected':'' ?>><?= $label ?></option><?php endforeach; ?></select></div>
         <div class="field field-search"><label for="itemSearch">Item search</label><input id="itemSearch" type="search" name="q" value="<?= accuracyH($search) ?>" placeholder="Search a supply…" maxlength="200"></div>
         <div class="field field-small"><label for="perPage">Rows per page</label><select id="perPage" name="per_page"><?php foreach([10,20,50] as $size): ?><option value="<?= $size ?>" <?= $size===$perPage?'selected':'' ?>><?= $size ?> rows</option><?php endforeach; ?></select></div>

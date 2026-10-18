@@ -9,6 +9,7 @@ require_once 'sources/workflow_helpers.php';
 require_once 'sources/forecast_training_helper.php';
 require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/forecast_auto_evaluation.php';
 require_once __DIR__ . '/fpdf/fpdf.php';
 
 // Authenticate before reading session data or loading notifications.
@@ -35,6 +36,19 @@ function dailyInventoryValidDate(string $date): bool
 {
     $parsed = DateTime::createFromFormat('Y-m-d', $date);
     return $parsed !== false && $parsed->format('Y-m-d') === $date;
+}
+
+/**
+ * After a closing is synced the training data revision increases: start the
+ * automatic forecast re-evaluation in the background. Never blocks or fails the save.
+ */
+function dailyInventoryStartAutoEvaluation(mysqli $conn, string $branchId): void
+{
+    try {
+        forecastAutoEvaluationTrigger($conn, $branchId, 'Daily closing saved');
+    } catch (Throwable $e) {
+        error_log('Automatic forecast evaluation trigger: ' . $e->getMessage());
+    }
 }
 
 function dailyInventoryPdfText($value): string
@@ -460,6 +474,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
                 . ' (each use counted once, plus any wastage adjustment).'
                 . ($result['synced'] > 0 ? ' The forecasting dataset was updated for ' . $result['synced'] . ' forecastable item(s).' : '')
         );
+        if ($result['synced'] > 0) {
+            dailyInventoryStartAutoEvaluation($conn, $branchId);
+        }
     } catch (Throwable $e) {
         try {
             $conn->rollback();
@@ -515,6 +532,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $trainingSynced = $saved['training_synced'];
         unset($_SESSION['daily_inventory_form']);
+        if ($trainingSynced) {
+            dailyInventoryStartAutoEvaluation($conn, $branchId);
+        }
 
         workflowFlash(
             'success',
