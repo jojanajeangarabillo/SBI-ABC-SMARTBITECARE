@@ -136,7 +136,7 @@ $recentPatientsQuery = "
         p.full_name as patient_name,
         DATE(COALESCE(c.date_of_bite, c.created_at)) as admission_date,
         c.case_number as case_no,
-        c.case_status,
+        " . patientCaseStatusSql('c') . " AS case_status,
         (
             SELECT ph.status
             FROM philhealth_records ph

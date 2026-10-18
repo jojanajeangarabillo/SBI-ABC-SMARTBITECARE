@@ -53,22 +53,24 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'get_patient') {
         }
 
         // Retrieve the latest active case belonging to the same branch.
+        // Case status: shared rule (a one-time / Not Anti-Rabies case is
+        // Completed once its products are recorded).
         $caseQuery = "SELECT
-                         case_id,
-                         case_number,
-                         case_status,
-                         date_of_bite,
-                         animal_type,
-                         bite_location,
-                         bite_category,
-                         animal_status,
-                         remarks AS case_remarks,
-                         created_at AS case_created_at
-                      FROM animal_bite_cases
-                      WHERE patient_id=?
-                        AND branch_id=?
-                        AND is_archived=0
-                      ORDER BY created_at DESC,case_id DESC
+                         c.case_id,
+                         c.case_number,
+                         " . patientCaseStatusSql('c') . " AS case_status,
+                         c.date_of_bite,
+                         c.animal_type,
+                         c.bite_location,
+                         c.bite_category,
+                         c.animal_status,
+                         c.remarks AS case_remarks,
+                         c.created_at AS case_created_at
+                      FROM animal_bite_cases c
+                      WHERE c.patient_id=?
+                        AND c.branch_id=?
+                        AND c.is_archived=0
+                      ORDER BY c.created_at DESC,c.case_id DESC
                       LIMIT 1";
         $stmt = $conn->prepare($caseQuery);
         $stmt->bind_param('is', $patientId, $branchId);
@@ -176,7 +178,7 @@ if (!empty($search)) {
 
 // Apply status filter only if a specific status is selected (not "All")
 if (!empty($statusFilter)) {
-    $whereConditions .= " AND ac.case_status = ?";
+    $whereConditions .= " AND " . patientCaseStatusSql('ac') . " = ?";
     $params[] = $statusFilter;
     $types .= "s";
 }
@@ -209,7 +211,7 @@ $query = "SELECT
             p.created_at as registration_date,
             b.branch_name,
             ac.case_id,
-            ac.case_status,
+            " . patientCaseStatusSql('ac') . " AS case_status,
             ac.date_of_bite,
             ac.created_at as case_created_at,
             ac.animal_type,
@@ -235,15 +237,14 @@ $stmt->execute();
 $patients = $stmt->get_result();
 
 // Get all distinct statuses for filter (from the branch's cases)
-$statusQuery = "SELECT DISTINCT ac.case_status 
+$statusQuery = "SELECT DISTINCT " . patientCaseStatusSql('ac') . " AS case_status
                 FROM animal_bite_cases ac 
                 INNER JOIN patients p ON ac.patient_id = p.patient_id 
                 WHERE p.branch_id = ?
                   AND ac.branch_id = ?
                   AND p.is_archived = 0
                   AND ac.is_archived = 0
-                  AND ac.case_status IS NOT NULL
-                ORDER BY ac.case_status";
+                ORDER BY case_status";
 $stmt = $conn->prepare($statusQuery);
 $stmt->bind_param("ss", $branchId, $branchId);
 $stmt->execute();

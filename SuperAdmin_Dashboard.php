@@ -5,6 +5,7 @@ require_once 'sources/inventory_stock_helpers.php';
 $stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
 require_once 'sources/workflow_helpers.php';
+require_once 'sources/patient_display_helper.php';
 
 // Check if user is Super Admin
 if (
@@ -78,11 +79,12 @@ $users_result = $conn->query($users_sql);
 $users_data = $users_result->fetch_assoc();
 
 // 4. Total Cases
+// Ongoing/Completed use the shared rule (one-time visits count as Completed).
 $cases_sql = "SELECT 
                 COUNT(*) as total_cases,
-                SUM(CASE WHEN case_status = 'Ongoing' THEN 1 ELSE 0 END) as ongoing_cases,
-                SUM(CASE WHEN case_status = 'Completed' THEN 1 ELSE 0 END) as completed_cases
-              FROM animal_bite_cases";
+                SUM(CASE WHEN " . patientCaseStatusSql('c') . " = 'Ongoing' THEN 1 ELSE 0 END) as ongoing_cases,
+                SUM(CASE WHEN " . patientCaseStatusSql('c') . " = 'Completed' THEN 1 ELSE 0 END) as completed_cases
+              FROM animal_bite_cases c";
 $cases_result = $conn->query($cases_sql);
 $cases_data = $cases_result->fetch_assoc();
 

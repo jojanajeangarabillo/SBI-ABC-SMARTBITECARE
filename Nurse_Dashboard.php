@@ -358,10 +358,11 @@ $doseCompletion = $stmt->get_result()->fetch_assoc() ?: [];
 $stmt->close();
 
 // 19. CASE STATUS DISTRIBUTION
-$caseStatusQuery = "SELECT case_status, COUNT(*) AS count
-                    FROM animal_bite_cases
-                    WHERE branch_id = ?
-                      AND is_archived = 0
+// Shared rule: a one-time / Not Anti-Rabies case is Completed once its products are recorded.
+$caseStatusQuery = "SELECT " . patientCaseStatusSql('c') . " AS case_status, COUNT(*) AS count
+                    FROM animal_bite_cases c
+                    WHERE c.branch_id = ?
+                      AND c.is_archived = 0
                     GROUP BY case_status";
 $stmt = $conn->prepare($caseStatusQuery);
 $stmt->bind_param("s", $branch_id);

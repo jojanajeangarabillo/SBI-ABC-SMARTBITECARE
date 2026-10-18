@@ -3,6 +3,7 @@ session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/patient_display_helper.php';
 
 $user = workflowRequireUser($conn, 4);
 
@@ -133,7 +134,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $queueStmt = $conn->prepare(
     "SELECT v.visit_id,v.visit_date,v.workflow_status,p.full_name,p.contact_number,c.case_id,c.case_number,
             c.animal_status,a.bite_category,a.treatment_profile,a.route,a.active_regimen,a.chart_signed_at,
-            r.registry_number,r.erig,r.ats,r.tt,r.remarks
+            r.registry_number,r.erig,r.ats,r.tt,r.remarks,
+            " . patientCaseVaccinationStatusSql('c') . " AS treatment_status
      FROM patient_visits v INNER JOIN patients p ON p.patient_id=v.patient_id
      INNER JOIN animal_bite_cases c ON c.case_id=v.case_id
      INNER JOIN clinical_assessments a ON a.visit_id=v.visit_id
@@ -924,6 +926,9 @@ $flash = workflowTakeFlash();
                                         <?php else: ?>
                                             <span class="badge-status status-success">Registered</span>
                                         <?php endif; ?>
+                                        <div class="small text-muted mt-2">Treatment:
+                                            <strong><?php echo workflowH((string)$row['treatment_status']); ?></strong>
+                                        </div>
                                     </td>
                                     <td>
                                         <?php if ($row['workflow_status'] === 'For Registry'): ?>

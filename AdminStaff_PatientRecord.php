@@ -346,12 +346,11 @@ function loadDoseStageData(mysqli $conn, int $caseId, string $branchId): array {
         }
     }
 
-    $overall = 'Pending';
-    if ($total > 0 && $completed === $total) {
-        $overall = 'Completed';
-    } elseif ($completed > 0) {
-        $overall = 'In Progress';
-    }
+    // One shared rule for every page (patient_display_helper.php): an
+    // anti-rabies schedule follows its doses; a case without one (Not
+    // Anti-Rabies / one-time treatment) is Completed once its one-time
+    // products are recorded.
+    $overall = patientCaseVaccinationStatus($conn, $caseId);
 
     return [
         'stages' => $stages,
@@ -4344,6 +4343,9 @@ body.sidebar-collapsed .main {
     const pageSize = 8;
     let searchTerm = '';
     let archiveTargetCaseId = null;
+    // Server status of the case being edited (shared rule); used when the case
+    // has no anti-rabies schedule (one-time treatment).
+    let caseServerStatus = null;
     let allPatients = [];
     let isCheckingCaseNo = false;
     let currentFilter = 'all';
@@ -4692,6 +4694,14 @@ body.sidebar-collapsed .main {
             statusBadge.textContent = total > 0 ? 'Scheduled' : 'No Schedule';
             statusBadge.className = 'summary-badge';
             progressBarFill.className = 'progress-bar-fill';
+        }
+        if (caseServerStatus === 'Completed' && completed === 0) {
+            // Not Anti-Rabies case: one-time products recorded by the Nurse.
+            progressText.textContent = 'One-time treatment recorded by Nurse (no anti-rabies schedule)';
+            progressBarFill.style.width = '100%';
+            statusBadge.textContent = 'Completed';
+            statusBadge.className = 'summary-badge completed';
+            progressBarFill.className = 'progress-bar-fill completed';
         }
     }
 
@@ -5297,7 +5307,9 @@ body.sidebar-collapsed .main {
                 ? DOSE_CONFIG.filter(d => returnedDoseKeys.includes(d.key)).map(d => d.key)
                 : getDoseKeysForCategory(category, route);
 
-            if (data.vaccination_doses && Object.keys(data.vaccination_doses).length > 0) {
+            const hasSchedule = data.vaccination_doses && Object.keys(data.vaccination_doses).length > 0;
+            caseServerStatus = hasSchedule ? null : (data.vaccination_status || null);
+            if (hasSchedule) {
                 loadDoseDataForEdit(data.vaccination_doses);
             } else {
                 renderScheduleTable();
@@ -5375,6 +5387,7 @@ body.sidebar-collapsed .main {
             setPhilhealthType('');
             document.getElementById('editId').value = '';
             document.getElementById('editPatientId').value = data.patient_id;
+            caseServerStatus = null;
             document.getElementById('modalTitle').textContent = 'New Case for Returning Patient';
             document.getElementById('patientName').value = data.patient_name || '';
             document.getElementById('address').value = data.address || '';
@@ -5620,6 +5633,7 @@ body.sidebar-collapsed .main {
     document.getElementById('addPatientBtn').addEventListener('click', function() {
         document.getElementById('editId').value = '';
         document.getElementById('editPatientId').value = '';
+        caseServerStatus = null;
         document.getElementById('modalTitle').textContent = 'Add New Patient';
         document.getElementById('patientForm').reset();
         setPhilhealthType('');
