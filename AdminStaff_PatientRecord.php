@@ -5425,7 +5425,7 @@ body.sidebar-collapsed .main {
             : null;
         document.getElementById('archivePatientName').textContent = patient ? 
             `Patient: ${patient.patient_name} (Case: ${patient.case_no})` : 
-            `Case ID: ${caseId}`;
+            'Selected case';
         document.getElementById('archiveReason').value = 'Archived by user';
         new bootstrap.Modal(document.getElementById('archiveModal')).show();
     }

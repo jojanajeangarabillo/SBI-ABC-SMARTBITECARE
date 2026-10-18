@@ -460,8 +460,9 @@ function generateCaseReport($branchId, $startDate = null, $endDate = null) {
     global $conn;
     
     $params = [];
-    $query = "SELECT abc.case_id, p.full_name as patient_name, abc.animal_type, 
-              abc.bite_location, abc.bite_category, abc.case_status, 
+    $query = "SELECT abc.case_id, abc.case_number, MAX(rr.registry_number) AS registry_number,
+              p.full_name as patient_name, abc.animal_type,
+              abc.bite_location, abc.bite_category, " . patientCaseStatusSql('abc') . " AS case_status, 
               abc.date_of_bite, abc.created_at,
               COUNT(DISTINCT rr.registry_id) as has_registry,
               COUNT(DISTINCT vr.vaccination_id) as has_vaccinations
@@ -510,12 +511,12 @@ function generateCaseReport($branchId, $startDate = null, $endDate = null) {
         'With Registry' => $withRegistry
     ]);
     
-    $headers = ['ID', 'Patient', 'Animal', 'Location', 'Status', 'Date'];
+    $headers = ['Case No.', 'Patient', 'Animal', 'Location', 'Status', 'Date'];
     $columnWidths = [18, 40, 28, 32, 22, 28];
     
     $data = array_map(function($case) {
         return [
-            $case['case_id'],
+            patientDisplayCaseNumber($case['case_number'] ?? null, $case['registry_number'] ?? null),
             substr($case['patient_name'] ?: 'Unknown', 0, 20),
             $case['animal_type'] ?: 'N/A',
             substr($case['bite_location'] ?: 'N/A', 0, 20),

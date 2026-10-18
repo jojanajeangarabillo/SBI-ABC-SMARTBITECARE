@@ -750,7 +750,7 @@ function buildPatientDocumentContent(
         'address' => $patientCase['address'] ?? 'N/A',
         'contact_number' => $patientCase['contact_number'] ?? 'N/A',
         'email' => $patientCase['email'] ?? 'N/A',
-        'case_number' => trim((string)($patientCase['case_number'] ?? '')) !== '' ? $patientCase['case_number'] : ('C' . str_pad((string)$caseId, 4, '0', STR_PAD_LEFT)),
+        'case_number' => patientCaseNumberById($conn, (int)$caseId),
         'bite_type' => $patientCase['bite_type'] ?? '',
         'wound_type' => $patientCase['wound_type'] ?? '',
         'regimen' => patientRegimenLabel($patientCase['treatment_profile'] ?? null, $patientCase['regimen_route'] ?? null),
@@ -2527,7 +2527,7 @@ function viewPatient(patientId) {
 
             vaccines.forEach(function(v) {
                 var status = v.vaccination_status || 'Scheduled';
-                var caseLabel = v.case_number || ('#' + (v.case_id || ''));
+                var caseLabel = v.case_number || 'N/A';
 
                 html += '<tr>';
                 html +=

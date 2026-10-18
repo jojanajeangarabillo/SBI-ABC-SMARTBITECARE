@@ -1521,7 +1521,7 @@ $branchName = $branchResult->fetch_assoc()['branch_name'] ?? 'Unknown Branch';
 
             if (caseData) {
                 html += `
-                    <div class="detail-row"><span class="detail-label">Case Number</span><span class="detail-value"><strong>${displayValue(caseData.case_number, '#' + caseData.case_id)}</strong></span></div>
+                    <div class="detail-row"><span class="detail-label">Case Number</span><span class="detail-value"><strong>${displayValue(caseData.case_number, 'N/A')}</strong></span></div>
                     <div class="detail-row"><span class="detail-label">Status</span><span class="detail-value"><span class="badge-status ${statusBadge}">${escapeHtml(statusText)}</span></span></div>
                     <div class="detail-row"><span class="detail-label">Date of Bite</span><span class="detail-value">${displayValue(caseData.date_of_bite, 'Not recorded')}</span></div>
                     <div class="detail-row"><span class="detail-label">Animal Type</span><span class="detail-value">${displayValue(caseData.animal_type, 'Not recorded')}</span></div>

@@ -9,6 +9,7 @@ require_once 'sources/notification_helper.php';
 require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/forecast_training_helper.php';
 require_once 'sources/daily_inventory_helpers.php';
+require_once 'sources/patient_display_helper.php';
 
 // ============================================================
 // AUTHENTICATED NURSE
@@ -1089,7 +1090,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $transactionRemarks =
                     'Non-anti-rabies administration'
                     . ' | Patient ID: ' . $patientId
-                    . ' | Case ID: ' . $caseId
+                    . ' | Case No.: ' . patientCaseNumberById($conn, (int)$caseId)
                     . ' | Product: ' . $vaccineName
                     . ' | Used: ' . $usageDescription
                     . ' | Batch(es): ' . $batchSummary

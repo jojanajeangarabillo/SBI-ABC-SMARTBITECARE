@@ -381,3 +381,18 @@ function patientCaseVaccinationStatus(mysqli $conn, int $caseId): string
     $stmt->close();
     return $status;
 }
+
+/** Case number shown to users for one case (registry number for old records without one). */
+function patientCaseNumberById(mysqli $conn, int $caseId): string
+{
+    $stmt = $conn->prepare("SELECT c.case_number,
+            (SELECT r.registry_number FROM registry_records r
+             WHERE r.case_id = c.case_id AND TRIM(COALESCE(r.registry_number, '')) <> ''
+             ORDER BY r.registry_id DESC LIMIT 1) AS registry_number
+        FROM animal_bite_cases c WHERE c.case_id = ?");
+    $stmt->bind_param('i', $caseId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc() ?: [];
+    $stmt->close();
+    return patientDisplayCaseNumber($row['case_number'] ?? null, $row['registry_number'] ?? null);
+}
