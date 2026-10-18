@@ -61,17 +61,29 @@ function inventoryTransactionClass(string $type): string
     return 'movement-adjustment';
 }
 
-function inventoryTransactionQuantity(string $type, $quantity): string
+function inventoryTransactionQuantity(string $type, $quantity, array $item): string
 {
+    // Stored in base units; shown in the clinic's counting format (e.g. "+2 vials").
     $type = strtoupper($type);
     $number = (float)$quantity;
     if (in_array($type, ['OUT', 'TRANSFER_OUT', 'EXPIRED'], true)) {
-        return '-' . inventoryNumber(abs($number));
+        return '-' . inventoryQuantityText(abs($number), $item);
     }
     if (in_array($type, ['IN', 'TRANSFER_IN', 'RETURN'], true)) {
-        return '+' . inventoryNumber(abs($number));
+        return '+' . inventoryQuantityText(abs($number), $item);
     }
-    return ($number > 0 ? '+' : '') . inventoryNumber($number);
+    return ($number > 0 ? '+' : '') . inventoryQuantityText($number, $item);
+}
+
+/** Small hint under a converted quantity, e.g. "1 vial = 6 sites"; empty for plain items. */
+function inventoryConversionHint(array $item): string
+{
+    if (!inventoryHasDisplayUnit($item)) {
+        return '';
+    }
+    $conversion = inventoryConversionToBase($item);
+    return '1 ' . inventoryUnitWord(inventoryDisplayUnitLabel($item), 1.0) . ' = '
+        . inventoryFormatNumber($conversion) . ' ' . inventoryUnitWord(inventoryBaseUnitLabel($item), $conversion);
 }
 
 // Only categories represented by inventory records in the logged-in branch
@@ -98,6 +110,9 @@ $categoriesStmt->close();
 // appearing as zero-stock records.
 $inventorySql = "SELECT i.item_id,i.item_name,i.description,i.minimum_stock,i.is_forecastable,
     c.category_id,c.category_name,c.monitoring_frequency,COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,
+    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS base_unit_label,
+    COALESCE(NULLIF(TRIM(i.display_unit_label), ''), u.unit_name) AS display_unit_label,
+    COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base,
     s.usable_stock AS total_stock,s.usable_batches AS active_batches,
     s.nearest_expiration,s.last_updated
 FROM inventory_items i JOIN inventory_categories c ON c.category_id=i.category_id
@@ -169,6 +184,9 @@ $recentSql = "
         st.transaction_date,
         i.item_name,
         un.unit_name,
+        COALESCE(NULLIF(TRIM(i.base_unit_label), ''), un.unit_name) AS base_unit_label,
+        COALESCE(NULLIF(TRIM(i.display_unit_label), ''), un.unit_name) AS display_unit_label,
+        COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base,
         COALESCE(u.username, 'System') AS performed_by
     FROM stock_transactions st
     INNER JOIN inventory_items i ON i.item_id = st.item_id
@@ -1009,13 +1027,14 @@ $recentStmt->close();
                                 } else {
                                     $decisionText = 'No immediate inventory action indicated.';
                                 }
-                                $searchText = strtolower($item['item_name'] . ' ' . $item['category_name'] . ' ' . $item['unit_name']);
+                                $searchText = strtolower($item['item_name'] . ' ' . $item['category_name'] . ' ' . $item['unit_name'] . ' ' . $item['display_unit_label']);
+                                $conversionHint = inventoryConversionHint($item);
                                 ?>
                                 <tr class="inventory-row" data-category="<?php echo (int)$item['category_id']; ?>" data-status="<?php echo workflowH($filterStatuses); ?>" data-search="<?php echo workflowH($searchText); ?>">
                                     <td><div class="item-name"><?php echo workflowH($item['item_name']); ?></div><?php if (!empty($item['description'])): ?><div class="item-description" title="<?php echo workflowH($item['description']); ?>"><?php echo workflowH($item['description']); ?></div><?php endif; ?></td>
                                     <td><span class="category-label"><?php echo workflowH($item['category_name']); ?></span><div class="monitoring-frequency"><?php echo workflowH($item['monitoring_frequency'] ?? 'Not set'); ?> monitoring</div></td>
-                                    <td><div class="stock-number"><?php echo inventoryNumber($stock); ?></div><div class="stock-unit"><?php echo workflowH($item['unit_name']); ?></div></td>
-                                    <td><strong><?php echo inventoryNumber($minimum); ?></strong> <span class="stock-unit"><?php echo workflowH($item['unit_name']); ?></span></td>
+                                    <td><div class="stock-number"><?php echo workflowH(inventoryQuantityText($stock, $item)); ?></div><?php if ($conversionHint !== ''): ?><div class="stock-unit"><?php echo workflowH($conversionHint); ?></div><?php endif; ?></td>
+                                    <td><strong><?php echo workflowH(inventoryQuantityText($minimum, $item)); ?></strong></td>
                                     <td><?php echo number_format((int)$item['active_batches']); ?><div class="stock-unit">with available stock</div></td>
                                     <td>
                                         <?php if (!empty($item['nearest_expiration'])): ?>
@@ -1062,9 +1081,9 @@ $recentStmt->close();
                             <?php foreach ($recentMovements as $movement): ?>
                                 <tr>
                                     <td><?php echo workflowH(date('M d, Y', strtotime($movement['transaction_date']))); ?><div class="stock-unit"><?php echo workflowH(date('h:i A', strtotime($movement['transaction_date']))); ?></div></td>
-                                    <td><div class="item-name"><?php echo workflowH($movement['item_name']); ?></div><div class="stock-unit"><?php echo workflowH($movement['unit_name']); ?></div></td>
+                                    <td><div class="item-name"><?php echo workflowH($movement['item_name']); ?></div><div class="stock-unit"><?php echo workflowH(inventoryConversionHint($movement) ?: inventoryCountingUnit($movement)); ?></div></td>
                                     <td><span class="movement-type <?php echo workflowH(inventoryTransactionClass($movement['transaction_type'])); ?>"><?php echo workflowH(str_replace('_', ' ', $movement['transaction_type'])); ?></span></td>
-                                    <td><span class="quantity-change"><?php echo workflowH(inventoryTransactionQuantity($movement['transaction_type'], $movement['quantity'])); ?></span> <span class="stock-unit"><?php echo workflowH($movement['unit_name']); ?></span></td>
+                                    <td><span class="quantity-change"><?php echo workflowH(inventoryTransactionQuantity($movement['transaction_type'], $movement['quantity'], $movement)); ?></span></td>
                                     <td><?php echo workflowH($movement['performed_by']); ?></td>
                                     <td><div class="remarks-cell" title="<?php echo workflowH($movement['remarks'] ?? ''); ?>"><?php echo workflowH($movement['remarks'] ?: 'No remarks'); ?></div></td>
                                 </tr>

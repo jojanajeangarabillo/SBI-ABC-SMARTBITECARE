@@ -1476,6 +1476,9 @@ if (!empty($branch_id)) {
     $itemsSQL = "SELECT i.item_id,i.category_id,i.unit_id,i.item_name,i.minimum_stock,i.description,
     i.is_forecastable,c.category_name,u.unit_name,
     COALESCE(NULLIF(TRIM(i.base_unit_label),''),u.unit_name) AS stock_unit_name,
+    COALESCE(NULLIF(i.base_unit_label,''),u.unit_name) AS base_unit_label,
+    COALESCE(NULLIF(i.display_unit_label,''),u.unit_name) AS display_unit_label,
+    COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base,
     COALESCE(s.usable_stock,0) AS quantity_available
 FROM inventory_items i JOIN inventory_categories c ON c.category_id=i.category_id
 JOIN units u ON u.unit_id=i.unit_id
@@ -1624,6 +1627,40 @@ WHERE 1=?";
                 $statusClass;
 
 
+            /*
+             * Display-only text in the clinic's counting unit
+             * (e.g. "67 vials + 3 sites"). Stored values stay in base units.
+             */
+
+            $row['quantity_text'] =
+                inventoryQuantityText($quantity, $row);
+
+            $row['minimum_stock_text'] =
+                inventoryQuantityText((float)$minimum, $row);
+
+            $hasCountingUnit =
+                strcasecmp(
+                    inventoryBaseUnitLabel($row),
+                    inventoryDisplayUnitLabel($row)
+                ) !== 0;
+
+            $row['unit_text'] =
+                $hasCountingUnit
+                ? inventoryDisplayUnitLabel($row) .
+                    ' (1 ' . strtolower(inventoryDisplayUnitLabel($row)) . ' = ' .
+                    inventoryQuantityText(inventoryConversionToBase($row), ['base_unit_label' => inventoryBaseUnitLabel($row)]) .
+                    ')'
+                : inventoryDisplayUnitLabel($row);
+
+            $row['minimum_stock_unit_hint'] =
+                $hasCountingUnit
+                ? 'Counted in ' . inventoryUnitWord(inventoryBaseUnitLabel($row), 2) .
+                    ' (1 ' . strtolower(inventoryDisplayUnitLabel($row)) . ' = ' .
+                    inventoryQuantityText(inventoryConversionToBase($row), ['base_unit_label' => inventoryBaseUnitLabel($row)]) .
+                    ').'
+                : 'Counted in ' . inventoryUnitWord(inventoryBaseUnitLabel($row), 2) . '.';
+
+
             $items[] =
                 $row;
         }
@@ -1726,6 +1763,9 @@ if (!empty($branch_id) && !empty($items)) {
                 'quantity_available' =>
                     (float)$batchRow['quantity_available'],
 
+                'quantity_text' =>
+                    '',
+
                 'expiration_date' =>
                     $batchRow['expiration_date']
             ];
@@ -1743,6 +1783,16 @@ if (!empty($branch_id) && !empty($items)) {
         $item['stock_batches'] =
             $batchMap[$itemId]
             ?? [];
+
+        foreach ($item['stock_batches'] as &$stockBatch) {
+            $stockBatch['quantity_text'] =
+                inventoryQuantityText(
+                    (float)$stockBatch['quantity_available'],
+                    $item
+                );
+        }
+
+        unset($stockBatch);
     }
 
     unset($item);
@@ -2985,11 +3035,7 @@ body {
                             <td>
 
                                 <?php
-                                echo h(inventoryFormatNumber((float)$item['quantity_available']));
-                                ?>
-
-                                <?php
-                                echo h($item['stock_unit_name']);
+                                echo h($item['quantity_text']);
                                 ?>
 
                             </td>
@@ -3065,6 +3111,15 @@ body {
                                                 'quantity_available' =>
                                                     (float)$item['quantity_available'],
 
+                                                'quantity_text' =>
+                                                    $item['quantity_text'],
+
+                                                'minimum_stock_text' =>
+                                                    $item['minimum_stock_text'],
+
+                                                'unit_text' =>
+                                                    $item['unit_text'],
+
                                                 'status' =>
                                                     $item['status'],
 
@@ -3111,6 +3166,9 @@ body {
 
                                                 'minimum_stock' =>
                                                     (int)$item['minimum_stock'],
+
+                                                'minimum_stock_unit_hint' =>
+                                                    $item['minimum_stock_unit_hint'],
 
                                                 'description' =>
                                                     $item['description'],
@@ -3561,6 +3619,10 @@ body {
                                 required
                             >
 
+                            <div class="form-text">
+                                Counted in the selected unit (base unit).
+                            </div>
+
                         </div>
 
                     </div>
@@ -3848,6 +3910,11 @@ body {
                                 step="1"
                                 required
                             >
+
+                            <div
+                                id="editMinimumStockHint"
+                                class="form-text"
+                            ></div>
 
                         </div>
 
@@ -4346,21 +4413,23 @@ function viewItem(item)
     document
         .getElementById('viewUnit')
         .textContent =
-            item.unit_name || '';
+            item.unit_text || item.unit_name || '';
 
 
     document
         .getElementById('viewStock')
         .textContent =
-            (item.quantity_available ?? 0) +
+            item.quantity_text ||
+            ((item.quantity_available ?? 0) +
             ' ' +
-            (item.unit_name || '');
+            (item.unit_name || ''));
 
 
     document
         .getElementById('viewMinimumStock')
         .textContent =
-            item.minimum_stock ?? 0;
+            item.minimum_stock_text ||
+            (item.minimum_stock ?? 0);
 
 
     const expirationContainer =
@@ -4421,9 +4490,10 @@ function viewItem(item)
                     'expiration-qty';
 
                 quantity.textContent =
-                    (batch.quantity_available ?? 0) +
+                    batch.quantity_text ||
+                    ((batch.quantity_available ?? 0) +
                     ' ' +
-                    (item.unit_name || '');
+                    (item.unit_name || ''));
 
 
                 const expiration =
@@ -4537,6 +4607,12 @@ function editItem(item)
         .getElementById('editMinimumStock')
         .value =
             item.minimum_stock ?? 0;
+
+
+    document
+        .getElementById('editMinimumStockHint')
+        .textContent =
+            item.minimum_stock_unit_hint || '';
 
 
     document

@@ -5,6 +5,7 @@ require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/dashboard_patient_metrics.php';
+require_once 'sources/patient_display_helper.php';
 
 $user = workflowRequireUser($conn, 4);
 $userId = (int)$user['user_id'];
@@ -50,6 +51,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             if (!$case) {
                 throw new RuntimeException('Patient/case was not found in your branch.');
+            }
+
+            // A case whose treatment is completed cannot start a new visit; a new
+            // bite is registered as a new case (Patient Record > New case).
+            foreach (patientCheckInCases($conn, $branchId) as $candidate) {
+                if ((int)$candidate['case_id'] === $caseId && $candidate['state'] === 'completed') {
+                    throw new RuntimeException('Treatment is completed for ' . $case['full_name'] . ' (Case '
+                        . $case['case_number'] . '). Use New case on Patient Record for a new exposure.');
+                }
             }
 
             $existing = $conn->prepare(
@@ -167,24 +177,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-$caseStmt = $conn->prepare(
-    "SELECT p.patient_id,
-            p.full_name,
-            c.case_id,
-            c.case_number,
-            c.case_status
-     FROM patients p
-     INNER JOIN animal_bite_cases c ON c.patient_id = p.patient_id
-     WHERE p.branch_id = ?
-       AND c.branch_id = ?
-       AND p.is_archived = 0
-       AND c.is_archived = 0
-     ORDER BY p.full_name, c.created_at DESC"
-);
-$caseStmt->bind_param('ss', $branchId, $branchId);
-$caseStmt->execute();
-$cases = $caseStmt->get_result()->fetch_all(MYSQLI_ASSOC);
-$caseStmt->close();
+// Only cases that can still be checked in are listed by default: the active
+// case has remaining doses (or is not scheduled yet). Completed cases are shown
+// only with "Show completed" (look-up only) and in the search hint.
+$showCompleted = ($_GET['show_completed'] ?? '') === '1';
+$allCases = patientCheckInCases($conn, $branchId);
+$cases = array_values(array_filter($allCases, static fn(array $case): bool => $case['state'] === 'active'));
+$completedCases = array_values(array_filter($allCases, static fn(array $case): bool => $case['state'] === 'completed'));
+$completedHint = array_map(static fn(array $case): array => [
+    'name' => patientDisplayName($case['full_name']),
+    'case_number' => (string)$case['case_number'],
+], $completedCases);
 
 $visitStmt = $conn->prepare(
     "SELECT v.*,
@@ -197,9 +200,11 @@ $visitStmt = $conn->prepare(
      LEFT JOIN users u ON u.user_id = v.assigned_nurse
      WHERE v.branch_id = ?
        AND v.visit_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+       AND (? = 1 OR v.workflow_status NOT IN ('" . implode("','", patientVisitDoneStatuses()) . "'))
      ORDER BY v.visit_date DESC, v.check_in_at DESC"
 );
-$visitStmt->bind_param('s', $branchId);
+$showCompletedFlag = $showCompleted ? 1 : 0;
+$visitStmt->bind_param('si', $branchId, $showCompletedFlag);
 $visitStmt->execute();
 $visits = $visitStmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $visitStmt->close();
@@ -929,6 +934,16 @@ $statusClasses = [
                         <h5><span class="section-icon"><i class="bi bi-person-plus-fill"></i></span>Check In a Patient</h5>
                         <p>Select an existing patient case and send the visit to the Nurse queue.</p>
                     </div>
+                    <div class="d-flex flex-column align-items-end gap-1">
+                        <div class="form-check form-switch m-0">
+                            <input class="form-check-input" type="checkbox" role="switch" id="showCompletedSwitch" <?php echo $showCompleted ? 'checked' : ''; ?>>
+                            <label class="form-check-label small" for="showCompletedSwitch">Show completed</label>
+                        </div>
+                        <small class="text-muted">
+                            <?php echo number_format(count($cases)); ?> case(s) can be checked in ·
+                            <?php echo number_format(count($completedCases)); ?> completed <?php echo $showCompleted ? 'shown' : 'hidden'; ?>
+                        </small>
+                    </div>
                 </div>
 
                 <div class="content-card-body">
@@ -938,23 +953,47 @@ $statusClasses = [
 
                         <div class="col-lg-5">
                             <label class="form-label required" for="caseSelection">Patient and Case</label>
+                            <input type="search" class="form-control mb-2" id="caseSearch" placeholder="Search patient name or case no..." autocomplete="off">
                             <select class="form-select" name="case_selection" id="caseSelection" required>
                                 <option value="">Select a patient and case...</option>
-                                <?php foreach ($cases as $case): ?>
+                                <?php foreach ($cases as $case):
+                                    $alreadyIn = $case['visit_today'] !== null;
+                                    if ((int)$case['total_doses'] === 0) {
+                                        $progress = 'not yet scheduled';
+                                    } else {
+                                        $progress = (int)$case['remaining_doses'] . ' dose(s) left';
+                                        if ($case['next_dose'] !== null) {
+                                            $progress .= ', next ' . workflowDoseLabel((int)$case['next_dose'])
+                                                . ($case['next_date'] ? ' ' . date('M d', strtotime($case['next_date'])) : '');
+                                        }
+                                    }
+                                ?>
                                     <option
                                         value="<?php echo (int)$case['case_id']; ?>"
                                         data-patient="<?php echo (int)$case['patient_id']; ?>"
+                                        <?php echo $alreadyIn ? 'disabled' : ''; ?>
                                     >
                                         <?php
                                         echo workflowH(
-                                            $case['full_name']
+                                            patientDisplayName($case['full_name'])
                                             . ' - ' . $case['case_number']
-                                            . ' (' . $case['case_status'] . ')'
+                                            . ' (' . $progress . ')'
+                                            . ($alreadyIn ? ' - already checked in today: ' . $case['visit_today'] : '')
                                         );
                                         ?>
                                     </option>
                                 <?php endforeach; ?>
+                                <?php if ($showCompleted && $completedCases): ?>
+                                    <optgroup label="Treatment completed (look-up only; use New case for a new exposure)">
+                                        <?php foreach ($completedCases as $case): ?>
+                                            <option value="" disabled>
+                                                <?php echo workflowH(patientDisplayName($case['full_name']) . ' - ' . $case['case_number'] . ' (Completed)'); ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </optgroup>
+                                <?php endif; ?>
                             </select>
+                            <div class="alert alert-info py-2 px-3 mt-2 mb-0 small" id="completedHint" style="display:none" role="status"></div>
                             <input type="hidden" name="patient_id" id="patientId">
                             <input type="hidden" name="case_id" id="caseId">
                         </div>
@@ -996,8 +1035,12 @@ $statusClasses = [
             <section class="content-card mb-0">
                 <div class="content-card-header">
                     <div>
-                        <h5><span class="section-icon"><i class="bi bi-clock-history"></i></span>Recent Visits</h5>
-                        <p>Check-ins and workflow progress recorded during the last 30 days.</p>
+                        <h5><span class="section-icon"><i class="bi bi-clock-history"></i></span><?php echo $showCompleted ? 'Recent Visits' : 'Active Visit Queue'; ?></h5>
+                        <p>
+                            <?php echo $showCompleted
+                                ? 'All check-ins of the last 30 days, including completed and cancelled visits.'
+                                : 'Visits still in progress (last 30 days). A visit leaves this queue once it is completed or cancelled; turn on "Show completed" to see them.'; ?>
+                        </p>
                     </div>
                     <span class="badge rounded-pill text-bg-light border">
                         <?php echo number_format(count($visits)); ?> records
@@ -1022,7 +1065,7 @@ $statusClasses = [
                                 <tr>
                                     <td colspan="7" class="empty-state">
                                         <i class="bi bi-inbox"></i>
-                                        No visit records yet.
+                                        <?php echo $showCompleted ? 'No visit records yet.' : 'No visits in progress.'; ?>
                                     </td>
                                 </tr>
                             <?php endif; ?>
@@ -1142,6 +1185,51 @@ $statusClasses = [
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src= "sources/sidebar.js"></script>
     <script>
+        // "Show completed" (off by default) reloads the page with completed cases and visits.
+        document.getElementById('showCompletedSwitch')?.addEventListener('change', function () {
+            const url = new URL(window.location.href);
+            if (this.checked) url.searchParams.set('show_completed', '1'); else url.searchParams.delete('show_completed');
+            window.location.href = url.toString();
+        });
+
+        // Search the check-in list; a completed patient gets the New case hint.
+        const completedCases = <?php echo json_encode($completedHint, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        const caseSearch = document.getElementById('caseSearch');
+        const completedHint = document.getElementById('completedHint');
+        caseSearch?.addEventListener('input', function () {
+            const term = this.value.trim().toLowerCase();
+            const select = document.getElementById('caseSelection');
+            let visible = 0;
+            Array.from(select.options).forEach((option, index) => {
+                if (index === 0) return;
+                const match = term === '' || option.textContent.toLowerCase().includes(term);
+                option.hidden = !match;
+                if (match && !option.disabled) visible++;
+            });
+            const matches = term.length >= 2
+                ? completedCases.filter(c => c.name.toLowerCase().includes(term) || c.case_number.toLowerCase().includes(term))
+                : [];
+            completedHint.replaceChildren();
+            if (matches.length) {
+                const first = matches[0];
+                completedHint.append(
+                    'Treatment completed: ' + matches.slice(0, 3).map(c => `${c.name} (Case ${c.case_number})`).join(', ')
+                    + (matches.length > 3 ? '…' : '') + '. Use New case for a new exposure. '
+                );
+                const link = document.createElement('a');
+                link.href = 'AdminStaff_PatientRecord.php?search=' + encodeURIComponent(first.name);
+                link.textContent = 'Open Patient Record';
+                completedHint.append(link);
+                completedHint.style.display = '';
+            } else {
+                completedHint.style.display = 'none';
+            }
+            if (visible === 1) {
+                const only = Array.from(select.options).find((o, i) => i > 0 && !o.hidden && !o.disabled);
+                if (only) { select.value = only.value; select.dispatchEvent(new Event('change')); }
+            }
+        });
+
         const caseSelection = document.getElementById('caseSelection');
         const patientIdInput = document.getElementById('patientId');
         const caseIdInput = document.getElementById('caseId');

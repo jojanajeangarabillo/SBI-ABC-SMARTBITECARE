@@ -9,6 +9,7 @@ require_once 'sources/workflow_helpers.php';
 require_once 'sources/forecast_training_helper.php';
 require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/forecast_auto_evaluation.php';
 require_once __DIR__ . '/fpdf/fpdf.php';
 
 // Authenticate before reading session data or loading notifications.
@@ -35,6 +36,19 @@ function dailyInventoryValidDate(string $date): bool
 {
     $parsed = DateTime::createFromFormat('Y-m-d', $date);
     return $parsed !== false && $parsed->format('Y-m-d') === $date;
+}
+
+/**
+ * After a closing is synced the training data revision increases: start the
+ * automatic forecast re-evaluation in the background. Never blocks or fails the save.
+ */
+function dailyInventoryStartAutoEvaluation(mysqli $conn, string $branchId): void
+{
+    try {
+        forecastAutoEvaluationTrigger($conn, $branchId, 'Daily closing saved');
+    } catch (Throwable $e) {
+        error_log('Automatic forecast evaluation trigger: ' . $e->getMessage());
+    }
 }
 
 function dailyInventoryPdfText($value): string
@@ -445,6 +459,52 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'daily_usage') {
     exit;
 }
 
+// Save the whole day's closing at once ("Save Closing").
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_day') {
+    $dayDate = is_string($_POST['day_date'] ?? null) ? trim($_POST['day_date']) : '';
+    $postedRows = is_array($_POST['rows'] ?? null) ? $_POST['rows'] : [];
+    try {
+        workflowVerifyCsrf();
+        $result = dailyInventorySaveDay($conn, $branchId, $userId, $dayDate, $postedRows);
+        workflowFlash(
+            'success',
+            'Daily closing saved for ' . date('M d, Y', strtotime($dayDate)) . ': ' . count($result['saved']) . ' item(s)'
+                . ($result['unchanged'] > 0 ? ', ' . $result['unchanged'] . ' unchanged' : '') . '. '
+                . 'Consumed came from the Assessment, Vaccination and Medical Supplies usage of the day'
+                . ' (each use counted once, plus any wastage adjustment).'
+                . ($result['synced'] > 0 ? ' The forecasting dataset was updated for ' . $result['synced'] . ' forecastable item(s).' : '')
+        );
+        if ($result['synced'] > 0) {
+            dailyInventoryStartAutoEvaluation($conn, $branchId);
+        }
+    } catch (Throwable $e) {
+        try {
+            $conn->rollback();
+        } catch (Throwable $ignored) {
+        }
+        $restoreRows = [];
+        foreach ($postedRows as $rawId => $row) {
+            if (is_array($row)) {
+                $restoreRows[(string)$rawId] = array_map(static fn($v) => is_string($v) ? $v : '', $row);
+            }
+        }
+        $stale = $e instanceof DailyInventoryDayException ? $e->staleItems : [];
+        foreach ($stale as $staleId) {
+            // Usage changed after loading: the new Consumed needs a fresh count.
+            if (isset($restoreRows[(string)$staleId])) {
+                $restoreRows[(string)$staleId]['actual_count'] = '';
+                unset($restoreRows[(string)$staleId]['context_token']);
+            }
+        }
+        $_SESSION['daily_inventory_day_restore'] = ['date' => $dayDate, 'rows' => $restoreRows];
+        workflowFlash('danger', 'The closing was not saved. '
+            . ($e instanceof DailyInventoryDayException ? 'Fix these items: ' : '') . $e->getMessage());
+    }
+    $redirectDate = dailyInventoryValidDate($dayDate) && $dayDate <= date('Y-m-d') ? $dayDate : date('Y-m-d');
+    header('Location: Nurse_DailyInventory.php?' . http_build_query(['date' => $redirectDate]));
+    exit;
+}
+
 // Save or correct a daily closing.
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
@@ -472,6 +532,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $trainingSynced = $saved['training_synced'];
         unset($_SESSION['daily_inventory_form']);
+        if ($trainingSynced) {
+            dailyInventoryStartAutoEvaluation($conn, $branchId);
+        }
 
         workflowFlash(
             'success',
@@ -521,6 +584,56 @@ $formDate = (string)($formRestore['inventory_date'] ?? (is_string($_GET['invento
 if (!dailyInventoryValidDate($formDate) || $formDate > date('Y-m-d')) {
     $formDate = date('Y-m-d');
 }
+
+// Whole-day closing: every item used that day is listed with Consumed filled in.
+$dayDate = is_string($_GET['date'] ?? null) ? trim($_GET['date']) : $formDate;
+if (!dailyInventoryValidDate($dayDate) || $dayDate > date('Y-m-d')) {
+    $dayDate = date('Y-m-d');
+}
+$dayRestoreData = $_SESSION['daily_inventory_day_restore'] ?? null;
+unset($_SESSION['daily_inventory_day_restore']);
+$dayRestore = is_array($dayRestoreData) && ($dayRestoreData['date'] ?? '') === $dayDate ? (array)$dayRestoreData['rows'] : [];
+$dayRows = dailyInventoryDayRows($conn, $branchId, $dayDate);
+$dayActiveCount = count(array_filter($dayRows, static fn(array $row): bool => $row['active']));
+$dayOutOfDate = array_values(array_filter($dayRows, static fn(array $row): bool => !empty($row['context']['closing_out_of_date'])));
+$dayShowAll = isset($_GET['all']) || ($dayRestore && array_filter($dayRows, static fn(array $row): bool =>
+    !$row['active'] && trim((string)($dayRestore[(string)$row['item']['item_id']]['actual_count'] ?? '')) !== ''));
+$dayOpeningLabels = [
+    'saved_closing' => 'Saved closing',
+    'previous_day' => "Yesterday's Actual",
+    'previous_computed' => "Yesterday's Inv. End",
+    'manual' => 'Enter the opening count',
+];
+// Restored entries win over the loaded values (the context token is always fresh).
+$dayValue = static function (array $row, string $field) use ($dayRestore): string {
+    $restored = $dayRestore[(string)$row['item']['item_id']] ?? null;
+    if (is_array($restored) && array_key_exists($field, $restored)) {
+        return (string)$restored[$field];
+    }
+    if (in_array($field, ['wastage_quantity', 'wastage_reason', 'wastage_other'], true)) {
+        return '';
+    }
+    return (string)($row['context']['fields'][$field] ?? '');
+};
+// Quantity entry in the clinic's units: vials + sites (or mL) for vaccines and
+// immunoglobulins, a single box otherwise. The hidden field carries the base unit.
+$dayQtyInput = static function (string $name, string $field, string $baseValue, array $item, bool $required = false): string {
+    $split = inventoryHasDisplayUnit($item);
+    $conversion = inventoryConversionToBase($item);
+    $remStep = inventoryIsSiteBased($item) ? '1' : '0.0001';
+    $html = '<div class="qty-group" data-field="' . workflowH($field) . '" data-conv="' . workflowH($split ? rtrim(rtrim(number_format($conversion, 4, '.', ''), '0'), '.') : '1') . '" data-split="' . ($split ? '1' : '0') . '">';
+    if ($split) {
+        $html .= '<input type="number" class="form-control q-main" min="0" step="1" inputmode="numeric" aria-label="' . workflowH(inventoryUnitWord(inventoryDisplayUnitLabel($item), 2)) . '"' . ($required ? ' required' : '') . '>'
+            . '<span class="q-unit">' . workflowH(inventoryUnitWord(inventoryDisplayUnitLabel($item), 2)) . '</span>'
+            . '<input type="number" class="form-control q-rem" min="0" step="' . $remStep . '" aria-label="' . workflowH(inventoryUnitWord(inventoryBaseUnitLabel($item), 2)) . '">'
+            . '<span class="q-unit">' . workflowH(inventoryUnitWord(inventoryBaseUnitLabel($item), 2)) . '</span>';
+    } else {
+        $unit = $conversion === 1.0 ? inventoryDisplayUnitLabel($item) : inventoryBaseUnitLabel($item);
+        $html .= '<input type="number" class="form-control q-main" min="0" step="0.0001"' . ($required ? ' required' : '') . '>'
+            . '<span class="q-unit">' . workflowH(inventoryUnitWord($unit, 2)) . '</span>';
+    }
+    return $html . '<input type="hidden" class="q-base" name="' . workflowH($name . '[' . $field . ']') . '" value="' . workflowH($baseValue) . '"></div>';
+};
 
 // Current stock is a live reference only; it is never used as the opening count.
 $itemStmt = $conn->prepare(
@@ -1309,6 +1422,30 @@ $flash = workflowTakeFlash();
                 display: none;
             }
         }
+
+        /* Whole-day closing */
+        .day-table-wrap { max-height: 75vh; }
+        .day-table { min-width: 1350px; font-size: 13px; }
+        .day-table thead th { position: sticky; top: 0; z-index: 2; padding: 11px 10px; color: #fff; background: var(--primary);
+            font-size: 11px; text-transform: uppercase; letter-spacing: .25px; white-space: nowrap; }
+        .day-table td { padding: 10px; vertical-align: top; border-color: #edf0f5; }
+        .day-item { min-width: 190px; }
+        .day-item .item-name { display: block; font-weight: 700; color: #25324b; }
+        .day-note { display: block; margin-top: 3px; color: #8b95a7; font-size: 11px; line-height: 1.3; }
+        .day-note.filled { color: #1d4ed8; }
+        .day-consumed { min-width: 200px; }
+        .day-consumed .consumed-total { color: #25324b; }
+        .qty-group { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
+        .qty-group .form-control { min-height: 34px; width: 74px; padding: 4px 6px; font-size: 13px; }
+        .qty-group .q-unit { color: #64708b; font-size: 11px; white-space: nowrap; }
+        .day-remarks { min-width: 170px; }
+        .day-table .computed { font-weight: 700; color: #25324b; white-space: nowrap; }
+        .day-divider td { background: #f3f5fa; color: #64708b; font-size: 12px; font-weight: 600; }
+        .row-saved { background: #f3fbf5; }
+        .row-stale { background: #fff8e6; }
+        .variance-ok { color: #1f7a35; font-weight: 700; }
+        .variance-bad { color: #b42318; font-weight: 700; }
+        #dayClosing:not(.show-all) .day-extra { display: none; }
     </style>
 </head>
 
@@ -1519,9 +1656,227 @@ $flash = workflowTakeFlash();
             <div>
                 <strong>Daily closing formula</strong>
                 <p>
-                    Beginning stock + delivery − consumed quantity −
-                    pull-out = computed ending stock.
+                    Inv. End = Beginning + Delivery − Consumed − Pull-out. Variance = Actual − Inv. End.
                 </p>
+            </div>
+        </div>
+
+        <section class="content-card" id="dayClosing">
+            <div class="content-card-header flex-wrap">
+                <div>
+                    <h2>
+                        <span class="section-icon">
+                            <i class="bi bi-table"></i>
+                        </span>
+                        Daily Closing
+                    </h2>
+                    <p>
+                        Every item used on this date is listed with Consumed already filled in from the
+                        Assessment, Vaccination and Medical Supplies records (each use counted once; doses given at
+                        another clinic never count). Enter the physical count in <strong>Actual</strong>, then
+                        <strong>Save Closing</strong>.
+                    </p>
+                </div>
+                <form method="get" class="d-flex align-items-end gap-2">
+                    <div>
+                        <label class="form-label" for="day_date">Inventory date</label>
+                        <input type="date" class="form-control" id="day_date" name="date"
+                               value="<?= workflowH($dayDate) ?>" max="<?= date('Y-m-d') ?>">
+                    </div>
+                    <button class="btn btn-primary" type="submit"><i class="bi bi-arrow-repeat me-1"></i>Load</button>
+                </form>
+            </div>
+
+            <?php if ($dayOutOfDate): ?>
+                <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2 mx-4 mt-3 mb-0" id="dayOutOfDateBox">
+                    <i class="bi bi-exclamation-triangle-fill"></i>
+                    <span class="flex-grow-1">
+                        The closing is out of date for
+                        <?= workflowH(implode(', ', array_map(static fn(array $row): string => trim((string)$row['item']['item_name']), $dayOutOfDate))) ?>:
+                        usage was recorded after it was saved. Consumed below shows the current total. Verify the
+                        count and save again.
+                    </span>
+                    <a class="btn btn-sm btn-warning" href="Nurse_DailyInventory.php?<?= workflowH(http_build_query(['date' => $dayDate])) ?>">
+                        <i class="bi bi-arrow-repeat me-1"></i>Refresh
+                    </a>
+                </div>
+            <?php endif; ?>
+
+            <form method="post" id="dayClosingForm">
+                <input type="hidden" name="csrf_token" value="<?= workflowH($csrf) ?>">
+                <input type="hidden" name="action" value="save_day">
+                <input type="hidden" name="day_date" value="<?= workflowH($dayDate) ?>">
+
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 px-4 pt-3">
+                    <small class="text-muted">
+                        <?= $dayActiveCount ?> item(s) with usage, movements or a saved closing on
+                        <?= workflowH(date('M d, Y', strtotime($dayDate))) ?>.
+                    </small>
+                    <div class="form-check form-switch m-0">
+                        <input class="form-check-input" type="checkbox" role="switch" id="dayShowAll" <?= $dayShowAll ? 'checked' : '' ?>>
+                        <label class="form-check-label small" for="dayShowAll">Show all items (<?= count($dayRows) - $dayActiveCount ?> without activity)</label>
+                    </div>
+                </div>
+
+                <div class="table-responsive day-table-wrap">
+                    <table class="table day-table align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Item</th>
+                                <th>Beginning</th>
+                                <th>Delivery</th>
+                                <th>Consumed</th>
+                                <th>Pull-out</th>
+                                <th>Inv. End</th>
+                                <th>Actual</th>
+                                <th>Variance</th>
+                                <th>Remarks</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        <?php $dividerShown = false; ?>
+                        <?php foreach ($dayRows as $row):
+                            $item = $row['item'];
+                            $context = $row['context'];
+                            $id = (int)$item['item_id'];
+                            $name = 'rows[' . $id . ']';
+                            $source = (string)$context['opening_source'];
+                            $outOfDate = !empty($context['closing_out_of_date']);
+                            $itemName = trim((string)$item['item_name']);
+                            $meta = [
+                                'conv' => inventoryHasDisplayUnit($item) ? inventoryConversionToBase($item) : 1,
+                                'display' => inventoryConversionToBase($item) === 1.0 ? inventoryDisplayUnitLabel($item) : inventoryBaseUnitLabel($item),
+                                'big' => inventoryDisplayUnitLabel($item),
+                                'base' => inventoryBaseUnitLabel($item),
+                                'split' => inventoryHasDisplayUnit($item),
+                            ];
+                        ?>
+                            <?php if (!$row['active'] && !$dividerShown): $dividerShown = true; ?>
+                                <tr class="day-divider day-extra">
+                                    <td colspan="9">Items without usage, movements or a saved closing on this date</td>
+                                </tr>
+                            <?php endif; ?>
+                            <tr class="day-row <?= $row['active'] ? '' : 'day-extra' ?> <?= $row['saved'] ? 'row-saved' : '' ?> <?= $outOfDate ? 'row-stale' : '' ?>"
+                                data-item-id="<?= $id ?>"
+                                data-item-name="<?= workflowH($itemName) ?>"
+                                data-consumed="<?= workflowH((string)$context['consumed']) ?>"
+                                data-unit='<?= workflowH(json_encode($meta)) ?>'
+                                data-saved-actual="<?= workflowH((string)($context['closing_saved_actual'] ?? '')) ?>">
+                                <td class="day-item">
+                                    <span class="item-name"><?= workflowH($itemName) ?></span>
+                                    <span class="day-note">
+                                        <?php if ($meta['split']): ?>
+                                            1 <?= workflowH(inventoryUnitWord($meta['big'], 1)) ?> = <?= workflowH(inventoryFormatNumber(inventoryConversionToBase($item))) ?> <?= workflowH(inventoryUnitWord($meta['base'], 2)) ?>
+                                        <?php else: ?>
+                                            <?= workflowH(inventoryUnitWord($meta['display'], 2)) ?>
+                                        <?php endif; ?>
+                                    </span>
+                                    <?php if ($row['saved']): ?>
+                                        <span class="badge text-bg-success mt-1">Saved</span>
+                                    <?php elseif ($outOfDate): ?>
+                                        <span class="badge text-bg-warning mt-1">Out of date</span>
+                                    <?php elseif ($row['used']): ?>
+                                        <span class="badge text-bg-primary mt-1">Used today</span>
+                                    <?php endif; ?>
+                                    <input type="hidden" name="<?= workflowH($name) ?>[context_token]" value="<?= workflowH((string)$context['context_token']) ?>">
+                                    <input type="hidden" name="<?= workflowH($name) ?>[item_name]" value="<?= workflowH($itemName) ?>">
+                                </td>
+                                <td>
+                                    <?= $dayQtyInput($name, 'beginning_stock', $dayValue($row, 'beginning_stock'), $item) ?>
+                                    <span class="day-note <?= in_array($source, ['previous_day', 'previous_computed'], true) ? 'filled' : '' ?>"
+                                          title="<?= workflowH((string)$context['opening_message']) ?>">
+                                        <?= workflowH($dayOpeningLabels[$source] ?? $source) ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <?= $dayQtyInput($name, 'delivery', $dayValue($row, 'delivery'), $item) ?>
+                                    <?php if ($row['prefilled']['delivery']): ?><span class="day-note filled">From stock-in records</span><?php endif; ?>
+                                </td>
+                                <td class="day-consumed">
+                                    <strong class="consumed-total"><?= workflowH(inventoryQuantityText((float)$context['consumed'], $item)) ?></strong>
+                                    <span class="day-note"><?= workflowH((string)$context['consumed_breakdown']) ?></span>
+                                    <span class="day-note adjust-summary text-danger"></span>
+                                    <button type="button" class="btn btn-link btn-sm p-0 adjust-btn">
+                                        <i class="bi bi-pencil-square me-1"></i>Edit / Adjust
+                                    </button>
+                                    <input type="hidden" class="w-qty" name="<?= workflowH($name) ?>[wastage_quantity]" value="<?= workflowH($dayValue($row, 'wastage_quantity')) ?>">
+                                    <input type="hidden" class="w-reason" name="<?= workflowH($name) ?>[wastage_reason]" value="<?= workflowH($dayValue($row, 'wastage_reason')) ?>">
+                                    <input type="hidden" class="w-other" name="<?= workflowH($name) ?>[wastage_other]" value="<?= workflowH($dayValue($row, 'wastage_other')) ?>">
+                                </td>
+                                <td>
+                                    <?= $dayQtyInput($name, 'pull_out', $dayValue($row, 'pull_out'), $item) ?>
+                                    <?php if ($row['prefilled']['pull_out']): ?><span class="day-note filled">From stock-out records</span><?php endif; ?>
+                                </td>
+                                <td class="computed" data-output="end">-</td>
+                                <td>
+                                    <?= $dayQtyInput($name, 'actual_count', $dayValue($row, 'actual_count'), $item, $row['used'] && !$row['saved']) ?>
+                                    <button type="button" class="btn btn-link btn-sm p-0 use-end">Use Inv. End</button>
+                                    <?php if ($outOfDate && (string)($context['closing_saved_actual'] ?? '') !== ''): ?>
+                                        <button type="button" class="btn btn-link btn-sm p-0 d-block use-saved-actual">Reload saved Actual</button>
+                                    <?php endif; ?>
+                                </td>
+                                <td data-output="variance">-</td>
+                                <td><input type="text" class="form-control form-control-sm day-remarks" maxlength="500" name="<?= workflowH($name) ?>[remarks]" value="<?= workflowH($dayValue($row, 'remarks')) ?>" placeholder="Required if variance"></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        <?php if (!$dayRows): ?>
+                            <tr><td colspan="9" class="text-center text-muted py-5">No consumable items are configured.</td></tr>
+                        <?php elseif ($dayActiveCount === 0): ?>
+                            <tr class="day-empty"><td colspan="9" class="text-center text-muted py-4">No usage, deliveries or pull-outs were recorded on this date. Use "Show all items" to count other items.</td></tr>
+                        <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 p-3 border-top">
+                    <small class="text-muted">
+                        Consumed is read-only; use Edit / Adjust only for wastage (leakage, a broken vial/ampule, expired or
+                        contaminated stock). Items used today need an Actual count. All rows are saved together; if one
+                        needs attention, nothing is saved and the problems are listed.
+                    </small>
+                    <button type="submit" class="btn btn-primary" id="saveDayBtn">
+                        <i class="bi bi-save-fill me-1"></i>Save Closing
+                    </button>
+                </div>
+            </form>
+        </section>
+
+        <div class="modal fade" id="adjustModal" tabindex="-1" aria-labelledby="adjustModalTitle" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="adjustModalTitle">Adjust Consumed (wastage)</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="small text-muted">
+                            For leakage, a broken vial/ampule or expired/contaminated stock. The extra quantity lost is
+                            recorded as wastage when you save the closing: it is deducted from stock once and added to
+                            Consumed. Medicines given without a vaccination record go to Medical Supplies Management.
+                        </p>
+                        <div class="mb-2">
+                            <span class="small text-muted d-block">Auto Consumed</span>
+                            <strong id="adjustAuto">-</strong>
+                        </div>
+                        <label class="form-label small">Extra quantity lost</label>
+                        <div id="adjustQtyHolder" class="mb-2"></div>
+                        <label class="form-label small" for="adjustReason">Reason</label>
+                        <select class="form-select mb-2" id="adjustReason">
+                            <option value="">Select a reason</option>
+                            <?php foreach (dailyInventoryWastageReasons() as $reason): ?>
+                                <option value="<?= workflowH($reason) ?>"><?= workflowH($reason === 'Other' ? 'Other – specify' : $reason) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <input type="text" class="form-control mb-2" id="adjustOther" maxlength="200" placeholder="Specify the reason" style="display:none">
+                        <div class="small">Final Consumed: <strong id="adjustFinal">-</strong></div>
+                        <div class="small text-danger mt-1" id="adjustError"></div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-light border me-auto" id="adjustRemove">Remove adjustment</button>
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary" id="adjustApply">Apply</button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -1532,18 +1887,21 @@ $flash = workflowTakeFlash();
                         <span class="section-icon">
                             <i class="bi bi-clipboard-check-fill"></i>
                         </span>
-                        Submit End-of-Shift Count
+                        Correct One Item
                     </h2>
 
                     <p>
-                        Record the physical count for one consumable item, or
-                        <a href="Nurse_DailyInventorySheet.php?date=<?= workflowH($formDate) ?>">open the whole-day sheet</a>
-                        to enter all items at once.
+                        Optional: correct a single item's closing afterwards (same checks as the daily closing).
                     </p>
                 </div>
+                <button class="btn btn-outline-primary" type="button" data-bs-toggle="collapse"
+                        data-bs-target="#singleItemBody" aria-expanded="<?= $formRestore || $formItemId !== '' ? 'true' : 'false' ?>"
+                        aria-controls="singleItemBody">
+                    <i class="bi bi-pencil me-1"></i>Correct one item
+                </button>
             </div>
 
-            <div class="content-card-body">
+            <div class="content-card-body collapse <?= $formRestore || $formItemId !== '' ? 'show' : '' ?>" id="singleItemBody">
                 <form method="post" class="row g-3" id="dailyClosingForm">
                     <input type="hidden" name="closing_context_token" id="closing_context_token" value="">
                     <input
@@ -2316,6 +2674,208 @@ $flash = workflowTakeFlash();
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="sources/sidebar.js"></script>
+
+<script>
+// ---------- Whole-day closing ----------
+// Integer ten-thousandths, matching the server's DECIMAL(12,4) arithmetic.
+function qtyScaled(value) {
+    if (value === '' || value === null || value === undefined) return 0;
+    if (!/^(?:[0-9]+(?:\.[0-9]{1,4})?|\.[0-9]{1,4})$/.test(String(value))) return null;
+    const parts = String(value).split('.');
+    return Number(parts[0] || '0') * 10000 + Number((parts[1] || '').padEnd(4, '0'));
+}
+function qtyDecimal(scaled) {
+    const magnitude = Math.abs(scaled);
+    return (scaled < 0 ? '-' : '') + Math.floor(magnitude / 10000) + '.' + String(magnitude % 10000).padStart(4, '0');
+}
+function unitWord(unit, quantity) {
+    unit = String(unit || '').trim();
+    if (/^(ml|l|mg|g|iu|cc|pcs|pc)$/i.test(unit)) return unit.toLowerCase() === 'ml' ? 'mL' : unit;
+    const word = unit.toLowerCase();
+    return Math.abs(quantity - 1) < 0.00005 || word.endsWith('s') ? word : word + 's';
+}
+function plainNumber(value) {
+    return Number(value.toFixed(4)).toLocaleString(undefined, {maximumFractionDigits: 4});
+}
+// "67 vials + 3 sites", "12 vials + 3 mL", "4 ampules" (same as inventoryQuantityText()).
+function qtyText(scaled, meta) {
+    const sign = scaled < 0 ? '-' : '';
+    const base = Math.abs(scaled) / 10000;
+    if (!meta.split) return sign + plainNumber(base) + ' ' + unitWord(meta.display, base);
+    const conv = Number(meta.conv);
+    const full = Math.floor((base + 0.0000001) / conv);
+    let rem = Number((base - full * conv).toFixed(4));
+    if (Math.abs(rem) < 0.00005) rem = 0;
+    const parts = [];
+    if (full > 0 || rem === 0) parts.push(full + ' ' + unitWord(meta.big, full));
+    if (rem > 0) parts.push(plainNumber(rem) + ' ' + unitWord(meta.base, rem));
+    return sign + parts.join(' + ');
+}
+// Vials + sites boxes -> base-unit hidden value (blank stays blank).
+function qtyCompose(group) {
+    const main = group.querySelector('.q-main').value.trim();
+    const remInput = group.querySelector('.q-rem');
+    const rem = remInput ? remInput.value.trim() : '';
+    const hidden = group.querySelector('.q-base');
+    if (main === '' && rem === '') { hidden.value = ''; return 0; }
+    const conv = Number(group.dataset.conv || '1');
+    const mainScaled = qtyScaled(main);
+    const remScaled = qtyScaled(rem);
+    if (mainScaled === null || remScaled === null) { hidden.value = 'invalid'; return null; }
+    const scaled = Math.round(mainScaled * conv) + remScaled;
+    hidden.value = qtyDecimal(scaled);
+    return scaled;
+}
+// Base-unit value -> vials + sites boxes.
+function qtySplit(group, baseValue) {
+    const main = group.querySelector('.q-main');
+    const remInput = group.querySelector('.q-rem');
+    const hidden = group.querySelector('.q-base');
+    hidden.value = baseValue === null || baseValue === undefined ? '' : String(baseValue);
+    const scaled = qtyScaled(hidden.value);
+    if (hidden.value === '' || scaled === null) { main.value = ''; if (remInput) remInput.value = ''; return; }
+    const conv = Number(group.dataset.conv || '1');
+    if (!remInput) { main.value = plainValue(scaled); return; }
+    const convScaled = Math.round(conv * 10000);
+    const full = Math.floor(scaled / convScaled);
+    main.value = String(full);
+    const rem = scaled - full * convScaled;
+    remInput.value = rem === 0 ? '0' : plainValue(rem);
+}
+function plainValue(scaled) {
+    return qtyDecimal(scaled).replace(/\.?0+$/, '');
+}
+function dayRowValue(row, field) {
+    const group = row.querySelector(`.qty-group[data-field="${field}"]`);
+    return group ? qtyCompose(group) : 0;
+}
+function dayRefreshRow(row) {
+    const meta = JSON.parse(row.dataset.unit);
+    const beginningGroup = row.querySelector('.qty-group[data-field="beginning_stock"]');
+    const beginning = dayRowValue(row, 'beginning_stock');
+    const beginningBlank = beginningGroup.querySelector('.q-base').value === '';
+    const delivery = dayRowValue(row, 'delivery');
+    const pullOut = dayRowValue(row, 'pull_out');
+    const actualGroup = row.querySelector('.qty-group[data-field="actual_count"]');
+    const actual = qtyCompose(actualGroup);
+    const actualBlank = actualGroup.querySelector('.q-base').value === '';
+    const consumed = qtyScaled(row.dataset.consumed);
+    const extraValue = row.querySelector('.w-qty').value;
+    const extra = extraValue === '' ? 0 : qtyScaled(extraValue);
+    const endCell = row.querySelector('[data-output="end"]');
+    const varianceCell = row.querySelector('[data-output="variance"]');
+    varianceCell.className = '';
+    row.querySelector('.consumed-total').textContent = qtyText((consumed ?? 0) + (extra ?? 0), meta);
+    row.querySelector('.adjust-summary').textContent = extra > 0
+        ? `incl. adjustment +${qtyText(extra, meta)} (${row.querySelector('.w-reason').value === 'Other' ? 'Other: ' + row.querySelector('.w-other').value : row.querySelector('.w-reason').value})`
+        : '';
+    if (beginningBlank || [beginning, delivery, pullOut, consumed, extra].includes(null)) {
+        endCell.textContent = '-'; varianceCell.textContent = '-'; row.dataset.end = ''; return;
+    }
+    const end = beginning + delivery - consumed - extra - pullOut;
+    row.dataset.end = String(end);
+    endCell.textContent = qtyText(end, meta);
+    if (end < 0) endCell.classList.add('variance-bad'); else endCell.classList.remove('variance-bad');
+    if (actualBlank || actual === null) { varianceCell.textContent = '-'; return; }
+    const variance = actual - end;
+    varianceCell.textContent = variance === 0 ? '0 (tallied)' : (variance > 0 ? '+' : '') + qtyText(variance, meta);
+    varianceCell.className = variance === 0 ? 'variance-ok' : 'variance-bad';
+}
+
+const dayClosing = document.getElementById('dayClosing');
+document.getElementById('dayShowAll')?.addEventListener('change', event => {
+    dayClosing.classList.toggle('show-all', event.target.checked);
+});
+if (document.getElementById('dayShowAll')?.checked) dayClosing.classList.add('show-all');
+
+document.querySelectorAll('.day-row').forEach(row => {
+    row.querySelectorAll('.qty-group').forEach(group => qtySplit(group, group.querySelector('.q-base').value));
+    row.addEventListener('input', () => dayRefreshRow(row));
+    row.querySelector('.use-end')?.addEventListener('click', () => {
+        if (row.dataset.end === '' || Number(row.dataset.end) < 0) return;
+        qtySplit(row.querySelector('.qty-group[data-field="actual_count"]'), qtyDecimal(Number(row.dataset.end)));
+        dayRefreshRow(row);
+    });
+    row.querySelector('.use-saved-actual')?.addEventListener('click', () => {
+        qtySplit(row.querySelector('.qty-group[data-field="actual_count"]'), row.dataset.savedActual);
+        dayRefreshRow(row);
+    });
+    row.querySelector('.adjust-btn').addEventListener('click', () => openAdjust(row));
+    dayRefreshRow(row);
+});
+
+// Edit / Adjust: the existing wastage adjustment, one row at a time.
+let adjustRow = null;
+const adjustModalEl = document.getElementById('adjustModal');
+function adjustMeta() { return JSON.parse(adjustRow.dataset.unit); }
+function adjustRefresh() {
+    const group = document.querySelector('#adjustQtyHolder .qty-group');
+    const extra = group ? qtyCompose(group) : 0;
+    const consumed = qtyScaled(adjustRow.dataset.consumed) ?? 0;
+    document.getElementById('adjustFinal').textContent = extra === null ? '-' :
+        qtyText(consumed + extra, adjustMeta()) + (extra > 0 ? ` (auto ${qtyText(consumed, adjustMeta())} + adjustment ${qtyText(extra, adjustMeta())})` : '');
+    document.getElementById('adjustOther').style.display = document.getElementById('adjustReason').value === 'Other' ? '' : 'none';
+}
+function openAdjust(row) {
+    adjustRow = row;
+    const meta = adjustMeta();
+    document.getElementById('adjustModalTitle').textContent = 'Adjust Consumed – ' + row.dataset.itemName;
+    document.getElementById('adjustAuto').textContent = qtyText(qtyScaled(row.dataset.consumed) ?? 0, meta);
+    // Same vials + sites boxes as the table, without a form name.
+    const template = row.querySelector('.qty-group[data-field="delivery"]').cloneNode(true);
+    template.dataset.field = 'adjust';
+    template.querySelector('.q-base').removeAttribute('name');
+    template.querySelectorAll('input').forEach(input => input.removeAttribute('required'));
+    const holder = document.getElementById('adjustQtyHolder');
+    holder.replaceChildren(template);
+    qtySplit(template, row.querySelector('.w-qty').value);
+    template.addEventListener('input', adjustRefresh);
+    document.getElementById('adjustReason').value = row.querySelector('.w-reason').value;
+    document.getElementById('adjustOther').value = row.querySelector('.w-other').value;
+    document.getElementById('adjustError').textContent = '';
+    adjustRefresh();
+    bootstrap.Modal.getOrCreateInstance(adjustModalEl).show();
+}
+document.getElementById('adjustReason').addEventListener('change', adjustRefresh);
+document.getElementById('adjustApply').addEventListener('click', () => {
+    const group = document.querySelector('#adjustQtyHolder .qty-group');
+    const extra = qtyCompose(group);
+    const reason = document.getElementById('adjustReason').value;
+    const other = document.getElementById('adjustOther').value.trim();
+    const error = document.getElementById('adjustError');
+    if (extra === null || extra <= 0) { error.textContent = 'Enter the extra quantity lost.'; return; }
+    if (!reason) { error.textContent = 'Pick a reason.'; return; }
+    if (reason === 'Other' && other === '') { error.textContent = 'Specify the reason.'; return; }
+    adjustRow.querySelector('.w-qty').value = qtyDecimal(extra);
+    adjustRow.querySelector('.w-reason').value = reason;
+    adjustRow.querySelector('.w-other').value = reason === 'Other' ? other : '';
+    dayRefreshRow(adjustRow);
+    bootstrap.Modal.getOrCreateInstance(adjustModalEl).hide();
+});
+document.getElementById('adjustRemove').addEventListener('click', () => {
+    for (const cls of ['.w-qty', '.w-reason', '.w-other']) adjustRow.querySelector(cls).value = '';
+    dayRefreshRow(adjustRow);
+    bootstrap.Modal.getOrCreateInstance(adjustModalEl).hide();
+});
+
+document.getElementById('dayClosingForm')?.addEventListener('submit', event => {
+    let firstProblem = null;
+    document.querySelectorAll('.day-row').forEach(row => {
+        row.querySelectorAll('.qty-group').forEach(group => {
+            if (qtyCompose(group) === null && !firstProblem) firstProblem = group;
+        });
+    });
+    if (firstProblem) {
+        event.preventDefault();
+        dayClosing.classList.add('show-all');
+        firstProblem.querySelector('.q-main').focus();
+        return;
+    }
+    const button = document.getElementById('saveDayBtn');
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Saving...';
+});
+</script>
 
 <script>
 const initialDailyForm = <?= json_encode(['item_id' => $formItemId, 'inventory_date' => $formDate, 'restore' => $formRestore], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;

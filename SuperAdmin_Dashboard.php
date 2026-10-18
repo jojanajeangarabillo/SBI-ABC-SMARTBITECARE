@@ -133,7 +133,10 @@ while ($row = $activities_result->fetch_assoc()) {
 
 // 9. System Alerts (Inventory alerts)
 $alerts_sql = "SELECT i.item_name,s.usable_stock AS quantity_available,i.minimum_stock,b.branch_name,
-    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,'Low Stock' AS alert_type
+    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name,'Low Stock' AS alert_type,
+    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS base_unit_label,
+    COALESCE(NULLIF(TRIM(i.display_unit_label), ''), u.unit_name) AS display_unit_label,
+    COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base
 FROM ($stockTotalsSql) s JOIN inventory_items i ON i.item_id=s.item_id
 JOIN branches b ON b.branch_id=s.branch_id JOIN units u ON u.unit_id=i.unit_id
 WHERE s.usable_stock<=i.minimum_stock ORDER BY s.usable_stock,i.item_name,b.branch_id LIMIT 4";
@@ -1023,7 +1026,7 @@ $today_data = $today_result->fetch_assoc();
                                     </strong>
                                     <br />
                                     Low stock in <strong><?php echo htmlspecialchars($alert['branch_name']); ?></strong> 
-                                    (<?php echo htmlspecialchars($alert['quantity_available']); ?> <?php echo htmlspecialchars($alert['unit_name']); ?> / <?php echo htmlspecialchars($alert['minimum_stock']); ?> minimum)
+                                    (<?php echo htmlspecialchars(inventoryQuantityText((float)$alert['quantity_available'], $alert)); ?> / <?php echo htmlspecialchars(inventoryQuantityText((float)$alert['minimum_stock'], $alert)); ?> minimum)
                                     <br />
                                     <small>Action required: Replenish stock immediately</small>
                                 </div>

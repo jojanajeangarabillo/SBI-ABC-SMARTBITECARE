@@ -6,6 +6,8 @@ require_once 'sources/forecast_accuracy_helper.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/forecast_reliability_view.php';
 require_once 'sources/forecast_metrics_summary.php';
+require_once 'sources/forecast_accuracy_units.php';
+require_once 'sources/forecast_auto_evaluation.php';
 
 // Provisional dashboard review targets, not universal accuracy standards.
 // Changing these changes presentation only, never saved scores or forecasts.
@@ -91,12 +93,31 @@ if($role===2){
 }else{$branchId=$requested!==''?$requested:(isset($branchMap[$actor['branch_id']??''])?$actor['branch_id']:($branches[0]['branch_id']??''));}
 if($branchId!==''&&!isset($branchMap[$branchId])){http_response_code(404);exit('Branch was not found.');}
 $branchName=$branchMap[$branchId]??'No branches';
+// Small JSON status used by the page while a background evaluation runs.
+if(isset($_GET['auto_status'])){
+    header('Content-Type: application/json');header('Cache-Control: no-store');
+    $state=forecastAutoEvaluationState($conn,$branchId);
+    echo json_encode(['running'=>$state['running'],'revision'=>$state['revision'],
+        'last_saved_job'=>$state['last_saved']?(int)$state['last_saved']['job_id']:null]);
+    exit;
+}
+// Opening the report starts the automatic re-evaluation when the saved results
+// are older than the branch's training data. It runs in the background; the
+// page never waits for it and shows the previous results meanwhile.
+$autoTrigger='unavailable';
+if(!isset($_GET['export'])&&$branchId!==''){
+    try{$autoTrigger=forecastAutoEvaluationTrigger($conn,$branchId,'Forecast Accuracy opened');}
+    catch(Throwable $e){error_log('Automatic forecast evaluation trigger: '.$e->getMessage());}
+}
+$autoState=$branchId!==''?forecastAutoEvaluationState($conn,$branchId):['ready'=>false];
 $method=(string)($_GET['method']??'all');if(!in_array($method,['all','one_step','recursive'],true))$method='all';
 $horizon=(string)($_GET['horizon']??'all');if(!in_array($horizon,['all','1','7','14','30'],true))$horizon='all';
 if($rollingView&&$horizon==='1')$horizon='all';
 $search=trim((string)($_GET['q']??''));if(strlen($search)>200){http_response_code(400);exit('Use a shorter item search.');}
 $perPage=filter_var($_GET['per_page']??10,FILTER_VALIDATE_INT);if(!in_array($perPage,[10,20,50],true))$perPage=10;
 $page=filter_var($_GET['page']??1,FILTER_VALIDATE_INT);if($page===false||$page<1)$page=1;
+// Errors in vials/ampules by default; "base" shows the saved numbers unchanged.
+$unitMode=forecastAccuracyUnitMode();$unitMap=forecastAccuracyUnitMap($conn);
 $runId=null;
 if(!$rollingView&&isset($_GET['run'])){
     $value=(string)$_GET['run'];if(!preg_match('/^[1-9][0-9]*$/D',$value)||strlen($value)>18){http_response_code(400);exit('Invalid evaluation selection.');}$runId=(int)$value;
@@ -108,7 +129,7 @@ $overallMetrics=['overall'=>[],'by_unit'=>[]];
 $totals=['total'=>0,'high'=>0,'moderate'=>0,'low'=>0,'unrated'=>0];$totalPages=1;
 $where='';$queryTypes='';$queryParams=[];
 if(!$rollingView&&!$problems&&$branchId!==''){
-    $stmt=accuracyQuery($conn,'SELECT * FROM forecast_evaluation_runs WHERE branch_id=? ORDER BY evaluation_id DESC LIMIT 50','s',[$branchId]);$runs=$stmt->get_result()->fetch_all(MYSQLI_ASSOC);$stmt->close();
+    $stmt=accuracyQuery($conn,'SELECT * FROM forecast_evaluation_runs WHERE branch_id=? ORDER BY evaluation_id DESC LIMIT 200','s',[$branchId]);$runs=$stmt->get_result()->fetch_all(MYSQLI_ASSOC);$stmt->close();
     if($runId===null&&$runs)$runId=(int)$runs[0]['evaluation_id'];
     if($runId!==null){
         $stmt=accuracyQuery($conn,'SELECT * FROM forecast_evaluation_runs WHERE evaluation_id=? AND branch_id=?','is',[$runId,$branchId]);$run=$stmt->get_result()->fetch_assoc();$stmt->close();
@@ -120,7 +141,7 @@ if(!$rollingView&&!$problems&&$branchId!==''){
         $where=' FROM forecast_evaluation_items WHERE '.implode(' AND ',$parts);
         // Aggregate the complete filtered result set, independently of pagination.
         $stmt=accuracyQuery($conn,'SELECT item_id,base_unit,method,horizon_days,evaluation_status,training_records,testing_records,mae,rmse,smape_percent'.$where,$queryTypes,$queryParams);
-        $overallMetrics=forecastMetricsSummarize($stmt->get_result());$stmt->close();
+        $overallMetrics=forecastMetricsSummarize($stmt->get_result(),false,$unitMap,$unitMode);$stmt->close();
         $high=sprintf('%.4f',ACCURACY_REVIEW_HIGH_MAX);$moderate=sprintf('%.4f',ACCURACY_REVIEW_MODERATE_MAX);$minimum=ACCURACY_REVIEW_MIN_TEST_RECORDS;
         $rated="evaluation_status='Available' AND training_records>0 AND testing_records>=$minimum AND actual_total>0 AND smape_percent BETWEEN 0 AND 200";
         $stmt=accuracyQuery($conn,"SELECT COUNT(*) AS total,
@@ -133,6 +154,7 @@ if(!$rollingView&&!$problems&&$branchId!==''){
         if(!isset($_GET['export'])){
             $stmt=accuracyQuery($conn,'SELECT *'.$where.' ORDER BY item_name,item_id,horizon_days,method,evaluation_item_id LIMIT ? OFFSET ?',
                 $queryTypes.'ii',[...$queryParams,$perPage,$offset]);$rows=$stmt->get_result()->fetch_all(MYSQLI_ASSOC);$stmt->close();
+            $rows=array_map(static fn(array $r):array=>forecastAccuracyConvertRow($r,$unitMap,$unitMode,false),$rows);
         }
         if(!array_filter($runs,static fn(array $r):bool=>(int)$r['evaluation_id']===$runId))array_unshift($runs,$run);
     }
@@ -154,6 +176,7 @@ if(!$rollingView&&isset($_GET['export'])){
 }
 $urlParams=['branch'=>$branchId,'method'=>$method,'horizon'=>$horizon,'q'=>$search,'per_page'=>$perPage];if($runId!==null)$urlParams['run']=$runId;
 if($rollingView)$urlParams=['view'=>'rolling','branch'=>$branchId];
+if($unitMode==='base')$urlParams['units']='base';
 function accuracyUrl(array $changes=[]):string{global $urlParams;return 'ForecastAccuracy.php?'.http_build_query(array_replace($urlParams,$changes));}
 $dashboard=$role===1?'SuperAdmin_Dashboard.php':'BranchAdmin_Dashboard.php';$back=$role===1?$dashboard:'BranchAdmin_Forecasting.php';
 $reports=$role===1?'SuperAdmin_Reports.php':'BranchAdmin_Reports.php';$first=$totals['total']?($page-1)*$perPage+1:0;$last=min($page*$perPage,$totals['total']);
@@ -238,6 +261,30 @@ body{background:#f9faff;font-size:15px}.sidebar{padding:0;visibility:visible;bac
     <main class="content">
         <div class="hero"><div><h1><?= accuracyIcon('chart') ?>Historical Forecast Evaluation</h1><p>Review the selected test window. Error scores describe past performance; they do not certify future forecasts.</p></div><div class="actions"><button class="btn" type="button" data-open-guide><?= accuracyIcon('book') ?>How to read results</button><?php if($run): ?><a class="btn btn-primary" href="<?= accuracyH(accuracyUrl(['export'=>'csv'])) ?>"><?= accuracyIcon('download') ?>Export results</a><?php endif; ?></div></div>
         <nav class="actions" aria-label="Evaluation views" style="margin-bottom:20px;flex-wrap:wrap"><a class="btn <?= !$rollingView?'btn-primary':'' ?>" href="ForecastAccuracy.php?<?= accuracyH(http_build_query(['branch'=>$branchId])) ?>">Single holdout</a><a class="btn <?= $rollingView?'btn-primary':'' ?>" href="ForecastAccuracy.php?<?= accuracyH(http_build_query(['branch'=>$branchId,'view'=>'rolling'])) ?>">Repeated tests &amp; baselines</a></nav>
+        <?php
+        // "Last updated · data revision" of the run on screen, and the automatic update state.
+        $shownRun=$rollingView?($rolling['run']??null):$run;
+        $shownRevision=null;
+        if($shownRun){
+            if($rollingView){$revisionMap=forecastAutoEvaluationRevisions($conn,$branchId,'reliability_id');$shownRevision=$revisionMap[(int)$shownRun['reliability_id']]??null;}
+            else{$shownRevision=isset($shownRun['training_revision'])?(int)$shownRun['training_revision']:null;}
+        }
+        ?>
+        <?php if(!empty($autoState['ready'])): ?>
+        <div class="panel" id="autoEvaluationStatus" data-running="<?= !empty($autoState['running'])?'1':'0' ?>" style="padding:14px 20px;display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center">
+            <span><strong>Last updated:</strong> <?= $shownRun?accuracyH(date('M j, Y · g:i a',strtotime($shownRun['generated_at']))):'—' ?>
+                · <?= $shownRevision!==null?'data revision '.(int)$shownRevision:'data revision not recorded (saved before automatic updates)' ?>
+                <span style="color:var(--muted)">(current data revision <?= (int)$autoState['revision'] ?>)</span></span>
+            <?php if(!empty($autoState['running'])): ?>
+                <span class="pill moderate" id="autoEvaluationRunning">Updating… showing previous results</span>
+            <?php elseif(!empty($autoState['last_failed'])): ?>
+                <span class="pill low">The last automatic update failed (<?= accuracyH(date('M j, g:i a',strtotime((string)$autoState['last_failed']['finished_at']))) ?>): <?= accuracyH((string)$autoState['last_failed']['message']) ?> Showing previous results.</span>
+            <?php elseif(empty($autoState['stale'])): ?>
+                <span class="pill">Latest automatic results are up to date with the training data</span>
+            <?php endif; ?>
+            <?php if(!empty($autoState['last_saved']['message'])): ?><span style="color:var(--muted);font-size:12px"><?= accuracyH((string)$autoState['last_saved']['message']) ?></span><?php endif; ?>
+        </div>
+        <?php endif; ?>
         <?php if($rollingView):forecastReliabilityRender($rolling,$branches,$branchId,$role);else: ?>
         <?php if($problems): ?><div class="setup-alert">Forecast accuracy setup is incomplete. Preview and apply <code>sources/migrate_forecast_accuracy.php</code> to enable saved results.</div><?php endif; ?>
         <form class="panel filters" method="get" action="ForecastAccuracy.php" id="accuracyFilters">
@@ -247,6 +294,7 @@ body{background:#f9faff;font-size:15px}.sidebar{padding:0;visibility:visible;bac
             <div class="field field-small"><label for="horizon">Test horizon</label><select name="horizon" id="horizon"><?php foreach(['all'=>'All horizons','1'=>'1 day','7'=>'7 days','14'=>'14 days','30'=>'30 days'] as $v=>$label): ?><option value="<?= accuracyH($v) ?>" <?= $horizon===(string)$v?'selected':'' ?>><?= $label ?></option><?php endforeach; ?></select></div>
             <div class="field field-search"><label for="itemSearch">Item search</label><div class="search-box"><?= accuracyIcon('search') ?><input type="search" name="q" id="itemSearch" value="<?= accuracyH($search) ?>" placeholder="Search a supply…" maxlength="200"></div></div>
             <div class="field field-small"><label for="perPage">Rows per page</label><select id="perPage" name="per_page"><?php foreach([10,20,50] as $size): ?><option value="<?= $size ?>" <?= $perPage===$size?'selected':'' ?>><?= $size ?> rows</option><?php endforeach; ?></select></div>
+            <div class="field"><label for="units">Show errors in</label><select id="units" name="units"><option value="display" <?= $unitMode==='display'?'selected':'' ?>>Vials / ampules</option><option value="base" <?= $unitMode==='base'?'selected':'' ?>>Base units (as stored)</option></select></div>
             <button class="btn btn-primary" type="submit">Apply filters</button><a class="filter-clear" href="<?= accuracyH(accuracyUrl(['method'=>'all','horizon'=>'all','q'=>'','page'=>1])) ?>">Reset</a>
         </form>
         <?php if(!$run): ?><section class="panel empty-state"><?= accuracyIcon('chart') ?><h2>No saved accuracy results yet</h2><p>Open Supply Forecasting as this branch's administrator and select a horizon. Its first successful generation after setup saves the test results here. Viewing this report never runs the model or changes stock.</p><a class="btn" href="<?= accuracyH($back) ?>"><?= accuracyIcon('arrow') ?><?= $role===2?'Open supply forecasting':'Back to dashboard' ?></a></section>
@@ -318,5 +366,18 @@ document.getElementById('cancelLogout').addEventListener('click',()=>document.ge
 document.addEventListener('keydown',event=>{if(event.key==='Escape')closeNavigation();});
 const branchSelect=document.getElementById('branch');
 if(branchSelect)branchSelect.addEventListener('change',()=>{document.getElementById('run').disabled=true;document.getElementById('accuracyFilters').requestSubmit();});
+</script>
+<script>
+// While the background evaluation runs, check every 10 seconds and reload when it finishes.
+(function(){
+    var box=document.getElementById('autoEvaluationStatus');
+    if(!box||box.dataset.running!=='1')return;
+    var url='ForecastAccuracy.php?auto_status=1&branch='+encodeURIComponent(<?= json_encode($branchId) ?>);
+    var timer=setInterval(function(){
+        fetch(url,{cache:'no-store',headers:{Accept:'application/json'}}).then(function(r){return r.json();}).then(function(s){
+            if(!s.running){clearInterval(timer);window.location.reload();}
+        }).catch(function(){});
+    },10000);
+})();
 </script>
 </body></html>

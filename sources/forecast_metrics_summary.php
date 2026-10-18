@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/forecast_accuracy_units.php';
+
 // Report-only aggregation. No training, forecast generation, or database writes.
 function forecastMetricsValid(array $row, bool $rolling): bool
 {
@@ -78,11 +80,20 @@ function forecastMetricsFinalize(array $groups): array
     return $results;
 }
 
-function forecastMetricsSummarize(iterable $rows, bool $rolling = false): array
+/**
+ * Pooled errors over the matching rows. With $unitMap (forecastAccuracyUnitMap)
+ * and $mode 'display', each item's MAE/RMSE is first converted to its counting
+ * unit (vials, ampules) and the pooled values are computed from those
+ * converted per-item values; SMAPE is unit-free and unchanged.
+ */
+function forecastMetricsSummarize(iterable $rows, bool $rolling = false, ?array $unitMap = null, string $mode = 'base'): array
 {
     $overall = [];
     $units = [];
     foreach ($rows as $row) {
+        if ($unitMap !== null) {
+            $row = forecastAccuracyConvertRow($row, $unitMap, $mode, $rolling);
+        }
         if ($rolling) {
             if (!in_array((int)($row['horizon_days'] ?? 0), [7, 14, 30], true)) continue;
             $methods = ['xgb', 'last', 'mean'];
@@ -129,16 +140,16 @@ function forecastMetricsRender(array $summary, bool $rolling = false, bool $filt
                 <td class="numeric"><strong><?= accuracyH(accuracyScore($row['smape_percent'])) ?><?= $row['smape_percent'] !== null ? '%' : '' ?></strong></td>
                 <td class="numeric"><?= accuracyH(accuracyScore($row['mae'])) ?></td>
                 <td class="numeric"><?= accuracyH(accuracyScore($row['rmse'])) ?></td>
-                <td><?= accuracyH(count($row['base_units']) > 1 ? 'Mixed base units' : ($row['base_units'][0] ?? 'Unavailable')) ?></td>
+                <td><?= accuracyH(count($row['base_units']) > 1 ? 'Mixed units: ' . implode(', ', $row['base_units']) : ($row['base_units'][0] ?? 'Unavailable')) ?></td>
                 <td><?= number_format($row['testing_records']) ?> item-day observations<div class="test-count"><?= (int)$row['supplies'] ?> tested supplies · <?= (int)$row['available_results'] ?> complete <?= $rolling ? 'item windows' : 'item tests' ?><br><?= (int)$row['excluded_results'] ?> excluded <?= $rolling ? 'item windows' : 'item tests' ?></div></td>
             </tr>
         <?php endforeach; ?>
         </tbody></table></div>
         <div style="padding:0 22px 18px">
-            <p class="policy-note">Lower errors are better. Valid zero-use observations remain included. Unavailable or incomplete tests are excluded and counted. Each horizon is scored separately. SMAPE is an error percentage, not an accuracy percentage. Mixed-unit MAE/RMSE are numerical summaries; use the errors by unit below for quantities such as mL or sites.</p>
+            <p class="policy-note">Lower errors are better. Valid zero-use observations remain included. Unavailable or incomplete tests are excluded and counted. Each horizon is scored separately. SMAPE is an error percentage, not an accuracy percentage. MAE and RMSE are shown in each supply's counting unit (vials, ampules) unless "Base units (as stored)" is selected; pooled values are computed from those converted per-supply values. Mixed-unit MAE/RMSE are numerical summaries; use the errors by unit below for a single unit.</p>
             <?php if (!$rolling): ?><p class="policy-note">The one-day diagnostic uses the known patient count and previous actual usage on each test day. The 7-, 14- and 30-day tests estimate patient counts from past records and feed their own predicted usage into later days, as the operational forecast does.</p><?php endif; ?>
-            <details><summary style="cursor:pointer;font-weight:600">View overall errors by base unit</summary>
-                <div class="table-scroll"><table><thead><tr><th scope="col">Horizon / test</th><th scope="col">Base unit</th><th scope="col">SMAPE</th><th scope="col">MAE</th><th scope="col">RMSE</th><th scope="col">Observations / exclusions</th></tr></thead><tbody>
+            <details><summary style="cursor:pointer;font-weight:600">View overall errors by unit</summary>
+                <div class="table-scroll"><table><thead><tr><th scope="col">Horizon / test</th><th scope="col">Unit</th><th scope="col">SMAPE</th><th scope="col">MAE</th><th scope="col">RMSE</th><th scope="col">Observations / exclusions</th></tr></thead><tbody>
                 <?php foreach ($summary['by_unit'] as $row): ?><tr>
                     <td><?= (int)$row['horizon_days'] ?> day<?= (int)$row['horizon_days'] === 1 ? '' : 's' ?><div class="test-count"><?= accuracyH(forecastMetricsLabel($row)) ?></div></td>
                     <td><?= accuracyH($row['base_unit']) ?></td>

@@ -7,6 +7,18 @@
   plus per-user notification preferences for low stock / expiring stock
   / prediction alerts described in the Notification System.
 */
+// The page escapes output with h(); it was never defined, which stopped the page.
+if (!function_exists('h')) {
+    function h($value): string
+    {
+        return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+    }
+}
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+$branch_name = (string)($_SESSION['branch_name'] ?? '');
+$username = (string)($_SESSION['username'] ?? '');
 ?>
 <!DOCTYPE html>
 <html lang="en">

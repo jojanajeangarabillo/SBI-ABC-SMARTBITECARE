@@ -134,7 +134,7 @@ function dailyInventoryUsageBreakdown(mysqli $conn, string $branchId, int $itemI
     return $parts;
 }
 
-/** Short text such as "Vaccination 4 sites + Assessment 1 Vial + Wastage 6 sites". */
+/** Short text such as "Assessment 1 site + Vaccination 4 sites + Medical Supplies 2 sites". */
 function dailyInventoryBreakdownText(array $breakdown, array $item): string
 {
     $labels = ['assessment' => 'Assessment', 'vaccination' => 'Vaccination', 'supplies' => 'Medical Supplies',
@@ -142,7 +142,7 @@ function dailyInventoryBreakdownText(array $breakdown, array $item): string
     $parts = [];
     foreach ($labels as $key => $label) {
         if (($breakdown[$key] ?? 0) > 0) {
-            $parts[] = $label . ' ' . inventoryUsageDescription((float)stockQuantityDecimal($breakdown[$key]), $item);
+            $parts[] = $label . ' ' . inventoryQuantityText((float)stockQuantityDecimal($breakdown[$key]), $item);
         }
     }
     return $parts ? implode(' + ', $parts) : 'No usage recorded for this date';
@@ -401,22 +401,14 @@ function dailyInventoryRecordUsage(
 }
 
 /**
- * Save one daily closing (single-item form and whole-day sheet share it).
+ * Validate the posted values of one closing row (no database access).
  * $values holds beginning_stock, delivery, pull_out and actual_count as posted
- * strings. Consumed is never typed: it is the day's recorded usage
+ * base-unit strings. Consumed is never typed: it is the day's recorded usage
  * (Assessment + Vaccination + Medical Supplies). The only way to adjust it is
  * the "Edit / Adjust" wastage entry: $wastageQuantity (base unit) with a
  * reason from dailyInventoryWastageReasons() ($wastageOther when "Other").
- * It is recorded as wastage (stock deducted once, labelled Wastage) and is then
- * part of Consumed, so final Consumed = auto-computed usage + adjustment.
- * Everything runs in one transaction under the branch revision lock.
  */
-function dailyInventorySaveClosing(
-    mysqli $conn,
-    string $branchId,
-    int $userId,
-    int $itemId,
-    string $inventoryDate,
+function dailyInventoryParseClosingInput(
     array $values,
     string $remarks,
     string $contextToken,
@@ -424,7 +416,6 @@ function dailyInventorySaveClosing(
     string $wastageReason = '',
     string $wastageOther = ''
 ): array {
-    dailyInventoryAssertDate($conn, $inventoryDate);
     $quantities = [];
     foreach (['beginning_stock' => 'Beginning stock', 'delivery' => 'Delivery',
               'pull_out' => 'Pull-out', 'actual_count' => 'Actual physical count'] as $field => $label) {
@@ -465,94 +456,387 @@ function dailyInventorySaveClosing(
     if (!preg_match('/\A[a-f0-9]{64}\z/', $contextToken)) {
         throw new RuntimeException('Load the selected item and date before submitting the closing.');
     }
+    return [
+        'quantities' => $quantities,
+        'remarks' => $remarks,
+        'context_token' => $contextToken,
+        'extra_scaled' => $extraScaled,
+        'wastage_reason' => $wastageReason,
+        'wastage_label' => $wastageLabel,
+    ];
+}
+
+/**
+ * The checks a closing must pass against the current context (computed ending
+ * not negative, a remark for any variance, the form still matching the
+ * recorded usage). Returns the first problem, or null. $extraScaled is the
+ * wastage about to be added to Consumed.
+ */
+function dailyInventoryClosingProblem(array $context, array $parsed): ?string
+{
+    $item = $context['item'];
+    if (!hash_equals($context['context_token'], $parsed['context_token'])) {
+        return $item['item_name'] . ': usage or the saved closing changed after the page was loaded. The page shows the new Consumed; verify it and enter a fresh physical count.';
+    }
+    $quantities = $parsed['quantities'];
+    $consumedScaled = stockQuantityParse($context['consumed'], true) + $parsed['extra_scaled'];
+    $computedScaled = $quantities['beginning_stock'] + $quantities['delivery'] - $consumedScaled - $quantities['pull_out'];
+    if ($computedScaled < 0) {
+        return $item['item_name'] . ': computed ending cannot be negative. Check beginning stock, delivery, consumed, and pull-out.';
+    }
+    if ($computedScaled > STOCK_QUANTITY_MAX_SCALED) {
+        return $item['item_name'] . ': the resulting stock quantity exceeds the supported range.';
+    }
+    if ($quantities['actual_count'] !== $computedScaled && $parsed['remarks'] === '') {
+        return $item['item_name'] . ': explain the difference between physical and computed stock in Remarks.';
+    }
+    return null;
+}
+
+/**
+ * Write one closing: optional wastage (stock deducted once, labelled Wastage,
+ * then part of Consumed), the daily_inventory_closings row, the training_dataset
+ * sync and the audit entry. The caller owns the transaction and already holds
+ * the branch revision lock (forecastTrainingRevision).
+ */
+function dailyInventoryWriteClosing(
+    mysqli $conn,
+    string $branchId,
+    int $userId,
+    int $itemId,
+    string $inventoryDate,
+    array $parsed
+): array {
+    $context = dailyInventoryContext($conn, $branchId, $itemId, $inventoryDate, true);
+    if (!hash_equals($context['context_token'], $parsed['context_token'])) {
+        throw new DailyInventoryStaleContextException('Recorded usage or a closing changed. Reload the selected item and date, verify the opening and movements, and enter a fresh physical count.');
+    }
+    $problem = dailyInventoryClosingProblem($context, $parsed);
+    if ($problem !== null) {
+        throw new RuntimeException($problem);
+    }
+    $quantities = $parsed['quantities'];
+    $remarks = $parsed['remarks'];
+    $wastageLabel = $parsed['wastage_label'];
+    $manualUsage = null;
+    if ($parsed['extra_scaled'] > 0) {
+        $manualUsage = dailyInventoryRecordUsage(
+            $conn, $userId, $branchId, $context['item'], (float)stockQuantityDecimal($parsed['extra_scaled']),
+            $inventoryDate, 'Daily inventory adjustment | ', $wastageLabel, 0,
+            'Daily Inventory', 'Wastage', $wastageLabel
+        );
+        // Consumed now includes the wastage just recorded (counted once).
+        $context = dailyInventoryContext($conn, $branchId, $itemId, $inventoryDate, true);
+    }
+    $item = $context['item'];
+    $consumedScaled = stockQuantityParse($context['consumed'], true);
+    $computedScaled = $quantities['beginning_stock'] + $quantities['delivery']
+        - $consumedScaled - $quantities['pull_out'];
+    if ($computedScaled < 0) {
+        throw new RuntimeException($item['item_name'] . ': computed ending cannot be negative. Check beginning stock, delivery, consumed, and pull-out.');
+    }
+    if ($computedScaled > STOCK_QUANTITY_MAX_SCALED) {
+        throw new RuntimeException('The resulting stock quantity exceeds the supported range.');
+    }
+    $varianceScaled = $quantities['actual_count'] - $computedScaled;
+    if ($varianceScaled !== 0 && $remarks === '') {
+        throw new RuntimeException($item['item_name'] . ': explain the difference between physical and computed stock in Remarks.');
+    }
+    if ($manualUsage !== null) {
+        $remarks = trim($remarks . ($remarks !== '' ? ' | ' : '') . 'Wastage: '
+            . $manualUsage['description'] . ' - ' . $wastageLabel);
+    }
+    // Counts may contain legacy fractions, including sites; never round them.
+    $beginning = stockQuantityDecimal($quantities['beginning_stock']);
+    $delivery = stockQuantityDecimal($quantities['delivery']);
+    $pullOut = stockQuantityDecimal($quantities['pull_out']);
+    $actual = stockQuantityDecimal($quantities['actual_count']);
+    $consumed = stockQuantityDecimal($consumedScaled);
+    $computed = stockQuantityDecimal($computedScaled);
+    $variance = stockQuantityDecimal($varianceScaled);
+
+    $stmt = $conn->prepare(
+        "INSERT INTO daily_inventory_closings
+         (branch_id, item_id, inventory_date, beginning_stock, delivery, consumed, pull_out,
+          computed_ending, actual_count, variance, remarks, status, submitted_by, submitted_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,'Submitted',?,NOW())
+         ON DUPLICATE KEY UPDATE
+            beginning_stock=VALUES(beginning_stock),
+            delivery=VALUES(delivery),
+            consumed=VALUES(consumed),
+            pull_out=VALUES(pull_out),
+            computed_ending=VALUES(computed_ending),
+            actual_count=VALUES(actual_count),
+            variance=VALUES(variance),
+            remarks=VALUES(remarks),
+            status='Submitted',
+            submitted_by=VALUES(submitted_by),
+            submitted_at=NOW(),
+            reviewed_by=NULL,
+            reviewed_at=NULL"
+    );
+    $stmt->bind_param('sisssssssssi', $branchId, $itemId, $inventoryDate, $beginning, $delivery,
+        $consumed, $pullOut, $computed, $actual, $variance, $remarks, $userId);
+    $stmt->execute();
+    $stmt->close();
+
+    $trainingSynced = forecastTrainingSyncClosing($conn, $branchId, $itemId, $inventoryDate);
+
+    workflowAudit(
+        $conn,
+        $userId,
+        $branchId,
+        'Submitted daily inventory for ' . $item['item_name'] . ' on ' . $inventoryDate
+            . ' | Beginning: ' . inventoryUsageDescription((float)$beginning, $item)
+            . ' (' . $context['opening_source'] . ')'
+            . ' | Delivery: ' . inventoryUsageDescription((float)$delivery, $item)
+            . ' | Consumed: ' . inventoryUsageDescription((float)$consumed, $item)
+            . ($manualUsage !== null ? ' (incl. wastage ' . $manualUsage['description'] . ' - ' . $wastageLabel . ')' : '')
+            . ' | Pull-out: ' . inventoryUsageDescription((float)$pullOut, $item)
+            . ' | Actual: ' . inventoryUsageDescription((float)$actual, $item),
+        'Daily Inventory'
+    );
+    return ['item' => $item, 'training_synced' => $trainingSynced, 'manual_usage' => $manualUsage];
+}
+
+/**
+ * Save one daily closing (the single-item correction form). Same validation,
+ * daily_inventory_closings write and training_dataset sync as the whole-day
+ * closing; everything runs in one transaction under the branch revision lock.
+ */
+function dailyInventorySaveClosing(
+    mysqli $conn,
+    string $branchId,
+    int $userId,
+    int $itemId,
+    string $inventoryDate,
+    array $values,
+    string $remarks,
+    string $contextToken,
+    string $wastageQuantity = '',
+    string $wastageReason = '',
+    string $wastageOther = ''
+): array {
+    dailyInventoryAssertDate($conn, $inventoryDate);
+    $parsed = dailyInventoryParseClosingInput($values, $remarks, $contextToken, $wastageQuantity, $wastageReason, $wastageOther);
+    $conn->begin_transaction();
+    try {
+        forecastTrainingRevision($conn, $branchId, true);
+        $result = dailyInventoryWriteClosing($conn, $branchId, $userId, $itemId, $inventoryDate, $parsed);
+        $conn->commit();
+        return $result;
+    } catch (Throwable $e) {
+        $conn->rollback();
+        throw $e;
+    }
+}
+
+/**
+ * Delivery and pull-out recorded in stock_transactions for each item on $date
+ * (base unit, scaled ten-thousandths), used to pre-fill the closing:
+ *  - Delivery: stock received (IN, TRANSFER_IN, RETURN).
+ *  - Pull-out: stock that left the branch without a usage record (Stock Out,
+ *    return shipments, expired disposal, TRANSFER_OUT, EXPIRED). Usage
+ *    movements (vaccination, assessment, Medical Supplies and wastage) carry a
+ *    vaccination_id or a "Usage ID:" and are already in Consumed, so they are
+ *    excluded here and never counted twice.
+ */
+function dailyInventoryDayMovements(mysqli $conn, string $branchId, string $date): array
+{
+    $stmt = $conn->prepare(
+        "SELECT item_id,
+                SUM(CASE WHEN transaction_type IN ('IN','TRANSFER_IN','RETURN') THEN quantity ELSE 0 END) AS delivery,
+                SUM(CASE WHEN transaction_type IN ('TRANSFER_OUT','EXPIRED')
+                          OR (transaction_type = 'OUT' AND vaccination_id IS NULL
+                              AND COALESCE(remarks, '') NOT LIKE '%Usage ID: %')
+                         THEN quantity ELSE 0 END) AS pull_out
+         FROM stock_transactions
+         WHERE branch_id = ? AND transaction_date >= ? AND transaction_date < DATE_ADD(?, INTERVAL 1 DAY)
+         GROUP BY item_id"
+    );
+    $stmt->bind_param('sss', $branchId, $date, $date);
+    $stmt->execute();
+    $movements = [];
+    foreach ($stmt->get_result()->fetch_all(MYSQLI_ASSOC) as $row) {
+        $movements[(int)$row['item_id']] = [
+            'delivery' => (int)round(abs((float)$row['delivery']) * STOCK_QUANTITY_SCALE),
+            'pull_out' => (int)round(abs((float)$row['pull_out']) * STOCK_QUANTITY_SCALE),
+        ];
+    }
+    $stmt->close();
+    return $movements;
+}
+
+/**
+ * Every consumable item for the whole-day closing of $date, in the clinic
+ * sheet order: its context (Beginning, Consumed with the breakdown by source,
+ * saved closing), Delivery and Pull-out pre-filled from that day's stock
+ * movements when no closing is saved yet, and whether it had activity that
+ * day (usage, movements or a saved closing). Items with activity are listed
+ * first; the rest are shown with "Show all items".
+ */
+function dailyInventoryDayRows(mysqli $conn, string $branchId, string $date): array
+{
+    $stmt = $conn->prepare('SELECT item_id, item_name FROM inventory_items WHERE is_consumable = 1');
+    $stmt->execute();
+    $items = dailyInventorySortItems($stmt->get_result()->fetch_all(MYSQLI_ASSOC));
+    $stmt->close();
+    $movements = dailyInventoryDayMovements($conn, $branchId, $date);
+    $rows = [];
+    foreach ($items as $listed) {
+        $itemId = (int)$listed['item_id'];
+        try {
+            $context = dailyInventoryContext($conn, $branchId, $itemId, $date);
+        } catch (RuntimeException $e) {
+            continue;
+        }
+        $hasClosing = $context['opening_source'] === 'saved_closing';
+        $moved = $movements[$itemId] ?? ['delivery' => 0, 'pull_out' => 0];
+        $prefilled = ['delivery' => false, 'pull_out' => false];
+        if (!$hasClosing) {
+            foreach (['delivery', 'pull_out'] as $field) {
+                if ($moved[$field] > 0) {
+                    $context['fields'][$field] = stockQuantityDecimal($moved[$field]);
+                    $prefilled[$field] = true;
+                }
+            }
+        }
+        $consumedScaled = stockQuantityParse($context['consumed'], true);
+        $rows[] = [
+            'item' => $context['item'],
+            'context' => $context,
+            'used' => $consumedScaled > 0,
+            'active' => $consumedScaled > 0 || $hasClosing || $moved['delivery'] > 0 || $moved['pull_out'] > 0,
+            'saved' => $hasClosing && !$context['needs_physical_count'],
+            'prefilled' => $prefilled,
+            'movements' => $moved,
+        ];
+    }
+    usort($rows, static fn(array $a, array $b): int => (int)$b['active'] <=> (int)$a['active']);
+    return $rows;
+}
+
+/** Thrown by dailyInventorySaveDay with one message per item that needs attention. */
+class DailyInventoryDayException extends RuntimeException
+{
+    public array $errors;
+    public array $staleItems;
+
+    public function __construct(array $errors, array $staleItems = [])
+    {
+        $this->errors = $errors;
+        $this->staleItems = $staleItems;
+        parent::__construct(implode(' | ', $errors));
+    }
+}
+
+/**
+ * Save the whole day's closing at once (the "Save Closing" button). $rows is
+ * keyed by item_id with the posted beginning_stock, delivery, pull_out,
+ * actual_count, remarks, context_token and optional wastage_* fields.
+ * - A row with usage that day must have an Actual count; other rows are saved
+ *   only when an Actual count is entered.
+ * - A saved closing posted back unchanged is skipped (no duplicate audit).
+ * - Every row is checked first and ALL problems are reported together. Then
+ *   all rows are written in ONE transaction under the branch revision lock,
+ *   with the same closing and training_dataset logic as a single item; if any
+ *   row fails, nothing is saved.
+ * Returns ['saved' => [item names], 'unchanged' => int, 'synced' => int].
+ */
+function dailyInventorySaveDay(mysqli $conn, string $branchId, int $userId, string $date, array $rows): array
+{
+    dailyInventoryAssertDate($conn, $date);
+    $errors = [];
+    $parsedRows = [];
+    $unchanged = 0;
+    foreach ($rows as $rawItemId => $row) {
+        if (!is_array($row)) continue;
+        $text = static fn(string $key): string => is_string($row[$key] ?? null) ? trim($row[$key]) : '';
+        $name = $text('item_name');
+        try {
+            $itemId = dailyInventoryItemId((string)$rawItemId);
+        } catch (InvalidArgumentException $e) {
+            continue;
+        }
+        if ($text('actual_count') === '') {
+            if ($text('wastage_quantity') !== '') {
+                $errors[$itemId] = ($name !== '' ? $name . ': ' : '') . 'enter the Actual count to save the Consumed adjustment.';
+            }
+            continue; // Required rows are checked below against the current usage.
+        }
+        try {
+            $parsedRows[$itemId] = dailyInventoryParseClosingInput(
+                [
+                    'beginning_stock' => $text('beginning_stock'),
+                    'delivery' => $text('delivery') === '' ? '0' : $text('delivery'),
+                    'pull_out' => $text('pull_out') === '' ? '0' : $text('pull_out'),
+                    'actual_count' => $text('actual_count'),
+                ],
+                $text('remarks'),
+                $text('context_token'),
+                $text('wastage_quantity'),
+                $text('wastage_reason'),
+                $text('wastage_other')
+            );
+        } catch (RuntimeException $e) {
+            $message = $e->getMessage();
+            $errors[$itemId] = ($name !== '' && !str_starts_with($message, $name) ? $name . ': ' : '') . $message;
+        }
+    }
 
     $conn->begin_transaction();
     try {
         forecastTrainingRevision($conn, $branchId, true);
-        $context = dailyInventoryContext($conn, $branchId, $itemId, $inventoryDate, true);
-        if (!hash_equals($context['context_token'], $contextToken)) {
-            throw new DailyInventoryStaleContextException('Recorded usage or a closing changed. Reload the selected item and date, verify the opening and movements, and enter a fresh physical count.');
+        $stale = [];
+        // Every item used that day needs a count before the day can be saved.
+        foreach (dailyInventoryDayRows($conn, $branchId, $date) as $dayRow) {
+            $itemId = (int)$dayRow['item']['item_id'];
+            if ($dayRow['used'] && !$dayRow['saved'] && !isset($parsedRows[$itemId]) && !isset($errors[$itemId])) {
+                $errors[$itemId] = $dayRow['item']['item_name'] . ': enter the Actual physical count (this item was used today).';
+            }
         }
-        $manualUsage = null;
-        if ($extraScaled > 0) {
-            $manualUsage = dailyInventoryRecordUsage(
-                $conn, $userId, $branchId, $context['item'], (float)stockQuantityDecimal($extraScaled),
-                $inventoryDate, 'Daily inventory adjustment | ', $wastageLabel, 0,
-                'Daily Inventory', 'Wastage', $wastageReason === 'Other' ? 'Other: ' . $wastageOther : $wastageReason
-            );
-            // Consumed now includes the wastage just recorded (counted once).
-            $context = dailyInventoryContext($conn, $branchId, $itemId, $inventoryDate, true);
+        $toWrite = [];
+        foreach ($parsedRows as $itemId => $parsed) {
+            $context = dailyInventoryContext($conn, $branchId, $itemId, $date, true);
+            if (!hash_equals($context['context_token'], $parsed['context_token'])) {
+                $stale[] = $itemId;
+            }
+            $problem = dailyInventoryClosingProblem($context, $parsed);
+            if ($problem !== null) {
+                $errors[$itemId] = $problem;
+                continue;
+            }
+            // A saved, current closing posted back unchanged needs no new write.
+            if ($context['opening_source'] === 'saved_closing' && !$context['needs_physical_count']
+                && $parsed['extra_scaled'] === 0 && $parsed['remarks'] === trim((string)$context['fields']['remarks'])) {
+                $same = true;
+                foreach (['beginning_stock', 'delivery', 'pull_out', 'actual_count'] as $field) {
+                    if ($parsed['quantities'][$field] !== stockQuantityParse((string)$context['fields'][$field], true)) {
+                        $same = false;
+                    }
+                }
+                if ($same) {
+                    $unchanged++;
+                    continue;
+                }
+            }
+            $toWrite[$itemId] = $parsed;
         }
-        $item = $context['item'];
-        $consumedScaled = stockQuantityParse($context['consumed'], true);
-        $computedScaled = $quantities['beginning_stock'] + $quantities['delivery']
-            - $consumedScaled - $quantities['pull_out'];
-        if ($computedScaled < 0) {
-            throw new RuntimeException($item['item_name'] . ': computed ending cannot be negative. Check beginning stock, delivery, consumed, and pull-out.');
+        if ($errors) {
+            throw new DailyInventoryDayException(array_values($errors), $stale);
         }
-        if ($computedScaled > STOCK_QUANTITY_MAX_SCALED) {
-            throw new RuntimeException('The resulting stock quantity exceeds the supported range.');
+        if (!$toWrite) {
+            throw new DailyInventoryDayException(['Nothing new to save. Enter or change the Actual count of at least one item.']);
         }
-        $varianceScaled = $quantities['actual_count'] - $computedScaled;
-        if ($varianceScaled !== 0 && $remarks === '') {
-            throw new RuntimeException($item['item_name'] . ': explain the difference between physical and computed stock in Remarks.');
+        $saved = [];
+        $synced = 0;
+        foreach ($toWrite as $itemId => $parsed) {
+            $result = dailyInventoryWriteClosing($conn, $branchId, $userId, $itemId, $date, $parsed);
+            $saved[] = (string)$result['item']['item_name'];
+            $synced += $result['training_synced'] ? 1 : 0;
         }
-        if ($manualUsage !== null) {
-            $remarks = trim($remarks . ($remarks !== '' ? ' | ' : '') . 'Wastage: '
-                . $manualUsage['description'] . ' - ' . $wastageLabel);
-        }
-        // Counts may contain legacy fractions, including sites; never round them.
-        $beginning = stockQuantityDecimal($quantities['beginning_stock']);
-        $delivery = stockQuantityDecimal($quantities['delivery']);
-        $pullOut = stockQuantityDecimal($quantities['pull_out']);
-        $actual = stockQuantityDecimal($quantities['actual_count']);
-        $consumed = stockQuantityDecimal($consumedScaled);
-        $computed = stockQuantityDecimal($computedScaled);
-        $variance = stockQuantityDecimal($varianceScaled);
-
-        $stmt = $conn->prepare(
-            "INSERT INTO daily_inventory_closings
-             (branch_id, item_id, inventory_date, beginning_stock, delivery, consumed, pull_out,
-              computed_ending, actual_count, variance, remarks, status, submitted_by, submitted_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,'Submitted',?,NOW())
-             ON DUPLICATE KEY UPDATE
-                beginning_stock=VALUES(beginning_stock),
-                delivery=VALUES(delivery),
-                consumed=VALUES(consumed),
-                pull_out=VALUES(pull_out),
-                computed_ending=VALUES(computed_ending),
-                actual_count=VALUES(actual_count),
-                variance=VALUES(variance),
-                remarks=VALUES(remarks),
-                status='Submitted',
-                submitted_by=VALUES(submitted_by),
-                submitted_at=NOW(),
-                reviewed_by=NULL,
-                reviewed_at=NULL"
-        );
-        $stmt->bind_param('sisssssssssi', $branchId, $itemId, $inventoryDate, $beginning, $delivery,
-            $consumed, $pullOut, $computed, $actual, $variance, $remarks, $userId);
-        $stmt->execute();
-        $stmt->close();
-
-        $trainingSynced = forecastTrainingSyncClosing($conn, $branchId, $itemId, $inventoryDate);
-
-        workflowAudit(
-            $conn,
-            $userId,
-            $branchId,
-            'Submitted daily inventory for ' . $item['item_name'] . ' on ' . $inventoryDate
-                . ' | Beginning: ' . inventoryUsageDescription((float)$beginning, $item)
-                . ' (' . $context['opening_source'] . ')'
-                . ' | Delivery: ' . inventoryUsageDescription((float)$delivery, $item)
-                . ' | Consumed: ' . inventoryUsageDescription((float)$consumed, $item)
-                . ($manualUsage !== null ? ' (incl. wastage ' . $manualUsage['description'] . ' - ' . $wastageLabel . ')' : '')
-                . ' | Pull-out: ' . inventoryUsageDescription((float)$pullOut, $item)
-                . ' | Actual: ' . inventoryUsageDescription((float)$actual, $item),
-            'Daily Inventory'
-        );
         $conn->commit();
-        return ['item' => $item, 'training_synced' => $trainingSynced, 'manual_usage' => $manualUsage];
+        return ['saved' => $saved, 'unchanged' => $unchanged, 'synced' => $synced];
     } catch (Throwable $e) {
         $conn->rollback();
         throw $e;

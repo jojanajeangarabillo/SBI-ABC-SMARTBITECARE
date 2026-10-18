@@ -36,7 +36,10 @@ if (!$itemId || $itemId <= 0) {
 $branchId = (string)$user['branch_id'];
 $stockTotalsSql = inventoryStockTotalsSql();
 $stmt = $conn->prepare("SELECT COALESCE(s.usable_stock,0) AS total_stock,
-    COALESCE(NULLIF(TRIM(i.base_unit_label),''),u.unit_name) AS unit_name
+    COALESCE(NULLIF(TRIM(i.base_unit_label),''),u.unit_name) AS unit_name,
+    COALESCE(NULLIF(TRIM(i.base_unit_label),''),u.unit_name) AS base_unit_label,
+    COALESCE(NULLIF(TRIM(i.display_unit_label),''),u.unit_name) AS display_unit_label,
+    COALESCE(NULLIF(i.conversion_to_base,0),1) AS conversion_to_base
     FROM inventory_items i JOIN units u ON u.unit_id=i.unit_id
     LEFT JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
     WHERE i.item_id=? LIMIT 1");
@@ -52,4 +55,6 @@ echo json_encode([
     'success' => true,
     'stock' => (string)$data['total_stock'],
     'unit' => $data['unit_name'],
+    // Display text only ("67 vials + 3 sites"); 'stock' stays in base units.
+    'stock_display' => inventoryStockBreakdown((float)$data['total_stock'], $data),
 ]);
