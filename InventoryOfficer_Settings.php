@@ -14,7 +14,11 @@ if (!function_exists('h')) {
         return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
     }
 }
-$branch_name = $branch_name ?? '';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+$branch_name = (string)($_SESSION['branch_name'] ?? '');
+$username = (string)($_SESSION['username'] ?? '');
 ?>
 <!DOCTYPE html>
 <html lang="en">
