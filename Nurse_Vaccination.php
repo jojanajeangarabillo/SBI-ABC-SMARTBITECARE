@@ -513,89 +513,11 @@ function inventoryRequiresSiteArvConfiguration(array $item): bool {
 }
 
 /**
- * Human-friendly stock display for the vaccination selector.
- *
- * Site-based ARV example:
- *   602 sites -> 100 Vial + 2 sites (602 sites total)
- *
- * Other convertible products continue to show their display-unit
- * equivalent plus the stored base-unit total.
+ * Stock display for the vaccination selector, in the clinic's format:
+ * 602 sites -> "100 vials + 2 sites" (see inventoryQuantityText).
  */
 function vaccinationStockDisplay(float $baseQuantity, array $item): string {
-    $baseQuantity = max(0, $baseQuantity);
-
-    $baseUnit = inventoryBaseUnitLabel($item);
-    $displayUnit = inventoryDisplayUnitLabel($item);
-    $conversion = inventoryConversionToBase($item);
-
-    if (
-        inventoryHasValidSiteArvConfiguration($item)
-        && $conversion > 0
-    ) {
-        $wholeVials = (int)floor(
-            ($baseQuantity + 0.00005) / $conversion
-        );
-
-        $remainingSites = round(
-            $baseQuantity - ($wholeVials * $conversion),
-            4
-        );
-
-        if ($remainingSites < 0.00005) {
-            $remainingSites = 0.0;
-        }
-
-        $text =
-            inventoryFormatNumber($wholeVials)
-            . ' '
-            . $displayUnit;
-
-        if ($remainingSites > 0) {
-            $text .=
-                ' + '
-                . inventoryFormatNumber($remainingSites)
-                . ' '
-                . ($remainingSites == 1.0 ? 'site' : 'sites');
-        }
-
-        return $text
-            . ' ('
-            . inventoryFormatNumber($baseQuantity)
-            . ' sites total)';
-    }
-
-    if (
-        $conversion > 0
-        && strcasecmp($baseUnit, $displayUnit) !== 0
-    ) {
-        $displayQuantity = inventoryBaseToDisplay(
-            $baseQuantity,
-            $item
-        );
-
-        $displayText =
-            inventoryFormatNumber($displayQuantity)
-            . ' '
-            . $displayUnit;
-
-        if (
-            abs($displayQuantity - round($displayQuantity))
-            > 0.00005
-        ) {
-            $displayText .= ' equivalent';
-        }
-
-        return $displayText
-            . ' ('
-            . inventoryFormatNumber($baseQuantity)
-            . ' '
-            . $baseUnit
-            . ' total)';
-    }
-
-    return inventoryFormatNumber($baseQuantity)
-        . ' '
-        . $baseUnit;
+    return inventoryQuantityText(max(0, $baseQuantity), $item);
 }
 
 // Get a Medical Supplies inventory item. Unit is loaded from the database

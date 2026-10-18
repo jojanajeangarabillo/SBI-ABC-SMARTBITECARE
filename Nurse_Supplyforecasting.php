@@ -5,6 +5,7 @@ require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/forecast_status_helper.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/inventory_unit_helpers.php';
 
 /* =========================================================
    ACCESS / CURRENT NURSE
@@ -1408,6 +1409,8 @@ $chartRiskValues = array_map(
 
                             $stockStatus = (string)$forecast['stock_status'];
                             $stockStatusClass = (string)$forecast['stock_status_class'];
+                            // Shown in vials/ampules (the clinic's counting unit); stored values stay in base units.
+                            $forecastDays = max(1, (int)($forecast['forecast_days'] ?? 0));
                         ?>
 
                         <tr
@@ -1423,45 +1426,26 @@ $chartRiskValues = array_map(
                                 </span>
 
                                 <span class="item-unit">
-                                    <?= workflowH($baseUnit) ?>
-                                    <?php if ($isConverted): ?>
-                                        · 1 <?= workflowH($displayUnit) ?>
+                                    <?= workflowH(inventoryUnitWord($displayUnit, 2)) ?>
+                                    <?php if (inventoryHasDisplayUnit($forecast)): ?>
+                                        · 1 <?= workflowH(inventoryUnitWord($displayUnit, 1)) ?>
                                         = <?= workflowH(nurseForecastFormatQuantity($conversion)) ?>
-                                        <?= workflowH($baseUnit) ?>
+                                        <?= workflowH(inventoryUnitWord($baseUnit, 2)) ?>
                                     <?php endif; ?>
                                 </span>
                             </td>
 
                             <td>
-                                <strong>
-                                    <?= workflowH(nurseForecastFormatQuantity($currentStock)) ?>
-                                    <?= workflowH($baseUnit) ?>
-                                </strong>
-
-                                <?php if ($isConverted): ?>
+                                <strong><?= workflowH(inventoryForecastQuantityText($currentStock, $forecast)) ?></strong>
+                                <?php if (inventoryHasDisplayUnit($forecast)): ?>
                                     <div class="text-muted" style="font-size:11px;">
-                                        ≈ <?= workflowH(nurseForecastFormatQuantity($currentDisplay)) ?>
-                                        <?= workflowH(
-                                            nurseForecastDisplayUnitLabel($displayUnit, $currentDisplay)
-                                        ) ?>
+                                        <?= workflowH(inventoryQuantityText($currentStock, $forecast)) ?>
                                     </div>
                                 <?php endif; ?>
                             </td>
 
                             <td>
-                                <strong>
-                                    <?= workflowH(nurseForecastFormatQuantity($minimumStock)) ?>
-                                    <?= workflowH($baseUnit) ?>
-                                </strong>
-
-                                <?php if ($isConverted): ?>
-                                    <div class="text-muted" style="font-size:11px;">
-                                        = <?= workflowH(nurseForecastFormatQuantity($minimumDisplay)) ?>
-                                        <?= workflowH(
-                                            nurseForecastDisplayUnitLabel($displayUnit, $minimumDisplay)
-                                        ) ?>
-                                    </div>
-                                <?php endif; ?>
+                                <strong><?= workflowH(inventoryForecastQuantityText($minimumStock, $forecast)) ?></strong>
                             </td>
 
                             <td>
@@ -1472,21 +1456,12 @@ $chartRiskValues = array_map(
 
                             <td>
                                 <strong>
-                                    <?= workflowH(nurseForecastFormatQuantity($forecastUse)) ?>
-                                    <?= workflowH($baseUnit) ?>
+                                    <?= workflowH(inventoryForecastQuantityText($forecastUse, $forecast)) ?>
+                                    over <?= $forecastDays ?> days
                                 </strong>
-
-                                <?php if ($isConverted): ?>
-                                    <div class="text-muted" style="font-size:11px;">
-                                        ≈ <?= workflowH(nurseForecastFormatQuantity($forecastUse / $conversion)) ?>
-                                        <?= workflowH(
-                                            nurseForecastDisplayUnitLabel(
-                                                $displayUnit,
-                                                $forecastUse / $conversion
-                                            )
-                                        ) ?>
-                                    </div>
-                                <?php endif; ?>
+                                <div class="text-muted" style="font-size:11px;">
+                                    <?= workflowH(inventoryForecastQuantityText($forecastUse / $forecastDays, $forecast)) ?>/day
+                                </div>
                                 <?= forecastMethodBadgeHtml($forecast['forecast_method'] ?? null) ?>
                             </td>
 
@@ -1522,19 +1497,12 @@ $chartRiskValues = array_map(
                                 <?php if ($reorderBase > 0): ?>
 
                                     <span class="reorder-value">
-                                        Reorder
-                                        <?= number_format($reorderDisplay) ?>
-                                        <?= workflowH(
-                                            $isConverted ? $reorderDisplayUnit : $displayUnit
-                                        ) ?>
+                                        Reorder <?= workflowH(inventoryReorderText($reorderBase, $forecast)) ?>
                                     </span>
-
-                                    <?php if ($isConverted): ?>
-                                        <div class="text-muted mt-1" style="font-size:11px;">
-                                            <?= workflowH(nurseForecastFormatQuantity($reorderBase)) ?>
-                                            <?= workflowH($baseUnit) ?> required
-                                        </div>
-                                    <?php endif; ?>
+                                    <div class="text-muted mt-1" style="font-size:11px;">
+                                        Rounded up to whole <?= workflowH(inventoryUnitWord($displayUnit, 2)) ?>
+                                        (<?= workflowH(inventoryForecastQuantityText($reorderBase, $forecast)) ?> needed)
+                                    </div>
 
                                 <?php else: ?>
 

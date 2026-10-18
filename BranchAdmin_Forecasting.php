@@ -8,6 +8,7 @@ session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/forecast_generation_helper.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/inventory_unit_helpers.php';
 
 // Check if user is logged in and is Branch Admin (role_id = 2)
 if (
@@ -1423,6 +1424,11 @@ while ($row = $items_result->fetch_assoc()) {
                                         $displayUnit,
                                         (float)$reorderDisplay
                                     );
+                                    // Shown in vials/ampules (the clinic's counting unit); stored values stay in base units.
+                                    $forecastDays = max(1, (int)($forecast['forecast_days'] ?? 0));
+                                    $countUnitHint = inventoryHasDisplayUnit($forecast)
+                                        ? '1 ' . inventoryUnitWord($displayUnit, 1) . ' = ' . forecastFormatQuantity($conversion) . ' ' . inventoryUnitWord($baseUnit, 2)
+                                        : '';
                                 ?>
                                 <tr
                                     class="forecast-row"
@@ -1432,44 +1438,25 @@ while ($row = $items_result->fetch_assoc()) {
                                 >
                                     <td><strong><?php echo htmlspecialchars($forecast['item_name']); ?></strong></td>
                                     <td>
-                                        <strong><?php echo htmlspecialchars($baseUnit); ?></strong>
-                                        <?php if ($isConverted): ?>
+                                        <strong><?php echo htmlspecialchars(inventoryUnitWord($displayUnit, 2)); ?></strong>
+                                        <?php if ($countUnitHint !== ''): ?>
                                             <div class="text-muted" style="font-size:11px;">
-                                                1 <?php echo htmlspecialchars($displayUnit); ?>
-                                                = <?php echo forecastFormatQuantity($conversion); ?>
-                                                <?php echo htmlspecialchars($baseUnit); ?>
+                                                <?php echo htmlspecialchars($countUnitHint); ?>
                                             </div>
                                         <?php endif; ?>
                                     </td>
 
                                     <td>
-                                        <strong>
-                                            <?php echo forecastFormatQuantity($currentStock); ?>
-                                            <?php echo htmlspecialchars($baseUnit); ?>
-                                        </strong>
-                                        <?php if ($isConverted): ?>
+                                        <strong><?php echo htmlspecialchars(inventoryForecastQuantityText($currentStock, $forecast)); ?></strong>
+                                        <?php if (inventoryHasDisplayUnit($forecast)): ?>
                                             <div class="text-muted" style="font-size:11px;">
-                                                ≈ <?php echo forecastFormatQuantity($currentDisplay); ?>
-                                                <?php echo htmlspecialchars(
-                                                    forecastDisplayUnitLabel($displayUnit, $currentDisplay)
-                                                ); ?>
+                                                <?php echo htmlspecialchars(inventoryQuantityText($currentStock, $forecast)); ?>
                                             </div>
                                         <?php endif; ?>
                                     </td>
 
                                     <td>
-                                        <strong>
-                                            <?php echo forecastFormatQuantity($minimumStock); ?>
-                                            <?php echo htmlspecialchars($baseUnit); ?>
-                                        </strong>
-                                        <?php if ($isConverted): ?>
-                                            <div class="text-muted" style="font-size:11px;">
-                                                = <?php echo forecastFormatQuantity($minimumDisplay); ?>
-                                                <?php echo htmlspecialchars(
-                                                    forecastDisplayUnitLabel($displayUnit, $minimumDisplay)
-                                                ); ?>
-                                            </div>
-                                        <?php endif; ?>
+                                        <strong><?php echo htmlspecialchars(inventoryForecastQuantityText($minimumStock, $forecast)); ?></strong>
                                     </td>
                                     <td>
                                         <?php
@@ -1483,17 +1470,12 @@ while ($row = $items_result->fetch_assoc()) {
                                     </td>
                                     <td>
                                         <strong>
-                                            <?php echo forecastFormatQuantity($forecastUse); ?>
-                                            <?php echo htmlspecialchars($baseUnit); ?>
+                                            <?php echo htmlspecialchars(inventoryForecastQuantityText($forecastUse, $forecast)); ?>
+                                            over <?php echo $forecastDays; ?> days
                                         </strong>
-                                        <?php if ($isConverted): ?>
-                                            <div class="text-muted" style="font-size:11px;">
-                                                ≈ <?php echo forecastFormatQuantity($forecastUse / $conversion); ?>
-                                                <?php echo htmlspecialchars(
-                                                    forecastDisplayUnitLabel($displayUnit, $forecastUse / $conversion)
-                                                ); ?>
-                                            </div>
-                                        <?php endif; ?>
+                                        <div class="text-muted" style="font-size:11px;">
+                                            <?php echo htmlspecialchars(inventoryForecastQuantityText($forecastUse / $forecastDays, $forecast)); ?>/day
+                                        </div>
                                         <?php echo forecastMethodBadgeHtml($forecast['forecast_method'] ?? null); ?>
                                     </td>
                                     <td>
@@ -1518,19 +1500,12 @@ while ($row = $items_result->fetch_assoc()) {
                                     <td>
                                         <?php if ($reorderBase > 0): ?>
                                             <span class="badge bg-warning text-dark">
-                                                Reorder
-                                                <?php echo number_format($reorderDisplay); ?>
-                                                <?php echo htmlspecialchars(
-                                                    $isConverted ? $reorderDisplayUnit : $displayUnit
-                                                ); ?>
+                                                Reorder <?php echo htmlspecialchars(inventoryReorderText($reorderBase, $forecast)); ?>
                                             </span>
-
-                                            <?php if ($isConverted): ?>
-                                                <div class="text-muted mt-1" style="font-size:11px;">
-                                                    <?php echo forecastFormatQuantity($reorderBase); ?>
-                                                    <?php echo htmlspecialchars($baseUnit); ?> required
-                                                </div>
-                                            <?php endif; ?>
+                                            <div class="text-muted mt-1" style="font-size:11px;">
+                                                Rounded up to whole <?php echo htmlspecialchars(inventoryUnitWord($displayUnit, 2)); ?>
+                                                (<?php echo htmlspecialchars(inventoryForecastQuantityText($reorderBase, $forecast)); ?> needed)
+                                            </div>
                                         <?php else: ?>
                                             <span class="text-success fw-semibold">
                                                 <i class="bi bi-check-circle-fill me-1"></i>No reorder
@@ -1597,12 +1572,10 @@ while ($row = $items_result->fetch_assoc()) {
                         ?>
                         <?php echo htmlspecialchars($item['item_name']); ?>
                         <span class="text-muted ms-1" style="font-weight:400;">
-                            (<?php echo htmlspecialchars($itemBaseUnit); ?>
-                            <?php if ($itemUnitMeta['is_converted']): ?>
-                                → <?php echo htmlspecialchars($itemDisplayUnit); ?>,
-                                1 <?php echo htmlspecialchars($itemDisplayUnit); ?>
+                            (<?php echo htmlspecialchars(inventoryUnitWord($itemDisplayUnit, 2)); ?><?php if (inventoryHasDisplayUnit($item)): ?>,
+                                1 <?php echo htmlspecialchars(inventoryUnitWord($itemDisplayUnit, 1)); ?>
                                 = <?php echo forecastFormatQuantity($itemConversion); ?>
-                                <?php echo htmlspecialchars($itemBaseUnit); ?>
+                                <?php echo htmlspecialchars(inventoryUnitWord($itemBaseUnit, 2)); ?>
                             <?php endif; ?>)
                         </span>
                     </span>

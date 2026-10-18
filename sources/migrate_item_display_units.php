@@ -15,8 +15,12 @@ require_once __DIR__ . '/inventory_stock_helpers.php';
  *   Hepa B, Hepa BIG, Flu, PPD            base mL,   display vial,   1 vial = 5 mL
  *   ATS (all)                             base mL,   display ampule, 1 ampule = 1 mL
  * Only inventory_items.base_unit_label, display_unit_label and
- * conversion_to_base change. No stored quantity is rescaled, and history rows
- * keep their own unit snapshots. The preview lists every item with its
+ * conversion_to_base change. No stored quantity is rescaled. The training
+ * history of these items is already in sites/mL (the dataset was generated in
+ * base units), so a training_dataset.base_unit_label_snapshot that still says
+ * the old label (e.g. "Vial") is relabelled to the base unit; otherwise the
+ * repeated-tests evaluation would stop on a unit mismatch. Unexpected labels
+ * are reported and left unchanged. The preview lists every item with its
  * current settings and shows the current stock in the new format so a wrong
  * stock unit can be spotted before --apply.
  */
@@ -66,10 +70,36 @@ try {
                 trim((string)$item['item_name']), $problems ? 'FIX ' . implode(', ', $problems) : 'OK',
                 inventoryFormatNumber((float)$item['stock']), $rule['base'], $stockText,
                 inventoryFormatNumber((float)$item['minimum_stock']), $minText);
+            $id = (int)$item['item_id'];
             if ($problems) {
-                $id = (int)$item['item_id'];
-                $plan[] = ['Set ' . trim((string)$item['item_name']) . ": {$rule['base']} / {$rule['display']} / {$rule['conversion']}", $id, $rule];
+                $plan[] = ['item', 'Set ' . trim((string)$item['item_name']) . ": {$rule['base']} / {$rule['display']} / {$rule['conversion']}", $id, $rule, []];
             }
+            // Training snapshots that still carry the old label (same numbers, already base units).
+            $relabel = array_values(array_unique(array_filter(
+                [$currentBase, $currentDisplay, trim((string)$item['unit_name']), 'Vial', 'Vials', 'Ampule', 'Ampules'],
+                static fn(string $label): bool => $label !== '' && strcasecmp($label, $rule['base']) !== 0
+            )));
+            $snap = $conn->prepare('SELECT base_unit_label_snapshot AS label, COUNT(*) AS n FROM training_dataset
+                WHERE item_id = ? AND COALESCE(base_unit_label_snapshot, \'\') <> \'\' GROUP BY base_unit_label_snapshot');
+            $snap->bind_param('i', $id);
+            $snap->execute();
+            $toRelabel = [];
+            foreach ($snap->get_result()->fetch_all(MYSQLI_ASSOC) as $label) {
+                if (strcasecmp((string)$label['label'], $rule['base']) === 0) continue;
+                $matchesOld = false;
+                foreach ($relabel as $old) {
+                    if (strcasecmp((string)$label['label'], $old) === 0) $matchesOld = true;
+                }
+                if ($matchesOld) {
+                    $toRelabel[] = (string)$label['label'];
+                    $plan[] = ['snapshot', 'Relabel ' . (int)$label['n'] . ' training row(s) of ' . trim((string)$item['item_name'])
+                        . " from '{$label['label']}' to '{$rule['base']}' (numbers unchanged)", $id, $rule, [(string)$label['label']]];
+                } else {
+                    $report[] = '  Note: ' . trim((string)$item['item_name']) . ' has ' . (int)$label['n']
+                        . " training row(s) labelled '{$label['label']}'. Left unchanged; review them before running the repeated tests.";
+                }
+            }
+            $snap->close();
             break;
         }
     }
@@ -83,19 +113,28 @@ try {
     }
     if (!$plan) echo "No migration changes are needed.\n";
     $update = $conn->prepare('UPDATE inventory_items SET base_unit_label = ?, display_unit_label = ?, conversion_to_base = ? WHERE item_id = ?');
-    foreach ($plan as [$label, $id, $rule]) {
+    $relabelSnapshot = $conn->prepare('UPDATE training_dataset SET base_unit_label_snapshot = ? WHERE item_id = ? AND base_unit_label_snapshot = ?');
+    if ($apply) $conn->begin_transaction();
+    foreach ($plan as [$kind, $label, $id, $rule, $old]) {
         echo '- ' . $label . "\n";
-        if ($apply) {
+        if (!$apply) continue;
+        if ($kind === 'item') {
             $update->bind_param('sssi', $rule['base'], $rule['display'], $rule['conversion'], $id);
             if (!$update->execute()) throw new RuntimeException('Unable to apply ' . $label);
-            $completed++;
+        } else {
+            $relabelSnapshot->bind_param('sis', $rule['base'], $id, $old[0]);
+            if (!$relabelSnapshot->execute()) throw new RuntimeException('Unable to apply ' . $label);
         }
+        $completed++;
     }
+    if ($apply) $conn->commit();
     $update->close();
-    if ($apply) echo "Item unit settings are ready. Stock, usage, closings and training data were not changed.\n";
+    $relabelSnapshot->close();
+    if ($apply) echo "Item unit settings are ready. Stock, usage, closings and training quantities were not changed.\n";
     else echo "No data or structure was changed. Check that each stock above reads correctly, then add --apply.\n";
 } catch (Throwable $e) {
+    try { $conn->rollback(); } catch (Throwable $ignored) {}
     fwrite(STDERR, 'Item display unit migration stopped: ' . $e->getMessage() . "\n"
-        . ($completed ? "Some items were updated; correct the problem and rerun (it is safe to rerun).\n" : "No migration changes were applied.\n"));
+        . "No migration changes were applied (all changes run in one transaction).\n");
     exit(1);
 }
