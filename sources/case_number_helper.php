@@ -5,7 +5,9 @@ declare(strict_types=1);
  * Case numbers use the clinic format YY-NNNN per branch (26-0001, 26-0002...).
  * Numbering continues from the branch's highest number of that year and
  * restarts at 0001 every new year (27-0001). Archived cases still count, so a
- * number is never reused.
+ * number is never reused. Only valid YY-NNNN numbers count (caseNumberIsValid).
+ * To list numbers that are malformed or far ahead of the sequence:
+ *   php sources/check_case_numbers.php --branch=SBI-002 [--year=26]
  */
 
 /** "26-" for any date in 2026. $date is Y-m-d. */
@@ -18,12 +20,27 @@ function caseNumberPrefix(string $date): string
     return $parsed->format('y') . '-';
 }
 
-/** Next free case number of the branch for the year of $date (Y-m-d). */
+/**
+ * True when $caseNumber is a valid clinic number for the year of $prefix
+ * ("26-"): exactly two year digits, a dash and four digits (26-0057).
+ * Anything else (26-01355, 26-57, 2026-0057, 26-0057A) is ignored by the
+ * generator, so a malformed or test number cannot make numbering jump.
+ */
+function caseNumberIsValid(string $caseNumber, string $prefix): bool
+{
+    return preg_match('/\A' . preg_quote($prefix, '/') . '[0-9]{4}\z/', trim($caseNumber)) === 1;
+}
+
+/**
+ * Next free case number of the branch for the year of $date (Y-m-d).
+ * Continues from the highest VALID number of that year (see
+ * caseNumberIsValid); archived cases count, so a number is never reused.
+ */
 function caseNumberNext(mysqli $conn, string $branchId, string $date): string
 {
     $prefix = caseNumberPrefix($date);
     $pattern = $prefix . '%';
-    $stmt = $conn->prepare('SELECT case_number FROM animal_bite_cases WHERE branch_id = ? AND case_number LIKE ?');
+    $stmt = $conn->prepare('SELECT case_number FROM animal_bite_cases WHERE branch_id = ? AND TRIM(case_number) LIKE ?');
     if (!$stmt) {
         throw new RuntimeException('Unable to prepare the case number lookup.');
     }
@@ -31,11 +48,15 @@ function caseNumberNext(mysqli $conn, string $branchId, string $date): string
     $stmt->execute();
     $highest = 0;
     foreach ($stmt->get_result()->fetch_all(MYSQLI_ASSOC) as $row) {
-        if (preg_match('/\A' . preg_quote($prefix, '/') . '([0-9]{1,6})\z/', trim((string)$row['case_number']), $match)) {
-            $highest = max($highest, (int)$match[1]);
+        $number = trim((string)$row['case_number']);
+        if (caseNumberIsValid($number, $prefix)) {
+            $highest = max($highest, (int)substr($number, strlen($prefix)));
         }
     }
     $stmt->close();
+    if ($highest >= 9999) {
+        throw new RuntimeException('Case numbers for ' . $prefix . ' have reached 9999. Enter the case number by hand.');
+    }
     return $prefix . str_pad((string)($highest + 1), 4, '0', STR_PAD_LEFT);
 }
 
