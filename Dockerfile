@@ -33,6 +33,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && a2enmod rewrite headers \
     && rm -rf /var/lib/apt/lists/*
 
+# The whole-day Daily Inventory sheet posts about 10 fields per item; PHP's
+# default max_input_vars (1000) would silently cut off a long sheet.
+RUN printf 'max_input_vars = 10000\n' > /usr/local/etc/php/conf.d/smartbitecare.ini
+
 
 # ============================================================
 # PYTHON / FORECASTING

@@ -6,6 +6,27 @@ require_once 'sources/notification_helper.php';
 // ============================================
 // AUDIT LOG FUNCTION
 // ============================================
+/**
+ * Branch performance counts, one row per branch. Each count is its own
+ * subquery: joining cases, vaccinations, users and audit logs side by side
+ * multiplied the rows (cases x vaccinations x users x logs) and MySQL ran out
+ * of temporary-table space. Same numbers as before (archived rows included).
+ * Callers append " AND ..." filters on b and the ORDER BY.
+ */
+function superAdminBranchPerformanceSql(): string
+{
+    return "SELECT b.branch_id, b.branch_name, b.branch_address, b.contact_number,
+              (SELECT COUNT(*) FROM animal_bite_cases abc WHERE abc.branch_id = b.branch_id) AS total_cases,
+              (SELECT COUNT(DISTINCT p.patient_id) FROM animal_bite_cases abc
+                 INNER JOIN patients p ON p.patient_id = abc.patient_id
+                 WHERE abc.branch_id = b.branch_id) AS total_patients,
+              (SELECT COUNT(*) FROM vaccination_records vr WHERE vr.branch_id = b.branch_id) AS total_vaccinations,
+              (SELECT COUNT(*) FROM users u WHERE u.branch_id = b.branch_id) AS total_staff,
+              (SELECT COUNT(*) FROM audit_logs al WHERE al.branch_id = b.branch_id) AS total_activities
+              FROM branches b
+              WHERE 1=1";
+}
+
 function addAuditLog($conn, $user_id, $action, $module = 'Reports') {
     $branch_id = null;
     $user_sql = "SELECT branch_id FROM users WHERE user_id = ?";
@@ -382,19 +403,7 @@ function exportBranchPerformanceCSV($branchId = null, $startDate = null, $endDat
     $params = [];
     $types = "";
     
-    $query = "SELECT b.branch_id, b.branch_name, b.branch_address, b.contact_number,
-              COUNT(DISTINCT abc.case_id) as total_cases,
-              COUNT(DISTINCT p.patient_id) as total_patients,
-              COUNT(DISTINCT vr.vaccination_id) as total_vaccinations,
-              COUNT(DISTINCT u.user_id) as total_staff,
-              COUNT(DISTINCT al.log_id) as total_activities
-              FROM branches b 
-              LEFT JOIN animal_bite_cases abc ON b.branch_id = abc.branch_id 
-              LEFT JOIN patients p ON abc.patient_id = p.patient_id 
-              LEFT JOIN vaccination_records vr ON b.branch_id = vr.branch_id 
-              LEFT JOIN users u ON b.branch_id = u.branch_id 
-              LEFT JOIN audit_logs al ON b.branch_id = al.branch_id 
-              WHERE 1=1";
+    $query = superAdminBranchPerformanceSql();
     
     if (!empty($branchId)) {
         $query .= " AND b.branch_id = ?";
@@ -409,8 +418,7 @@ function exportBranchPerformanceCSV($branchId = null, $startDate = null, $endDat
         $types .= "ss";
     }
     
-    $query .= " GROUP BY b.branch_id, b.branch_name, b.branch_address, b.contact_number 
-                ORDER BY total_cases DESC";
+    $query .= " ORDER BY total_cases DESC";
     
     $stmt = $conn->prepare($query);
     if (!empty($params)) {
@@ -635,19 +643,7 @@ function generateBranchPerformanceReport($branchId = null, $startDate = null, $e
     $params = [];
     $types = "";
     
-    $query = "SELECT b.branch_id, b.branch_name, b.branch_address, b.contact_number,
-              COUNT(DISTINCT abc.case_id) as total_cases,
-              COUNT(DISTINCT p.patient_id) as total_patients,
-              COUNT(DISTINCT vr.vaccination_id) as total_vaccinations,
-              COUNT(DISTINCT u.user_id) as total_staff,
-              COUNT(DISTINCT al.log_id) as total_activities
-              FROM branches b 
-              LEFT JOIN animal_bite_cases abc ON b.branch_id = abc.branch_id 
-              LEFT JOIN patients p ON abc.patient_id = p.patient_id 
-              LEFT JOIN vaccination_records vr ON b.branch_id = vr.branch_id 
-              LEFT JOIN users u ON b.branch_id = u.branch_id 
-              LEFT JOIN audit_logs al ON b.branch_id = al.branch_id 
-              WHERE 1=1";
+    $query = superAdminBranchPerformanceSql();
     
     if (!empty($branchId)) {
         $query .= " AND b.branch_id = ?";
@@ -662,8 +658,7 @@ function generateBranchPerformanceReport($branchId = null, $startDate = null, $e
         $types .= "ss";
     }
     
-    $query .= " GROUP BY b.branch_id, b.branch_name, b.branch_address, b.contact_number 
-                ORDER BY total_cases DESC";
+    $query .= " ORDER BY total_cases DESC";
     
     $stmt = $conn->prepare($query);
     if (!empty($params)) {
