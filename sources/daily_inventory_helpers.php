@@ -149,13 +149,59 @@ function dailyInventoryBreakdownText(array $breakdown, array $item): string
 }
 
 /**
+ * System stock of one item at the START of $date (base unit, scaled
+ * ten-thousandths): the current usable stock with every movement dated $date
+ * or later undone:
+ *   current usable stock + consumed since $date - deliveries since $date
+ *   + pull-outs since $date - stock adjustments since $date.
+ * For today this is current stock + today's consumed - today's delivery +
+ * today's pull-out. Consumed is inventory_usage_history (by usage_date);
+ * Delivery and Pull-out follow the same rules as the day sheet
+ * (dailyInventoryDeliverySql / dailyInventoryPullOutSql); adjustments are
+ * stored signed. Returns ['opening' => int, 'parts' => [...]].
+ */
+function dailyInventorySystemOpening(mysqli $conn, string $branchId, int $itemId, string $date, string $currentStock): array
+{
+    $stmt = $conn->prepare(
+        'SELECT COALESCE(SUM(quantity_used), 0) AS consumed
+         FROM inventory_usage_history WHERE branch_id = ? AND item_id = ? AND usage_date >= ?'
+    );
+    $stmt->bind_param('sis', $branchId, $itemId, $date);
+    $stmt->execute();
+    $consumed = stockQuantityParse((string)$stmt->get_result()->fetch_assoc()['consumed'], true);
+    $stmt->close();
+    $stmt = $conn->prepare(
+        "SELECT COALESCE(SUM(CASE WHEN " . dailyInventoryDeliverySql() . " THEN ABS(quantity) ELSE 0 END), 0) AS delivery,
+                COALESCE(SUM(CASE WHEN " . dailyInventoryPullOutSql() . " THEN ABS(quantity) ELSE 0 END), 0) AS pull_out,
+                COALESCE(SUM(CASE WHEN transaction_type = 'ADJUSTMENT' THEN quantity ELSE 0 END), 0) AS adjustment
+         FROM stock_transactions
+         WHERE branch_id = ? AND item_id = ? AND transaction_date >= ?"
+    );
+    $stmt->bind_param('sis', $branchId, $itemId, $date);
+    $stmt->execute();
+    $moves = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    $scaled = static fn($value): int => (int)round((float)$value * STOCK_QUANTITY_SCALE);
+    $parts = [
+        'current' => $scaled($currentStock),
+        'consumed' => $consumed,
+        'delivery' => $scaled($moves['delivery']),
+        'pull_out' => $scaled($moves['pull_out']),
+        'adjustment' => $scaled($moves['adjustment']),
+    ];
+    $opening = $parts['current'] + $parts['consumed'] - $parts['delivery'] + $parts['pull_out'] - $parts['adjustment'];
+    return ['opening' => $opening, 'parts' => $parts];
+}
+
+/**
  * Current stock is a reference, never an opening balance. A saved closing is
  * loaded for correction. Otherwise the clinic rule fills Beginning (Inv.
  * Beginning) from the previous day: its Actual count, or, when that day has no
  * current actual count (closing reopened because usage changed), its computed
  * Inv. End = Beginning + Delivery - Consumed - Pull-out. The value stays
  * editable and opening_source/opening_message say where it came from. With no
- * closing for the previous day, the opening stays blank.
+ * closing for the previous day, Beginning is filled from the system stock at
+ * the start of the day (dailyInventorySystemOpening, "from system stock").
  * A caller saving a closing holds the existing branch revision lock first.
  */
 function dailyInventoryContext(
@@ -257,8 +303,23 @@ function dailyInventoryContext(
             $message = 'The computed Inv. End of ' . $previousDate . ' is negative. Enter the verified opening count for ' . $date . '.';
         }
     } else {
-        $message = 'No current submitted closing is available for the previous day. Enter the verified opening count for ' . $date
-            . '. Current remaining stock is not the opening balance.';
+        // No closing for the previous day: start from the system stock at the
+        // start of this day (current stock with every later movement undone).
+        $system = dailyInventorySystemOpening($conn, $branchId, $itemId, $date, (string)$item['current_stock']);
+        if ($system['opening'] >= 0) {
+            $source = 'system_stock';
+            $beginning = stockQuantityDecimal($system['opening']);
+            $p = $system['parts'];
+            $text = static fn(int $value): string => inventoryQuantityText((float)stockQuantityDecimal($value), $item);
+            $message = 'Beginning filled from system stock (no closing was saved for ' . $previousDate . '): current stock '
+                . $text($p['current']) . ' + consumed since ' . $date . ' ' . $text($p['consumed'])
+                . ' - delivery since then ' . $text($p['delivery']) . ' + pull-out since then ' . $text($p['pull_out'])
+                . ($p['adjustment'] !== 0 ? ' - net stock adjustments since then (' . ($p['adjustment'] > 0 ? '+' : '-') . $text(abs($p['adjustment'])) . ')' : '')
+                . '. You can edit it; confirm it against the physical opening count.';
+        } else {
+            $message = 'No closing was saved for ' . $previousDate . ' and the system stock for the start of ' . $date
+                . ' works out negative. Enter the verified opening count.';
+        }
     }
     // A snapshot fingerprint detects usage changes and overlapping corrections.
     // Authorization and quantity validation remain entirely server-side.
@@ -641,15 +702,25 @@ function dailyInventorySaveClosing(
  *    vaccination_id or a "Usage ID:" and are already in Consumed, so they are
  *    excluded here and never counted twice.
  */
+/** stock_transactions conditions for Delivery and Pull-out (shared by the day pre-fill and the system-stock opening). */
+function dailyInventoryDeliverySql(): string
+{
+    return "transaction_type IN ('IN','TRANSFER_IN','RETURN')";
+}
+
+function dailyInventoryPullOutSql(): string
+{
+    return "(transaction_type IN ('TRANSFER_OUT','EXPIRED')
+             OR (transaction_type = 'OUT' AND vaccination_id IS NULL
+                 AND COALESCE(remarks, '') NOT LIKE '%Usage ID: %'))";
+}
+
 function dailyInventoryDayMovements(mysqli $conn, string $branchId, string $date): array
 {
     $stmt = $conn->prepare(
         "SELECT item_id,
-                SUM(CASE WHEN transaction_type IN ('IN','TRANSFER_IN','RETURN') THEN quantity ELSE 0 END) AS delivery,
-                SUM(CASE WHEN transaction_type IN ('TRANSFER_OUT','EXPIRED')
-                          OR (transaction_type = 'OUT' AND vaccination_id IS NULL
-                              AND COALESCE(remarks, '') NOT LIKE '%Usage ID: %')
-                         THEN quantity ELSE 0 END) AS pull_out
+                SUM(CASE WHEN " . dailyInventoryDeliverySql() . " THEN quantity ELSE 0 END) AS delivery,
+                SUM(CASE WHEN " . dailyInventoryPullOutSql() . " THEN quantity ELSE 0 END) AS pull_out
          FROM stock_transactions
          WHERE branch_id = ? AND transaction_date >= ? AND transaction_date < DATE_ADD(?, INTERVAL 1 DAY)
          GROUP BY item_id"

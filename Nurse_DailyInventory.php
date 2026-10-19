@@ -649,6 +649,7 @@ $dayOpeningLabels = [
     'saved_closing' => 'Saved closing',
     'previous_day' => "Yesterday's Actual",
     'previous_computed' => "Yesterday's Inv. End",
+    'system_stock' => 'From system stock',
     'manual' => 'Enter the opening count',
 ];
 // Restored entries win over the loaded values (the context token is always fresh).
@@ -1865,7 +1866,7 @@ $flash = workflowTakeFlash();
                                 </td>
                                 <td>
                                     <?= $dayQtyInput($name, 'beginning_stock', $dayValue($row, 'beginning_stock'), $item) ?>
-                                    <span class="day-note <?= in_array($source, ['previous_day', 'previous_computed'], true) ? 'filled' : '' ?>"
+                                    <span class="day-note <?= in_array($source, ['previous_day', 'previous_computed', 'system_stock'], true) ? 'filled' : '' ?>"
                                           title="<?= workflowH((string)$context['opening_message']) ?>">
                                         <?= workflowH($dayOpeningLabels[$source] ?? $source) ?>
                                     </span>
