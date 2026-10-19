@@ -46,7 +46,9 @@ try {
         FROM inventory_items i
         JOIN units u ON u.unit_id = i.unit_id
         LEFT JOIN ($stockSql) s ON s.item_id = i.item_id
-        GROUP BY i.item_id ORDER BY i.item_id")->fetch_all(MYSQLI_ASSOC);
+        GROUP BY i.item_id, i.item_name, i.base_unit_label, i.display_unit_label, i.conversion_to_base,
+            i.minimum_stock, u.unit_name
+        ORDER BY i.item_id")->fetch_all(MYSQLI_ASSOC);
 
     $plan = [];
     $report = [];

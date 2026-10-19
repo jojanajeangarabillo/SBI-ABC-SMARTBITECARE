@@ -146,6 +146,7 @@ $allFollowUpsQuery = "
                     GROUP BY case_id
                 ) r ON c.case_id = r.case_id
     WHERE c.branch_id = ?
+      AND c.is_archived = 0 AND COALESCE(p.is_archived, 0) = 0 /* archived patients/cases never appear */
     AND v.scheduled_date IS NOT NULL
 ";
 
@@ -241,6 +242,7 @@ $statsQuery = "
                     AND c.branch_id = v.branch_id
     INNER JOIN patients p ON p.patient_id = c.patient_id
     WHERE c.branch_id = ?
+      AND c.is_archived = 0 AND COALESCE(p.is_archived, 0) = 0 /* archived patients/cases never appear */
     AND v.scheduled_date IS NOT NULL
 ";
 $stmt = $conn->prepare($statsQuery);
@@ -279,6 +281,7 @@ $calQuery = "
                     AND c.branch_id = v.branch_id
     INNER JOIN patients p ON p.patient_id = c.patient_id
     WHERE c.branch_id = ?
+      AND c.is_archived = 0 AND COALESCE(p.is_archived, 0) = 0 /* archived patients/cases never appear */
     AND v.scheduled_date IS NOT NULL
     AND YEAR(v.scheduled_date) = ?
     AND MONTH(v.scheduled_date) = ?
@@ -320,6 +323,7 @@ $upcomingQuery = "
                     AND c.branch_id = v.branch_id
     INNER JOIN patients p ON p.patient_id = c.patient_id
     WHERE c.branch_id = ?
+      AND c.is_archived = 0 AND COALESCE(p.is_archived, 0) = 0 /* archived patients/cases never appear */
     AND v.scheduled_date IS NOT NULL
     AND v.vaccination_status = 'Scheduled'
     AND v.scheduled_date >= CURDATE()
@@ -385,6 +389,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
                     GROUP BY case_id
                 ) r ON c.case_id = r.case_id
         WHERE c.branch_id = ?
+          AND c.is_archived = 0 AND COALESCE(p.is_archived, 0) = 0 /* archived patients/cases never appear */
         AND v.scheduled_date IS NOT NULL
     ";
     
@@ -483,6 +488,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     AND c.branch_id = v.branch_id
                 INNER JOIN patients p ON p.patient_id = c.patient_id
                 WHERE c.branch_id = ?
+                  AND c.is_archived = 0 AND COALESCE(p.is_archived, 0) = 0 /* archived patients/cases never appear */
                 AND v.scheduled_date IS NOT NULL
             ";
             $stmt = $conn->prepare($statsQuery);
@@ -527,6 +533,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     AND c.branch_id = v.branch_id
                 INNER JOIN patients p ON p.patient_id = c.patient_id
                 WHERE c.branch_id = ?
+                  AND c.is_archived = 0 AND COALESCE(p.is_archived, 0) = 0 /* archived patients/cases never appear */
                 AND v.scheduled_date IS NOT NULL
                 AND YEAR(v.scheduled_date) = ?
                 AND MONTH(v.scheduled_date) = ?
@@ -622,6 +629,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     GROUP BY case_id
                 ) r ON c.case_id = r.case_id
                 WHERE c.branch_id = ?
+                  AND c.is_archived = 0 AND COALESCE(p.is_archived, 0) = 0 /* archived patients/cases never appear */
                 AND v.scheduled_date IS NOT NULL
             ";
             
@@ -729,6 +737,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     GROUP BY case_id
                 ) r ON c.case_id = r.case_id
                 WHERE c.branch_id = ?
+                  AND c.is_archived = 0 AND COALESCE(p.is_archived, 0) = 0 /* archived patients/cases never appear */
                   AND v.scheduled_date IS NOT NULL
                   AND DATE(v.scheduled_date) = ?
                 ORDER BY p.full_name ASC, v.dose_number ASC
