@@ -460,20 +460,41 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'daily_usage') {
 }
 
 // Save the whole day's closing at once ("Save Closing").
+// The result (saved count, or every problem by item) is shown inside the sheet
+// after the reload, and the page scrolls back to it (#dayClosing).
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_day') {
     $dayDate = is_string($_POST['day_date'] ?? null) ? trim($_POST['day_date']) : '';
     $postedRows = is_array($_POST['rows'] ?? null) ? $_POST['rows'] : [];
+    $dayLabel = dailyInventoryValidDate($dayDate) ? date('M d, Y', strtotime($dayDate)) : 'this date';
     try {
         workflowVerifyCsrf();
+        // PHP drops fields past max_input_vars without an error; never save a cut-off sheet.
+        $postedFields = 0;
+        array_walk_recursive($_POST, static function () use (&$postedFields): void { $postedFields++; });
+        $maxFields = (int)ini_get('max_input_vars');
+        if ($maxFields > 0 && $postedFields >= $maxFields) {
+            throw new RuntimeException('The sheet sent more fields than the server accepts (max_input_vars = '
+                . $maxFields . '), so some rows were cut off. Nothing was saved. Count fewer items per save, '
+                . 'or ask the administrator to raise max_input_vars.');
+        }
         $result = dailyInventorySaveDay($conn, $branchId, $userId, $dayDate, $postedRows);
-        workflowFlash(
-            'success',
-            'Daily closing saved for ' . date('M d, Y', strtotime($dayDate)) . ': ' . count($result['saved']) . ' item(s)'
-                . ($result['unchanged'] > 0 ? ', ' . $result['unchanged'] . ' unchanged' : '') . '. '
-                . 'Consumed came from the Assessment, Vaccination and Medical Supplies usage of the day'
-                . ' (each use counted once, plus any wastage adjustment).'
-                . ($result['synced'] > 0 ? ' The forecasting dataset was updated for ' . $result['synced'] . ' forecastable item(s).' : '')
-        );
+        $savedCount = count($result['saved']);
+        $details = [];
+        if ($result['unchanged'] > 0) {
+            $details[] = $result['unchanged'] . ' unchanged item(s) were already saved.';
+        }
+        $details[] = 'Consumed came from the Assessment, Vaccination and Medical Supplies usage of the day'
+            . ' (each use counted once, plus any wastage adjustment).';
+        if ($result['synced'] > 0) {
+            $details[] = 'The forecasting dataset was updated for ' . $result['synced'] . ' forecastable item(s).';
+        }
+        $_SESSION['daily_inventory_day_result'] = [
+            'date' => $dayDate,
+            'type' => 'success',
+            'title' => 'Closing for ' . $dayLabel . ' saved – ' . $savedCount . ' item' . ($savedCount === 1 ? '' : 's'),
+            'details' => $details,
+            'problems' => [],
+        ];
         if ($result['synced'] > 0) {
             dailyInventoryStartAutoEvaluation($conn, $branchId);
         }
@@ -481,6 +502,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         try {
             $conn->rollback();
         } catch (Throwable $ignored) {
+        }
+        if (!$e instanceof RuntimeException) {
+            error_log('Daily inventory save_day: ' . $e->getMessage());
         }
         $restoreRows = [];
         foreach ($postedRows as $rawId => $row) {
@@ -497,11 +521,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
             }
         }
         $_SESSION['daily_inventory_day_restore'] = ['date' => $dayDate, 'rows' => $restoreRows];
-        workflowFlash('danger', 'The closing was not saved. '
-            . ($e instanceof DailyInventoryDayException ? 'Fix these items: ' : '') . $e->getMessage());
+        $problems = [];
+        if ($e instanceof DailyInventoryDayException) {
+            foreach ($e->errors as $key => $message) {
+                $problems[] = ['item_id' => is_int($key) && $key > 0 ? $key : 0, 'message' => (string)$message];
+            }
+        } else {
+            $problems[] = ['item_id' => 0, 'message' => $e instanceof RuntimeException
+                ? $e->getMessage() : 'Unexpected error while saving. Nothing was saved; try again.'];
+        }
+        $_SESSION['daily_inventory_day_result'] = [
+            'date' => $dayDate,
+            'type' => 'danger',
+            'title' => 'The closing for ' . $dayLabel . ' was not saved. Fix ' . (count($problems) === 1 ? 'this problem' : 'these ' . count($problems) . ' problems') . ':',
+            'details' => [],
+            'problems' => $problems,
+        ];
     }
     $redirectDate = dailyInventoryValidDate($dayDate) && $dayDate <= date('Y-m-d') ? $dayDate : date('Y-m-d');
-    header('Location: Nurse_DailyInventory.php?' . http_build_query(['date' => $redirectDate]));
+    header('Location: Nurse_DailyInventory.php?' . http_build_query(['date' => $redirectDate]) . '#dayClosing');
     exit;
 }
 
@@ -592,11 +630,20 @@ if (!dailyInventoryValidDate($dayDate) || $dayDate > date('Y-m-d')) {
 }
 $dayRestoreData = $_SESSION['daily_inventory_day_restore'] ?? null;
 unset($_SESSION['daily_inventory_day_restore']);
+$dayResultData = $_SESSION['daily_inventory_day_result'] ?? null;
+unset($_SESSION['daily_inventory_day_result']);
+$dayResult = is_array($dayResultData) && ($dayResultData['date'] ?? '') === $dayDate ? $dayResultData : null;
+$dayProblemItems = [];
+foreach ((array)($dayResult['problems'] ?? []) as $problem) {
+    if ((int)($problem['item_id'] ?? 0) > 0) $dayProblemItems[(int)$problem['item_id']] = true;
+}
 $dayRestore = is_array($dayRestoreData) && ($dayRestoreData['date'] ?? '') === $dayDate ? (array)$dayRestoreData['rows'] : [];
 $dayRows = dailyInventoryDayRows($conn, $branchId, $dayDate);
 $dayActiveCount = count(array_filter($dayRows, static fn(array $row): bool => $row['active']));
 $dayOutOfDate = array_values(array_filter($dayRows, static fn(array $row): bool => !empty($row['context']['closing_out_of_date'])));
-$dayShowAll = isset($_GET['all']) || ($dayRestore && array_filter($dayRows, static fn(array $row): bool =>
+$dayShowAll = isset($_GET['all']) || array_filter($dayRows, static fn(array $row): bool =>
+        !$row['active'] && isset($dayProblemItems[(int)$row['item']['item_id']]))
+    || ($dayRestore && array_filter($dayRows, static fn(array $row): bool =>
     !$row['active'] && trim((string)($dayRestore[(string)$row['item']['item_id']]['actual_count'] ?? '')) !== ''));
 $dayOpeningLabels = [
     'saved_closing' => 'Saved closing',
@@ -1443,6 +1490,8 @@ $flash = workflowTakeFlash();
         .day-divider td { background: #f3f5fa; color: #64708b; font-size: 12px; font-weight: 600; }
         .row-saved { background: #f3fbf5; }
         .row-stale { background: #fff8e6; }
+        .day-row.row-problem > td { background: #fdecee; }
+        .day-row.row-problem .item-name { color: #b02a37; }
         .variance-ok { color: #1f7a35; font-weight: 700; }
         .variance-bad { color: #b42318; font-weight: 700; }
         #dayClosing:not(.show-all) .day-extra { display: none; }
@@ -1702,10 +1751,42 @@ $flash = workflowTakeFlash();
                 </div>
             <?php endif; ?>
 
-            <form method="post" id="dayClosingForm">
+            <!-- novalidate: the browser's own number checks blocked the submit without
+                 any message when the invalid field was in a hidden row. The script below
+                 and the server check every value and list the problems instead. -->
+            <form method="post" id="dayClosingForm" novalidate>
                 <input type="hidden" name="csrf_token" value="<?= workflowH($csrf) ?>">
                 <input type="hidden" name="action" value="save_day">
                 <input type="hidden" name="day_date" value="<?= workflowH($dayDate) ?>">
+
+                <?php if ($dayResult): ?>
+                    <div class="alert alert-<?= $dayResult['type'] === 'success' ? 'success' : 'danger' ?> mx-4 mt-3 mb-0" id="dayResult" role="<?= $dayResult['type'] === 'success' ? 'status' : 'alert' ?>" tabindex="-1">
+                        <div class="fw-semibold">
+                            <i class="bi <?= $dayResult['type'] === 'success' ? 'bi-check-circle-fill' : 'bi-exclamation-triangle-fill' ?> me-1"></i>
+                            <?= workflowH((string)$dayResult['title']) ?>
+                        </div>
+                        <?php if ($dayResult['problems']): ?>
+                            <ul class="mb-0 mt-2 ps-3">
+                                <?php foreach ($dayResult['problems'] as $problem): ?>
+                                    <li>
+                                        <?php if ((int)$problem['item_id'] > 0): ?>
+                                            <a href="#" class="alert-link day-problem-link" data-item-id="<?= (int)$problem['item_id'] ?>"><?= workflowH((string)$problem['message']) ?></a>
+                                        <?php else: ?>
+                                            <?= workflowH((string)$problem['message']) ?>
+                                        <?php endif; ?>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                        <?php endif; ?>
+                        <?php foreach ($dayResult['details'] as $detail): ?>
+                            <div class="small mt-1"><?= workflowH((string)$detail) ?></div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+                <div class="alert alert-danger mx-4 mt-3 mb-0 d-none" id="dayProblems" role="alert" tabindex="-1">
+                    <div class="fw-semibold"><i class="bi bi-exclamation-triangle-fill me-1"></i><span class="day-problems-title"></span></div>
+                    <ul class="mb-0 mt-2 ps-3"></ul>
+                </div>
 
                 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 px-4 pt-3">
                     <small class="text-muted">
@@ -1756,8 +1837,9 @@ $flash = workflowTakeFlash();
                                     <td colspan="9">Items without usage, movements or a saved closing on this date</td>
                                 </tr>
                             <?php endif; ?>
-                            <tr class="day-row <?= $row['active'] ? '' : 'day-extra' ?> <?= $row['saved'] ? 'row-saved' : '' ?> <?= $outOfDate ? 'row-stale' : '' ?>"
+                            <tr class="day-row <?= $row['active'] ? '' : 'day-extra' ?> <?= $row['saved'] ? 'row-saved' : '' ?> <?= $outOfDate ? 'row-stale' : '' ?> <?= isset($dayProblemItems[$id]) ? 'row-problem' : '' ?>"
                                 data-item-id="<?= $id ?>"
+                                data-needs-actual="<?= $row['used'] && !$row['saved'] ? '1' : '0' ?>"
                                 data-item-name="<?= workflowH($itemName) ?>"
                                 data-consumed="<?= workflowH((string)$context['consumed']) ?>"
                                 data-unit='<?= workflowH(json_encode($meta)) ?>'
@@ -2858,23 +2940,122 @@ document.getElementById('adjustRemove').addEventListener('click', () => {
     bootstrap.Modal.getOrCreateInstance(adjustModalEl).hide();
 });
 
+// Save Closing: check every row that will be saved, list ALL problems at the top
+// of the sheet (showing hidden rows that have one) and scroll to the list.
+// Rows without an Actual count or adjustment are not sent (the server skips
+// them anyway), which keeps the request well under PHP's max_input_vars.
+const dayFieldLabels = { beginning_stock: 'Beginning', delivery: 'Delivery', pull_out: 'Pull-out', actual_count: 'Actual' };
+let daySaving = false;
+
+function dayGroupEntered(group) {
+    return group ? [...group.querySelectorAll('input.form-control')].some(input => input.value.trim() !== '' || input.validity.badInput) : false;
+}
+function dayShowRow(row) {
+    if (row.classList.contains('day-extra') && !dayClosing.classList.contains('show-all')) {
+        dayClosing.classList.add('show-all');
+        const toggle = document.getElementById('dayShowAll');
+        if (toggle) toggle.checked = true;
+    }
+}
+function dayFocusRow(row, input) {
+    dayShowRow(row);
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    (input || row.querySelector('input.form-control:not([disabled])'))?.focus({ preventScroll: true });
+}
+function dayShowProblems(problems) {
+    const box = document.getElementById('dayProblems');
+    const list = box.querySelector('ul');
+    list.innerHTML = '';
+    box.querySelector('.day-problems-title').textContent = 'Nothing was saved. Fix '
+        + (problems.length === 1 ? 'this problem' : 'these ' + problems.length + ' problems') + ':';
+    problems.forEach(problem => {
+        const li = document.createElement('li');
+        const link = document.createElement('a');
+        link.href = '#';
+        link.className = 'alert-link';
+        link.textContent = problem.text;
+        link.addEventListener('click', event => { event.preventDefault(); dayFocusRow(problem.row, problem.input); });
+        li.appendChild(link);
+        list.appendChild(li);
+        problem.row.classList.add('row-problem');
+        dayShowRow(problem.row);
+    });
+    document.getElementById('dayResult')?.classList.add('d-none');
+    box.classList.remove('d-none');
+    box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    box.focus({ preventScroll: true });
+}
+
 document.getElementById('dayClosingForm')?.addEventListener('submit', event => {
-    let firstProblem = null;
+    if (daySaving) { event.preventDefault(); return; } // already saving: ignore the second click
+    const problems = [];
+    const skipRows = [];
     document.querySelectorAll('.day-row').forEach(row => {
+        row.classList.remove('row-problem');
+        row.querySelectorAll('.is-invalid').forEach(input => input.classList.remove('is-invalid'));
+        const name = row.dataset.itemName || 'Item';
+        const actualGroup = row.querySelector('.qty-group[data-field="actual_count"]');
+        const hasActual = dayGroupEntered(actualGroup);
+        const hasAdjustment = (row.querySelector('.w-qty')?.value || '').trim() !== '';
+        if (!hasActual && !hasAdjustment) {
+            if (row.dataset.needsActual === '1') {
+                actualGroup?.querySelectorAll('input.form-control').forEach(input => input.classList.add('is-invalid'));
+                problems.push({ row, input: actualGroup?.querySelector('.q-main'),
+                    text: name + ': enter the Actual physical count (this item was used today).' });
+            } else {
+                skipRows.push(row);
+            }
+            return;
+        }
+        if (!hasActual) {
+            problems.push({ row, input: actualGroup?.querySelector('.q-main'),
+                text: name + ': enter the Actual count to save the Consumed adjustment.' });
+        }
         row.querySelectorAll('.qty-group').forEach(group => {
-            if (qtyCompose(group) === null && !firstProblem) firstProblem = group;
+            const inputs = [...group.querySelectorAll('input.form-control')];
+            const unreadable = inputs.some(input => input.validity.badInput);
+            if (unreadable || qtyCompose(group) === null) {
+                inputs.forEach(input => input.classList.add('is-invalid'));
+                problems.push({ row, input: inputs[0], text: name + ': ' + (dayFieldLabels[group.dataset.field] || 'Quantity')
+                    + ' must be a number of 0 or more (digits only, up to 4 decimals).' });
+            }
         });
     });
-    if (firstProblem) {
+    if (problems.length) {
         event.preventDefault();
-        dayClosing.classList.add('show-all');
-        firstProblem.querySelector('.q-main').focus();
+        dayShowProblems(problems);
         return;
     }
+    daySaving = true;
+    // Not sent: rows with nothing to save (re-enabled if the page is shown again from history).
+    skipRows.forEach(row => row.querySelectorAll('input[name], select[name], textarea[name]').forEach(input => { input.disabled = true; }));
     const button = document.getElementById('saveDayBtn');
     button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
     button.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Saving...';
 });
+window.addEventListener('pageshow', () => {
+    daySaving = false;
+    document.querySelectorAll('#dayClosingForm [name]:disabled').forEach(input => { input.disabled = false; });
+    const button = document.getElementById('saveDayBtn');
+    if (button && button.disabled) {
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+        button.innerHTML = '<i class="bi bi-save-fill me-1"></i>Save Closing';
+    }
+});
+// After a save, bring the result (success or the problem list) into view.
+(() => {
+    const result = document.getElementById('dayResult');
+    if (!result) return;
+    result.querySelectorAll('.day-problem-link').forEach(link => link.addEventListener('click', event => {
+        event.preventDefault();
+        const row = document.querySelector(`.day-row[data-item-id="${link.dataset.itemId}"]`);
+        if (row) dayFocusRow(row);
+    }));
+    result.scrollIntoView({ block: 'start' });
+    result.focus({ preventScroll: true });
+})();
 </script>
 
 <script>

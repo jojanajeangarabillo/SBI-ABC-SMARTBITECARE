@@ -716,7 +716,7 @@ function dailyInventoryDayRows(mysqli $conn, string $branchId, string $date): ar
     return $rows;
 }
 
-/** Thrown by dailyInventorySaveDay with one message per item that needs attention. */
+/** Thrown by dailyInventorySaveDay with one message per item that needs attention (keyed by item_id). */
 class DailyInventoryDayException extends RuntimeException
 {
     public array $errors;
@@ -823,7 +823,7 @@ function dailyInventorySaveDay(mysqli $conn, string $branchId, int $userId, stri
             $toWrite[$itemId] = $parsed;
         }
         if ($errors) {
-            throw new DailyInventoryDayException(array_values($errors), $stale);
+            throw new DailyInventoryDayException($errors, $stale); // keyed by item_id
         }
         if (!$toWrite) {
             throw new DailyInventoryDayException(['Nothing new to save. Enter or change the Actual count of at least one item.']);
