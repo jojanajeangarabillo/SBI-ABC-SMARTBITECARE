@@ -380,13 +380,13 @@ function generatePatientReport($branchId, $startDate = null, $endDate = null) {
     global $conn;
     
     $params = [];
+    // Counts as subqueries: no GROUP BY (MariaDB ONLY_FULL_GROUP_BY) and no
+    // cases x vaccinations row multiplication.
     $query = "SELECT p.patient_id, p.full_name, p.email, p.contact_number, 
               p.birthday, p.gender, p.address, p.created_at,
-              COUNT(DISTINCT abc.case_id) as total_cases,
-              COUNT(DISTINCT vr.vaccination_id) as total_vaccinations
+              (SELECT COUNT(*) FROM animal_bite_cases abc WHERE abc.patient_id = p.patient_id) as total_cases,
+              (SELECT COUNT(*) FROM vaccination_records vr WHERE vr.patient_id = p.patient_id) as total_vaccinations
               FROM patients p 
-              LEFT JOIN animal_bite_cases abc ON p.patient_id = abc.patient_id 
-              LEFT JOIN vaccination_records vr ON p.patient_id = vr.patient_id 
               WHERE p.branch_id = ?";
     $params[] = $branchId;
     
@@ -396,7 +396,7 @@ function generatePatientReport($branchId, $startDate = null, $endDate = null) {
         $params[] = $endDate;
     }
     
-    $query .= " GROUP BY p.patient_id ORDER BY p.created_at DESC";
+    $query .= " ORDER BY p.created_at DESC";
     
     $stmt = $conn->prepare($query);
     $types = "s";
@@ -460,16 +460,17 @@ function generateCaseReport($branchId, $startDate = null, $endDate = null) {
     global $conn;
     
     $params = [];
-    $query = "SELECT abc.case_id, abc.case_number, MAX(rr.registry_number) AS registry_number,
+    // Counts as subqueries: no GROUP BY (MariaDB ONLY_FULL_GROUP_BY) and no
+    // registry x vaccinations row multiplication.
+    $query = "SELECT abc.case_id, abc.case_number,
+              (SELECT MAX(rr.registry_number) FROM registry_records rr WHERE rr.case_id = abc.case_id) AS registry_number,
               p.full_name as patient_name, abc.animal_type,
               abc.bite_location, abc.bite_category, " . patientCaseStatusSql('abc') . " AS case_status, 
               abc.date_of_bite, abc.created_at,
-              COUNT(DISTINCT rr.registry_id) as has_registry,
-              COUNT(DISTINCT vr.vaccination_id) as has_vaccinations
+              (SELECT COUNT(*) FROM registry_records rr WHERE rr.case_id = abc.case_id) as has_registry,
+              (SELECT COUNT(*) FROM vaccination_records vr WHERE vr.case_id = abc.case_id) as has_vaccinations
               FROM animal_bite_cases abc 
               LEFT JOIN patients p ON abc.patient_id = p.patient_id 
-              LEFT JOIN registry_records rr ON abc.case_id = rr.case_id 
-              LEFT JOIN vaccination_records vr ON abc.case_id = vr.case_id 
               WHERE abc.branch_id = ?";
     $params[] = $branchId;
     
@@ -479,7 +480,7 @@ function generateCaseReport($branchId, $startDate = null, $endDate = null) {
         $params[] = $endDate;
     }
     
-    $query .= " GROUP BY abc.case_id ORDER BY abc.created_at DESC";
+    $query .= " ORDER BY abc.created_at DESC";
     
     $stmt = $conn->prepare($query);
     $types = "s";
