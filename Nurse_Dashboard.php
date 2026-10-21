@@ -291,6 +291,10 @@ $stmt->close();
 
 // 15. FOLLOW-UP DUE: actual outstanding schedules due today or earlier.
 $followups = dashboardDueFollowupPatients($conn, (string)$branch_id);
+// Patients checked in today for their scheduled dose (same rule as the Nurse Calendar).
+$readyVisits = workflowReadyVaccinationVisits($conn, (string)$branch_id);
+$readyByPatient = [];
+foreach ($readyVisits as $readyVisit) $readyByPatient[(int)$readyVisit['patient_id']] = $readyVisit;
 
 // 16. WEEKLY VACCINATION TREND (Today + previous 6 days)
 // One point = one completed dose stage, regardless of how many products were given.
@@ -846,6 +850,12 @@ $todayDisplay = date('l, F j, Y');
         .mini-badge.success {
             color: #18794e;
             background: var(--success-soft);
+        }
+
+        /* Checked in today for the dose: ready for vaccination (same green as the Nurse Calendar). */
+        .mini-badge.ready {
+            color: #fff;
+            background: #198754;
         }
 
         /* Charts */
@@ -1412,7 +1422,10 @@ $todayDisplay = date('l, F j, Y');
                                         </div>
 
                                         <div class="list-side">
-                                            <?php if ((int)$schedule['dose_number'] === 6): ?>
+                                            <?php $scheduleReady = $readyVisits[(int)$schedule['case_id']] ?? null; ?>
+                                            <?php if ($scheduleReady && (int)$scheduleReady['dose']['dose_number'] === (int)$schedule['dose_number']): ?>
+                                                <a class="mini-badge ready text-decoration-none" href="<?php echo htmlspecialchars($scheduleReady['vaccinate_url']); ?>" title="Checked in today for this dose">Checked in – Ready</a>
+                                            <?php elseif ((int)$schedule['dose_number'] === 6): ?>
                                                 <span class="mini-badge success">Final Stage</span>
                                             <?php else: ?>
                                                 <span class="mini-badge success">Scheduled</span>
@@ -1472,7 +1485,12 @@ $todayDisplay = date('l, F j, Y');
                                                     ? 'Due Today'
                                                     : ($followupDays <= WORKFLOW_LATE_DOSE_WINDOW_DAYS ? 'Catch-up (≤' . WORKFLOW_LATE_DOSE_WINDOW_DAYS . 'd)' : 'Over ' . WORKFLOW_LATE_DOSE_WINDOW_DAYS . 'd - nurse decides');
                                             ?>
+                                            <?php $followupReady = $readyByPatient[(int)$followup['patient_id']] ?? null; ?>
+                                            <?php if ($followupReady): ?>
+                                                <a class="mini-badge ready text-decoration-none" href="<?php echo htmlspecialchars($followupReady['vaccinate_url']); ?>" title="Checked in today for <?php echo htmlspecialchars($followupReady['dose']['dose_display']); ?>">Checked in – Ready</a>
+                                            <?php else: ?>
                                             <span class="mini-badge danger" title="<?php echo htmlspecialchars(workflowLateDoseStatus($followupDays)['description']); ?>"><?php echo htmlspecialchars($followupBadge); ?></span>
+                                            <?php endif; ?>
                                         </div>
                                     </div>
                                 <?php endforeach; ?>

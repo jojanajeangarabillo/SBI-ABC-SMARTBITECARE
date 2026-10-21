@@ -1473,6 +1473,9 @@ $queue = $queueStmt
     ->fetch_all(MYSQLI_ASSOC);
 
 $queueStmt->close();
+// Follow-up visits checked in for a scheduled dose go straight to vaccination
+// (shared rule: workflowReadyVaccinationVisits), keyed by case_id.
+$readyVisits = workflowReadyVaccinationVisits($conn, $branchId);
 
 // ============================================================
 // MISSED / OVERDUE FOLLOW-UP — COUNT
@@ -2162,6 +2165,10 @@ $flash = workflowTakeFlash();
             color: var(--primary);
             background: #fff;
         }
+
+        /* Follow-up checked in for its scheduled dose: goes straight to vaccination. */
+        .queue-item.queue-ready { border-left: 4px solid #198754; }
+        .status-pill.status-ready { color: #fff; background: #198754; }
 
         .empty-state {
             display: flex;
@@ -3254,6 +3261,18 @@ $flash = workflowTakeFlash();
                         <div class="list-group list-group-flush queue-list">
 
                             <?php foreach ($queue as $row): ?>
+                                <?php $queueReady = $readyVisits[(int)$row['case_id']] ?? null;
+                                if ($queueReady && (int)$queueReady['visit_id'] === (int)$row['visit_id']): ?>
+                                    <div class="list-group-item queue-item queue-ready">
+                                        <a class="d-block text-decoration-none text-reset" href="<?= workflowH($queueReady['vaccinate_url']) ?>" title="Scheduled follow-up dose: no new assessment needed">
+                                            <span class="queue-name"><?= workflowH((string)$row['full_name']) ?></span>
+                                            <span class="queue-detail"><?= workflowH($row['case_number'] . ' | ' . $row['visit_type'] . ' | ' . $queueReady['dose']['dose_display']) ?></span>
+                                            <span class="status-pill status-ready"><i class="bi bi-check-circle-fill me-1"></i>Checked in – Ready: Vaccinate</span>
+                                        </a>
+                                        <a class="small text-muted" href="Nurse_Assessment.php?tab=queue&visit_id=<?= (int)$row['visit_id'] ?>">Re-assess instead</a>
+                                    </div>
+                                    <?php continue; ?>
+                                <?php endif; ?>
 
                                 <a
                                     class="
