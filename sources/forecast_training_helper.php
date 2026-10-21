@@ -71,7 +71,6 @@ function forecastTrainingInvalidateForecasts(mysqli $conn, string $branchId, str
     $stmt->close();
 }
 
-/** Read the authoritative closing and daily counts; read-only when $lock is false. */
 /**
  * The day's activity counts written to training_dataset by the daily closing
  * sync, and shown read-only on the Nurse Daily Inventory (so the number shown
@@ -106,6 +105,7 @@ function forecastTrainingDayCounts(mysqli $conn, string $branchId, string $date)
     return $result;
 }
 
+/** Read the authoritative closing and daily counts; read-only when $lock is false. */
 function forecastTrainingClosingData(mysqli $conn, string $branchId, int $itemId, string $date, bool $lock = false): array
 {
     forecastTrainingAssertDate($conn, $date);
@@ -160,7 +160,7 @@ function forecastTrainingClosingData(mysqli $conn, string $branchId, int $itemId
         throw new RuntimeException('Usage changed after this closing. Resubmit the daily inventory before synchronizing training data.');
     }
 
-    $data += forecastTrainingDayCounts($conn, $branchId, $date);
+    $data = array_merge($data, forecastTrainingDayCounts($conn, $branchId, $date));
     $data['minimum_stock_level'] = stockQuantityDecimal(stockQuantityParse((string)$closing['minimum_stock'], true));
     $data['low_stock_target'] = stockQuantityParse($data['ending_stock'], true)
         <= stockQuantityParse($data['minimum_stock_level'], true) ? 1 : 0;
