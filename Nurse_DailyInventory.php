@@ -222,9 +222,10 @@ function fetchDailyInventoryClosingsForDate(
                 u.username
          FROM daily_inventory_closings d
          INNER JOIN inventory_items i ON i.item_id=d.item_id
+         INNER JOIN inventory_categories c ON c.category_id=i.category_id
          INNER JOIN users u ON u.user_id=d.submitted_by
          INNER JOIN units u2 ON u2.unit_id=i.unit_id
-         WHERE d.branch_id=? AND d.inventory_date=?
+         WHERE d.branch_id=? AND d.inventory_date=? AND " . dailyInventoryItemSql('i', 'c') . "
          ORDER BY i.item_name"
     );
 
@@ -695,9 +696,10 @@ $itemStmt = $conn->prepare(
             COALESCE(s.usable_stock,0) AS current_stock
      FROM inventory_items i
      INNER JOIN units u ON u.unit_id=i.unit_id
+     INNER JOIN inventory_categories c ON c.category_id=i.category_id
      LEFT JOIN ($stockTotalsSql) s
         ON s.item_id=i.item_id AND s.branch_id=?
-     WHERE i.is_consumable=1
+     WHERE " . dailyInventoryItemSql('i', 'c') . "
      ORDER BY i.item_name"
 );
 
@@ -744,9 +746,10 @@ $historySql =
             u.username
      FROM daily_inventory_closings d
      INNER JOIN inventory_items i ON i.item_id=d.item_id
+     INNER JOIN inventory_categories c ON c.category_id=i.category_id
      INNER JOIN users u ON u.user_id=d.submitted_by
      INNER JOIN units u2 ON u2.unit_id=i.unit_id
-     WHERE d.branch_id=?";
+     WHERE d.branch_id=? AND " . dailyInventoryItemSql('i', 'c');
 
 $historyLabel = 'Today';
 

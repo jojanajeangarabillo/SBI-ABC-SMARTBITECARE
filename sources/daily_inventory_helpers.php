@@ -28,6 +28,19 @@ function dailyInventoryAssertDate(mysqli $conn, string $date): void
     }
 }
 
+/**
+ * Items that belong on the Nurse Daily Inventory: MEDICAL supplies only (the
+ * shared rule, inventoryMedicalSql: category "Medical Supplies") that are
+ * consumable or forecastable, so every forecastable medical item is listed,
+ * even at zero stock. Beds, forms and other non-medical items never appear
+ * here, so no daily closing (and no training_dataset sync) is ever made for
+ * them. $i = inventory_items alias, $c = inventory_categories alias.
+ */
+function dailyInventoryItemSql(string $i = 'i', string $c = 'c'): string
+{
+    return '(' . inventoryMedicalSql($c) . " AND ($i.is_consumable = 1 OR $i.is_forecastable = 1))";
+}
+
 /** True once sources/migrate_usage_wastage.php labelled inventory_usage_history. */
 function dailyInventoryUsageLabelsReady(mysqli $conn): bool
 {
@@ -220,8 +233,9 @@ function dailyInventoryContext(
                 COALESCE(s.usable_stock,0) AS current_stock
          FROM inventory_items i
          JOIN units u ON u.unit_id=i.unit_id
+         JOIN inventory_categories c ON c.category_id=i.category_id
          LEFT JOIN ($stockSql) s ON s.item_id=i.item_id AND s.branch_id=?
-         WHERE i.item_id=? AND i.is_consumable=1 LIMIT 1"
+         WHERE i.item_id=? AND " . dailyInventoryItemSql('i', 'c') . " LIMIT 1"
     );
     $stmt->bind_param('si', $branchId, $itemId);
     $stmt->execute();
@@ -748,7 +762,9 @@ function dailyInventoryDayMovements(mysqli $conn, string $branchId, string $date
  */
 function dailyInventoryDayRows(mysqli $conn, string $branchId, string $date): array
 {
-    $stmt = $conn->prepare('SELECT item_id, item_name FROM inventory_items WHERE is_consumable = 1');
+    $stmt = $conn->prepare('SELECT i.item_id, i.item_name FROM inventory_items i
+        JOIN inventory_categories c ON c.category_id = i.category_id
+        WHERE ' . dailyInventoryItemSql('i', 'c'));
     $stmt->execute();
     $items = dailyInventorySortItems($stmt->get_result()->fetch_all(MYSQLI_ASSOC));
     $stmt->close();
