@@ -41,6 +41,57 @@ function dailyInventoryItemSql(string $i = 'i', string $c = 'c'): string
     return '(' . inventoryMedicalSql($c) . " AND ($i.is_consumable = 1 OR $i.is_forecastable = 1))";
 }
 
+/**
+ * The day's activity shown read-only on the Daily Inventory: patients checked
+ * in, animal-bite cases and vaccine doses given. These are exactly the numbers
+ * the daily closing sync writes to training_dataset (forecastTrainingDayCounts:
+ * same queries), so the number shown is the number saved. They come from the
+ * check-in and vaccination records; the nurse cannot edit them.
+ */
+function dailyInventoryDayCounts(mysqli $conn, string $branchId, string $date): array
+{
+    return forecastTrainingDayCounts($conn, $branchId, $date);
+}
+
+/** Counts saved by each item's daily closing sync on $date: item_id => the three counts. */
+function dailyInventorySavedDayCounts(mysqli $conn, string $branchId, string $date): array
+{
+    $stmt = $conn->prepare(
+        "SELECT item_id, patient_count, animal_bite_cases, vaccinations_administered
+         FROM training_dataset
+         WHERE branch_id = ? AND record_date = ? AND source_type = 'daily_closing'"
+    );
+    $stmt->bind_param('ss', $branchId, $date);
+    $stmt->execute();
+    $saved = [];
+    foreach ($stmt->get_result()->fetch_all(MYSQLI_ASSOC) as $row) {
+        $saved[(int)$row['item_id']] = [
+            'patient_count' => (int)$row['patient_count'],
+            'animal_bite_cases' => (int)$row['animal_bite_cases'],
+            'vaccinations_administered' => (int)$row['vaccinations_administered'],
+        ];
+    }
+    $stmt->close();
+    return $saved;
+}
+
+/** True when a saved closing's counts no longer match the check-ins (a patient was checked in after saving). */
+function dailyInventoryCountsDiffer(?array $saved, array $current): bool
+{
+    if ($saved === null) return false;
+    foreach (['patient_count', 'animal_bite_cases', 'vaccinations_administered'] as $key) {
+        if ((int)($saved[$key] ?? 0) !== (int)($current[$key] ?? 0)) return true;
+    }
+    return false;
+}
+
+/** "3 patients · 2 animal-bite cases · 4 doses" for messages. */
+function dailyInventoryCountsText(array $counts): string
+{
+    return (int)$counts['patient_count'] . ' patient(s) · ' . (int)$counts['animal_bite_cases']
+        . ' animal-bite case(s) · ' . (int)$counts['vaccinations_administered'] . ' dose(s)';
+}
+
 /** True once sources/migrate_usage_wastage.php labelled inventory_usage_history. */
 function dailyInventoryUsageLabelsReady(mysqli $conn): bool
 {
@@ -769,6 +820,8 @@ function dailyInventoryDayRows(mysqli $conn, string $branchId, string $date): ar
     $items = dailyInventorySortItems($stmt->get_result()->fetch_all(MYSQLI_ASSOC));
     $stmt->close();
     $movements = dailyInventoryDayMovements($conn, $branchId, $date);
+    $currentCounts = dailyInventoryDayCounts($conn, $branchId, $date);
+    $savedCounts = dailyInventorySavedDayCounts($conn, $branchId, $date);
     $rows = [];
     foreach ($items as $listed) {
         $itemId = (int)$listed['item_id'];
@@ -778,6 +831,14 @@ function dailyInventoryDayRows(mysqli $conn, string $branchId, string $date): ar
             continue;
         }
         $hasClosing = $context['opening_source'] === 'saved_closing';
+        // A patient checked in (or a dose given) after the closing was saved:
+        // the closing must be saved again so training_dataset gets the new counts.
+        $countsStale = $hasClosing && dailyInventoryCountsDiffer($savedCounts[$itemId] ?? null, $currentCounts);
+        if ($countsStale) {
+            $context['closing_out_of_date'] = true;
+            $context['counts_out_of_date'] = true;
+            $context['saved_counts'] = $savedCounts[$itemId];
+        }
         $moved = $movements[$itemId] ?? ['delivery' => 0, 'pull_out' => 0];
         $prefilled = ['delivery' => false, 'pull_out' => false];
         if (!$hasClosing) {
@@ -794,7 +855,7 @@ function dailyInventoryDayRows(mysqli $conn, string $branchId, string $date): ar
             'context' => $context,
             'used' => $consumedScaled > 0,
             'active' => $consumedScaled > 0 || $hasClosing || $moved['delivery'] > 0 || $moved['pull_out'] > 0,
-            'saved' => $hasClosing && !$context['needs_physical_count'],
+            'saved' => $hasClosing && !$context['needs_physical_count'] && !$countsStale,
             'prefilled' => $prefilled,
             'movements' => $moved,
         ];
@@ -874,6 +935,8 @@ function dailyInventorySaveDay(mysqli $conn, string $branchId, int $userId, stri
     $conn->begin_transaction();
     try {
         forecastTrainingRevision($conn, $branchId, true);
+        $currentCounts = dailyInventoryDayCounts($conn, $branchId, $date);
+        $savedCounts = dailyInventorySavedDayCounts($conn, $branchId, $date);
         $stale = [];
         // Every item used that day needs a count before the day can be saved.
         foreach (dailyInventoryDayRows($conn, $branchId, $date) as $dayRow) {
@@ -895,7 +958,8 @@ function dailyInventorySaveDay(mysqli $conn, string $branchId, int $userId, stri
             }
             // A saved, current closing posted back unchanged needs no new write.
             if ($context['opening_source'] === 'saved_closing' && !$context['needs_physical_count']
-                && $parsed['extra_scaled'] === 0 && $parsed['remarks'] === trim((string)$context['fields']['remarks'])) {
+                && $parsed['extra_scaled'] === 0 && $parsed['remarks'] === trim((string)$context['fields']['remarks'])
+                && !dailyInventoryCountsDiffer($savedCounts[$itemId] ?? null, $currentCounts)) {
                 $same = true;
                 foreach (['beginning_stock', 'delivery', 'pull_out', 'actual_count'] as $field) {
                     if ($parsed['quantities'][$field] !== stockQuantityParse((string)$context['fields'][$field], true)) {

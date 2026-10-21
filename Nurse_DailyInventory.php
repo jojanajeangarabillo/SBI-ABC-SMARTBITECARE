@@ -390,6 +390,17 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
         0,
         1
     );
+    // Same read-only counts as the page and the training sync (check-ins and doses).
+    $exportCounts = dailyInventoryDayCounts($conn, $branchId, $exportDate);
+    $pdf->Cell(
+        0,
+        5,
+        'Patients checked in: ' . (int)$exportCounts['patient_count'] .
+            ' | Animal-bite cases: ' . (int)$exportCounts['animal_bite_cases'] .
+            ' | Vaccine doses given: ' . (int)$exportCounts['vaccinations_administered'],
+        0,
+        1
+    );
 
     $remarks = array_values(
         array_filter(
@@ -448,7 +459,16 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'daily_usage') {
         $itemId = dailyInventoryItemId($_GET['item_id'] ?? '');
         $inventoryDate = is_string($_GET['date'] ?? null) ? trim($_GET['date']) : '';
         dailyInventoryAssertDate($conn, $inventoryDate);
-        echo json_encode(dailyInventoryContext($conn, $branchId, $itemId, $inventoryDate), JSON_THROW_ON_ERROR);
+        $context = dailyInventoryContext($conn, $branchId, $itemId, $inventoryDate);
+        // Read-only day counts (same numbers the closing sync saves); a later
+        // check-in makes the saved closing out of date.
+        $context['day_counts'] = dailyInventoryDayCounts($conn, $branchId, $inventoryDate);
+        $savedCounts = dailyInventorySavedDayCounts($conn, $branchId, $inventoryDate)[$itemId] ?? null;
+        $context['counts_out_of_date'] = $context['opening_source'] === 'saved_closing'
+            && dailyInventoryCountsDiffer($savedCounts, $context['day_counts']);
+        $context['saved_counts_text'] = $savedCounts !== null ? dailyInventoryCountsText($savedCounts) : '';
+        $context['day_counts_text'] = dailyInventoryCountsText($context['day_counts']);
+        echo json_encode($context, JSON_THROW_ON_ERROR);
     } catch (InvalidArgumentException | RuntimeException $e) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -641,7 +661,12 @@ foreach ((array)($dayResult['problems'] ?? []) as $problem) {
 $dayRestore = is_array($dayRestoreData) && ($dayRestoreData['date'] ?? '') === $dayDate ? (array)$dayRestoreData['rows'] : [];
 $dayRows = dailyInventoryDayRows($conn, $branchId, $dayDate);
 $dayActiveCount = count(array_filter($dayRows, static fn(array $row): bool => $row['active']));
-$dayOutOfDate = array_values(array_filter($dayRows, static fn(array $row): bool => !empty($row['context']['closing_out_of_date'])));
+$dayOutOfDate = array_values(array_filter($dayRows, static fn(array $row): bool => !empty($row['context']['closing_out_of_date'])
+    && empty($row['context']['counts_out_of_date'])));
+// Closings saved before a later check-in / dose: the saved patient counts are out of date.
+$dayCountsOutOfDate = array_values(array_filter($dayRows, static fn(array $row): bool => !empty($row['context']['counts_out_of_date'])));
+// Read-only day counts: exactly what the daily closing sync saves (forecastTrainingDayCounts).
+$dayCounts = dailyInventoryDayCounts($conn, $branchId, $dayDate);
 $dayShowAll = isset($_GET['all']) || array_filter($dayRows, static fn(array $row): bool =>
         !$row['active'] && isset($dayProblemItems[(int)$row['item']['item_id']]))
     || ($dayRestore && array_filter($dayRows, static fn(array $row): bool =>
@@ -1170,6 +1195,11 @@ $flash = workflowTakeFlash();
             font-weight: 700;
         }
 
+        .summary-pill.counts {
+            background: #eef2ff;
+            color: #2b3a8c;
+        }
+
         .summary-pill.total {
             color: #435176;
             background: #edf1f7;
@@ -1495,6 +1525,9 @@ $flash = workflowTakeFlash();
         .row-saved { background: #f3fbf5; }
         .row-stale { background: #fff8e6; }
         .day-row.row-problem > td { background: #fdecee; }
+        .day-counts { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; padding: 10px 14px; border: 1px solid #dfe5f3; border-radius: 12px; background: #f6f8fd; font-size: 14px; color: #33406a; }
+        .day-counts .day-count i { color: #2b3a8c; margin-right: 6px; }
+        .day-counts .day-count-note { flex-basis: 100%; font-size: 12px; color: #6b7699; }
         .day-row.row-problem .item-name { color: #b02a37; }
         .variance-ok { color: #1f7a35; font-weight: 700; }
         .variance-bad { color: #b42318; font-weight: 700; }
@@ -1739,6 +1772,28 @@ $flash = workflowTakeFlash();
                     <button class="btn btn-primary" type="submit"><i class="bi bi-arrow-repeat me-1"></i>Load</button>
                 </form>
             </div>
+
+            <div class="day-counts mx-4 mt-3" id="dayCounts" aria-label="Activity on this date (from the check-in and vaccination records)">
+                <span class="day-count"><i class="bi bi-person-check-fill"></i>Patients checked in <?= $dayDate === date('Y-m-d') ? 'today' : 'on ' . workflowH(date('M d, Y', strtotime($dayDate))) ?>: <strong data-count="patient_count"><?= (int)$dayCounts['patient_count'] ?></strong></span>
+                <span class="day-count"><i class="bi bi-clipboard2-pulse-fill"></i>Animal-bite cases: <strong data-count="animal_bite_cases"><?= (int)$dayCounts['animal_bite_cases'] ?></strong></span>
+                <span class="day-count"><i class="bi bi-eyedropper"></i>Vaccine doses given: <strong data-count="vaccinations_administered"><?= (int)$dayCounts['vaccinations_administered'] ?></strong></span>
+                <span class="day-count-note">Read-only, from Visit Check-in and vaccination records; saved with the closing for forecasting.</span>
+            </div>
+
+            <?php if ($dayCountsOutOfDate): ?>
+                <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2 mx-4 mt-3 mb-0" id="dayCountsOutOfDateBox">
+                    <i class="bi bi-exclamation-triangle-fill"></i>
+                    <span class="flex-grow-1">
+                        The closing is out of date: patients were checked in (or doses given) after it was saved.
+                        Saved: <?= workflowH(dailyInventoryCountsText($dayCountsOutOfDate[0]['context']['saved_counts'])) ?>;
+                        now: <?= workflowH(dailyInventoryCountsText($dayCounts)) ?>.
+                        Click <strong>Save Closing</strong> to refresh it (the same closing is updated; nothing is added).
+                    </span>
+                    <a class="btn btn-sm btn-warning" href="Nurse_DailyInventory.php?<?= workflowH(http_build_query(['date' => $dayDate])) ?>">
+                        <i class="bi bi-arrow-repeat me-1"></i>Refresh
+                    </a>
+                </div>
+            <?php endif; ?>
 
             <?php if ($dayOutOfDate): ?>
                 <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2 mx-4 mt-3 mb-0" id="dayOutOfDateBox">
@@ -2132,6 +2187,15 @@ $flash = workflowTakeFlash();
                         <small class="d-block text-primary" id="consumedBreakdown"></small>
                     </div>
 
+                    <div class="col-12" id="singleDayCounts" style="display:none">
+                        <div class="day-counts">
+                            <span class="day-count"><i class="bi bi-person-check-fill"></i><span id="singlePatientsLabel">Patients checked in today</span>: <strong id="singlePatients">0</strong></span>
+                            <span class="day-count"><i class="bi bi-clipboard2-pulse-fill"></i>Animal-bite cases: <strong id="singleCases">0</strong></span>
+                            <span class="day-count"><i class="bi bi-eyedropper"></i>Vaccine doses given: <strong id="singleDoses">0</strong></span>
+                            <span class="day-count-note">Read-only, from Visit Check-in and vaccination records; saved with the closing for forecasting.</span>
+                        </div>
+                    </div>
+
                     <div class="col-12" id="adjustConsumedPanel" style="display:none">
                         <div class="border rounded p-3 bg-light">
                             <strong class="d-block mb-1"><i class="bi bi-exclamation-octagon me-1"></i>Adjust Consumed (wastage)</strong>
@@ -2443,6 +2507,12 @@ $flash = workflowTakeFlash();
                 <?php
                 $dayTallied = 0;
                 $dayVariance = 0;
+                $historyCounts = dailyInventoryDayCounts($conn, $branchId, (string)$closingDate);
+                $historySaved = dailyInventorySavedDayCounts($conn, $branchId, (string)$closingDate);
+                $historyCountsStale = false;
+                foreach ($historySaved as $savedRow) {
+                    $historyCountsStale = $historyCountsStale || dailyInventoryCountsDiffer($savedRow, $historyCounts);
+                }
 
                 foreach ($dailyRows as $dailyRow) {
                     if (abs((float)$dailyRow['variance']) < 0.00005) {
@@ -2483,6 +2553,17 @@ $flash = workflowTakeFlash();
                         </div>
 
                         <div class="day-summary">
+                            <span class="summary-pill counts" title="From Visit Check-in and vaccination records (read-only)">
+                                <i class="bi bi-person-check-fill"></i>
+                                <?= (int)$historyCounts['patient_count'] ?> patients ·
+                                <?= (int)$historyCounts['animal_bite_cases'] ?> cases ·
+                                <?= (int)$historyCounts['vaccinations_administered'] ?> doses
+                            </span>
+                            <?php if ($historyCountsStale): ?>
+                                <a class="summary-pill variance text-decoration-none" href="Nurse_DailyInventory.php?<?= workflowH(http_build_query(['date' => $closingDate])) ?>#dayClosing" title="Patients were checked in after this closing was saved">
+                                    <i class="bi bi-exclamation-triangle-fill"></i> Out of date – save again
+                                </a>
+                            <?php endif; ?>
                             <span class="summary-pill total">
                                 <i class="bi bi-box-seam"></i>
                                 <?= count($dailyRows) ?>
@@ -3149,6 +3230,7 @@ function refreshClosingPreview() {
 function resetDailyFields() {
     for (const id of ['beginning_stock', 'actual_count', 'remarks', 'wastage_quantity', 'wastage_reason', 'wastage_other']) document.getElementById(id).value = '';
     document.getElementById('closingOutOfDateBox').style.display = 'none';
+    document.getElementById('singleDayCounts').style.display = 'none';
     document.getElementById('consumedBreakdown').textContent = '';
     lastDailyContext = null;
     for (const id of ['delivery', 'pull_out']) document.getElementById(id).value = '0';
@@ -3199,6 +3281,20 @@ async function refreshAutomaticConsumption(restore = null) {
                 'The saved closing for this date is out of date: usage was recorded after it was submitted (saved Consumed '
                 + formatClosingNumber(dailyScaled(String(data.closing_saved_consumed)) ?? 0) + `, now ${formatClosingNumber(dailyScaled(data.consumed) ?? 0)} ${baseUnit}). `
                 + 'Refresh it: verify the counts and submit again.';
+            document.getElementById('closingOutOfDateBox').style.display = '';
+        }
+        if (data.day_counts) {
+            const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+            document.getElementById('singlePatientsLabel').textContent = date === today ? 'Patients checked in today' : 'Patients checked in on ' + date;
+            document.getElementById('singlePatients').textContent = data.day_counts.patient_count;
+            document.getElementById('singleCases').textContent = data.day_counts.animal_bite_cases;
+            document.getElementById('singleDoses').textContent = data.day_counts.vaccinations_administered;
+            document.getElementById('singleDayCounts').style.display = '';
+        }
+        if (data.counts_out_of_date) {
+            document.getElementById('closingOutOfDateText').textContent =
+                'The saved closing for this date is out of date: patients were checked in (or doses given) after it was submitted (saved: '
+                + data.saved_counts_text + '; now: ' + data.day_counts_text + '). Submit it again to refresh it; the same closing is updated.';
             document.getElementById('closingOutOfDateBox').style.display = '';
         }
         for (const [id, value] of Object.entries(data.fields)) document.getElementById(id).value = value;
