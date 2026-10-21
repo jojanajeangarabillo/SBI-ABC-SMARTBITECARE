@@ -170,3 +170,33 @@ function dashboardDueFollowupPatients(mysqli $conn, string $branchId): array
         $stmt->close();
     }
 }
+
+/**
+ * Vaccinations given: completed doses of active records (dose row, case and
+ * patient not archived), one definition for the Branch Admin Dashboard,
+ * Branch Admin Reports (card and vaccination report). Optional date range on
+ * date_administered (Y-m-d).
+ */
+function dashboardVaccinationsGiven(mysqli $conn, string $branchId, ?string $from = null, ?string $to = null): int
+{
+    $sql = "SELECT COUNT(*) AS total
+        FROM vaccination_records vr
+        LEFT JOIN animal_bite_cases c ON c.case_id = vr.case_id
+        LEFT JOIN patients p ON p.patient_id = vr.patient_id
+        WHERE vr.branch_id = ? AND vr.is_archived = 0 AND vr.vaccination_status = 'Completed'
+          AND COALESCE(c.is_archived, 0) = 0 AND COALESCE(p.is_archived, 0) = 0";
+    $types = 's';
+    $params = [$branchId];
+    if ($from !== null && $to !== null) {
+        $sql .= ' AND DATE(vr.date_administered) BETWEEN ? AND ?';
+        $types .= 'ss';
+        $params[] = $from;
+        $params[] = $to;
+    }
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param($types, ...$params);
+    $stmt->execute();
+    $total = (int)($stmt->get_result()->fetch_assoc()['total'] ?? 0);
+    $stmt->close();
+    return $total;
+}

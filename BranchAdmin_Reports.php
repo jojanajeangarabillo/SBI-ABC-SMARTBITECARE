@@ -6,6 +6,7 @@ $stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/patient_display_helper.php';
+require_once 'sources/dashboard_patient_metrics.php';
 
 // ============================================
 // AUDIT LOG FUNCTION
@@ -581,28 +582,39 @@ JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=? WHERE s.branch
                    getBranchName($branchId),
                    ($startDate && $endDate) ? $startDate . ' to ' . $endDate : 'All Time');
     
+    // Same rules as the stat cards and the Inventory Overview (inventoryBranchSummary).
     $totalItems = count($items);
-    $lowStock = array_reduce($items, function($carry, $item) {
-        return $carry + ($item['quantity_available'] <= $item['minimum_stock'] ? 1 : 0);
-    }, 0);
-    $expiring = array_reduce($items, function($carry, $item) {
-        if ($item['expiration_date']) {
-            $daysUntilExpiry = (strtotime($item['expiration_date']) - time()) / (60*60*24);
-            return $carry + ($daysUntilExpiry <= 30 && $daysUntilExpiry >= 0 ? 1 : 0);
-        }
-        return $carry;
-    }, 0);
-    // Display only: each item's stock counted in its counting unit (vials, ampules, pcs)
-    // instead of summing raw base units such as sites or mL.
-    $totalStock = inventoryFormatNumber(array_reduce($items, function($carry, $item) {
-        return $carry + (float)$item['quantity_available'] / inventoryConversionToBase($item);
-    }, 0.0), 1);
+    $statusCounts = ['low' => 0, 'out' => 0, 'ok' => 0];
+    $medicalItems = 0;
+    foreach ($items as $item) {
+        $statusCounts[inventoryStockStatusKey((float)$item['quantity_available'], (float)$item['minimum_stock'])]++;
+        $medicalItems += ($item['category_name'] ?? '') === 'Medical Supplies' ? 1 : 0;
+    }
+    $lowStock = $statusCounts['low'];
+    $batchStmt = $conn->prepare("SELECT item_id,
+            SUM(quantity_available > 0 AND expiration_date IS NOT NULL AND expiration_date >= CURDATE()
+                AND expiration_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)) AS expiring,
+            SUM(quantity_available > 0 AND expiration_date IS NOT NULL AND expiration_date < CURDATE()) AS expired
+        FROM inventory_stocks WHERE branch_id = ? GROUP BY item_id");
+    $batchStmt->bind_param('s', $branchId);
+    $batchStmt->execute();
+    $listed = array_flip(array_map(static fn($item) => (int)$item['item_id'], $items));
+    $expiringBatches = 0;
+    $expiredBatches = 0;
+    foreach ($batchStmt->get_result()->fetch_all(MYSQLI_ASSOC) as $batchRow) {
+        if (!isset($listed[(int)$batchRow['item_id']])) continue;
+        $expiringBatches += (int)$batchRow['expiring'];
+        $expiredBatches += (int)$batchRow['expired'];
+    }
+    $batchStmt->close();
     
     $pdf->CreateStatsBox([
-        'Total Items' => $totalItems,
+        'Inventory items (all)' => $totalItems,
+        'Medical supplies' => $medicalItems,
         'Low Stock' => $lowStock,
-        'Expiring Soon' => $expiring,
-        'Total Stock (mixed units)' => $totalStock
+        'Out of Stock' => $statusCounts['out'],
+        'Expiring batches (30 days)' => $expiringBatches,
+        'Expired batches' => $expiredBatches,
     ]);
     
     $headers = ['Item', 'Category', 'Qty', 'Min', 'Status', 'Expiry'];
@@ -610,10 +622,11 @@ JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=? WHERE s.branch
     $columnWidths = [40, 30, 36, 30, 18, 22];
     
     $data = array_map(function($item) {
-        $status = $item['quantity_available'] <= $item['minimum_stock'] ? 'Low Stock' : 'OK';
+        $statusKey = inventoryStockStatusKey((float)$item['quantity_available'], (float)$item['minimum_stock']);
+        $status = ['out' => 'Out of Stock', 'low' => 'Low Stock', 'ok' => 'OK'][$statusKey];
         $expiry = $item['expiration_date'] ? date('Y-m-d', strtotime($item['expiration_date'])) : 'N/A';
         
-        if ($item['expiration_date']) {
+        if ($statusKey === 'ok' && $item['expiration_date']) {
             $daysUntilExpiry = (strtotime($item['expiration_date']) - time()) / (60*60*24);
             if ($daysUntilExpiry <= 30 && $daysUntilExpiry >= 0) {
                 $status = 'Expiring';
@@ -683,22 +696,33 @@ function generateVaccinationReport($branchId, $startDate = null, $endDate = null
                    getBranchName($branchId),
                    ($startDate && $endDate) ? $startDate . ' to ' . $endDate : 'All Time');
     
-    $total = count($vaccinations);
-    $completed = array_reduce($vaccinations, function($carry, $v) {
-        return $carry + ($v['vaccination_status'] == 'Completed' ? 1 : 0);
-    }, 0);
-    $scheduled = array_reduce($vaccinations, function($carry, $v) {
-        return $carry + ($v['vaccination_status'] == 'Scheduled' ? 1 : 0);
-    }, 0);
+    // Summary over ALL matching records (the table lists the latest 50); the
+    // Completed count is the "Vaccinations given" card (dashboardVaccinationsGiven).
+    $summarySql = "SELECT COUNT(*) AS total,
+            COALESCE(SUM(vr.vaccination_status = 'Completed'), 0) AS completed,
+            COALESCE(SUM(vr.vaccination_status = 'Scheduled'), 0) AS scheduled,
+            COALESCE(SUM(vr.is_final_dose = 1), 0) AS final_doses
+        FROM vaccination_records vr
+        LEFT JOIN patients p ON vr.patient_id = p.patient_id
+        LEFT JOIN animal_bite_cases abc ON vr.case_id = abc.case_id
+        WHERE vr.branch_id = ? AND vr.is_archived = 0
+          AND COALESCE(abc.is_archived, 0) = 0 AND COALESCE(p.is_archived, 0) = 0"
+        . (($startDate && $endDate) ? " AND DATE(vr.created_at) BETWEEN ? AND ?" : "");
+    $summaryStmt = $conn->prepare($summarySql);
+    $summaryStmt->bind_param($types, ...$params);
+    $summaryStmt->execute();
+    $summary = $summaryStmt->get_result()->fetch_assoc() ?: [];
+    $summaryStmt->close();
+    $total = (int)($summary['total'] ?? 0);
+    $completed = (int)($summary['completed'] ?? 0);
+    $scheduled = (int)($summary['scheduled'] ?? 0);
     // Missed doses use the one shared definition (same number as the dashboards).
     $missed = workflowMissedDoseCounts($conn, (string)$branchId)['doses'];
-    $finalDoses = array_reduce($vaccinations, function($carry, $v) {
-        return $carry + ($v['is_final_dose'] ? 1 : 0);
-    }, 0);
+    $finalDoses = (int)($summary['final_doses'] ?? 0);
     
     $pdf->CreateStatsBox([
-        'Total Vaccinations' => $total,
-        'Completed' => $completed,
+        'Vaccination records' => $total,
+        'Vaccinations given' => $completed,
         'Scheduled' => $scheduled,
         'Missed doses (today)' => $missed,
         'Final Doses' => $finalDoses
@@ -773,45 +797,25 @@ if (isset($_GET['generate_report']) && isset($_GET['report_type'])) {
     }
 }
 
-// Get report statistics for the dashboard
-$stats = [];
-
-$statQuery = "SELECT COUNT(*) as count FROM patients WHERE branch_id = ?";
-$stmt = $conn->prepare($statQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$result = $stmt->get_result();
-$stats['total_patients'] = $result->fetch_assoc()['count'] ?? 0;
-
-$statQuery = "SELECT COUNT(*) as count FROM animal_bite_cases WHERE branch_id = ?";
-$stmt = $conn->prepare($statQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$result = $stmt->get_result();
-$stats['total_cases'] = $result->fetch_assoc()['count'] ?? 0;
-
-$statQuery = "SELECT COUNT(*) as count FROM inventory_stocks WHERE branch_id = ?";
-$stmt = $conn->prepare($statQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$result = $stmt->get_result();
-$stats['total_inventory'] = $result->fetch_assoc()['count'] ?? 0;
-
-$statQuery = "SELECT COUNT(*) as count FROM vaccination_records WHERE branch_id = ?";
-$stmt = $conn->prepare($statQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$result = $stmt->get_result();
-$stats['total_vaccinations'] = $result->fetch_assoc()['count'] ?? 0;
-
-$statQuery = "SELECT COUNT(*) AS count FROM inventory_items i
-JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
-WHERE s.usable_stock<=i.minimum_stock";
-$stmt = $conn->prepare($statQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$result = $stmt->get_result();
-$stats['low_stock'] = $result->fetch_assoc()['count'] ?? 0;
+// Report stat cards. Each uses the shared definition of the page it must match:
+//  - patients / cases: dashboardPatientMetrics() (Branch Admin Dashboard; archived records excluded)
+//  - vaccinations given: dashboardVaccinationsGiven() (Branch Admin Dashboard "Completed Vaccinations")
+//  - inventory: inventoryBranchSummary() (Inventory Overview / Inventory Officer pages)
+$patientMetrics = dashboardPatientMetrics($conn, (string)$branch_id);
+$inventorySummary = inventoryBranchSummary($conn, (string)$branch_id);
+$completedVaccinations = dashboardVaccinationsGiven($conn, (string)$branch_id);
+$stats = [
+    'total_patients' => (int)$patientMetrics['total_patients'],
+    'total_cases' => (int)$patientMetrics['total_cases'],
+    'total_vaccinations' => $completedVaccinations,
+    'total_inventory' => $inventorySummary['items'],
+    'medical_items' => $inventorySummary['medical_items'],
+    'non_medical_items' => $inventorySummary['non_medical_items'],
+    'low_stock' => $inventorySummary['low_stock'],
+    'out_of_stock' => $inventorySummary['out_of_stock'],
+    'expiring_batches' => $inventorySummary['expiring_batches'],
+    'expired_batches' => $inventorySummary['expired_batches'],
+];
 ?>
 
 <!-- HTML PAGE (unchanged) -->
@@ -1116,6 +1120,13 @@ $stats['low_stock'] = $result->fetch_assoc()['count'] ?? 0;
 /* =====================================================
    LABEL
    ===================================================== */
+
+.stat-card .stat-note {
+    font-size: 11px;
+    color: #6b7699;
+    margin-top: 2px;
+    line-height: 1.3;
+}
 
 .stat-card .label {
     font-size: 13px;
@@ -1520,74 +1531,72 @@ $stats['low_stock'] = $result->fetch_assoc()['count'] ?? 0;
     </div>
 
     <div class="content">
- <!-- Statistics Cards -->
+ <!-- Statistics Cards (shared definitions: see the PHP block above) -->
 <div class="stats-grid">
-
-    <!-- Total Patients -->
     <div class="stat-card stat-primary">
-        <div class="stat-icon">
-            <i class="bi bi-people-fill"></i>
-        </div>
+        <div class="stat-icon"><i class="bi bi-people-fill"></i></div>
         <div class="stat-content">
-            <div class="number">
-                <?php echo number_format($stats['total_patients']); ?>
-            </div>
-            <div class="label">Total Patients</div>
+            <div class="number"><?php echo number_format($stats['total_patients']); ?></div>
+            <div class="label">Patients</div>
+            <div class="stat-note">Active patient records (archived excluded) – same as the Branch Admin Dashboard</div>
         </div>
     </div>
-
-    <!-- Total Cases -->
     <div class="stat-card stat-primary">
-        <div class="stat-icon">
-            <i class="bi bi-clipboard2-pulse-fill"></i>
-        </div>
+        <div class="stat-icon"><i class="bi bi-clipboard2-pulse-fill"></i></div>
         <div class="stat-content">
-            <div class="number">
-                <?php echo number_format($stats['total_cases']); ?>
-            </div>
-            <div class="label">Total Cases</div>
+            <div class="number"><?php echo number_format($stats['total_cases']); ?></div>
+            <div class="label">Cases</div>
+            <div class="stat-note">Active case records – same as the Branch Admin Dashboard</div>
         </div>
     </div>
-
-    <!-- Inventory Items -->
-    <div class="stat-card stat-info">
-        <div class="stat-icon">
-            <i class="bi bi-box-seam-fill"></i>
-        </div>
-        <div class="stat-content">
-            <div class="number">
-                <?php echo number_format($stats['total_inventory']); ?>
-            </div>
-            <div class="label">Inventory Items</div>
-        </div>
-    </div>
-
-    <!-- Vaccinations -->
     <div class="stat-card stat-success">
-        <div class="stat-icon">
-            <i class="bi bi-eyedropper"></i>
-        </div>
+        <div class="stat-icon"><i class="bi bi-eyedropper"></i></div>
         <div class="stat-content">
-            <div class="number">
-                <?php echo number_format($stats['total_vaccinations']); ?>
-            </div>
-            <div class="label">Vaccinations</div>
+            <div class="number"><?php echo number_format($stats['total_vaccinations']); ?></div>
+            <div class="label">Vaccinations given</div>
+            <div class="stat-note">Completed doses of active records – same as the Branch Admin Dashboard</div>
         </div>
     </div>
-
-    <!-- Low Stock -->
+    <div class="stat-card stat-info">
+        <div class="stat-icon"><i class="bi bi-box-seam-fill"></i></div>
+        <div class="stat-content">
+            <div class="number"><?php echo number_format($stats['total_inventory']); ?></div>
+            <div class="label">Inventory items (all)</div>
+            <div class="stat-note">Items with stock records in this branch, medical and non-medical – same as Inventory Overview</div>
+        </div>
+    </div>
+    <div class="stat-card stat-info">
+        <div class="stat-icon"><i class="bi bi-capsule"></i></div>
+        <div class="stat-content">
+            <div class="number"><?php echo number_format($stats['medical_items']); ?></div>
+            <div class="label">Medical supplies</div>
+            <div class="stat-note">Items in the Medical Supplies category – same as Medical Supplies Management</div>
+        </div>
+    </div>
     <div class="stat-card <?php echo $stats['low_stock'] > 0 ? 'stat-danger' : 'stat-success'; ?>">
-        <div class="stat-icon">
-            <i class="bi bi-exclamation-triangle-fill"></i>
-        </div>
+        <div class="stat-icon"><i class="bi bi-exclamation-triangle-fill"></i></div>
         <div class="stat-content">
-            <div class="number">
-                <?php echo number_format($stats['low_stock']); ?>
-            </div>
-            <div class="label">Low Stock Items</div>
+            <div class="number"><?php echo number_format($stats['low_stock']); ?></div>
+            <div class="label">Low stock</div>
+            <div class="stat-note">At or below the minimum, above zero (expired batches excluded) – same as Inventory Overview</div>
         </div>
     </div>
-
+    <div class="stat-card <?php echo $stats['out_of_stock'] > 0 ? 'stat-danger' : 'stat-success'; ?>">
+        <div class="stat-icon"><i class="bi bi-x-octagon-fill"></i></div>
+        <div class="stat-content">
+            <div class="number"><?php echo number_format($stats['out_of_stock']); ?></div>
+            <div class="label">Out of stock</div>
+            <div class="stat-note">No usable stock left – same as Inventory Overview</div>
+        </div>
+    </div>
+    <div class="stat-card <?php echo ($stats['expiring_batches'] + $stats['expired_batches']) > 0 ? 'stat-danger' : 'stat-success'; ?>">
+        <div class="stat-icon"><i class="bi bi-calendar-x-fill"></i></div>
+        <div class="stat-content">
+            <div class="number"><?php echo number_format($stats['expiring_batches'] + $stats['expired_batches']); ?></div>
+            <div class="label">Expiry attention (batches)</div>
+            <div class="stat-note"><?php echo number_format($stats['expiring_batches']); ?> expiring within 30 days · <?php echo number_format($stats['expired_batches']); ?> expired – same as Inventory Overview / Inventory Officer Dashboard</div>
+        </div>
+    </div>
 </div>
         <!-- Report Generator Card -->
         <div class="report-card">
