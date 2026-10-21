@@ -1224,8 +1224,31 @@ $username = $userInfo['username'] ?? 'Admin';
 
     <div class="row g-4">
 
+        <!-- Total Active Patients (shared: dashboardActivePatients) -->
+        <div class="col-xl col-lg-4 col-md-6">
+            <div class="stat-card stat-primary" data-patient-metric="active_patients">
+
+                <div class="stat-icon">
+                    <i class="bi bi-people-fill"></i>
+                </div>
+
+                <div class="stat-content">
+                    <div class="stat-label">Total Active Patients</div>
+
+                    <div class="stat-number">
+                        <?php echo number_format($stats['active_patients']); ?>
+                    </div>
+
+                    <div class="stat-description">
+                        With a vaccination cycle in progress
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
         <!-- Total Patients -->
-        <div class="col-lg-3 col-md-6">
+        <div class="col-xl col-lg-4 col-md-6">
             <div class="stat-card stat-primary">
 
                 <div class="stat-icon">
@@ -1249,7 +1272,7 @@ $username = $userInfo['username'] ?? 'Admin';
 
 
         <!-- Total Cases -->
-        <div class="col-lg-3 col-md-6">
+        <div class="col-xl col-lg-4 col-md-6">
             <div class="stat-card stat-primary">
 
                 <div class="stat-icon">
@@ -1273,7 +1296,7 @@ $username = $userInfo['username'] ?? 'Admin';
 
 
         <!-- Ongoing Cases -->
-        <div class="col-lg-3 col-md-6">
+        <div class="col-xl col-lg-4 col-md-6">
             <div class="stat-card stat-warning">
 
                 <div class="stat-icon">
@@ -1297,7 +1320,7 @@ $username = $userInfo['username'] ?? 'Admin';
 
 
         <!-- Completed Cases -->
-        <div class="col-lg-3 col-md-6">
+        <div class="col-xl col-lg-4 col-md-6">
             <div class="stat-card stat-success">
 
                 <div class="stat-icon">

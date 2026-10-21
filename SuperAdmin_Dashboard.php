@@ -113,7 +113,7 @@ $inventory_data = $inventory_result->fetch_assoc();
 // All-branch totals are the SUM of the branch numbers, using the same shared
 // definitions as each Branch Admin Dashboard (archived records excluded) and
 // the Inventory Overview (inventoryBranchSummary: items with stock records).
-$branchTotals = ['total_patients' => 0, 'total_cases' => 0, 'ongoing_cases' => 0, 'completed_cases' => 0];
+$branchTotals = ['total_patients' => 0, 'active_patients' => 0, 'total_cases' => 0, 'ongoing_cases' => 0, 'completed_cases' => 0];
 $branchIdResult = $conn->query("SELECT branch_id FROM branches ORDER BY branch_id");
 while ($branchRow = $branchIdResult->fetch_assoc()) {
     $branchMetrics = dashboardPatientMetrics($conn, (string)$branchRow['branch_id']);
@@ -878,7 +878,7 @@ $today_data = $today_result->fetch_assoc();
             </div>
 
             <div class="stat-sub">
-                All Time Total
+                <?php echo number_format($branchTotals['active_patients']); ?> Total Active Patients (sum of branches)
             </div>
         </div>
     </div>

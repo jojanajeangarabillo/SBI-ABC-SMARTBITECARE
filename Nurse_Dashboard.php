@@ -671,6 +671,11 @@ $todayDisplay = date('l, F j, Y');
         .stat-success .stat-icon { color: var(--success); }
         .stat-info { border-left-color: var(--info); }
         .stat-info .stat-icon { color: var(--info); }
+        .stat-primary { border-left-color: var(--primary); }
+        .stat-primary .stat-icon { color: var(--primary); }
+        @media (min-width: 1400px) {
+            .stats-grid.stats-five { grid-template-columns: repeat(5,minmax(0,1fr)); }
+        }
 
         /* Cards */
         .panel-card {
@@ -1338,7 +1343,15 @@ $todayDisplay = date('l, F j, Y');
                 </div>
             </div>
 
-            <div class="stats-grid">
+            <div class="stats-grid stats-five">
+                <a class="stat-card-link" href="Nurse_Patients.php">
+                    <div class="stat-card stat-primary" data-patient-metric="active_patients">
+                        <span class="stat-icon"><i class="bi bi-people-fill"></i></span>
+                        <span class="stat-title">Total Active Patients</span>
+                        <span class="stat-number"><?php echo number_format($stats['active_patients']); ?></span>
+                        <span class="stat-note">With a vaccination cycle in progress</span>
+                    </div>
+                </a>
                 <a class="stat-card-link" href="Nurse_Patients.php">
                     <div class="stat-card stat-warning">
                         <span class="stat-icon"><i class="bi bi-activity"></i></span>

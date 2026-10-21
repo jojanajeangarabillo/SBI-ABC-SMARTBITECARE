@@ -109,6 +109,7 @@ function dashboardPatientMetrics(mysqli $conn, string $branchId): array
             throw new RuntimeException('Patient dashboard counts were not returned.');
         }
         $metrics = array_map(static fn($value): int => (int)$value, $row);
+        $metrics['active_patients'] = dashboardActivePatients($conn, $branchId);
         // Missed/overdue always uses the one shared definition (see
         // workflowMissedDoseCondition) so every page shows the same number.
         $missed = workflowMissedDoseCounts($conn, $branchId);
@@ -195,6 +196,31 @@ function dashboardVaccinationsGiven(mysqli $conn, string $branchId, ?string $fro
     }
     $stmt = $conn->prepare($sql);
     $stmt->bind_param($types, ...$params);
+    $stmt->execute();
+    $total = (int)($stmt->get_result()->fetch_assoc()['total'] ?? 0);
+    $stmt->close();
+    return $total;
+}
+
+/**
+ * Total Active Patients, one definition for every dashboard: a patient (not
+ * archived) with at least one case (not archived) whose vaccination cycle is
+ * active and not yet completed: it has active (non-archived) dose rows and the
+ * shared case status (patientCaseStatusSql) is still Ongoing. New cases not
+ * yet assessed (no schedule), completed cycles and one-time treatments do not
+ * count.
+ */
+function dashboardActivePatients(mysqli $conn, string $branchId): int
+{
+    $stmt = $conn->prepare("SELECT COUNT(DISTINCT c.patient_id) AS total
+        FROM animal_bite_cases c
+        INNER JOIN patients p ON p.patient_id = c.patient_id
+            AND p.branch_id = c.branch_id AND p.is_archived = 0
+        WHERE c.branch_id = ? AND c.is_archived = 0
+          AND EXISTS (SELECT 1 FROM vaccination_records ap
+                      WHERE ap.case_id = c.case_id AND ap.is_archived = 0 AND ap.dose_number >= 1)
+          AND " . patientCaseStatusSql('c') . " = 'Ongoing'");
+    $stmt->bind_param('s', $branchId);
     $stmt->execute();
     $total = (int)($stmt->get_result()->fetch_assoc()['total'] ?? 0);
     $stmt->close();
