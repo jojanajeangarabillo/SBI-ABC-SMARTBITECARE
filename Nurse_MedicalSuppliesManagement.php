@@ -45,6 +45,11 @@ function supplyStatus(array $item): array
     $minimum = (float)($item['minimum_stock'] ?? 0);
     $nearestExpiry = trim((string)($item['nearest_expiry'] ?? ''));
 
+    // A catalog item this branch never stocked is not "out of stock" here
+    // (same item list as the Inventory Overview and Branch Admin Reports).
+    if (array_key_exists('has_stock_record', $item) && !(int)$item['has_stock_record']) {
+        return ['Not stocked in this branch', 'none'];
+    }
     if ($stock <= 0) {
         return ['Out of Stock', 'out'];
     }
@@ -376,7 +381,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
  * ============================================================ */
 $search = trim((string)($_GET['search'] ?? ''));
 $statusFilter = trim((string)($_GET['status'] ?? 'all'));
-$allowedStatuses = ['all', 'normal', 'low', 'out', 'expiring'];
+$allowedStatuses = ['all', 'normal', 'low', 'out', 'expiring', 'none'];
 if (!in_array($statusFilter, $allowedStatuses, true)) {
     $statusFilter = 'all';
 }
@@ -412,7 +417,8 @@ $stmt = $conn->prepare(
         COALESCE(s.usable_batches,0) AS usable_batches,
         s.nearest_expiration AS nearest_expiry,
         s.last_updated,
-        COALESCE(ut.today_used,0) AS today_used
+        COALESCE(ut.today_used,0) AS today_used,
+        (s.item_id IS NOT NULL) AS has_stock_record
      FROM inventory_items i
      INNER JOIN inventory_categories c ON c.category_id=i.category_id
      INNER JOIN units u ON u.unit_id=i.unit_id
@@ -444,13 +450,21 @@ unset($item);
 $usageItems = array_values(array_filter($allItems, fn(array $item): bool => (bool)$item['is_consumable']));
 $usageToken = supplyUsageFormToken();
 
+// Cards: medical supplies of this branch (items with stock records), same
+// numbers as Branch Admin Reports / Inventory Overview (inventoryBranchSummary).
 $stats = [
-    'total' => count($allItems),
+    'total' => 0,
+    'not_stocked' => 0,
     'low' => 0,
     'out' => 0,
     'expiring' => 0,
 ];
 foreach ($allItems as $item) {
+    if ($item['status_key'] === 'none') {
+        $stats['not_stocked']++;
+    } else {
+        $stats['total']++;
+    }
     if ($item['status_key'] === 'low') $stats['low']++;
     if ($item['status_key'] === 'out') $stats['out']++;
     if ($item['status_key'] === 'expiring') $stats['expiring']++;
@@ -616,6 +630,7 @@ $flash = workflowTakeFlash();
         .status-badge.low{background:#fff5d6;color:#926a00}
         .status-badge.out{background:#fdebec;color:#c0392b}
         .status-badge.expiring{background:#e4f7fb;color:#137d90}
+        .status-badge.none{background:#eef0f5;color:#5b6680}
         .expired-note{display:block;margin-top:4px;color:#c0392b;font-size:11px;font-weight:600}
         .stock-sub{display:block;margin-top:3px;color:#8993a8;font-size:11px}
         .btn-icon{width:36px;height:36px;border:1px solid #dbe1ee;border-radius:9px;background:#fff;color:var(--primary);display:inline-flex;align-items:center;justify-content:center}
@@ -719,7 +734,7 @@ $flash = workflowTakeFlash();
         </div>
 
         <div class="row g-3">
-            <div class="col-xl-3 col-md-6"><div class="stat-card"><div class="stat-icon"><i class="bi bi-boxes"></i></div><div><div class="stat-label">Medical Supply Items</div><div class="stat-value"><?= (int)$stats['total'] ?></div></div></div></div>
+            <div class="col-xl-3 col-md-6"><div class="stat-card"><div class="stat-icon"><i class="bi bi-boxes"></i></div><div><div class="stat-label">Medical Supplies (this branch)</div><div class="stat-value"><?= (int)$stats['total'] ?></div><?php if ($stats['not_stocked'] > 0): ?><div class="small text-muted"><?= (int)$stats['not_stocked'] ?> more in the catalog, not stocked here</div><?php endif; ?></div></div></div>
             <div class="col-xl-3 col-md-6"><div class="stat-card low"><div class="stat-icon"><i class="bi bi-exclamation-triangle-fill"></i></div><div><div class="stat-label">Low Stock</div><div class="stat-value"><?= (int)$stats['low'] ?></div></div></div></div>
             <div class="col-xl-3 col-md-6"><div class="stat-card out"><div class="stat-icon"><i class="bi bi-x-octagon-fill"></i></div><div><div class="stat-label">Out of Stock</div><div class="stat-value"><?= (int)$stats['out'] ?></div></div></div></div>
             <div class="col-xl-3 col-md-6"><div class="stat-card expiring"><div class="stat-icon"><i class="bi bi-calendar2-exclamation-fill"></i></div><div><div class="stat-label">Expiring Within 30 Days</div><div class="stat-value"><?= (int)$stats['expiring'] ?></div></div></div></div>
@@ -821,6 +836,7 @@ $flash = workflowTakeFlash();
                             <option value="low" <?= $statusFilter==='low'?'selected':'' ?>>Low Stock</option>
                             <option value="out" <?= $statusFilter==='out'?'selected':'' ?>>Out of Stock</option>
                             <option value="expiring" <?= $statusFilter==='expiring'?'selected':'' ?>>Expiring Soon</option>
+                            <option value="none" <?= $statusFilter==='none'?'selected':'' ?>>Not stocked in this branch</option>
                         </select>
                     </div>
                     <div class="col-lg-2 d-grid"><button class="btn btn-primary" type="submit">Apply Filter</button></div>

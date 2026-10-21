@@ -6,6 +6,7 @@ $stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/patient_display_helper.php';
+require_once 'sources/dashboard_patient_metrics.php';
 
 // Check if user is Super Admin
 if (
@@ -108,6 +109,22 @@ $inventory_sql = "SELECT
                   FROM inventory_items";
 $inventory_result = $conn->query($inventory_sql);
 $inventory_data = $inventory_result->fetch_assoc();
+
+// All-branch totals are the SUM of the branch numbers, using the same shared
+// definitions as each Branch Admin Dashboard (archived records excluded) and
+// the Inventory Overview (inventoryBranchSummary: items with stock records).
+$branchTotals = ['total_patients' => 0, 'active_patients' => 0, 'total_cases' => 0, 'ongoing_cases' => 0, 'completed_cases' => 0];
+$branchIdResult = $conn->query("SELECT branch_id FROM branches ORDER BY branch_id");
+while ($branchRow = $branchIdResult->fetch_assoc()) {
+    $branchMetrics = dashboardPatientMetrics($conn, (string)$branchRow['branch_id']);
+    foreach ($branchTotals as $key => $_) $branchTotals[$key] += (int)$branchMetrics[$key];
+}
+$patients_data['total_patients'] = $branchTotals['total_patients'];
+$cases_data['total_cases'] = $branchTotals['total_cases'];
+$cases_data['ongoing_cases'] = $branchTotals['ongoing_cases'];
+$cases_data['completed_cases'] = $branchTotals['completed_cases'];
+$inventoryAllBranches = inventoryBranchSummary($conn);
+$inventory_data['total_items'] = $inventoryAllBranches['total']['items'];
 
 // 7. Total Inventory Stocks by Branch
 $stock_sql = "SELECT COALESCE(SUM(s.total_batches),0) AS total_stocks,
@@ -861,7 +878,7 @@ $today_data = $today_result->fetch_assoc();
             </div>
 
             <div class="stat-sub">
-                All Time Total
+                <?php echo number_format($branchTotals['active_patients']); ?> Total Active Patients (sum of branches)
             </div>
         </div>
     </div>
@@ -928,6 +945,7 @@ $today_data = $today_result->fetch_assoc();
             </div>
 
             <div class="stat-title">Total Inventory Items</div>
+            <div class="small text-muted">Sum of branch inventories (<?php echo number_format($inventoryAllBranches['total']['medical_items']); ?> medical)</div>
 
             <div class="stat-number">
                 <?php echo number_format($inventory_data['total_items'] ?? 0); ?>

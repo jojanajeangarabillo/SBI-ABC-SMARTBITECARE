@@ -48,6 +48,7 @@ $inTransaction = false;
 try {
     require_once __DIR__ . '/db_connect.php';
     require_once __DIR__ . '/forecast_training_helper.php';
+    require_once __DIR__ . '/inventory_stock_helpers.php';
     if ($date !== null) forecastTrainingAssertDate($conn, $date);
 
     // Read-only schema checks: this tool never creates or alters database tables.
@@ -86,8 +87,10 @@ try {
     $sql = "SELECT d.item_id, d.inventory_date
             FROM daily_inventory_closings d
             JOIN inventory_items i ON i.item_id = d.item_id
+            JOIN inventory_categories c ON c.category_id = i.category_id
             WHERE d.branch_id = ? AND d.status IN ('Submitted', 'Reviewed')
-              AND i.is_forecastable = 1 AND d.inventory_date <= CURDATE()";
+              AND i.is_forecastable = 1 AND d.inventory_date <= CURDATE()
+              AND " . inventoryMedicalSql('c');  // non-medical items never reach training_dataset
     if ($date !== null) $sql .= ' AND d.inventory_date = ?';
     $sql .= ' ORDER BY d.inventory_date, d.item_id';
     $stmt = forecastTrainingStatement($conn, $sql);

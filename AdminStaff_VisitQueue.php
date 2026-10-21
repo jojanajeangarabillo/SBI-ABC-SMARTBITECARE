@@ -112,29 +112,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             $stmt->execute();
+            if (!$existingVisit) {
+                $visitId = (int)$conn->insert_id;
+            }
             $stmt->close();
 
-            $message = $case['full_name']
-                . ' (Case ' . $case['case_number'] . ') is waiting for assessment.';
-
-            workflowNotifyRole(
-                $conn,
-                $branchId,
-                3,
-                'Patient Waiting for Nurse',
-                $message,
-                'patient_queue'
-            );
+            // A Follow-up visit for a dose that is due (today, or late within the
+            // catch-up window) goes straight to vaccination: every active Nurse
+            // gets ONE "Ready for vaccination" notification for this visit (the
+            // source key makes a resubmitted form or a re-check-in harmless).
+            // Everything else waits for assessment, as before.
+            $readyDose = $visitType === 'Follow-up'
+                ? workflowScheduledVaccinationDose($conn, $caseId, $branchId)
+                : null;
+            if ($readyDose !== null) {
+                $doseText = preg_replace('/^Dose\s+/', '', (string)$readyDose['dose_display']);
+                workflowNotifyRoleOnce(
+                    $conn,
+                    $branchId,
+                    3,
+                    'Ready for Vaccination',
+                    'Ready for vaccination: ' . patientDisplayName($case['full_name'])
+                        . ' – Case ' . ($case['case_number'] ?: 'N/A')
+                        . ' – Dose ' . $doseText
+                        . ((int)$readyDose['days_late'] > 0 ? ' (' . (int)$readyDose['days_late'] . ' day(s) late)' : ''),
+                    'vaccination_ready',
+                    'vaccination_ready_visit_' . $visitId
+                );
+            } else {
+                workflowNotifyRole(
+                    $conn,
+                    $branchId,
+                    3,
+                    'Patient Waiting for Nurse',
+                    $case['full_name'] . ' (Case ' . $case['case_number'] . ') is waiting for assessment.',
+                    'patient_queue'
+                );
+            }
             workflowAudit(
                 $conn,
                 $userId,
                 $branchId,
-                'Checked in ' . $case['full_name'] . ' as ' . $visitType,
+                'Checked in ' . $case['full_name'] . ' as ' . $visitType
+                    . ($readyDose !== null ? ' (ready for vaccination: ' . $readyDose['dose_display'] . ')' : ''),
                 'Patient Visit'
             );
 
             $conn->commit();
-            workflowFlash('success', 'Patient checked in and sent to the Nurse queue.');
+            workflowFlash('success', $readyDose !== null
+                ? 'Patient checked in. The Nurse was notified: ready for vaccination (' . $readyDose['dose_display'] . ').'
+                : 'Patient checked in and sent to the Nurse queue.');
         } elseif ($action === 'cancel') {
             $visitId = (int)($_POST['visit_id'] ?? 0);
 
@@ -219,6 +246,10 @@ $visitStats = [
 ];
 
 $flash = workflowTakeFlash();
+// Today's Follow-up visits that go straight to vaccination (same rule as the Nurse pages).
+$readyVisits = workflowReadyVaccinationVisits($conn, $branchId);
+$readyVisitIds = [];
+foreach ($readyVisits as $readyVisit) $readyVisitIds[(int)$readyVisit['visit_id']] = $readyVisit;
 
 $statusClasses = [
     'Checked In' => 'status-info',
@@ -1089,6 +1120,12 @@ $statusClasses = [
                                         <span class="badge-status <?php echo workflowH($statusClass); ?>">
                                             <?php echo workflowH($visitStatus); ?>
                                         </span>
+                                        <?php if (isset($readyVisitIds[(int)$visit['visit_id']])): ?>
+                                            <div class="small text-success mt-1">
+                                                <i class="bi bi-check-circle-fill me-1"></i>Ready for vaccination
+                                                (<?php echo workflowH((string)$readyVisitIds[(int)$visit['visit_id']]['dose']['dose_display']); ?>) – no new assessment
+                                            </div>
+                                        <?php endif; ?>
                                     </td>
                                     <td>
                                         <?php if (!empty($visit['nurse_name'])): ?>

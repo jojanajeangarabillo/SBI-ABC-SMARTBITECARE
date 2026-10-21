@@ -71,6 +71,40 @@ function forecastTrainingInvalidateForecasts(mysqli $conn, string $branchId, str
     $stmt->close();
 }
 
+/**
+ * The day's activity counts written to training_dataset by the daily closing
+ * sync, and shown read-only on the Nurse Daily Inventory (so the number shown
+ * is exactly the number saved). Same queries as before (moved here, unchanged):
+ *   patient_count             distinct patients with a visit (check-in) that day, Cancelled excluded
+ *   animal_bite_cases         distinct cases with a visit that day (new cases and follow-ups)
+ *   vaccinations_administered distinct doses (patient, case, dose) completed that day, archived excluded
+ */
+function forecastTrainingDayCounts(mysqli $conn, string $branchId, string $date): array
+{
+    // Count each patient and case once, even when several products were used.
+    $stmt = forecastTrainingStatement($conn,
+        "SELECT COUNT(DISTINCT patient_id) AS patient_count,
+                COUNT(DISTINCT case_id) AS animal_bite_cases
+         FROM patient_visits WHERE branch_id = ? AND visit_date = ? AND workflow_status <> 'Cancelled'");
+    $stmt->bind_param('ss', $branchId, $date);
+    forecastTrainingExecute($stmt);
+    $counts = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    $result = [
+        'patient_count' => (int)$counts['patient_count'],
+        'animal_bite_cases' => (int)$counts['animal_bite_cases'],
+    ];
+    $stmt = forecastTrainingStatement($conn,
+        "SELECT COUNT(DISTINCT patient_id, case_id, dose_number) AS doses
+         FROM vaccination_records WHERE branch_id = ? AND date_administered = ?
+         AND vaccination_status = 'Completed' AND is_archived = 0");
+    $stmt->bind_param('ss', $branchId, $date);
+    forecastTrainingExecute($stmt);
+    $result['vaccinations_administered'] = (int)$stmt->get_result()->fetch_assoc()['doses'];
+    $stmt->close();
+    return $result;
+}
+
 /** Read the authoritative closing and daily counts; read-only when $lock is false. */
 function forecastTrainingClosingData(mysqli $conn, string $branchId, int $itemId, string $date, bool $lock = false): array
 {
@@ -126,25 +160,7 @@ function forecastTrainingClosingData(mysqli $conn, string $branchId, int $itemId
         throw new RuntimeException('Usage changed after this closing. Resubmit the daily inventory before synchronizing training data.');
     }
 
-    // Count each patient and case once, even when several products were used.
-    $stmt = forecastTrainingStatement($conn,
-        "SELECT COUNT(DISTINCT patient_id) AS patient_count,
-                COUNT(DISTINCT case_id) AS animal_bite_cases
-         FROM patient_visits WHERE branch_id = ? AND visit_date = ? AND workflow_status <> 'Cancelled'");
-    $stmt->bind_param('ss', $branchId, $date);
-    forecastTrainingExecute($stmt);
-    $counts = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-    $data['patient_count'] = (int)$counts['patient_count'];
-    $data['animal_bite_cases'] = (int)$counts['animal_bite_cases'];
-    $stmt = forecastTrainingStatement($conn,
-        "SELECT COUNT(DISTINCT patient_id, case_id, dose_number) AS doses
-         FROM vaccination_records WHERE branch_id = ? AND date_administered = ?
-         AND vaccination_status = 'Completed' AND is_archived = 0");
-    $stmt->bind_param('ss', $branchId, $date);
-    forecastTrainingExecute($stmt);
-    $data['vaccinations_administered'] = (int)$stmt->get_result()->fetch_assoc()['doses'];
-    $stmt->close();
+    $data = array_merge($data, forecastTrainingDayCounts($conn, $branchId, $date));
     $data['minimum_stock_level'] = stockQuantityDecimal(stockQuantityParse((string)$closing['minimum_stock'], true));
     $data['low_stock_target'] = stockQuantityParse($data['ending_stock'], true)
         <= stockQuantityParse($data['minimum_stock_level'], true) ? 1 : 0;
