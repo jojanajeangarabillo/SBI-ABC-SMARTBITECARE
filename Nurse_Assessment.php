@@ -5221,7 +5221,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const pixels = { front: null, back: null };
     let view = markers.length && markers.every(m => m.view === 'back') ? 'back' : 'front';
 
-    // Site of Bite follows the dots until the nurse types her own text.
+    // Site of Bite follows the dots until the nurse types their own text.
     const autoSite = () => Array.from(new Set(markers.map((m, i) => biteMarkerLabel(m, i)))).join('; ').slice(0, 255);
     let lastAutoSite = autoSite();
     const siteFollowsDots = () => siteField && (siteField.value.trim() === '' || siteField.value === lastAutoSite);
