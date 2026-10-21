@@ -286,9 +286,14 @@ function assessmentBiteMarkers($raw): string {
             || (float)$marker['y'] < 0 || (float)$marker['y'] > 100) {
             throw new RuntimeException('Invalid bite-location marker.');
         }
+        $view = $marker['view'] ?? 'front';
+        if (!in_array($view, ['front', 'back'], true)) {
+            throw new RuntimeException('Invalid bite-location marker view.');
+        }
         $clean[] = [
             'x' => round((float)$marker['x'], 4),
             'y' => round((float)$marker['y'], 4),
+            'view' => $view,
             'label' => trim($label)
         ];
     }
@@ -2685,10 +2690,16 @@ $flash = workflowTakeFlash();
         .bite-map-panel { border: 1px solid #d6e1e8; border-radius: 12px; padding: 18px; background: #f8fafc; }
         .bite-map-stage { position: relative; width: min(100%, 340px); margin: 12px auto; background: #526778; border-radius: 10px; overflow: hidden; }
         .bite-map-stage img { display: block; width: 100%; height: auto; cursor: crosshair; user-select: none; }
+        .bite-map-stage img[hidden] { display: none; }
+        .bite-map-stage img { -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
         .bite-map-marker { position: absolute; transform: translate(-50%, -50%); width: 28px; height: 28px; padding: 0; border: 2px solid white; border-radius: 50%; background: #b91c1c; color: white; font-size: 12px; font-weight: bold; box-shadow: 0 1px 4px #0008; cursor: pointer; }
         .bite-map-marker:focus-visible { outline: 3px solid #facc15; outline-offset: 2px; }
         .bite-map-list { max-height: 250px; overflow-y: auto; padding-left: 24px; }
         .bite-map-list li { margin-bottom: 8px; }
+        .bite-map-views .btn { font-weight: 600; }
+        .bite-map-view-label { position: absolute; top: 8px; left: 10px; z-index: 2; padding: 2px 8px; border-radius: 6px; background: rgba(255,255,255,.85); color: #2b3a8c; font-size: 11px; font-weight: 800; letter-spacing: .06em; pointer-events: none; }
+        .bite-map-list li.view-back::marker { color: #8a4b00; font-weight: 700; }
+        .bite-map-list li.view-front::marker { color: #2b3a8c; font-weight: 700; }
 
     </style>
 </head>
@@ -3670,12 +3681,18 @@ $flash = workflowTakeFlash();
                                 <div class="col-12">
                                     <div class="bite-map-panel" id="biteMapPanel">
                                         <h6 class="mb-2">Bite Location Diagram</h6>
-                                        <p class="small text-muted mb-3">Click the body to place a dot on each bite location. Click a numbered dot or its Remove button to delete it. Write the site in Site of Bite above.</p>
+                                        <p class="small text-muted mb-3">Choose Front or Back, then click the body to place a dot on each bite location (both views can be marked in one assessment). Each dot is named after the body part, e.g. "Back – Left calf", and Site of Bite above is filled from the dots (you can still edit it). Click a numbered dot or its Remove button to delete it.</p>
                                         <input type="hidden" id="bite_markers" name="bite_markers" value="<?= workflowH((string)($selected['bite_markers'] ?? '[]')) ?>">
                                         <div class="row g-3">
                                             <div class="col-md-6">
-                                                <div class="bite-map-stage" id="biteMapStage">
-                                                    <img id="biteMapImage" src="images/human-figure.png" alt="Human silhouette for marking bite locations" draggable="false">
+                                                <div class="btn-group bite-map-views w-100" role="group" aria-label="Body view">
+                                                    <button type="button" class="btn btn-outline-primary active" data-view="front" aria-pressed="true">Front <span class="badge text-bg-light ms-1" data-view-count="front">0</span></button>
+                                                    <button type="button" class="btn btn-outline-primary" data-view="back" aria-pressed="false">Back <span class="badge text-bg-light ms-1" data-view-count="back">0</span></button>
+                                                </div>
+                                                <div class="bite-map-stage" id="biteMapStage" data-view="front">
+                                                    <span class="bite-map-view-label" id="biteMapViewLabel">FRONT</span>
+                                                    <img id="biteMapImage" data-view="front" src="images/human-figure.png" alt="Front view of the body for marking bite locations" draggable="false">
+                                                    <img id="biteMapImageBack" data-view="back" src="images/human-figure-back.png" alt="Back view of the body for marking bite locations" draggable="false" hidden>
                                                 </div>
                                             </div>
                                             <div class="col-md-6">
@@ -5135,14 +5152,56 @@ document.addEventListener('DOMContentLoaded', function () {
 
 
 <script>
+// Bite location diagram: Front and Back views. Each dot is saved as
+// {x, y, view, label} in bite_markers (x/y = % of the figure image). The label
+// names the body part with its view ("Back – Left calf") and Site of Bite is
+// filled from the labels (still editable). Old dots without a view are Front.
+const BITE_VIEW_TITLE = { front: 'Front', back: 'Back' };
+
+/** Body part at x/y (% of the figure). Front: the patient's right is on the
+ *  viewer's left; Back (figure seen from behind): the patient's left is on the left. */
+function biteRegionName(view, x, y) {
+    const back = view === 'back';
+    const side = x < 50 ? (back ? 'Left' : 'Right') : (back ? 'Right' : 'Left');
+    const sided = name => side + ' ' + name;
+    const central = Math.abs(x - 50) < 2.5;
+    if (y < 19) return back ? 'Back of the head' : (y < 11 ? 'Head' : 'Face');
+    if (y < 22.5) return back ? 'Nape' : 'Neck';
+    if ((x < 38 || x > 62) && y < 58) {                     // arms
+        if (y < 27) return sided('shoulder');
+        if (y < 38) return sided(back ? 'back of the upper arm' : 'upper arm');
+        if (y < 44) return sided(back ? 'elbow' : 'inner elbow');
+        if (y < 49.5) return sided(back ? 'back of the forearm' : 'forearm');
+        return sided(back ? 'back of the hand' : 'hand / palm');
+    }
+    if (y < 47) {                                           // trunk
+        if (y < 27 && Math.abs(x - 50) > 8) return sided('shoulder');
+        if (back) return (central ? '' : side + ' ') + (y < 37 ? 'upper back' : 'lower back');
+        return central ? (y < 37 ? 'Chest (center)' : 'Abdomen (center)') : sided(y < 37 ? 'chest' : 'abdomen');
+    }
+    if (y < 52) return back ? (central ? 'Buttocks (center)' : sided('buttock')) : (central ? 'Groin' : sided('hip'));
+    if (y < 70) return sided(back ? 'back of the thigh' : 'thigh');
+    if (y < 76) return sided(back ? 'back of the knee' : 'knee');
+    if (y < 88) return sided(back ? 'calf' : 'shin');
+    return sided(back ? 'heel' : 'foot / ankle');
+}
+
+function biteMarkerLabel(marker, index) {
+    const label = String(marker.label || '').trim();
+    return label !== '' ? label : (BITE_VIEW_TITLE[marker.view || 'front'] + ' – bite location ' + (index + 1));
+}
+
 document.addEventListener('DOMContentLoaded', function () {
     const field = document.getElementById('bite_markers');
     if (!field) return;
     const stage = document.getElementById('biteMapStage');
-    const image = document.getElementById('biteMapImage');
+    const images = { front: document.getElementById('biteMapImage'), back: document.getElementById('biteMapImageBack') };
+    const viewLabel = document.getElementById('biteMapViewLabel');
+    const viewButtons = Array.from(document.querySelectorAll('.bite-map-views [data-view]'));
     const list = document.getElementById('biteMapList');
     const status = document.getElementById('biteMapStatus');
     const clear = document.getElementById('biteMapClear');
+    const siteField = document.getElementById('exposure_site');
     let markers;
     try {
         markers = JSON.parse(field.value || '[]');
@@ -5150,98 +5209,164 @@ document.addEventListener('DOMContentLoaded', function () {
             !m || typeof m.x !== 'number' || typeof m.y !== 'number' ||
             !Number.isFinite(m.x) || !Number.isFinite(m.y) ||
             m.x < 0 || m.x > 100 || m.y < 0 || m.y > 100 ||
-            (m.label !== undefined && typeof m.label !== 'string')
+            (m.label !== undefined && typeof m.label !== 'string') ||
+            (m.view !== undefined && m.view !== 'front' && m.view !== 'back')
         )) throw new Error('Invalid saved markers');
     } catch (_) {
         status.textContent = 'Saved markers could not be read. Reload before saving this assessment.';
         field.form.querySelectorAll('button[type="submit"]').forEach(b => b.disabled = true);
         return;
     }
-    let pixels = null;
-    let ready = false;
+    markers.forEach(m => { if (m.view !== 'back') m.view = 'front'; });
+    const pixels = { front: null, back: null };
+    let view = markers.length && markers.every(m => m.view === 'back') ? 'back' : 'front';
+
+    // Site of Bite follows the dots until the nurse types her own text.
+    const autoSite = () => Array.from(new Set(markers.map((m, i) => biteMarkerLabel(m, i)))).join('; ').slice(0, 255);
+    let lastAutoSite = autoSite();
+    const siteFollowsDots = () => siteField && (siteField.value.trim() === '' || siteField.value === lastAutoSite);
+    function syncSite() {
+        if (!siteField) return;
+        const next = autoSite();
+        if (siteFollowsDots() && markers.length > 0) siteField.value = next;
+        lastAutoSite = next;
+    }
+
     function render(message) {
         field.value = JSON.stringify(markers);
         stage.querySelectorAll('.bite-map-marker').forEach(el => el.remove());
         list.replaceChildren();
         markers.forEach((marker, index) => {
-            const pin = document.createElement('button');
-            pin.type = 'button';
-            pin.className = 'bite-map-marker';
-            pin.style.left = marker.x + '%';
-            pin.style.top = marker.y + '%';
-            pin.textContent = String(index + 1);
-            const markerName = (marker.label || '').trim() || ('Bite location ' + (index + 1));
-            pin.setAttribute('aria-label', 'Remove bite marker ' + (index + 1) + ': ' + markerName);
-            pin.title = pin.getAttribute('aria-label');
+            const name = biteMarkerLabel(marker, index);
             const remove = () => {
+                const keep = siteFollowsDots();
                 markers.splice(index, 1);
+                if (keep && siteField) { siteField.value = autoSite(); }
+                lastAutoSite = autoSite();
                 render('Marker removed.');
             };
-            pin.addEventListener('click', remove);
-            stage.appendChild(pin);
+            if (marker.view === view) {
+                const pin = document.createElement('button');
+                pin.type = 'button';
+                pin.className = 'bite-map-marker';
+                pin.style.left = marker.x + '%';
+                pin.style.top = marker.y + '%';
+                pin.textContent = String(index + 1);
+                pin.setAttribute('aria-label', 'Remove bite marker ' + (index + 1) + ': ' + name);
+                pin.title = pin.getAttribute('aria-label');
+                pin.addEventListener('click', remove);
+                stage.appendChild(pin);
+            }
             const item = document.createElement('li');
+            item.className = 'view-' + marker.view;
             const text = document.createElement('span');
-            text.textContent = markerName + ' ';
+            text.textContent = name + ' ';
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'btn btn-outline-danger btn-sm ms-2';
             button.textContent = 'Remove';
-            button.setAttribute('aria-label', pin.getAttribute('aria-label'));
+            button.setAttribute('aria-label', 'Remove bite marker ' + (index + 1) + ': ' + name);
             button.addEventListener('click', remove);
             item.append(text, button);
             list.appendChild(item);
         });
+        for (const v of ['front', 'back']) {
+            const badge = document.querySelector('[data-view-count="' + v + '"]');
+            if (badge) badge.textContent = String(markers.filter(m => m.view === v).length);
+        }
         clear.disabled = markers.length === 0;
-        status.textContent = (message ? message + ' ' : '') + markers.length + ' bite marker(s). Save the assessment to keep changes.';
+        status.textContent = (message ? message + ' ' : '') + markers.length + ' bite marker(s) ('
+            + markers.filter(m => m.view === 'front').length + ' front, ' + markers.filter(m => m.view === 'back').length
+            + ' back). Save the assessment to keep changes.';
     }
-    function loadImage() {
-        if (!image.naturalWidth) return;
+
+    function showView(next) {
+        view = next;
+        stage.dataset.view = view;
+        images.front.hidden = view !== 'front';
+        images.back.hidden = view !== 'back';
+        viewLabel.textContent = view === 'back' ? 'BACK' : 'FRONT';
+        viewButtons.forEach(btn => {
+            const on = btn.dataset.view === view;
+            btn.classList.toggle('active', on);
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+        render();
+    }
+    viewButtons.forEach(btn => btn.addEventListener('click', () => showView(btn.dataset.view)));
+
+    function loadImage(v) {
+        const image = images[v];
+        if (!image || !image.naturalWidth) return;
         try {
             const canvas = document.createElement('canvas');
             canvas.width = image.naturalWidth;
             canvas.height = image.naturalHeight;
             const context = canvas.getContext('2d', { willReadFrequently: true });
             context.drawImage(image, 0, 0);
-            pixels = context.getImageData(0, 0, canvas.width, canvas.height);
-            ready = true;
+            pixels[v] = context.getImageData(0, 0, canvas.width, canvas.height);
             render();
         } catch (_) {
-            status.textContent = 'The body image could not be read. Use images/human-figure.png from this project.';
+            status.textContent = 'The body image could not be read. Use images/human-figure.png and images/human-figure-back.png from this project.';
         }
     }
-    image.addEventListener('load', loadImage);
-    image.addEventListener('error', () => {
-        ready = false;
-        status.textContent = 'Body image missing. Place the transparent PNG at images/human-figure.png. Existing markers are preserved.';
-    });
-    image.addEventListener('click', event => {
-        if (!ready) return;
-        if (markers.length >= 30) {
-            status.textContent = 'Maximum 30 markers. Remove a marker before adding another.';
-            return;
-        }
-        const rect = image.getBoundingClientRect();
-        const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-        const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
-        const px = Math.min(pixels.width - 1, Math.floor(x * pixels.width));
-        const py = Math.min(pixels.height - 1, Math.floor(y * pixels.height));
-        if (pixels.data[(py * pixels.width + px) * 4 + 3] < 128) {
-            status.textContent = 'Click on the human silhouette to place the marker.';
-            return;
-        }
-        // The written site stays in Site of Bite; the dot only marks the location.
-        markers.push({ x: Number((x * 100).toFixed(4)), y: Number((y * 100).toFixed(4)), label: '' });
-        render('Marker added.');
-    });
+    for (const v of ['front', 'back']) {
+        const image = images[v];
+        image.addEventListener('load', () => loadImage(v));
+        image.addEventListener('error', () => {
+            pixels[v] = null;
+            status.textContent = 'Body image missing (' + (v === 'back' ? 'images/human-figure-back.png' : 'images/human-figure.png') + '). Existing markers are preserved.';
+        });
+        image.addEventListener('click', event => {
+            const data = pixels[v];
+            if (!data) return;
+            if (markers.length >= 30) {
+                status.textContent = 'Maximum 30 markers. Remove a marker before adding another.';
+                return;
+            }
+            const rect = image.getBoundingClientRect();
+            let x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+            let y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+            let px = Math.min(data.width - 1, Math.floor(x * data.width));
+            let py = Math.min(data.height - 1, Math.floor(y * data.height));
+            const onBody = (qx, qy) => qx >= 0 && qy >= 0 && qx < data.width && qy < data.height
+                && data.data[(qy * data.width + qx) * 4 + 3] >= 128;
+            if (!onBody(px, py)) {
+                // A finger tap just outside the outline (tablets) snaps to the nearest point on the body.
+                const radius = Math.round(data.width * 0.025);
+                let best = null;
+                for (let dy = -radius; dy <= radius; dy += 2) {
+                    for (let dx = -radius; dx <= radius; dx += 2) {
+                        const d = dx * dx + dy * dy;
+                        if (d <= radius * radius && (!best || d < best.d) && onBody(px + dx, py + dy)) best = { d, dx, dy };
+                    }
+                }
+                if (!best) {
+                    status.textContent = 'Click on the body to place the marker.';
+                    return;
+                }
+                px += best.dx;
+                py += best.dy;
+                x = (px + 0.5) / data.width;
+                y = (py + 0.5) / data.height;
+            }
+            const xp = Number((x * 100).toFixed(4));
+            const yp = Number((y * 100).toFixed(4));
+            const region = biteRegionName(v, xp, yp);
+            markers.push({ x: xp, y: yp, view: v, label: BITE_VIEW_TITLE[v] + ' – ' + region.charAt(0).toUpperCase() + region.slice(1) });
+            syncSite();
+            render('Marker added: ' + markers[markers.length - 1].label + '.');
+        });
+        if (image.complete && image.naturalWidth) loadImage(v);
+    }
     clear.addEventListener('click', () => {
+        const keep = siteFollowsDots();
         markers = [];
+        if (keep && siteField) siteField.value = '';
+        lastAutoSite = '';
         render('All markers cleared.');
     });
-    render();
-    if (image.complete) {
-        if (image.naturalWidth) loadImage();
-        else status.textContent = 'Body image missing. Place the transparent PNG at images/human-figure.png.';
-    }
+    showView(view);
 });
 </script>
 

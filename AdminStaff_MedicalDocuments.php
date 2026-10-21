@@ -1065,8 +1065,8 @@ function writePatientPdf($filePath, $documentType, $data)
     $objects = [];
     $objects[1] = '<< /Type /Catalog /Pages 2 0 R >>';
     $objects[2] = '<< /Type /Pages /Kids [5 0 R] /Count 1 >>';
-    $objects[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
-    $objects[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>';
+    $objects[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+    $objects[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
 
     $resources = '/Font << /F1 3 0 R /F2 4 0 R >>';
 

@@ -370,6 +370,18 @@ function getBranchName($branchId) {
 // ============================================
 
 /**
+ * Text for FPDF's core fonts (Windows-1252): cut to $max characters (not bytes)
+ * and convert from UTF-8, so "Back – Left calf" or "Peñafrancia" print correctly.
+ */
+function reportPdfText($value, int $max = 0): string
+{
+    $value = (string)$value;
+    if ($max > 0 && mb_strlen($value) > $max) $value = mb_substr($value, 0, $max);
+    $converted = function_exists('iconv') ? @iconv('UTF-8', 'Windows-1252//TRANSLIT//IGNORE', $value) : false;
+    return $converted !== false ? $converted : $value;
+}
+
+/**
  * Generate Patient Report PDF
  *
  * @param string $branchId Branch ID
@@ -519,9 +531,9 @@ function generateCaseReport($branchId, $startDate = null, $endDate = null) {
     $data = array_map(function($case) {
         return [
             patientDisplayCaseNumber($case['case_number'] ?? null, $case['registry_number'] ?? null),
-            substr($case['patient_name'] ?: 'Unknown', 0, 20),
-            $case['animal_type'] ?: 'N/A',
-            substr($case['bite_location'] ?: 'N/A', 0, 20),
+            reportPdfText($case['patient_name'] ?: 'Unknown', 20),
+            reportPdfText($case['animal_type'] ?: 'N/A'),
+            reportPdfText($case['bite_location'] ?: 'N/A', 20),
             $case['case_status'] ?: 'N/A',
             date('Y-m-d', strtotime($case['date_of_bite'] ?: $case['created_at']))
         ];
