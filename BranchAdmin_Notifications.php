@@ -21,6 +21,9 @@ function notificationTypeLabel(?string $type): string
 function notificationPresentation(?string $type, ?string $title): array
 {
     $value = strtolower(trim((string)$type . ' ' . (string)$title));
+    if ((string)$type === 'approval_request') {
+        return ['bi-patch-check-fill', 'inventory', 'BranchAdmin_Approvals.php', 'Open Pending Approvals'];
+    }
     if (strpos($value, 'forecast') !== false || strpos($value, 'prediction') !== false) {
         return ['bi-graph-up-arrow', 'forecast', 'BranchAdmin_Forecasting.php', 'View Forecast'];
     }

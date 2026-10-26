@@ -38,6 +38,7 @@ function notificationTypeClass(string $type): string {
         'stock_out' => 'stock_out',
         'stock_adjustment' => 'stock_adjustment',
         'restock_request' => 'restock_request',
+        'approval_decision' => 'approval',
         'incoming_return' => 'incoming_return', 'return_received' => 'return_received',
         default => 'general'
     };
@@ -46,7 +47,7 @@ function notifIconClass(string $type): string {
     return match (notificationTypeClass($type)) {
         'low_stock' => 'icon-low', 'expiring' => 'icon-expiring', 'forecast' => 'icon-forecast',
         'stock_in' => 'icon-in', 'stock_out' => 'icon-out', 'stock_adjustment' => 'icon-adjustment',
-        'restock_request', 'incoming_return', 'return_received' => 'icon-restock',
+        'restock_request', 'incoming_return', 'return_received', 'approval' => 'icon-restock',
         default => 'icon-general'
     };
 }
@@ -55,7 +56,7 @@ function notifIcon(string $type): string {
         'low_stock' => 'bi-exclamation-triangle-fill', 'expiring' => 'bi-hourglass-split',
         'forecast' => 'bi-graph-up-arrow', 'stock_in' => 'bi-box-arrow-in-down',
         'stock_out' => 'bi-box-arrow-up', 'stock_adjustment' => 'bi-sliders',
-        'restock_request' => 'bi-cart-plus-fill', 'incoming_return' => 'bi-arrow-return-left', 'return_received' => 'bi-check2-circle',
+        'restock_request' => 'bi-cart-plus-fill', 'approval' => 'bi-patch-check-fill', 'incoming_return' => 'bi-arrow-return-left', 'return_received' => 'bi-check2-circle',
         default => 'bi-bell-fill'
     };
 }
@@ -71,7 +72,7 @@ function badgeText(string $type): string {
     return match (notificationTypeClass($type)) {
         'low_stock' => 'Low Stock', 'expiring' => 'Expiring', 'forecast' => 'Forecast',
         'stock_in' => 'Stock In', 'stock_out' => 'Stock Out', 'stock_adjustment' => 'Adjusted',
-        'restock_request' => 'Restock Request', 'incoming_return' => 'Incoming Return', 'return_received' => 'Return Received',
+        'restock_request' => 'Restock Request', 'approval' => 'Approval Decision', 'incoming_return' => 'Incoming Return', 'return_received' => 'Return Received',
         default => 'Update'
     };
 }
