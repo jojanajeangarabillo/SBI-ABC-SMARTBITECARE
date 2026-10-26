@@ -1677,6 +1677,41 @@ if ($selected) {
     );
 }
 
+/*
+ * "Record Administered Products": opens Vaccination with this patient, case
+ * and the dose due (workflowFirstOpenDose), plus visit_id so the page fills
+ * in the regimen's product, sites and date and returns here after saving.
+ * The schedule exists only once THIS visit's assessment is saved, so until
+ * then the button is disabled with the reason (the page script also disables
+ * it while the form has unsaved changes). Not Anti-Rabies Vaccine uses the
+ * one-time product form on this page instead (no anti-rabies dose).
+ */
+$recordProducts = ['url' => '', 'block' => '', 'dose' => ''];
+if ($selected) {
+    $savedProfile = strtoupper(trim((string)($selected['treatment_profile'] ?? '')));
+    if (!(int)$selected['has_assessment']) {
+        $recordProducts['block'] = 'Save the assessment first: the vaccination schedule exists only after Save Assessment and Generate Schedule.';
+    } elseif ($savedProfile === 'OTHER') {
+        $recordProducts['block'] = 'This assessment is saved as Not Anti-Rabies Vaccine. Save it as an anti-rabies assessment first to record an anti-rabies dose.';
+    } else {
+        $openDose = workflowFirstOpenDose($conn, (int)$selected['case_id'], $branchId);
+        if ($openDose === null) {
+            $recordProducts['block'] = 'Every dose of this vaccination cycle is already recorded.';
+        } elseif (!$openDose['is_due']) {
+            $recordProducts['block'] = 'No dose is due today. Next: ' . $openDose['dose_display'] . ' on '
+                . date('M d, Y', strtotime((string)$openDose['scheduled_date'])) . '.';
+        } else {
+            $recordProducts['url'] = workflowVaccinateUrl(
+                (int)$selected['patient_id'],
+                (int)$selected['case_id'],
+                (int)$openDose['dose_number'],
+                $selectedId
+            );
+            $recordProducts['dose'] = (string)$openDose['dose_display'];
+        }
+    }
+}
+
 $nonRabiesItems = [];
 $nonRabiesAdministrations = [];
 
@@ -4270,13 +4305,25 @@ $flash = workflowTakeFlash();
                                     </button>
 
                                     <a
-                                        class="btn btn-outline-primary"
-                                        href="Nurse_Vaccination.php"
+                                        class="btn btn-outline-primary<?= $recordProducts['url'] === '' ? ' disabled' : '' ?>"
+                                        id="recordProductsButton"
+                                        href="<?= workflowH($recordProducts['url'] !== '' ? $recordProducts['url'] : '#recordProductsHint') ?>"
+                                        aria-disabled="<?= $recordProducts['url'] === '' ? 'true' : 'false' ?>"
+                                        aria-describedby="recordProductsHint"
+                                        data-vaccinate-url="<?= workflowH($recordProducts['url']) ?>"
+                                        data-block-reason="<?= workflowH($recordProducts['block']) ?>"
+                                        data-dose="<?= workflowH($recordProducts['dose']) ?>"
                                     >
                                         <i class="bi bi-shield-check me-1"></i>
 
                                         Record Administered Products
                                     </a>
+
+                                    <small class="text-muted align-self-center" id="recordProductsHint">
+                                        <?= workflowH($recordProducts['url'] !== ''
+                                            ? 'Opens Vaccination with this patient, case and ' . $recordProducts['dose'] . ' filled in.'
+                                            : $recordProducts['block']) ?>
+                                    </small>
 
                                 </div>
 
@@ -4594,6 +4641,8 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     window.SBC_OUTSIDE_INITIAL = restored ? restored.values : null;
+    // A restored draft is not saved yet: Record Administered Products waits for a save.
+    window.SBC_ASSESSMENT_DRAFT_RESTORED = Boolean(restored);
     sbcInitClinicalForm(form);
 
     if (restored) {
@@ -4658,6 +4707,78 @@ document.addEventListener('DOMContentLoaded', function () {
         panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
         panel.querySelector('.alert').classList.add('border', 'border-danger', 'border-2');
     }, true);
+});
+
+/*
+ * Record Administered Products. Anti-rabies: opens Vaccination prefilled from
+ * the SAVED assessment, so it is disabled while the form has unsaved changes
+ * (or a restored draft) and the hint says to save first. Not Anti-Rabies
+ * Vaccine checked: opens the one-time product form below for this patient and
+ * case (no anti-rabies dose); that form saves the assessment with the products.
+ */
+document.addEventListener('DOMContentLoaded', function () {
+    const form = document.getElementById('assessmentForm');
+    const button = document.getElementById('recordProductsButton');
+    const hint = document.getElementById('recordProductsHint');
+    const nonArv = document.getElementById('not_anti_rabies');
+    const panel = document.getElementById('nonArvAdministrationPanel');
+    if (!form || !button || !hint) return;
+    const url = button.dataset.vaccinateUrl || '';
+    const block = button.dataset.blockReason || '';
+    const ignored = new Set(['csrf_token', 'visit_id', 'action']);
+
+    function serialize() {
+        return JSON.stringify(Array.from(form.elements)
+            .filter(el => el.name && !ignored.has(el.name) && !el.name.startsWith('non_rabies_')
+                && el.type !== 'submit' && el.type !== 'button')
+            .map(el => [el.name, el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value]));
+    }
+
+    function setState(enabled, href, text) {
+        button.classList.toggle('disabled', !enabled);
+        button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+        button.setAttribute('href', enabled ? href : '#recordProductsHint');
+        hint.textContent = text;
+    }
+
+    let snapshot = null;
+    function sync() {
+        if (nonArv && nonArv.checked) {
+            setState(true, '#nonArvAdministrationPanel',
+                'Not Anti-Rabies Vaccine: opens the one-time product form below for this patient and case (no anti-rabies dose).');
+        } else if (block) {
+            setState(false, '', block);
+        } else if (window.SBC_ASSESSMENT_DRAFT_RESTORED || snapshot === null || serialize() !== snapshot) {
+            setState(false, '', 'You have unsaved changes. Save the assessment first, then record the products.');
+        } else {
+            setState(true, url, 'Opens Vaccination with this patient, case and ' + (button.dataset.dose || 'the dose due') + ' filled in.');
+        }
+    }
+
+    button.addEventListener('click', function (event) {
+        sync();
+        if (button.classList.contains('disabled')) {
+            event.preventDefault();
+            return;
+        }
+        if (nonArv && nonArv.checked && panel) {
+            event.preventDefault();
+            panel.style.display = '';
+            panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            const firstProduct = panel.querySelector('.non-arv-product-select');
+            if (firstProduct) firstProduct.focus({ preventScroll: true });
+        }
+    });
+    form.addEventListener('input', sync);
+    form.addEventListener('change', sync);
+    // Bite markers change the form without input events.
+    form.addEventListener('click', function () { setTimeout(sync, 0); });
+
+    // After every page script has set the form up (draft, regimen, Not Anti-Rabies).
+    setTimeout(function () {
+        snapshot = serialize();
+        sync();
+    }, 0);
 });
 
 // Late Dose Decision: "Restart from Day 0" uses today's re-assessment as the new D0.
