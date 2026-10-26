@@ -848,3 +848,50 @@ function inventoryApprovalReviewClosing(mysqli $conn, int $closingId, int $admin
         throw $e;
     }
 }
+
+/* ------------------------------------------------------------------
+ * ITEM TRANSACTION HISTORY: who requested, who approved, when, why.
+ * stock_transactions.approval_request_id links a movement to its request
+ * (approved adjustment / stock-out / disposal, or the restock request a
+ * Stock In fulfilled). Unlinked movements show "No request".
+ * ---------------------------------------------------------------- */
+
+/** SELECT columns and JOINs for history queries; NULL columns before the migration. */
+function inventoryApprovalHistorySql(mysqli $conn, string $alias = 'st'): array
+{
+    if (!inventoryApprovalReady($conn)) {
+        return ['select' => 'NULL AS ar_request_id, NULL AS ar_type, NULL AS ar_reason, NULL AS ar_status,
+                NULL AS ar_requested_at, NULL AS ar_decided_at, NULL AS ar_requester, NULL AS ar_decider', 'join' => ''];
+    }
+    return [
+        'select' => 'ar.request_id AS ar_request_id, ar.request_type AS ar_type, ar.reason AS ar_reason, ar.status AS ar_status,
+                ar.requested_at AS ar_requested_at, ar.decided_at AS ar_decided_at,
+                arq.username AS ar_requester, ard.username AS ar_decider',
+        'join' => " LEFT JOIN inventory_approval_requests ar ON ar.request_id = $alias.approval_request_id
+                LEFT JOIN users arq ON arq.user_id = ar.requested_by
+                LEFT JOIN users ard ON ard.user_id = ar.decided_by",
+    ];
+}
+
+/** Request / approval fields of one history row for display and CSV. */
+function inventoryApprovalHistoryFields(array $row): array
+{
+    if (empty($row['ar_request_id'])) {
+        return ['linked' => false, 'request' => 'No request', 'requested_by' => '', 'requested_at' => '',
+            'approved_by' => '', 'approved_at' => '', 'reason' => '', 'text' => 'No request'];
+    }
+    $fmt = static fn($v): string => $v ? date('m/d/Y h:i A', strtotime((string)$v)) : '';
+    $fields = [
+        'linked' => true,
+        'request' => '#' . (int)$row['ar_request_id'] . ' ' . inventoryApprovalTypeLabel((string)$row['ar_type']),
+        'requested_by' => (string)($row['ar_requester'] ?? ''),
+        'requested_at' => $fmt($row['ar_requested_at'] ?? null),
+        'approved_by' => (string)($row['ar_decider'] ?? ''),
+        'approved_at' => $fmt($row['ar_decided_at'] ?? null),
+        'reason' => (string)($row['ar_reason'] ?? ''),
+    ];
+    $fields['text'] = $fields['request'] . ' | Requested by ' . ($fields['requested_by'] ?: '—') . ' ' . $fields['requested_at']
+        . ' | Approved by ' . ($fields['approved_by'] ?: '—') . ' ' . $fields['approved_at']
+        . ($fields['reason'] !== '' ? ' | Reason: ' . $fields['reason'] : '');
+    return $fields;
+}
