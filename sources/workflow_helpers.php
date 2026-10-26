@@ -542,10 +542,35 @@ function workflowRecordLateDecision(
 function workflowScheduledVaccinationDose(mysqli $conn, int $caseId, string $branchId, ?string $asOf = null): ?array
 {
     $asOf = $asOf ?? date('Y-m-d');
-    $window = WORKFLOW_LATE_DOSE_WINDOW_DAYS;
+    $dose = workflowFirstOpenDose($conn, $caseId, $branchId, $asOf);
+    // Only the FIRST open stage counts, once the cycle has started: not due
+    // yet, or more than the window late (nurse decision: continue or restart),
+    // means Assessment as before.
+    if (!$dose || !$dose['cycle_started'] || !$dose['is_due'] || $dose['days_late'] > WORKFLOW_LATE_DOSE_WINDOW_DAYS) {
+        return null;
+    }
+    return $dose;
+}
+
+/**
+ * The FIRST open stage of the case's active cycle (D0-D28 slot not given yet:
+ * Scheduled or Missed with no Completed row for the same stage), whatever its
+ * date, or null when every stage is given. Case and patient must be active.
+ * Returns vaccination_id, dose_number, scheduled_date, days_late (0 when not
+ * due yet), is_due (scheduled on or before $asOf), cycle_started (a stage was
+ * already given) and dose_display ("Dose 2 - D3").
+ */
+function workflowFirstOpenDose(mysqli $conn, int $caseId, string $branchId, ?string $asOf = null): ?array
+{
+    $asOf = $asOf ?? date('Y-m-d');
     $stmt = $conn->prepare(
         "SELECT vr.vaccination_id, vr.dose_number, vr.scheduled_date,
-                DATEDIFF(?, vr.scheduled_date) AS days_late
+                DATEDIFF(?, vr.scheduled_date) AS days_late,
+                EXISTS (
+                    SELECT 1 FROM vaccination_records started
+                    WHERE started.case_id = vr.case_id AND started.is_archived = 0
+                      AND started.dose_number >= 1 AND started.vaccination_status = 'Completed'
+                ) AS cycle_started
          FROM vaccination_records vr
          INNER JOIN animal_bite_cases c ON c.case_id = vr.case_id
             AND c.patient_id = vr.patient_id AND c.branch_id = vr.branch_id
@@ -561,10 +586,6 @@ function workflowScheduledVaccinationDose(mysqli $conn, int $caseId, string $bra
                SELECT 1 FROM vaccination_records done
                WHERE done.case_id = vr.case_id AND done.dose_number = vr.dose_number
                  AND done.is_archived = 0 AND done.vaccination_status = 'Completed')
-           AND EXISTS (
-               SELECT 1 FROM vaccination_records started
-               WHERE started.case_id = vr.case_id AND started.is_archived = 0
-                 AND started.dose_number >= 1 AND started.vaccination_status = 'Completed')
          ORDER BY vr.dose_number ASC, vr.scheduled_date ASC, vr.vaccination_id ASC
          LIMIT 1"
     );
@@ -572,9 +593,9 @@ function workflowScheduledVaccinationDose(mysqli $conn, int $caseId, string $bra
     $stmt->execute();
     $dose = $stmt->get_result()->fetch_assoc();
     $stmt->close();
-    // Only the FIRST open stage counts: not due yet, or more than the window
-    // late (nurse decision: continue or restart), means Assessment as before.
-    if (!$dose || (string)$dose['scheduled_date'] > $asOf || (int)$dose['days_late'] > $window) return null;
+    if (!$dose) return null;
+    $dose['cycle_started'] = (bool)$dose['cycle_started'];
+    $dose['is_due'] = (string)$dose['scheduled_date'] <= $asOf;
     // Patient-facing label ("Dose 2 - D3") from every active dose of the case.
     $profile = workflowCaseProfile($conn, $caseId);
     $numbers = $conn->prepare('SELECT dose_number FROM vaccination_records WHERE case_id = ? AND is_archived = 0');
@@ -629,12 +650,48 @@ function workflowReadyVaccinationVisits(mysqli $conn, string $branchId): array
     return $ready;
 }
 
-/** Nurse Vaccination page opened on this patient's case and dose (same shortcut the Calendar uses). */
-function workflowVaccinateUrl(int $patientId, int $caseId, int $doseNumber): string
+/**
+ * Nurse Vaccination page opened on this patient's case and dose (same shortcut the Calendar uses).
+ * With $visitId (Record Administered Products on the Assessment page) the page also fills in the
+ * product, sites and date from that visit's assessment and returns to it after saving.
+ */
+function workflowVaccinateUrl(int $patientId, int $caseId, int $doseNumber, ?int $visitId = null): string
 {
-    return 'Nurse_Vaccination.php?' . http_build_query([
-        'tab' => 'vaccination', 'patient_id' => $patientId, 'case_id' => $caseId, 'dose' => $doseNumber,
-    ]);
+    $query = ['tab' => 'vaccination', 'patient_id' => $patientId, 'case_id' => $caseId, 'dose' => $doseNumber];
+    if ($visitId !== null && $visitId > 0) $query['visit_id'] = $visitId;
+    return 'Nurse_Vaccination.php?' . http_build_query($query);
+}
+
+/**
+ * After the nurse records a COMPLETED dose for a visit opened from the
+ * Assessment page: the visit's treatment is done ("Treatment Completed", the
+ * same status as a one-time product given on the Assessment page). The visit
+ * stays in the Assessment Queue until the nurse uses Complete and Send for
+ * Registry. Only a saved assessment ("Under Assessment") of this patient and
+ * case moves; returns 1 when it moved, 0 otherwise.
+ */
+function workflowCompleteAssessmentTreatment(
+    mysqli $conn,
+    int $visitId,
+    int $patientId,
+    int $caseId,
+    string $branchId,
+    int $nurseId
+): int {
+    $stmt = $conn->prepare(
+        "UPDATE patient_visits
+         SET workflow_status = 'Treatment Completed',
+             assigned_nurse = ?,
+             treatment_completed_at = COALESCE(treatment_completed_at, NOW()),
+             updated_at = NOW()
+         WHERE visit_id = ? AND patient_id = ? AND case_id = ? AND branch_id = ?
+           AND workflow_status = 'Under Assessment'"
+    );
+    $stmt->bind_param('iiiis', $nurseId, $visitId, $patientId, $caseId, $branchId);
+    $stmt->execute();
+    $changed = $stmt->affected_rows;
+    $stmt->close();
+    return max(0, (int)$changed);
 }
 
 /**
