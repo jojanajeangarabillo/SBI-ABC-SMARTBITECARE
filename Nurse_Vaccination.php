@@ -1051,6 +1051,8 @@ if (isset($_POST['submit_vaccination'])) {
         $vaccination_details = [];
         // Late doses (1-7 days) shift the remaining schedule once per dose stage.
         $late_stage_shifts = [];
+        // Dates of the Completed doses saved below (a Missed-only save has none).
+        $completed_dose_dates = [];
 
         foreach ($vaccine_items as $item) {
             $item_id = intval($item['item_id'] ?? 0);
