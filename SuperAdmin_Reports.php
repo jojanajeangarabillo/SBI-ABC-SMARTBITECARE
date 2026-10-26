@@ -10,17 +10,29 @@ require_once 'sources/notification_helper.php';
  * Branch performance counts, one row per branch. Each count is its own
  * subquery: joining cases, vaccinations, users and audit logs side by side
  * multiplied the rows (cases x vaccinations x users x logs) and MySQL ran out
- * of temporary-table space. Same numbers as before (archived rows included).
+ * of temporary-table space. Patients, cases and vaccinations given use the
+ * Branch Admin Dashboard definitions (archived records excluded:
+ * dashboardPatientMetrics / dashboardVaccinationsGiven) and inventory items the
+ * Inventory Overview one (inventoryBranchSummary: items with stock records), so
+ * the all-branch totals are the sum of what each branch sees.
  * Callers append " AND ..." filters on b and the ORDER BY.
  */
 function superAdminBranchPerformanceSql(): string
 {
     return "SELECT b.branch_id, b.branch_name, b.branch_address, b.contact_number,
-              (SELECT COUNT(*) FROM animal_bite_cases abc WHERE abc.branch_id = b.branch_id) AS total_cases,
-              (SELECT COUNT(DISTINCT p.patient_id) FROM animal_bite_cases abc
-                 INNER JOIN patients p ON p.patient_id = abc.patient_id
-                 WHERE abc.branch_id = b.branch_id) AS total_patients,
-              (SELECT COUNT(*) FROM vaccination_records vr WHERE vr.branch_id = b.branch_id) AS total_vaccinations,
+              (SELECT COUNT(*) FROM animal_bite_cases abc
+                 INNER JOIN patients p ON p.patient_id = abc.patient_id AND p.branch_id = abc.branch_id AND p.is_archived = 0
+                 WHERE abc.branch_id = b.branch_id AND abc.is_archived = 0) AS total_cases,
+              (SELECT COUNT(*) FROM patients p WHERE p.branch_id = b.branch_id AND p.is_archived = 0) AS total_patients,
+              (SELECT COUNT(*) FROM vaccination_records vr
+                 LEFT JOIN animal_bite_cases vc ON vc.case_id = vr.case_id
+                 LEFT JOIN patients vp ON vp.patient_id = vr.patient_id
+                 WHERE vr.branch_id = b.branch_id AND vr.is_archived = 0 AND vr.vaccination_status = 'Completed'
+                   AND COALESCE(vc.is_archived, 0) = 0 AND COALESCE(vp.is_archived, 0) = 0) AS total_vaccinations,
+              (SELECT COUNT(DISTINCT st.item_id) FROM inventory_stocks st
+                 INNER JOIN inventory_items ii ON ii.item_id = st.item_id
+                 INNER JOIN inventory_categories ic ON ic.category_id = ii.category_id
+                 WHERE st.branch_id = b.branch_id) AS total_items,
               (SELECT COUNT(*) FROM users u WHERE u.branch_id = b.branch_id) AS total_staff,
               (SELECT COUNT(*) FROM audit_logs al WHERE al.branch_id = b.branch_id) AS total_activities
               FROM branches b
@@ -433,7 +445,7 @@ function exportBranchPerformanceCSV($branchId = null, $startDate = null, $endDat
     $output = fopen('php://output', 'w');
     fprintf($output, chr(0xEF) . chr(0xBB) . chr(0xBF));
     
-    fputcsv($output, ['Branch', 'Address', 'Contact', 'Total Cases', 'Total Patients', 'Total Vaccinations', 'Total Staff', 'Total Activities']);
+    fputcsv($output, ['Branch', 'Address', 'Contact', 'Total Cases', 'Total Patients', 'Vaccinations Given', 'Inventory Items', 'Total Staff', 'Total Activities']);
     
     while ($row = $result->fetch_assoc()) {
         fputcsv($output, [
@@ -443,6 +455,7 @@ function exportBranchPerformanceCSV($branchId = null, $startDate = null, $endDat
             $row['total_cases'] ?: 0,
             $row['total_patients'] ?: 0,
             $row['total_vaccinations'] ?: 0,
+            $row['total_items'] ?: 0,
             $row['total_staff'] ?: 0,
             $row['total_activities'] ?: 0
         ]);
@@ -684,12 +697,13 @@ function generateBranchPerformanceReport($branchId = null, $startDate = null, $e
     $pdf->CreateStatsBox([
         'Total Cases' => $totalCases,
         'Total Patients' => $totalPatients,
-        'Total Vaccinations' => $totalVaccinations,
+        'Vaccinations Given' => $totalVaccinations,
+        'Inventory Items' => array_sum(array_column($branches, 'total_items')),
         'Active Branches' => count($branches)
     ]);
     
-    $headers = ['Branch', 'Cases', 'Patients', 'Vaccinations', 'Staff', 'Activities'];
-    $columnWidths = [40, 28, 28, 32, 25, 30];
+    $headers = ['Branch', 'Cases', 'Patients', 'Vacc. Given', 'Items', 'Staff', 'Activities'];
+    $columnWidths = [38, 22, 24, 26, 20, 20, 28];
     
     $data = array_map(function($branch) {
         return [
@@ -697,6 +711,7 @@ function generateBranchPerformanceReport($branchId = null, $startDate = null, $e
             $branch['total_cases'] ?: 0,
             $branch['total_patients'] ?: 0,
             $branch['total_vaccinations'] ?: 0,
+            $branch['total_items'] ?: 0,
             $branch['total_staff'] ?: 0,
             $branch['total_activities'] ?: 0
         ];

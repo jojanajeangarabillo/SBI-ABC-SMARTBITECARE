@@ -538,6 +538,9 @@ while ($row = $trendResult->fetch_assoc()) {
         .stat-card.returned-records {
             border-left-color: var(--danger);
         }
+        .stat-card.active-patients {
+            border-left-color: #2b3a8c;
+        }
 
         .stat-icon {
             position: absolute;
@@ -553,6 +556,7 @@ while ($row = $trendResult->fetch_assoc()) {
         .stat-card.visit-queue .stat-icon { color: rgba(111,66,193,.17); }
         .stat-card.registry-queue .stat-icon { color: rgba(253,126,20,.17); }
         .stat-card.returned-records .stat-icon { color: rgba(220,53,69,.16); }
+        .stat-card.active-patients .stat-icon { color: rgba(43,58,140,.16); }
 
         .stat-card h6 {
             margin: 0 0 5px;
@@ -1327,6 +1331,13 @@ while ($row = $trendResult->fetch_assoc()) {
             </div>
 
             <div class="stats-container" aria-label="Patient visits today">
+                <a href="AdminStaff_PatientRecord.php" class="stat-card active-patients" data-patient-metric="active_patients" aria-label="Open patient records">
+                    <i class="bi bi-people-fill stat-icon"></i>
+                    <h6>Total Active Patients</h6>
+                    <h1><?php echo number_format($patientMetrics['active_patients']); ?></h1>
+                    <div class="stat-trend">With a vaccination cycle in progress (archived and completed excluded)</div>
+                    <span class="card-link-label">View Patient Records <i class="bi bi-arrow-right"></i></span>
+                </a>
                 <a href="AdminStaff_VisitQueue.php" class="stat-card visit-queue" data-patient-metric="today_visits">
                     <i class="bi bi-person-check stat-icon"></i>
                     <h6>Today's Visits</h6>
