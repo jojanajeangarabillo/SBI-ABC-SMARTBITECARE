@@ -242,13 +242,13 @@ function inventoryApprovalList(mysqli $conn, array $filters = []): array
                    COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base,
                    COALESCE(un.unit_name, r.unit_snapshot) AS unit_name,
                    req.username AS requester_name, req.role_id AS requester_role_id, rr.role_name AS requester_role,
-                   dec.username AS decider_name
+                   dcd.username AS decider_name
             FROM inventory_approval_requests r
             LEFT JOIN inventory_items i ON i.item_id = r.item_id
             LEFT JOIN units un ON un.unit_id = i.unit_id
             LEFT JOIN users req ON req.user_id = r.requested_by
             LEFT JOIN roles rr ON rr.role_id = req.role_id
-            LEFT JOIN users dec ON dec.user_id = r.decided_by"
+            LEFT JOIN users dcd ON dcd.user_id = r.decided_by"
         . ($where ? ' WHERE ' . implode(' AND ', $where) : '')
         . " ORDER BY r.requested_at DESC, r.request_id DESC LIMIT $limit";
     $stmt = $conn->prepare($sql);
