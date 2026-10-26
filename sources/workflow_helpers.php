@@ -529,6 +529,169 @@ function workflowRecordLateDecision(
 }
 
 /**
+ * The follow-up dose a visit on $asOf (default today) is for, or null.
+ * A "scheduled vaccination" is the FIRST open stage (D0-D28 slot, not given
+ * yet: Scheduled or Missed with no Completed row for the same stage) of the
+ * case's ACTIVE cycle that already started (at least one stage given), when
+ * it is due on or before $asOf and at most WORKFLOW_LATE_DOSE_WINDOW_DAYS late. New
+ * cases, doses not due yet and doses more than the window late return null:
+ * those visits keep going through the Assessment Queue (re-assessment /
+ * nurse decision), exactly as before.
+ * Returns vaccination_id, dose_number, scheduled_date, days_late, dose_display.
+ */
+function workflowScheduledVaccinationDose(mysqli $conn, int $caseId, string $branchId, ?string $asOf = null): ?array
+{
+    $asOf = $asOf ?? date('Y-m-d');
+    $window = WORKFLOW_LATE_DOSE_WINDOW_DAYS;
+    $stmt = $conn->prepare(
+        "SELECT vr.vaccination_id, vr.dose_number, vr.scheduled_date,
+                DATEDIFF(?, vr.scheduled_date) AS days_late
+         FROM vaccination_records vr
+         INNER JOIN animal_bite_cases c ON c.case_id = vr.case_id
+            AND c.patient_id = vr.patient_id AND c.branch_id = vr.branch_id
+         INNER JOIN patients p ON p.patient_id = vr.patient_id
+         WHERE vr.case_id = ? AND vr.branch_id = ?
+           AND vr.is_archived = 0
+           AND vr.dose_number BETWEEN 1 AND 6
+           AND vr.vaccination_status IN ('Scheduled', 'Missed')
+           AND vr.scheduled_date IS NOT NULL
+           AND COALESCE(vr.vaccine_name, '') NOT LIKE '%Default%'
+           AND c.is_archived = 0 AND c.case_status = 'Ongoing' AND p.is_archived = 0
+           AND NOT EXISTS (
+               SELECT 1 FROM vaccination_records done
+               WHERE done.case_id = vr.case_id AND done.dose_number = vr.dose_number
+                 AND done.is_archived = 0 AND done.vaccination_status = 'Completed')
+           AND EXISTS (
+               SELECT 1 FROM vaccination_records started
+               WHERE started.case_id = vr.case_id AND started.is_archived = 0
+                 AND started.dose_number >= 1 AND started.vaccination_status = 'Completed')
+         ORDER BY vr.dose_number ASC, vr.scheduled_date ASC, vr.vaccination_id ASC
+         LIMIT 1"
+    );
+    $stmt->bind_param('sis', $asOf, $caseId, $branchId);
+    $stmt->execute();
+    $dose = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    // Only the FIRST open stage counts: not due yet, or more than the window
+    // late (nurse decision: continue or restart), means Assessment as before.
+    if (!$dose || (string)$dose['scheduled_date'] > $asOf || (int)$dose['days_late'] > $window) return null;
+    // Patient-facing label ("Dose 2 - D3") from every active dose of the case.
+    $profile = workflowCaseProfile($conn, $caseId);
+    $numbers = $conn->prepare('SELECT dose_number FROM vaccination_records WHERE case_id = ? AND is_archived = 0');
+    $numbers->bind_param('i', $caseId);
+    $numbers->execute();
+    $map = workflowDoseSequenceMap($profile['profile'], array_column($numbers->get_result()->fetch_all(MYSQLI_ASSOC), 'dose_number'));
+    $numbers->close();
+    $dose['dose_number'] = (int)$dose['dose_number'];
+    $dose['days_late'] = max(0, (int)$dose['days_late']);
+    $dose['dose_display'] = workflowDoseDisplay($dose['dose_number'], $map);
+    return $dose;
+}
+
+/** Statuses of a visit that is checked in and still waiting for the nurse. */
+function workflowWaitingVisitStatuses(): array
+{
+    return ['Checked In', 'Waiting for Nurse'];
+}
+
+/**
+ * Today's "ready for vaccination" visits of the branch, keyed by case_id:
+ * Follow-up visits checked in today, still waiting for the nurse, whose case
+ * has a scheduled vaccination dose (workflowScheduledVaccinationDose). Used by
+ * the Nurse Calendar, Vaccination page, Dashboard and Assessment Queue so the
+ * green "Checked in - Ready" state is the same everywhere. Once the dose is
+ * recorded the visit is completed and drops out of this list.
+ */
+function workflowReadyVaccinationVisits(mysqli $conn, string $branchId): array
+{
+    $statuses = workflowWaitingVisitStatuses();
+    $stmt = $conn->prepare(
+        "SELECT v.visit_id, v.patient_id, v.case_id, v.check_in_at, p.full_name, c.case_number
+         FROM patient_visits v
+         INNER JOIN patients p ON p.patient_id = v.patient_id AND p.is_archived = 0
+         INNER JOIN animal_bite_cases c ON c.case_id = v.case_id AND c.is_archived = 0
+         WHERE v.branch_id = ? AND v.visit_date = CURDATE() AND v.visit_type = 'Follow-up'
+           AND v.workflow_status IN (?, ?)
+         ORDER BY v.check_in_at, v.visit_id"
+    );
+    $stmt->bind_param('sss', $branchId, $statuses[0], $statuses[1]);
+    $stmt->execute();
+    $visits = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+    $ready = [];
+    foreach ($visits as $visit) {
+        $dose = workflowScheduledVaccinationDose($conn, (int)$visit['case_id'], $branchId);
+        if ($dose === null) continue;
+        $visit['dose'] = $dose;
+        $visit['vaccinate_url'] = workflowVaccinateUrl((int)$visit['patient_id'], (int)$visit['case_id'], (int)$dose['dose_number']);
+        $ready[(int)$visit['case_id']] = $visit;
+    }
+    return $ready;
+}
+
+/** Nurse Vaccination page opened on this patient's case and dose (same shortcut the Calendar uses). */
+function workflowVaccinateUrl(int $patientId, int $caseId, int $doseNumber): string
+{
+    return 'Nurse_Vaccination.php?' . http_build_query([
+        'tab' => 'vaccination', 'patient_id' => $patientId, 'case_id' => $caseId, 'dose' => $doseNumber,
+    ]);
+}
+
+/**
+ * Page a notification opens, or '' when it has no target. "Ready for
+ * vaccination" notifications (source key vaccination_ready_visit_<visit_id>)
+ * open the Nurse Vaccination page on that patient, case and current due dose.
+ */
+function workflowNotificationTarget(mysqli $conn, string $type, ?string $sourceKey, string $branchId): string
+{
+    if ($type !== 'vaccination_ready' || !preg_match('/\Avaccination_ready_visit_(\d+)\z/', (string)$sourceKey, $m)) {
+        return '';
+    }
+    $visitId = (int)$m[1];
+    $stmt = $conn->prepare('SELECT patient_id, case_id FROM patient_visits WHERE visit_id = ? AND branch_id = ?');
+    $stmt->bind_param('is', $visitId, $branchId);
+    $stmt->execute();
+    $visit = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    if (!$visit) return 'Nurse_Vaccination.php?tab=vaccination';
+    $dose = workflowScheduledVaccinationDose($conn, (int)$visit['case_id'], $branchId);
+    if ($dose !== null) {
+        return workflowVaccinateUrl((int)$visit['patient_id'], (int)$visit['case_id'], (int)$dose['dose_number']);
+    }
+    return 'Nurse_Vaccination.php?' . http_build_query([
+        'tab' => 'vaccination', 'patient_id' => (int)$visit['patient_id'], 'case_id' => (int)$visit['case_id'],
+    ]);
+}
+
+/**
+ * After the nurse records a COMPLETED dose given on $doseDate: the case's
+ * Follow-up visit of that day that is still waiting for the nurse becomes
+ * "Visit Completed" (the dose and the registry dose flag are already saved by
+ * the Vaccination page, so no assessment or registry step is needed). Visits
+ * under assessment (re-assessment / restart) are left to the Assessment flow.
+ * Returns the number of visits completed (0 or 1).
+ */
+function workflowCompleteVaccinationVisit(mysqli $conn, int $caseId, string $branchId, string $doseDate, int $nurseId): int
+{
+    $statuses = workflowWaitingVisitStatuses();
+    $stmt = $conn->prepare(
+        "UPDATE patient_visits
+         SET workflow_status = 'Visit Completed',
+             assigned_nurse = ?,
+             treatment_completed_at = COALESCE(treatment_completed_at, NOW()),
+             completed_at = NOW(),
+             updated_at = NOW()
+         WHERE case_id = ? AND branch_id = ? AND visit_date = ?
+           AND visit_type = 'Follow-up' AND workflow_status IN (?, ?)"
+    );
+    $stmt->bind_param('iissss', $nurseId, $caseId, $branchId, $doseDate, $statuses[0], $statuses[1]);
+    $stmt->execute();
+    $changed = $stmt->affected_rows;
+    $stmt->close();
+    return max(0, (int)$changed);
+}
+
+/**
  * ONE definition of a "missed dose", used by every calendar, dashboard,
  * report and notification count:
  *   a dose (dose_number >= 1) of an active, non-archived vaccination cycle

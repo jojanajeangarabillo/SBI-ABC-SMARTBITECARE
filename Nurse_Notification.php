@@ -57,6 +57,27 @@ $filterType = isset($_GET['filter']) ? $_GET['filter'] : 'all';
 $markRead = isset($_GET['mark_read']) ? (int)$_GET['mark_read'] : 0;
 $markAllRead = isset($_GET['mark_all_read']) ? true : false;
 
+// Open a notification's page ("Ready for vaccination" -> Vaccination page on that
+// patient): only the user's own notification; it is marked read first.
+$openId = isset($_GET['open']) ? (int)$_GET['open'] : 0;
+if ($openId > 0) {
+    $sourceSql = workflowColumnExists($conn, 'notifications', 'source_key') ? 'source_key' : 'NULL AS source_key';
+    $stmt = $conn->prepare("SELECT notification_type, $sourceSql FROM notifications WHERE notification_id = ? AND user_id = ?");
+    $stmt->bind_param('ii', $openId, $user_id);
+    $stmt->execute();
+    $openRow = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    $target = $openRow ? workflowNotificationTarget($conn, (string)$openRow['notification_type'], $openRow['source_key'], (string)$branch_id) : '';
+    if ($openRow) {
+        $stmt = $conn->prepare('UPDATE notifications SET is_read = 1 WHERE notification_id = ? AND user_id = ?');
+        $stmt->bind_param('ii', $openId, $user_id);
+        $stmt->execute();
+        $stmt->close();
+    }
+    header('Location: ' . ($target !== '' ? $target : 'Nurse_Notification.php'));
+    exit();
+}
+
 // Handle Mark as Read
 if ($markRead > 0) {
     $updateQuery = "UPDATE notifications SET is_read = 1 WHERE notification_id = ? AND user_id = ?";
@@ -95,7 +116,7 @@ $notifQuery = "
             WHEN n.notification_type = 'follow_up' THEN 'followup'
             WHEN n.notification_type = 'low_stock' THEN 'low'
             WHEN n.notification_type = 'expiring' THEN 'expiring'
-            WHEN n.notification_type = 'vaccination' THEN 'vaccination'
+            WHEN n.notification_type IN ('vaccination', 'vaccination_ready') THEN 'vaccination'
             WHEN n.notification_type = 'patient_record' THEN 'patient'
             ELSE 'general'
         END as notif_category,
@@ -104,12 +125,14 @@ $notifQuery = "
             WHEN n.notification_type = 'low_stock' THEN 'Low Stock Alert'
             WHEN n.notification_type = 'expiring' THEN 'Expiring Vaccine Alert'
             WHEN n.notification_type = 'vaccination' THEN 'Vaccination Administered'
+            WHEN n.notification_type = 'vaccination_ready' THEN 'Ready for Vaccination'
             WHEN n.notification_type = 'patient_record' THEN 'Patient Record Update'
             WHEN n.notification_type = 'stock_received' THEN 'Medical Supplies Received'
             ELSE 'Notification'
         END as display_title,
         DATEDIFF(NOW(), n.created_at) as days_ago,
-        DATE(n.created_at) as notif_date
+        DATE(n.created_at) as notif_date,
+        " . (workflowColumnExists($conn, 'notifications', 'source_key') ? 'n.source_key' : 'NULL') . " AS source_key
     FROM notifications n
     WHERE n.user_id = ?
 ";
@@ -137,7 +160,7 @@ if ($filterType != 'all') {
     } elseif ($filterType == 'expiring') {
         $notifQuery .= " AND n.notification_type = 'expiring'";
     } elseif ($filterType == 'vaccination') {
-        $notifQuery .= " AND n.notification_type = 'vaccination'";
+        $notifQuery .= " AND n.notification_type IN ('vaccination', 'vaccination_ready')";
     } elseif ($filterType == 'stock_received') {
         $notifQuery .= " AND n.notification_type = 'stock_received'";
     }
@@ -165,7 +188,7 @@ $statsQuery = "
         SUM(CASE WHEN notification_type = 'follow_up' AND is_read = 0 THEN 1 ELSE 0 END) as followup_unread,
         SUM(CASE WHEN notification_type = 'low_stock' AND is_read = 0 THEN 1 ELSE 0 END) as low_stock_unread,
         SUM(CASE WHEN notification_type = 'expiring' AND is_read = 0 THEN 1 ELSE 0 END) as expiring_unread,
-        SUM(CASE WHEN notification_type = 'vaccination' AND is_read = 0 THEN 1 ELSE 0 END) as vaccination_unread
+        SUM(CASE WHEN notification_type IN ('vaccination', 'vaccination_ready') AND is_read = 0 THEN 1 ELSE 0 END) as vaccination_unread
     FROM notifications
     WHERE user_id = ?
 ";
@@ -344,7 +367,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                         WHEN n.notification_type = 'follow_up' THEN 'followup'
                         WHEN n.notification_type = 'low_stock' THEN 'low'
                         WHEN n.notification_type = 'expiring' THEN 'expiring'
-                        WHEN n.notification_type = 'vaccination' THEN 'vaccination'
+                        WHEN n.notification_type IN ('vaccination', 'vaccination_ready') THEN 'vaccination'
                         ELSE 'general'
                     END as notif_category,
                     DATE(n.created_at) as notif_date
@@ -373,7 +396,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                 } elseif ($filter == 'expiring') {
                     $query .= " AND n.notification_type = 'expiring'";
                 } elseif ($filter == 'vaccination') {
-                    $query .= " AND n.notification_type = 'vaccination'";
+                    $query .= " AND n.notification_type IN ('vaccination', 'vaccination_ready')";
                 } elseif ($filter == 'stock_received') {
                     $query .= " AND n.notification_type = 'stock_received'";
                 }
@@ -973,6 +996,8 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             cursor: pointer;
             text-decoration: none;
         }
+        .notif-action-btn.open-action-btn { background: #198754; display: inline-flex; align-items: center; }
+        .notif-action-btn.open-action-btn:hover { background: #146c43; color: #fff; }
         .notif-action-btn:hover {
             background: #1d2863;
             color: white;
@@ -1590,6 +1615,11 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                     <span class="badge-status-pill <?php echo $isRead ? 'badge-read' : $badgeClass; ?>">
                         <?php echo $statusLabel; ?>
                     </span>
+                    <?php if (workflowNotificationTarget($conn, (string)$notif['notification_type'], $notif['source_key'] ?? null, (string)$branch_id) !== ''): ?>
+                    <a class="notif-action-btn open-action-btn" href="Nurse_Notification.php?open=<?php echo (int)$notif['notification_id']; ?>" title="Open the Vaccination page for this patient">
+                        <i class="bi bi-shield-plus me-1"></i>Open Vaccination
+                    </a>
+                    <?php endif; ?>
                     <button class="notif-action-btn view-action-btn" data-notif-id="<?php echo $notif['notification_id']; ?>">
                         View Details
                     </button>

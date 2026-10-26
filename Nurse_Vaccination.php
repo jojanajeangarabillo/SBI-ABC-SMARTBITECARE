@@ -1624,6 +1624,9 @@ if (isset($_POST['submit_vaccination'])) {
                            " | Date: {$date_administered}";
 
             logAudit($conn, $user_id, $branch_id, $auditAction, 'Vaccination');
+            if ($vaccination_status === 'Completed') {
+                $completed_dose_dates[$date_administered] = true;
+            }
 
             $vaccination_details[] = [
                 'vaccine_name' => $vaccine_name,
@@ -1703,6 +1706,16 @@ if (isset($_POST['submit_vaccination'])) {
             );
         }
 
+        // A Follow-up visit waiting for this dose is finished now (no assessment
+        // or registry step: the dose and registry dose flag are saved above).
+        $completed_visits = 0;
+        foreach (array_keys($completed_dose_dates) as $completed_date) {
+            $completed_visits += workflowCompleteVaccinationVisit($conn, (int)$case_id, (string)$branch_id, (string)$completed_date, (int)$user_id);
+        }
+        if ($completed_visits > 0) {
+            logAudit($conn, $user_id, $branch_id, 'Follow-up vaccination visit completed | Case: ' . $case_label . ' (ID: ' . (int)$case_id . ')', 'Patient Visit');
+        }
+
         if ($reopened_closings > 0) {
             createNotification($conn, $user_id, 'Daily Inventory Resubmission Required',
                 'Vaccination usage changed after ' . $reopened_closings . ' daily inventory closing(s). Resubmit the affected item/date with updated physical counts to restore its forecasting training record.', 'inventory');
@@ -1716,6 +1729,7 @@ if (isset($_POST['submit_vaccination'])) {
                       . max(array_column($late_stage_shifts, 'days')) . ' day(s) later.'
                     : '')
                 . ($reopened_closings > 0 ? ' Resubmit ' . $reopened_closings . ' affected daily inventory closing(s) because usage changed after closing.' : '')
+                . ($completed_visits > 0 ? ' The follow-up visit is completed.' : '')
         ]);
         exit;
 
@@ -1773,6 +1787,7 @@ if (isset($_POST['late_dose_restart'])) {
             throw new RuntimeException(getDoseLabel($dose_number) . ' is not more than ' . WORKFLOW_LATE_DOSE_WINDOW_DAYS
                 . ' days late, so no restart is needed. Record the dose normally.');
         }
+        $completed_dose_dates = [];
         $conn->begin_transaction();
         workflowRecordLateDecision($conn, (int)$target['vaccination_id'], 'restart', (int)$target['days_late'],
             $remark, $user_id, $branch_id, [
@@ -2082,6 +2097,10 @@ if ($search !== '') {
 
 $patient_list_stmt->execute();
 $patient_list = $patient_list_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+// Patients checked in today for their scheduled dose (same rule as the Nurse Calendar).
+$ready_visits = workflowReadyVaccinationVisits($conn, (string)$branch_id);
+$ready_by_patient = [];
+foreach ($ready_visits as $ready_visit) $ready_by_patient[(int)$ready_visit['patient_id']] = $ready_visit;
 $patient_list_stmt->close();
 
 function getStatusBadge($status)
@@ -2735,6 +2754,20 @@ function getStatusBadge($status)
                 aria-labelledby="vaccination-tab"
                 tabindex="0"
             >
+        <?php if ($ready_visits): ?>
+            <div class="alert alert-success py-2 mb-3" id="readyVisitsBox">
+                <div class="fw-bold mb-1"><i class="bi bi-person-check-fill me-1"></i>Checked in today – ready for vaccination (<?php echo count($ready_visits); ?>)</div>
+                <?php foreach ($ready_visits as $ready_visit): ?>
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 py-1 border-top border-success-subtle">
+                        <span><strong><?php echo htmlspecialchars($ready_visit['full_name'], ENT_QUOTES, 'UTF-8'); ?></strong>
+                            – Case <?php echo htmlspecialchars($ready_visit['case_number'] ?: 'N/A', ENT_QUOTES, 'UTF-8'); ?>
+                            – <?php echo htmlspecialchars($ready_visit['dose']['dose_display'], ENT_QUOTES, 'UTF-8'); ?></span>
+                        <a class="btn btn-sm btn-success" href="<?php echo htmlspecialchars($ready_visit['vaccinate_url'], ENT_QUOTES, 'UTF-8'); ?>"><i class="bi bi-check-circle-fill me-1"></i>Checked in – Ready</a>
+                    </div>
+                <?php endforeach; ?>
+                <div class="small mt-1">Green = checked in today for this dose (no new assessment needed). Recording the dose completes the visit.</div>
+            </div>
+        <?php endif; ?>
         <div class="vaccination-section" id="vaccinationSection">
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <h5 class="section-title"><i class="bi bi-syringe me-2"></i>Administer Vaccination</h5>
@@ -2938,6 +2971,9 @@ function getStatusBadge($status)
                                                     <span class="<?php echo getStatusBadge($patient['case_status'] ?? ''); ?>">
                                                         <?php echo htmlspecialchars($patient['case_status'] ?: 'Ongoing', ENT_QUOTES, 'UTF-8'); ?>
                                                     </span>
+                                                    <?php if (isset($ready_by_patient[(int)$patient['patient_id']])): ?>
+                                                        <a class="badge text-bg-success text-decoration-none ms-1" href="<?php echo htmlspecialchars($ready_by_patient[(int)$patient['patient_id']]['vaccinate_url'], ENT_QUOTES, 'UTF-8'); ?>">Checked in – Ready</a>
+                                                    <?php endif; ?>
                                                 </td>
 
                                                 <td class="text-center">

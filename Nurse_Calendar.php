@@ -111,6 +111,8 @@ $next14Count = (int)($summary['next_14_count'] ?? 0);
 $next30Count = (int)($summary['next_30_count'] ?? 0);
 // Same shared missed-dose count as the dashboards and the Admin Staff Calendar.
 $missedShared = workflowMissedDoseCounts($conn, $branchId);
+// Patients checked in today for their scheduled dose (shared rule, keyed by case_id).
+$readyVisits = workflowReadyVaccinationVisits($conn, $branchId);
 
 $whereSql = "
     vr.branch_id = ?
@@ -562,6 +564,14 @@ function nurseCalendarUrl(string $range, string $search, int $page = 1): string
         }
 
         .btn-open:hover { background: var(--primary-dark); color: #fff; }
+        /* Checked in today for this dose: ready for vaccination. */
+        .btn-open.btn-ready { background: #198754; border-color: #198754; }
+        .btn-open.btn-ready:hover { background: #146c43; color: #fff; }
+        .ready-legend { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; font-size: 13px; color: #4a5578; }
+        .ready-legend .swatch { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: -2px; margin-right: 5px; }
+        .ready-panel { border: 1px solid #b7e1c6; background: #f0faf3; border-radius: 12px; padding: 12px 14px; }
+        .ready-panel .ready-item { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px dashed #cde9d6; }
+        .ready-panel .ready-item:first-of-type { border-top: 0; }
 
         .empty-state {
             text-align: center;
@@ -774,6 +784,28 @@ function nurseCalendarUrl(string $range, string $search, int $page = 1): string
             <span><strong><?= (int)$missedShared['doses'] ?></strong> missed dose(s) for <?= (int)$missedShared['patients'] ?> patient(s): past due, not given. Open the Assessment Queue follow-ups.</span>
         </a>
 
+        <?php if ($readyVisits): ?>
+            <div class="ready-panel mb-3" id="readyPanel">
+                <div class="fw-bold text-success mb-1"><i class="bi bi-person-check-fill me-1"></i>Checked in today – ready for vaccination (<?= count($readyVisits) ?>)</div>
+                <?php foreach ($readyVisits as $ready): ?>
+                    <div class="ready-item">
+                        <span>
+                            <strong><?= nurseCalendarH($ready['full_name']) ?></strong>
+                            <span class="text-muted">– Case <?= nurseCalendarH($ready['case_number'] ?: 'N/A') ?> – <?= nurseCalendarH($ready['dose']['dose_display']) ?></span>
+                            <?php if ((int)$ready['dose']['days_late'] > 0): ?>
+                                <span class="badge text-bg-warning ms-1"><?= (int)$ready['dose']['days_late'] ?> day(s) late</span>
+                            <?php endif; ?>
+                        </span>
+                        <a class="btn-open btn-ready" href="<?= nurseCalendarH($ready['vaccinate_url']) ?>"><i class="bi bi-check-circle-fill"></i>Checked in – Ready</a>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        <?php endif; ?>
+        <div class="ready-legend mb-2" aria-label="Vaccination button colors">
+            <span><span class="swatch" style="background:#198754"></span>Checked in – Ready: the patient was checked in today for this dose</span>
+            <span><span class="swatch" style="background:var(--primary)"></span>Vaccination: scheduled, not checked in yet</span>
+        </div>
+
         <div class="filter-card">
             <div class="range-tabs" aria-label="Schedule date filters">
                 <a class="<?= $range === 'today' ? 'active' : '' ?>" href="<?= nurseCalendarH(nurseCalendarUrl('today', $search)) ?>">Today</a>
@@ -878,9 +910,17 @@ function nurseCalendarUrl(string $range, string $search, int $page = 1): string
                                     </td>
                                     <td><span class="schedule-badge <?= nurseCalendarH($badgeClass) ?>"><?= nurseCalendarH($badgeText) ?></span></td>
                                     <td class="text-center">
+                                        <?php $rowReady = isset($readyVisits[(int)$row['case_id']])
+                                            && (int)$readyVisits[(int)$row['case_id']]['dose']['dose_number'] === (int)$row['dose_number']; ?>
+                                        <?php if ($rowReady): ?>
+                                            <a class="btn-open btn-ready" href="<?= nurseCalendarH(workflowVaccinateUrl((int)$row['patient_id'], (int)$row['case_id'], (int)$row['dose_number'])) ?>" title="The patient is checked in today for this dose">
+                                                <i class="bi bi-check-circle-fill"></i>Checked in – Ready
+                                            </a>
+                                        <?php else: ?>
                                         <a class="btn-open" href="Nurse_Vaccination.php?tab=vaccination&amp;patient_id=<?= (int)$row['patient_id'] ?>&amp;case_id=<?= (int)$row['case_id'] ?>&amp;dose=<?= (int)$row['dose_number'] ?>" title="Open Vaccination with this patient, case and dose filled in">
                                             <i class="bi bi-shield-plus"></i>Vaccination
                                         </a>
+                                        <?php endif; ?>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>

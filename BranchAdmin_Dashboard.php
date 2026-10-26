@@ -49,38 +49,14 @@ if (!$branch_id) {
 $notification_count = getUnreadNotificationCount($conn, $user_id);
 $stats = dashboardPatientMetrics($conn, (string)$branch_id);
 
-// Total inventory items for this branch
-$totalItemsQuery = "SELECT COUNT(DISTINCT s.item_id) as total 
-                    FROM inventory_stocks s 
-                    WHERE s.branch_id = ?";
-$stmt = $conn->prepare($totalItemsQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$totalItemsResult = $stmt->get_result();
-$stats['total_items'] = $totalItemsResult->fetch_assoc()['total'] ?? 0;
-
-// Low stocks (with proper branch filtering)
-$lowStockQuery = "SELECT COUNT(*) AS low_stock FROM inventory_items i
-JOIN ($stockTotalsSql) s ON s.item_id=i.item_id AND s.branch_id=?
-WHERE s.usable_stock<=i.minimum_stock";
-$stmt = $conn->prepare($lowStockQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$lowStockResult = $stmt->get_result();
-$stats['low_stocks'] = $lowStockResult->fetch_assoc()['low_stock'] ?? 0;
-
-// Expiring stocks (within 30 days) - branch specific
-$expiringQuery = "SELECT COUNT(*) as expiring 
-                  FROM inventory_stocks 
-                  WHERE branch_id = ? 
-                  AND expiration_date IS NOT NULL 
-                  AND expiration_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY) 
-                  AND expiration_date >= CURDATE()";
-$stmt = $conn->prepare($expiringQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$expiringResult = $stmt->get_result();
-$stats['expiring_stocks'] = $expiringResult->fetch_assoc()['expiring'] ?? 0;
+// Inventory cards: one shared definition with the Inventory Overview,
+// Branch Admin Reports and Super Admin (inventoryBranchSummary).
+$inventorySummary = inventoryBranchSummary($conn, (string)$branch_id);
+$stats['total_items'] = $inventorySummary['items'];
+$stats['low_stocks'] = $inventorySummary['low_stock'];
+$stats['out_of_stock'] = $inventorySummary['out_of_stock'];
+$stats['expiring_stocks'] = $inventorySummary['expiring_batches'];
+$stats['expired_stocks'] = $inventorySummary['expired_batches'];
 
 // Total vaccinations for this branch
 $vaccinationQuery = "SELECT COUNT(*) as total 
@@ -92,16 +68,8 @@ $stmt->execute();
 $vaccinationResult = $stmt->get_result();
 $stats['total_vaccinations'] = $vaccinationResult->fetch_assoc()['total'] ?? 0;
 
-// Completed vaccinations for this branch
-$completedVaccQuery = "SELECT COUNT(*) as completed 
-                       FROM vaccination_records 
-                       WHERE branch_id = ? 
-                       AND vaccination_status = 'Completed'";
-$stmt = $conn->prepare($completedVaccQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$completedVaccResult = $stmt->get_result();
-$stats['completed_vaccinations'] = $completedVaccResult->fetch_assoc()['completed'] ?? 0;
+// Completed vaccinations: shared "vaccinations given" (active records), same as Branch Admin Reports.
+$stats['completed_vaccinations'] = dashboardVaccinationsGiven($conn, (string)$branch_id);
 
 // Scheduled vaccinations for this branch
 $scheduledVaccQuery = "SELECT COUNT(*) as scheduled 
@@ -1256,8 +1224,31 @@ $username = $userInfo['username'] ?? 'Admin';
 
     <div class="row g-4">
 
+        <!-- Total Active Patients (shared: dashboardActivePatients) -->
+        <div class="col-xl col-lg-4 col-md-6">
+            <div class="stat-card stat-primary" data-patient-metric="active_patients">
+
+                <div class="stat-icon">
+                    <i class="bi bi-people-fill"></i>
+                </div>
+
+                <div class="stat-content">
+                    <div class="stat-label">Total Active Patients</div>
+
+                    <div class="stat-number">
+                        <?php echo number_format($stats['active_patients']); ?>
+                    </div>
+
+                    <div class="stat-description">
+                        With a vaccination cycle in progress
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
         <!-- Total Patients -->
-        <div class="col-lg-3 col-md-6">
+        <div class="col-xl col-lg-4 col-md-6">
             <div class="stat-card stat-primary">
 
                 <div class="stat-icon">
@@ -1281,7 +1272,7 @@ $username = $userInfo['username'] ?? 'Admin';
 
 
         <!-- Total Cases -->
-        <div class="col-lg-3 col-md-6">
+        <div class="col-xl col-lg-4 col-md-6">
             <div class="stat-card stat-primary">
 
                 <div class="stat-icon">
@@ -1305,7 +1296,7 @@ $username = $userInfo['username'] ?? 'Admin';
 
 
         <!-- Ongoing Cases -->
-        <div class="col-lg-3 col-md-6">
+        <div class="col-xl col-lg-4 col-md-6">
             <div class="stat-card stat-warning">
 
                 <div class="stat-icon">
@@ -1329,7 +1320,7 @@ $username = $userInfo['username'] ?? 'Admin';
 
 
         <!-- Completed Cases -->
-        <div class="col-lg-3 col-md-6">
+        <div class="col-xl col-lg-4 col-md-6">
             <div class="stat-card stat-success">
 
                 <div class="stat-icon">
@@ -1375,7 +1366,7 @@ $username = $userInfo['username'] ?? 'Admin';
                     </div>
 
                     <div class="stat-description">
-                        Unique stock items
+                        Medical and non-medical items with stock records (same as Inventory Overview)
                     </div>
                 </div>
 
@@ -1399,7 +1390,7 @@ $username = $userInfo['username'] ?? 'Admin';
                     </div>
 
                     <div class="stat-description">
-                        Needs reordering
+                        At or below minimum, above zero
                     </div>
                 </div>
 
@@ -1423,7 +1414,7 @@ $username = $userInfo['username'] ?? 'Admin';
                     </div>
 
                     <div class="stat-description">
-                        Within 30 days
+                        Batches expiring within 30 days
                     </div>
                 </div>
 

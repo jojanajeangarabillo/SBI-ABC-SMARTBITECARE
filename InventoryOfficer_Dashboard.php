@@ -168,11 +168,14 @@ $lowStockItems = [];
 $expirationAlerts = [];
 $recentTransactionsList = [];
 
-/* Total master inventory items. */
+/* Master catalog size (subtitle) and this branch's items: items with stock
+   records here, the same count as Inventory Overview and Branch Admin Reports. */
+$stats['catalog_items'] = 0;
 $itemCountResult = $conn->query("SELECT COUNT(*) AS total FROM inventory_items");
 if ($itemCountResult) {
-    $stats['inventory_items'] = (int)($itemCountResult->fetch_assoc()['total'] ?? 0);
+    $stats['catalog_items'] = (int)($itemCountResult->fetch_assoc()['total'] ?? 0);
 }
+$stats['inventory_items'] = !empty($branch_id) ? inventoryBranchSummary($conn, (string)$branch_id)['items'] : $stats['catalog_items'];
 
 if (!empty($branch_id)) {
 
@@ -1059,9 +1062,9 @@ body{
                 <a class="stat-card-link" href="InventoryOfficer_InventoryItems.php">
                     <div class="stat-card stat-card-primary">
                         <div class="stat-icon"><i class="bi bi-box-seam"></i></div>
-                        <div class="stat-title">Inventory Items</div>
+                        <div class="stat-title">Inventory Items (this branch)</div>
                         <div class="stat-number"><?php echo number_format($stats['inventory_items']); ?></div>
-                        <div class="stat-subtitle">Master items available</div>
+                        <div class="stat-subtitle">With stock records here · <?php echo number_format($stats['catalog_items']); ?> in the master catalog</div>
                     </div>
                 </a>
             </div>
