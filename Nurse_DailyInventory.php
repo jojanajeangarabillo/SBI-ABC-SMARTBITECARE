@@ -2697,7 +2697,21 @@ $flash = workflowTakeFlash();
                                     </td>
 
                                     <td>
-                                        <?php if ($closing['status'] === 'Draft'): ?>
+                                        <?php if ($closing['status'] === 'Returned'): ?>
+                                            <span class="result-badge variance">
+                                                Returned for recount
+                                            </span>
+
+                                            <div class="small text-danger mt-1">
+                                                The Branch Admin returned this closing<?= trim((string)($closing['review_remarks'] ?? '')) !== ''
+                                                    ? ': ' . workflowH(trim((string)$closing['review_remarks'])) : '' ?>.
+                                                <a href="Nurse_DailyInventory.php?<?= workflowH(http_build_query([
+                                                    'item_id' => (int)$closing['item_id'],
+                                                    'inventory_date' => (string)$closing['inventory_date'],
+                                                    'history_date' => (string)$closing['inventory_date'],
+                                                ])) ?>">Recount and save again</a>
+                                            </div>
+                                        <?php elseif ($closing['status'] === 'Draft'): ?>
                                             <span class="result-badge variance">
                                                 Resubmission required
                                             </span>
@@ -2725,6 +2739,13 @@ $flash = workflowTakeFlash();
                                                     ? 'Needs review'
                                                     : 'Tallied' ?>
                                             </span>
+                                        <?php endif; ?>
+
+                                        <?php if ($closing['status'] === 'Reviewed'): ?>
+                                            <div class="small text-success mt-1">
+                                                <i class="bi bi-patch-check-fill"></i> Reviewed by the Branch Admin<?= trim((string)($closing['review_remarks'] ?? '')) !== ''
+                                                    ? ': ' . workflowH(trim((string)$closing['review_remarks'])) : '' ?>
+                                            </div>
                                         <?php endif; ?>
 
                                         <?php if (

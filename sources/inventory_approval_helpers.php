@@ -347,18 +347,23 @@ function inventoryApprovalClosingsToReview(mysqli $conn, string $branchId): int
  */
 function inventoryApprovalSidebarLink(mysqli $conn, int $userId, bool $active = false): string
 {
-    $count = 0;
+    $requests = 0;
+    $closings = 0;
     try {
         $user = inventoryApprovalUser($conn, $userId);
         if ($user && (int)$user['role_id'] === 2 && $user['branch_id']) {
-            $count = inventoryApprovalPendingCount($conn, (string)$user['branch_id']);
+            $requests = inventoryApprovalPendingCount($conn, (string)$user['branch_id']);
+            $closings = inventoryApprovalClosingsToReview($conn, (string)$user['branch_id']);
         }
     } catch (Throwable $e) {
-        $count = 0;
+        $requests = $closings = 0;
     }
+    $count = $requests + $closings;
+    $title = $requests . ' pending request' . ($requests === 1 ? '' : 's') . ', ' . $closings . ' closing'
+        . ($closings === 1 ? '' : 's') . ' to review';
     return '<li><a href="BranchAdmin_Approvals.php" class="notification-link' . ($active ? ' active' : '') . '"'
         . ($active ? ' aria-current="page"' : '') . '><i class="bi bi-patch-check-fill"></i><span>Pending Approvals</span>'
-        . ($count > 0 ? '<span class="notification-badge" title="Pending approvals">' . $count . '</span>' : '')
+        . ($count > 0 ? '<span class="notification-badge" title="' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '">' . $count . '</span>' : '')
         . '</a></li>';
 }
 
@@ -722,6 +727,122 @@ function inventoryApprovalReorderFromForecast(mysqli $conn, int $adminId, string
             'restock_request', 'restock_approved:' . $requestId);
         $conn->commit();
         return $requestId;
+    } catch (Throwable $e) {
+        $conn->rollback();
+        throw $e;
+    }
+}
+
+/* ------------------------------------------------------------------
+ * DAILY CLOSING REVIEW (Branch Admin)
+ * A closing with a variance or wastage is listed first. "Reviewed" accepts
+ * it; "Return for recount" sets status 'Returned' (remark required) and
+ * notifies the Nurse, who must save the closing again. The training row of
+ * the closing is KEPT while it is Returned: the Nurse's re-save upserts the
+ * same training_dataset row (unique branch, item, date), so nothing is
+ * duplicated and usage is never counted twice.
+ * ---------------------------------------------------------------- */
+
+/**
+ * Closings of a branch for review. $all = false: closings that need the
+ * Branch Admin (Submitted with a variance or wastage) and Returned ones;
+ * true: every closing of the last $days days. Flagged closings come first.
+ */
+function inventoryApprovalClosingList(mysqli $conn, string $branchId, bool $all = false, int $days = 60): array
+{
+    $hasRemarks = workflowColumnExists($conn, 'daily_inventory_closings', 'review_remarks');
+    $days = max(1, min(366, $days));
+    $sql = "SELECT d.closing_id, d.branch_id, d.item_id, d.inventory_date, d.beginning_stock, d.delivery, d.consumed,
+                   d.pull_out, d.computed_ending, d.actual_count, d.variance, d.remarks, d.status, d.submitted_by,
+                   d.submitted_at, d.reviewed_by, d.reviewed_at, " . ($hasRemarks ? 'd.review_remarks' : 'NULL AS review_remarks') . ",
+                   i.item_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), un.unit_name) AS base_unit_label,
+                   COALESCE(NULLIF(TRIM(i.display_unit_label), ''), un.unit_name) AS display_unit_label,
+                   COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base, un.unit_name,
+                   sub.username AS submitter_name, rev.username AS reviewer_name,
+                   COALESCE(w.wastage, 0) AS wastage,
+                   (d.variance <> 0 OR COALESCE(w.wastage, 0) > 0) AS flagged
+            FROM daily_inventory_closings d
+            JOIN inventory_items i ON i.item_id = d.item_id
+            JOIN units un ON un.unit_id = i.unit_id
+            LEFT JOIN users sub ON sub.user_id = d.submitted_by
+            LEFT JOIN users rev ON rev.user_id = d.reviewed_by
+            LEFT JOIN (SELECT h.item_id, h.usage_date, SUM(h.quantity_used) AS wastage
+                       FROM inventory_usage_history h
+                       WHERE h.branch_id = ? AND h.usage_type = 'Wastage'
+                       GROUP BY h.item_id, h.usage_date) w
+                   ON w.item_id = d.item_id AND w.usage_date = d.inventory_date
+            WHERE d.branch_id = ?"
+        . ($all
+            ? " AND d.inventory_date >= DATE_SUB(CURDATE(), INTERVAL $days DAY)"
+            : " AND ((d.status = 'Submitted' AND (d.variance <> 0 OR COALESCE(w.wastage, 0) > 0)) OR d.status = 'Returned')")
+        . " ORDER BY (d.status = 'Submitted' AND (d.variance <> 0 OR COALESCE(w.wastage, 0) > 0)) DESC,
+                     (d.status = 'Returned') DESC, d.inventory_date DESC, i.item_name ASC
+            LIMIT 500";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param('ss', $branchId, $branchId);
+    $stmt->execute();
+    $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+    return $rows;
+}
+
+/** Mark a submitted closing Reviewed, or return it to the Nurse for a recount. */
+function inventoryApprovalReviewClosing(mysqli $conn, int $closingId, int $adminId, string $decision, string $remarks): string
+{
+    $remarks = trim($remarks);
+    if (!in_array($decision, ['reviewed', 'return'], true)) throw new RuntimeException('Choose Reviewed or Return for recount.');
+    if ($decision === 'return' && $remarks === '') throw new RuntimeException('Enter a remark telling the Nurse what to recount.');
+    if (mb_strlen($remarks) > 1000) throw new RuntimeException('Keep the review remark within 1,000 characters.');
+    if (!workflowColumnExists($conn, 'daily_inventory_closings', 'review_remarks')) inventoryApprovalAssertReady($conn);
+    $conn->begin_transaction();
+    try {
+        $stmt = $conn->prepare("SELECT d.closing_id, d.branch_id, d.item_id, d.inventory_date, d.status, d.variance,
+                d.submitted_by, i.item_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), un.unit_name) AS base_unit_label,
+                COALESCE(NULLIF(TRIM(i.display_unit_label), ''), un.unit_name) AS display_unit_label,
+                COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base
+            FROM daily_inventory_closings d JOIN inventory_items i ON i.item_id = d.item_id JOIN units un ON un.unit_id = i.unit_id
+            WHERE d.closing_id = ? FOR UPDATE");
+        $stmt->bind_param('i', $closingId);
+        $stmt->execute();
+        $closing = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+        if (!$closing) throw new RuntimeException('The daily closing was not found.');
+        $admin = inventoryApprovalUser($conn, $adminId);
+        if (!$admin || (int)$admin['role_id'] !== 2 || $admin['status'] !== 'Active') {
+            throw new RuntimeException('Only an active Branch Admin can review daily closings.');
+        }
+        if ((string)$admin['branch_id'] !== (string)$closing['branch_id']) {
+            throw new RuntimeException('This closing belongs to another branch.');
+        }
+        if ((int)$closing['submitted_by'] === $adminId) throw new RuntimeException('You cannot review a closing you submitted.');
+        if ($closing['status'] !== 'Submitted') {
+            throw new RuntimeException('This closing is ' . $closing['status'] . ' and cannot be reviewed now'
+                . ($closing['status'] === 'Returned' ? ' (it is waiting for the Nurse\'s recount)' : '') . '.');
+        }
+        $status = $decision === 'reviewed' ? 'Reviewed' : 'Returned';
+        $stmt = $conn->prepare("UPDATE daily_inventory_closings
+            SET status = ?, reviewed_by = ?, reviewed_at = NOW(), review_remarks = NULLIF(?, '')
+            WHERE closing_id = ? AND status = 'Submitted'");
+        $stmt->bind_param('sisi', $status, $adminId, $remarks, $closingId);
+        $stmt->execute();
+        if ($stmt->affected_rows !== 1) throw new RuntimeException('The closing changed. Refresh and try again.');
+        $stmt->close();
+        $label = $closing['item_name'] . ' on ' . $closing['inventory_date'];
+        $varianceText = inventoryQuantityText((float)$closing['variance'], $closing);
+        workflowAudit($conn, $adminId, (string)$closing['branch_id'],
+            ($status === 'Reviewed' ? 'Reviewed daily closing #' : 'Returned daily closing for recount #') . $closingId . ': ' . $label
+            . ' | Variance: ' . $varianceText . ($remarks !== '' ? ' | Remark: ' . $remarks : '')
+            . ($status === 'Returned' ? ' | Training row kept until the Nurse saves the recount' : ''), 'Daily Inventory Review');
+        if ($status === 'Returned') {
+            inventoryApprovalNotifyUser($conn, (int)$closing['submitted_by'], 'Daily closing returned for recount',
+                $admin['username'] . ' returned the daily closing of ' . $label . ' for a recount. Remark: ' . $remarks
+                . '. Open Daily Inventory, count the item again and save the closing.',
+                'closing_returned', 'closing_returned:' . $closingId);
+        }
+        $conn->commit();
+        return $status === 'Reviewed'
+            ? 'The closing of ' . $label . ' is marked Reviewed.'
+            : 'The closing of ' . $label . ' was returned to the Nurse for a recount.';
     } catch (Throwable $e) {
         $conn->rollback();
         throw $e;
