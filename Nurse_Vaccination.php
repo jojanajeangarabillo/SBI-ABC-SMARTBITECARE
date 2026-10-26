@@ -2836,6 +2836,7 @@ function getStatusBadge($status)
             }
         }
     </style>
+    <script src="sources/manila_date.js"></script>
 </head>
 <body>
 
@@ -3983,7 +3984,7 @@ function addVaccineEntry(autoSuggest = false) {
                     <input type="hidden" class="arv-site-count" value="0">
                 </div>
             </div>
-            <div class="col-md-6"><label class="form-label fw-semibold">Date Administered</label><input type="date" class="form-control date-administered" value="${new Date().toISOString().split('T')[0]}"></div>
+            <div class="col-md-6"><label class="form-label fw-semibold">Date Administered</label><input type="date" class="form-control date-administered" value="${sbcManilaToday()}"></div>
             <div class="col-md-2"><label class="form-label fw-semibold">Status</label><select class="form-select status-select" onchange="updateUsageForStatus(this)"><option value="Completed" selected>Completed</option><option value="Missed">Missed</option></select></div>
             <div class="col-md-12"><label class="form-label fw-semibold">Remarks</label><input type="text" class="form-control remarks-input" maxlength="500" placeholder="Optional clinical/inventory note"></div>
         </div>
@@ -4388,7 +4389,7 @@ function submitVaccination() {
             dose_number: dNum.value,
             quantity_base: isMissed ? 0 : Number(qty.value),
             site_count: isMissed ? 0 : siteCount,
-            date_administered: dAdmin.value || new Date().toISOString().split('T')[0],
+            date_administered: dAdmin.value || sbcManilaToday(),
             vaccine_status: statusSel.value || 'Completed',
             remarks: remarks ? remarks.value.trim() : ''
         });
