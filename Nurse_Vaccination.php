@@ -624,12 +624,12 @@ function vaccineBatchSummary($batches, array $item = []) {
     return implode(', ', $parts);
 }
 
-// Handle AJAX request for getting available vaccines
-if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_vaccines') {
-    header('Content-Type: application/json');
-
-    // Show every consumable Medical Supplies item. Items with no usable
-    // stock remain visible but are disabled in the browser.
+/**
+ * Products the nurse can choose: every consumable Medical Supplies item with
+ * this branch's usable stock (expired batches excluded). Items with no usable
+ * stock stay listed but are disabled in the browser.
+ */
+function vaccinationProductList(mysqli $conn, string $branch_id, string $stockTotalsSql): array {
     $sql = "SELECT
                 i.item_id,
                 i.item_name,
@@ -673,7 +673,164 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_vaccines') {
     }
     unset($vaccine);
 
-    echo json_encode($vaccines);
+    return $vaccines;
+}
+
+/**
+ * Products named in an assessment's Active Regimen text, in the order they
+ * appear: "PVRV TRC SPEEDA" names Speeda; "PVRV TRC SPEEDA + ERIG" also names
+ * "ERIG (Equine Rabies Immunoglobulin)". A product matches by its full name or
+ * by the short name before " (", as a whole word, ignoring case.
+ */
+function vaccinationProductsInRegimen(string $regimen, array $products): array {
+    $text = strtoupper($regimen);
+    $found = [];
+    foreach ($products as $product) {
+        $name = strtoupper(trim((string)($product['item_name'] ?? '')));
+        $keys = array_unique(array_filter([$name, trim((string)strstr($name, ' (', true))]));
+        foreach ($keys as $key) {
+            if (preg_match('/(?<![A-Z0-9])' . preg_quote($key, '/') . '(?![A-Z0-9])/', $text, $m, PREG_OFFSET_CAPTURE)) {
+                $found[(int)$product['item_id']] = ['offset' => (int)$m[0][1], 'length' => strlen($key), 'product' => $product];
+                break;
+            }
+        }
+    }
+    uasort($found, static fn($a, $b) => [$a['offset'], -$a['length']] <=> [$b['offset'], -$b['length']]);
+    return array_values(array_map(static fn($f) => $f['product'], $found));
+}
+
+/** True when the product can be selected now (usable stock and a valid unit setup). */
+function vaccinationProductSelectable(array $product): bool {
+    return !empty($product['is_available'])
+        && empty($product['requires_ml_configuration'])
+        && empty($product['requires_site_configuration']);
+}
+
+/**
+ * "Record Administered Products" on the Assessment page opens this page with
+ * the visit_id of a SAVED anti-rabies assessment of this patient and case.
+ * Returns what to fill in, or null when the link does not match such a visit
+ * in this branch (the page then works exactly as before):
+ *   item_id   anti-rabies product named in the Active Regimen (else the product
+ *             of the cycle's last given dose), only when it has usable stock;
+ *             the batch is chosen at save time, FEFO, never an expired one
+ *   sites     the regimen's default (ID 2, Booster ID 1, IM 0 = full vial)
+ *   date      today; for D0 the assessment's D0 date when it is not in the future
+ *   extras    other products named in the Active Regimen (ERIG, HRIG, ATS, TT):
+ *             extra rows, amount left for the nurse
+ */
+function vaccinationAssessmentPrefill(
+    mysqli $conn,
+    string $branch_id,
+    array $products,
+    int $visitId,
+    int $patientId,
+    int $caseId,
+    int $dose
+): ?array {
+    if ($visitId <= 0 || $patientId <= 0 || $caseId <= 0) {
+        return null;
+    }
+    $stmt = $conn->prepare(
+        "SELECT a.treatment_profile, a.route, a.active_regimen, a.d0_date
+         FROM patient_visits v
+         INNER JOIN clinical_assessments a ON a.visit_id = v.visit_id
+         WHERE v.visit_id = ? AND v.patient_id = ? AND v.case_id = ? AND v.branch_id = ?
+           AND v.workflow_status IN ('Under Assessment', 'Treatment Completed')
+         LIMIT 1"
+    );
+    $stmt->bind_param('iiis', $visitId, $patientId, $caseId, $branch_id);
+    $stmt->execute();
+    $assessment = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    $profile = strtoupper(trim((string)($assessment['treatment_profile'] ?? '')));
+    if (!$assessment || $profile === '' || $profile === 'OTHER') {
+        return null;
+    }
+
+    $regimenText = trim((string)($assessment['active_regimen'] ?? ''));
+    $named = vaccinationProductsInRegimen($regimenText, $products);
+    $vaccine = null;
+    $extras = [];
+    foreach ($named as $product) {
+        if (!empty($product['is_site_arv'])) {
+            $vaccine = $vaccine ?? $product;
+        } else {
+            $extras[] = $product;
+        }
+    }
+    $source = $vaccine ? 'Active Regimen "' . $regimenText . '"' : '';
+    if (!$vaccine) {
+        // No anti-rabies product in the Active Regimen: the product of this cycle's last given dose.
+        $last = $conn->prepare(
+            "SELECT item_id FROM vaccination_records
+             WHERE case_id = ? AND branch_id = ? AND is_archived = 0 AND vaccination_status = 'Completed'
+               AND dose_number BETWEEN 1 AND 6 AND item_id IS NOT NULL
+             ORDER BY date_administered DESC, vaccination_id DESC"
+        );
+        $last->bind_param('is', $caseId, $branch_id);
+        $last->execute();
+        $usedIds = array_map('intval', array_column($last->get_result()->fetch_all(MYSQLI_ASSOC), 'item_id'));
+        $last->close();
+        foreach ($usedIds as $usedId) {
+            foreach ($products as $product) {
+                if ((int)$product['item_id'] === $usedId && !empty($product['is_site_arv'])) {
+                    $vaccine = $product;
+                    $source = 'the product of the last dose given in this cycle';
+                    break 2;
+                }
+            }
+        }
+    }
+
+    $notes = [];
+    $itemId = 0;
+    if ($vaccine && vaccinationProductSelectable($vaccine)) {
+        $itemId = (int)$vaccine['item_id'];
+        $notes[] = 'Product: ' . trim((string)$vaccine['item_name']) . ' (from ' . $source . ').';
+    } elseif ($vaccine) {
+        $notes[] = 'Product: ' . trim((string)$vaccine['item_name']) . ' (from ' . $source . ') has no usable stock or unit setup - choose the product given.';
+    } else {
+        $notes[] = 'Product: not found in the Active Regimen' . ($regimenText !== '' ? ' "' . $regimenText . '"' : '') . ' - choose the product given.';
+    }
+    $extraRows = [];
+    foreach ($extras as $extra) {
+        if (vaccinationProductSelectable($extra)) {
+            $extraRows[] = ['item_id' => (int)$extra['item_id'], 'item_name' => trim((string)$extra['item_name'])];
+        } else {
+            $notes[] = trim((string)$extra['item_name']) . ' (named in the Active Regimen) has no usable stock - add it yourself if given.';
+        }
+    }
+    if ($extraRows) {
+        $notes[] = 'Also from the Active Regimen: ' . implode(', ', array_column($extraRows, 'item_name')) . ' - enter the amount given.';
+    }
+
+    $sites = workflowProfileDefaultSites($profile, (string)($assessment['route'] ?? ''));
+    $notes[] = 'Sites: ' . ($sites === 0 ? 'IM - full vial' : $sites . ' site' . ($sites === 1 ? '' : 's'))
+        . ' (' . workflowProfileLabel($profile, (string)($assessment['route'] ?? '')) . ').';
+
+    $today = date('Y-m-d');
+    $d0 = (string)($assessment['d0_date'] ?? '');
+    $date = ($dose === 1 && $d0 !== '' && $d0 <= $today) ? $d0 : $today;
+    $notes[] = 'Date administered: ' . date('M d, Y', strtotime($date)) . ($date === $d0 && $dose === 1 ? ' (D0 date of the assessment).' : ' (today).');
+
+    return [
+        'visit_id' => $visitId,
+        'patient_id' => $patientId,
+        'case_id' => $caseId,
+        'item_id' => $itemId,
+        'sites' => $sites,
+        'date' => $date,
+        'extras' => $extraRows,
+        'notes' => $notes,
+        'return_url' => 'Nurse_Assessment.php?tab=queue&visit_id=' . $visitId,
+    ];
+}
+
+// Handle AJAX request for getting available vaccines
+if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_vaccines') {
+    header('Content-Type: application/json');
+    echo json_encode(vaccinationProductList($conn, (string)$branch_id, $stockTotalsSql));
     exit;
 }
 
@@ -1051,6 +1208,8 @@ if (isset($_POST['submit_vaccination'])) {
         $vaccination_details = [];
         // Late doses (1-7 days) shift the remaining schedule once per dose stage.
         $late_stage_shifts = [];
+        // Dates of the Completed doses saved below (a Missed-only save has none).
+        $completed_dose_dates = [];
 
         foreach ($vaccine_items as $item) {
             $item_id = intval($item['item_id'] ?? 0);
@@ -1716,20 +1875,57 @@ if (isset($_POST['submit_vaccination'])) {
             logAudit($conn, $user_id, $branch_id, 'Follow-up vaccination visit completed | Case: ' . $case_label . ' (ID: ' . (int)$case_id . ')', 'Patient Visit');
         }
 
+        // Opened from Record Administered Products on the Assessment page: the
+        // visit's treatment is done; the nurse returns to the Assessment to
+        // Complete and Send for Registry (the visit stays in the queue until then).
+        $assessment_visit_id = (int)($_POST['visit_id'] ?? 0);
+        $return_url = '';
+        $treatment_completed = 0;
+        if ($assessment_visit_id > 0) {
+            $visitCheck = $conn->prepare(
+                "SELECT visit_id FROM patient_visits
+                 WHERE visit_id = ? AND patient_id = ? AND case_id = ? AND branch_id = ?
+                   AND workflow_status IN ('Under Assessment', 'Treatment Completed')
+                 LIMIT 1"
+            );
+            $visitCheck->bind_param('iiis', $assessment_visit_id, $patient_id, $case_id, $branch_id);
+            $visitCheck->execute();
+            $assessmentVisit = $visitCheck->get_result()->fetch_assoc();
+            $visitCheck->close();
+            if ($assessmentVisit) {
+                $return_url = 'Nurse_Assessment.php?tab=queue&visit_id=' . $assessment_visit_id;
+                if ($completed_dose_dates) {
+                    $treatment_completed = workflowCompleteAssessmentTreatment(
+                        $conn, $assessment_visit_id, (int)$patient_id, (int)$case_id, (string)$branch_id, (int)$user_id
+                    );
+                }
+                if ($treatment_completed > 0) {
+                    logAudit($conn, $user_id, $branch_id, 'Treatment completed from the assessment | Visit ' . $assessment_visit_id
+                        . ' | Case: ' . $case_label . ' (ID: ' . (int)$case_id . ')', 'Patient Visit');
+                }
+            }
+        }
+
         if ($reopened_closings > 0) {
             createNotification($conn, $user_id, 'Daily Inventory Resubmission Required',
                 'Vaccination usage changed after ' . $reopened_closings . ' daily inventory closing(s). Resubmit the affected item/date with updated physical counts to restore its forecasting training record.', 'inventory');
         }
         $conn->commit();
+        $saved_message = 'Successfully saved ' . $success_count . ' vaccination entr' . ($success_count === 1 ? 'y' : 'ies') . '.'
+            . ($shifted_doses > 0
+                ? ' The dose was given late, so ' . $shifted_doses . ' remaining dose(s) moved '
+                  . max(array_column($late_stage_shifts, 'days')) . ' day(s) later.'
+                : '')
+            . ($reopened_closings > 0 ? ' Resubmit ' . $reopened_closings . ' affected daily inventory closing(s) because usage changed after closing.' : '')
+            . ($completed_visits > 0 ? ' The follow-up visit is completed.' : '');
+        if ($return_url !== '') {
+            // Shown on the Assessment page the nurse returns to.
+            workflowFlash('success', $saved_message . ' Review the chart, then use Complete and Send for Registry.');
+        }
         echo json_encode([
             'success' => true,
-            'message' => 'Successfully saved ' . $success_count . ' vaccination entr' . ($success_count === 1 ? 'y' : 'ies') . '.'
-                . ($shifted_doses > 0
-                    ? ' The dose was given late, so ' . $shifted_doses . ' remaining dose(s) moved '
-                      . max(array_column($late_stage_shifts, 'days')) . ' day(s) later.'
-                    : '')
-                . ($reopened_closings > 0 ? ' Resubmit ' . $reopened_closings . ' affected daily inventory closing(s) because usage changed after closing.' : '')
-                . ($completed_visits > 0 ? ' The follow-up visit is completed.' : '')
+            'message' => $saved_message . ($return_url !== '' ? ' Returning to the Assessment...' : ''),
+            'return_url' => $return_url,
         ]);
         exit;
 
@@ -2097,6 +2293,20 @@ if ($search !== '') {
 
 $patient_list_stmt->execute();
 $patient_list = $patient_list_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+// Opened from Record Administered Products on the Assessment page (visit_id in
+// the link): what to fill in from that visit's saved assessment, else null.
+$assessment_prefill = isset($_GET['visit_id'])
+    ? vaccinationAssessmentPrefill(
+        $conn,
+        (string)$branch_id,
+        vaccinationProductList($conn, (string)$branch_id, $stockTotalsSql),
+        (int)$_GET['visit_id'],
+        (int)($_GET['patient_id'] ?? 0),
+        (int)($_GET['case_id'] ?? 0),
+        (int)($_GET['dose'] ?? 0)
+    )
+    : null;
+
 // Patients checked in today for their scheduled dose (same rule as the Nurse Calendar).
 $ready_visits = workflowReadyVaccinationVisits($conn, (string)$branch_id);
 $ready_by_patient = [];
@@ -2773,6 +2983,20 @@ function getStatusBadge($status)
                 <h5 class="section-title"><i class="bi bi-syringe me-2"></i>Administer Vaccination</h5>
                 <span class="badge bg-primary rounded-pill px-3 py-2" id="selectedPatientBadge">No patient selected</span>
             </div>
+            <?php if ($assessment_prefill): ?>
+                <div class="alert alert-info py-2 mb-3" id="assessmentPrefillNote" role="status">
+                    <div class="fw-bold"><i class="bi bi-clipboard2-check-fill me-1"></i>Filled in from the assessment – check before saving.</div>
+                    <ul class="small mb-1 ps-3">
+                        <?php foreach ($assessment_prefill['notes'] as $note): ?>
+                            <li><?php echo htmlspecialchars($note, ENT_QUOTES, 'UTF-8'); ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                    <div class="small">
+                        You can change any field. After saving you return to the Assessment to Complete and Send for Registry.
+                        <a href="<?php echo htmlspecialchars($assessment_prefill['return_url'], ENT_QUOTES, 'UTF-8'); ?>" class="ms-1"><i class="bi bi-arrow-left"></i> Back to the Assessment</a>
+                    </div>
+                </div>
+            <?php endif; ?>
 
             <div class="row mb-4">
                 <div class="col-md-6">
@@ -3184,18 +3408,25 @@ let caseDefaultSites = 2;
 let caseRegimenLabel = '';
 let nextDoseDisplay = '';
 // Calendar shortcut: Nurse_Vaccination.php?patient_id=..&case_id=..&dose=..
+// From Record Administered Products on the Assessment page the link also has
+// visit_id; the server then adds the assessment's product, sites and date
+// (prefill), checked against that visit, patient and case.
 const vaccinationPreselect = (function () {
     const params = new URLSearchParams(window.location.search);
     const patient = params.get('patient_id');
     if (!patient || !/^\d+$/.test(patient)) return null;
+    const prefill = <?php echo json_encode($assessment_prefill, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+    const caseId = /^\d+$/.test(params.get('case_id') || '') ? params.get('case_id') : '';
     return {
         patientId: patient,
-        caseId: /^\d+$/.test(params.get('case_id') || '') ? params.get('case_id') : '',
-        dose: /^[1-6]$/.test(params.get('dose') || '') ? params.get('dose') : ''
+        caseId: caseId,
+        dose: /^[1-6]$/.test(params.get('dose') || '') ? params.get('dose') : '',
+        prefill: prefill && String(prefill.patient_id) === patient && String(prefill.case_id) === caseId ? prefill : null
     };
 })();
 let pendingCasePreselect = null;
 let pendingDosePreselect = null;
+let pendingAssessmentPrefill = null;
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -3308,6 +3539,7 @@ function loadVaccines() {
                     if (patientSelect.value === vaccinationPreselect.patientId) {
                         pendingCasePreselect = vaccinationPreselect.caseId;
                         pendingDosePreselect = vaccinationPreselect.dose;
+                        pendingAssessmentPrefill = vaccinationPreselect.prefill;
                         loadPatientData();
                     } else {
                         showAlert('This patient is no longer eligible for vaccination. Please refresh the page.', 'warning');
@@ -3459,10 +3691,50 @@ function loadNextDose(pid, cid) {
                         doseInput.value = String(pendingDosePreselect || nextDoseNumber);
                         if (!doseInput.value) doseInput.value = String(nextDoseNumber);
                     }
+                    // Opened from the Assessment: product, sites, date and extra products.
+                    if (pendingAssessmentPrefill && String(cid) === String(pendingAssessmentPrefill.case_id)) {
+                        applyAssessmentPrefill(firstEntry, pendingAssessmentPrefill);
+                    }
                 }
                 pendingDosePreselect = null;
+                pendingAssessmentPrefill = null;
             }
         }).catch(e => console.error('Error loading next dose:', e));
+}
+
+// Select a product in a vaccine card the same way the nurse does (same unit,
+// stock and site handling). Only enabled options (usable stock) are chosen.
+function selectEntryProduct(entry, itemId) {
+    var select = entry.querySelector('.vaccine-select');
+    if (!select || !itemId) return false;
+    var option = Array.from(select.options).find(o => o.value === String(itemId) && !o.disabled);
+    if (!option) return false;
+    select.value = option.value;
+    updateVaccineUnit(select);
+    return true;
+}
+
+// Fill in the first card from the assessment, plus one card per extra product
+// (ERIG, HRIG, ATS, TT named in the Active Regimen) on the same dose. Every
+// field stays editable; nothing is saved until the nurse clicks Save Vaccination.
+function applyAssessmentPrefill(entry, prefill) {
+    var date = /^\d{4}-\d{2}-\d{2}$/.test(prefill.date || '') ? prefill.date : '';
+    if (date) entry.querySelector('.date-administered').value = date;
+    if (selectEntryProduct(entry, prefill.item_id)) {
+        // After updateVaccineUnit's own default-site click: the assessment's regimen sites.
+        var siteKey = Number(prefill.sites) === 0 ? 'full' : String(Number(prefill.sites) || 2);
+        setTimeout(function () {
+            var siteButton = entry.querySelector('.arv-site-btn[data-sites="' + siteKey + '"]');
+            if (siteButton && entry.querySelector('.arv-site-control').style.display !== 'none') siteButton.click();
+        }, 0);
+    }
+    (prefill.extras || []).forEach(function (extra) {
+        addVaccineEntry(false);
+        var cards = document.querySelectorAll('#vaccineEntries .vaccine-entry');
+        var card = cards[cards.length - 1];
+        if (!selectEntryProduct(card, extra.item_id)) { card.remove(); return; }
+        if (date) card.querySelector('.date-administered').value = date;
+    });
 }
 
 function updateNextDoseIndicator() {
@@ -4145,6 +4417,11 @@ function postVaccination(lateChoice) {
     formData.append('patient_id', sub.pid);
     formData.append('case_id', sub.cid);
     formData.append('vaccine_items', JSON.stringify(sub.items));
+    // Opened from the Assessment and still on that patient and case: the visit's treatment is done.
+    var fromAssessment = vaccinationPreselect && vaccinationPreselect.prefill;
+    if (fromAssessment && String(sub.pid) === String(fromAssessment.patient_id) && String(sub.cid) === String(fromAssessment.case_id)) {
+        formData.append('visit_id', String(fromAssessment.visit_id));
+    }
     if (lateChoice) {
         formData.append('late_decision', 'continue');
         formData.append('late_confirm', '1');
@@ -4159,8 +4436,13 @@ function postVaccination(lateChoice) {
             }
             if (data.success) {
                 showAlert(data.message, 'success');
-                setTimeout(() => { 
-                    resetForm(); 
+                if (data.return_url && /^Nurse_Assessment\.php\?/.test(data.return_url)) {
+                    // Back to the Assessment to Complete and Send for Registry.
+                    setTimeout(() => { window.location.href = data.return_url; }, 1500);
+                    return;
+                }
+                setTimeout(() => {
+                    resetForm();
                     // Reload so a vaccination-complete patient is immediately
                     // removed from the Select Patient dropdown.
                     location.reload();
