@@ -13,6 +13,7 @@ require_once __DIR__ . '/return_management_helper.php';
  * Branch Admin of the same branch approves). One table, inventory_approval_requests
  * (sources/migrate_inventory_approvals.php), for every request type:
  *
+ *   stock_in          a delivery (new batch or added quantity); added only on approval
  *   stock_adjustment  Inventory Officer counted a batch; stock changes only on approval
  *   stock_out         Stock Out / pull-out / damaged, contaminated or lost stock
  *   expired_disposal  dispose and archive an expired batch
@@ -34,6 +35,7 @@ require_once __DIR__ . '/return_management_helper.php';
  */
 
 const INVENTORY_APPROVAL_TYPES = [
+    'stock_in' => 'Stock in / delivery',
     'stock_adjustment' => 'Stock adjustment',
     'stock_out' => 'Stock out / pull-out',
     'expired_disposal' => 'Expired stock disposal',
@@ -282,6 +284,11 @@ function inventoryApprovalDescribe(array $row): string
     $batch = trim((string)($row['batch_snapshot'] ?? ''));
     $batchText = $batch !== '' ? ' (batch ' . $batch . ')' : '';
     switch ((string)$row['request_type']) {
+        case 'stock_in':
+            return 'receive ' . $qty . ' of ' . $item . $batchText
+                . (!empty($p['expiration_date']) ? ', expires ' . $p['expiration_date'] : '')
+                . (!empty($p['source_label']) ? ', from ' . $p['source_label'] : '')
+                . (!empty($p['restock_request_id']) ? ', for restock request #' . (int)$p['restock_request_id'] : '');
         case 'stock_adjustment':
             return 'adjust ' . $item . $batchText . ' from ' . inventoryApprovalQuantityText($p['system_at_count'] ?? 0, $row)
                 . ' to the counted ' . inventoryApprovalQuantityText($p['counted'] ?? 0, $row);
@@ -542,6 +549,43 @@ function inventoryApprovalApply(mysqli $conn, array $request, array $actor, arra
     $now = date('Y-m-d H:i:s');
     $requestId = (int)$request['request_id'];
     switch ($request['request_type']) {
+        case 'stock_in':
+            // Validated again: the batch may have expired or been archived since the request.
+            $origin = stockReceiptSourceFromForm($conn, (string)$actor['branch_id'], [
+                'stock_source_type' => (string)($p['stock_source_type'] ?? ''),
+                'stock_source_branch_id' => (string)($p['stock_source_branch_id'] ?? ''),
+                'stock_source_name' => (string)($p['stock_source_name'] ?? ''),
+            ]);
+            $restockId = !empty($p['restock_request_id']) ? (int)$p['restock_request_id'] : null;
+            $quantityScaled = stockQuantityParse((string)$request['quantity']);
+            $done = inventoryStockInApply($conn, $actor, (int)$request['item_id'], $quantityScaled,
+                $p['batch_lot_no'] ?? null, $p['manufacturing_date'] ?? null, $p['expiration_date'] ?? null, $origin,
+                trim((string)($p['remarks'] ?? '') . ' | Received on ' . ($p['received_date'] ?? '') . ' | Approved request #' . $requestId
+                    . ($restockId ? ' | Restock request #' . $restockId : ''), ' |'),
+                $now, $requestId);
+            $restockText = '';
+            if ($restockId !== null) {
+                $restock = inventoryApprovalLoad($conn, $restockId, true);
+                if ($restock && $restock['status'] === 'Approved' && (int)$restock['item_id'] === (int)$request['item_id']
+                    && (string)$restock['branch_id'] === (string)$request['branch_id']) {
+                    $fulfil = inventoryApprovalFulfil($conn, $restockId, (string)$request['branch_id'], (int)$request['item_id'],
+                        $quantityScaled, (int)$done['transaction_id'], (int)$approver['user_id']);
+                    $restockText = ' Restock request #' . $restockId . ($fulfil['complete']
+                        ? ' is now Fulfilled (' . $fulfil['fulfilled_text'] . ' received).'
+                        : ' stays Approved: ' . $fulfil['fulfilled_text'] . ' of ' . $fulfil['approved_text'] . ' received, '
+                            . $fulfil['remaining_text'] . ' remaining.');
+                } else {
+                    // The stock physically arrived; it is received, without the link.
+                    $restockText = ' Restock request #' . $restockId . ' is ' . ($restock['status'] ?? 'missing')
+                        . ', so this delivery was not counted against it.';
+                }
+            }
+            return ['transaction_id' => $done['transaction_id'],
+                'reference' => $restockId ? 'Restock request #' . $restockId : null,
+                'before' => 'usable ' . inventoryQuantityText((float)stockQuantityDecimal($done['before']), $done['item']),
+                'after' => 'usable ' . inventoryQuantityText((float)stockQuantityDecimal($done['after']), $done['item']),
+                'message' => 'Stock In recorded (transaction #' . $done['transaction_id'] . '); it appears as Delivery in today\'s Daily Inventory.'
+                    . $restockText];
         case 'stock_adjustment':
             $done = inventoryStockAdjustmentApply($conn, $actor, (int)$request['item_id'], (int)$request['stock_id'],
                 stockQuantityParse((string)$p['counted'], true), stockQuantityParse((string)$p['system_at_count'], true),
@@ -656,6 +700,19 @@ function inventoryApprovalOpenRestocks(mysqli $conn, string $branchId, ?int $ite
         $fulfilled = stockQuantityParse((string)$row['fulfilled_quantity'], true);
         $row['remaining_scaled'] = max(0, $approved - $fulfilled);
         $row['remaining_text'] = inventoryQuantityText((float)stockQuantityDecimal($row['remaining_scaled']), $row);
+        $row['pending_delivery_scaled'] = 0;
+    }
+    unset($row);
+    // Pending Stock In requests already linked to each restock (not received yet).
+    $pendingIn = inventoryApprovalList($conn, ['branch_id' => $branchId, 'statuses' => ['Pending'], 'types' => ['stock_in'], 'limit' => 500]);
+    foreach ($rows as &$row) {
+        foreach ($pendingIn as $in) {
+            if ((int)($in['payload_data']['restock_request_id'] ?? 0) === (int)$row['request_id']) {
+                $row['pending_delivery_scaled'] += stockQuantityParse((string)$in['quantity'], true);
+            }
+        }
+        $row['pending_delivery_text'] = $row['pending_delivery_scaled'] > 0
+            ? inventoryQuantityText((float)stockQuantityDecimal($row['pending_delivery_scaled']), $row) : '';
     }
     unset($row);
     return $rows;
@@ -906,4 +963,52 @@ function inventoryApprovalHistoryFields(array $row): array
         . ' | Approved by ' . ($fields['approved_by'] ?: '—') . ' ' . $fields['approved_at']
         . ($fields['reason'] !== '' ? ' | Reason: ' . $fields['reason'] : '');
     return $fields;
+}
+
+/**
+ * Pending Stock In requests of a branch grouped by item, for the notes on the
+ * stock views ("1 delivery of Speeda (50 vials) awaiting approval"): pending
+ * stock cannot be used until the Branch Admin approves it.
+ */
+function inventoryApprovalPendingDeliveries(mysqli $conn, string $branchId): array
+{
+    $byItem = [];
+    foreach (inventoryApprovalList($conn, ['branch_id' => $branchId, 'statuses' => ['Pending'], 'types' => ['stock_in'], 'limit' => 500]) as $row) {
+        $key = (int)$row['item_id'];
+        if (!isset($byItem[$key])) {
+            $byItem[$key] = ['item_id' => $key, 'item_name' => (string)$row['item_name'], 'count' => 0, 'scaled' => 0,
+                'unit_row' => $row, 'request_ids' => []];
+        }
+        $byItem[$key]['count']++;
+        $byItem[$key]['scaled'] += stockQuantityParse((string)$row['quantity'], true);
+        $byItem[$key]['request_ids'][] = (int)$row['request_id'];
+    }
+    foreach ($byItem as &$entry) {
+        $entry['quantity_text'] = inventoryQuantityText((float)stockQuantityDecimal($entry['scaled']), $entry['unit_row']);
+        $entry['text'] = $entry['count'] . ' ' . ($entry['count'] === 1 ? 'delivery' : 'deliveries') . ' of '
+            . $entry['item_name'] . ' (' . $entry['quantity_text'] . ') awaiting approval';
+    }
+    unset($entry);
+    return array_values($byItem);
+}
+
+/** HTML note listing pending deliveries (empty string when there are none). */
+function inventoryApprovalPendingDeliveriesNote(mysqli $conn, string $branchId, string $audience = ''): string
+{
+    try {
+        $rows = inventoryApprovalReady($conn) ? inventoryApprovalPendingDeliveries($conn, $branchId) : [];
+    } catch (Throwable $e) {
+        $rows = [];
+    }
+    if (!$rows) return '';
+    $items = '';
+    foreach ($rows as $row) {
+        $items .= '<li>' . htmlspecialchars($row['text'], ENT_QUOTES, 'UTF-8') . ' (request #'
+            . implode(', #', $row['request_ids']) . ')</li>';
+    }
+    return '<div class="alert alert-warning d-flex gap-2 align-items-start mb-3" role="status">'
+        . '<i class="bi bi-hourglass-split mt-1"></i><div><strong>Deliveries awaiting Branch Admin approval</strong>'
+        . '<ul class="mb-0 mt-1 ps-3">' . $items . '</ul>'
+        . '<div class="small mt-1">This stock is not in inventory yet and cannot be used until it is approved.'
+        . ($audience !== '' ? ' ' . htmlspecialchars($audience, ENT_QUOTES, 'UTF-8') : '') . '</div></div></div>';
 }

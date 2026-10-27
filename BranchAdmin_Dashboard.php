@@ -1191,6 +1191,9 @@ $username = $userInfo['username'] ?? 'Admin';
                             <?php endif; ?>
                             · <?php echo number_format($approvalClosings); ?> daily closing<?php echo $approvalClosings === 1 ? '' : 's'; ?> to review
                         </div>
+                        <?php foreach (inventoryApprovalPendingDeliveries($conn, (string)$branch_id) as $pendingDelivery): ?>
+                            <div class="stat-description text-danger fw-semibold"><i class="bi bi-hourglass-split"></i> <?php echo htmlspecialchars($pendingDelivery['text'], ENT_QUOTES, 'UTF-8'); ?> — the stock cannot be used until approved</div>
+                        <?php endforeach; ?>
                     </div>
                 </div>
             </a>

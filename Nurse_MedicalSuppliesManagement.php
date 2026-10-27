@@ -706,6 +706,8 @@ $flash = workflowTakeFlash();
             <div class="col-xl-3 col-md-6"><div class="stat-card expiring"><div class="stat-icon"><i class="bi bi-calendar2-exclamation-fill"></i></div><div><div class="stat-label">Expiring Within 30 Days</div><div class="stat-value"><?= (int)$stats['expiring'] ?></div></div></div></div>
         </div>
 
+        <?= inventoryApprovalPendingDeliveriesNote($conn, $branchId, 'Ask the Branch Admin to approve it if the item is needed now.') ?>
+
         <section class="content-card" id="recordSupplyUsage">
             <div class="card-head">
                 <div><h2><span class="section-icon"><i class="bi bi-box-arrow-up"></i></span>Record Supply Usage</h2>
