@@ -2872,6 +2872,7 @@ function getStatusBadge($status)
             <li><a href="Nurse_DailyInventory.php"><i class="bi bi-clipboard-data-fill"></i><span>Daily Inventory</span></a></li>
             <li><a href="Nurse_MedicalSuppliesManagement.php"><i class="bi bi-calendar-check"></i><span>Medical Supplies Management</span></a></li>
             <li><a href="Nurse_Supplyforecasting.php"><i class="bi bi-graph-up-arrow"></i><span>Supply Forecasting</span></a></li>
+            <li><a href="Nurse_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
             <li><a  href="Nurse_Notification.php" class="notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
                         <?php if ($notification_count > 0): ?>
                             <span class="notification-badge"><?php echo $notification_count; ?></span>

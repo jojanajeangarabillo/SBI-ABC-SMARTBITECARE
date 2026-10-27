@@ -3814,6 +3814,7 @@ body.sidebar-collapsed .main {
                 <li><a href="AdminStaff_Registry.php"><i class="bi bi-journal-check"></i><span>Registry Queue</span></a></li>
                 <li><a href="AdminStaff_PhilhealthWorkflow.php"><i class="bi bi-check2-all"></i><span>PhilHealth Workflow</span></a></li>
                 <li><a href="AdminStaff_MedicalDocuments.php"><i class="bi bi-file-earmark-ruled"></i><span>Medical Documents</span></a></li>
+                <li><a href="AdminStaff_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
                 <li>
                     <a href="AdminStaff_Notifications.php" style="position: relative;">
                         <i class="bi bi-bell-fill"></i>
@@ -5924,6 +5925,9 @@ body.sidebar-collapsed .main {
             searchTerm = initialSearch;
         }
         renderTable();
+        // ?edit_case=ID (e.g. a "Fix" link in the Data Quality report) opens that case for editing.
+        const editCaseId = parseInt(new URLSearchParams(window.location.search).get('edit_case') || '', 10);
+        if (editCaseId > 0) editPatient(editCaseId);
         
         const category = document.getElementById('vaccCategory').value;
         const route = document.getElementById('route').value;

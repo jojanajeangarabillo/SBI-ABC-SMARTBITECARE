@@ -1102,6 +1102,7 @@ body.sidebar-collapsed .main {
             <li><a href="AdminStaff_Registry.php"><i class="bi bi-journal-check"></i><span>Registry Queue</span></a></li>
             <li><a href="AdminStaff_PhilhealthWorkflow.php"><i class="bi bi-check2-all"></i><span>PhilHealth Workflow</span></a></li>
             <li><a href="AdminStaff_MedicalDocuments.php"><i class="bi bi-file-earmark-ruled"></i><span>Medical Documents</span></a></li>
+            <li><a href="AdminStaff_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
             <li>
                 <a href="AdminStaff_Notifications.php" style="position:relative;">
                     <i class="bi bi-bell-fill"></i>

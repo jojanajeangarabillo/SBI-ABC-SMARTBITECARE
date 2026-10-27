@@ -1622,6 +1622,7 @@ $flash = workflowTakeFlash();
                     <span>Supply Forecasting</span>
                 </a>
             </li>
+            <li><a href="Nurse_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
 
             <li>
                 <a
