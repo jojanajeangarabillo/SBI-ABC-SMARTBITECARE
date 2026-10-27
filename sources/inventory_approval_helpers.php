@@ -44,7 +44,16 @@ const INVENTORY_APPROVAL_TYPES = [
 ];
 
 /** Stock Out reasons the Inventory Officer can request. */
-const INVENTORY_STOCK_OUT_REASONS = ['Dispensed to Patient', 'Damaged', 'Contaminated', 'Expired', 'Lost / Wastage', 'Pull-out', 'Other'];
+/*
+ * Inventory Officer Stock Out reasons. "Dispensed to Patient" is NOT one of
+ * them: giving stock to a patient is usage, recorded immediately by the Nurse
+ * in Assessment, Vaccination or Medical Supplies (counted once as Consumed).
+ * A Stock Out is a pull-out, so a dispensed vial recorded here would show as
+ * Pull-out after a delay. Old transactions keep their remarks text and still
+ * display; an old pending request with that reason cannot be approved.
+ */
+const INVENTORY_STOCK_OUT_REASONS = ['Damaged', 'Contaminated', 'Expired', 'Lost / Wastage', 'Pull-out', 'Other'];
+const INVENTORY_PATIENT_USAGE_REASON = 'Dispensed to Patient';
 
 function inventoryApprovalTypeLabel(string $type): string
 {
@@ -544,6 +553,9 @@ function inventoryApprovalApply(mysqli $conn, array $request, array $actor, arra
                 'message' => 'Stock of ' . $done['item']['item_name'] . ' is now '
                     . inventoryQuantityText((float)stockQuantityDecimal($done['after']), $done['item']) . ' (transaction #' . $done['transaction_id'] . ').'];
         case 'stock_out':
+            if (($p['reason'] ?? $request['reason']) === INVENTORY_PATIENT_USAGE_REASON) {
+                throw new RuntimeException('"Dispensed to Patient" is patient usage, not a pull-out. Reject this request and ask the Nurse to record the usage in Assessment, Vaccination or Medical Supplies so it counts as Consumed once.');
+            }
             $done = inventoryStockOutApply($conn, $actor, (int)$request['item_id'], stockQuantityParse((string)$request['quantity']),
                 (string)$p['reason'], trim((string)($request['remarks'] ?? '') . ' | Approved request #' . $requestId, ' |'), $now, $requestId);
             $expired = $p['reason'] === 'Expired';
