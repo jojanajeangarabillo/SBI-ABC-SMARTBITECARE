@@ -91,10 +91,11 @@ function reportQty($quantity, array $item): string
 /* ------------------------------------------------------------------
  * 1. APPROVAL / CONTROL REPORT
  * ---------------------------------------------------------------- */
-function reportApprovalControl(mysqli $conn, ?string $branchId, string $from, string $to): array
+function reportApprovalControl(mysqli $conn, ?string $branchId, string $from, string $to, ?array $onlyStatuses = null): array
 {
     $filters = ['requested_from' => $from, 'requested_to' => $to, 'limit' => 20000];
     if ($branchId !== null) $filters['branch_id'] = $branchId;
+    if ($onlyStatuses) $filters['statuses'] = $onlyStatuses; // e.g. the Decision History (decided requests only)
     $requests = array_reverse(inventoryApprovalList($conn, $filters));
     $statuses = ['Pending', 'Approved', 'Fulfilled', 'Rejected', 'Cancelled'];
     $counts = [];
