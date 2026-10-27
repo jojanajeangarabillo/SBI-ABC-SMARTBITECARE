@@ -1269,7 +1269,6 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         // ----------------------------------------------------------------
         document.getElementById('exportBtn').addEventListener('click', () => { window.location.href = window.location.pathname + '?export=csv'; });
         document.getElementById('exportPdfBtn').addEventListener('click', () => { window.location.href = window.location.pathname + '?export=pdf'; });
-        });
 
         // ----------------------------------------------------------------
         // AUTO-REFRESH (every 30 seconds)
