@@ -5,6 +5,7 @@ require_once 'sources/notification_helper.php';
 require_once 'sources/inventory_officer_activity_helper.php';
 require_once 'sources/return_management_helper.php';
 require_once 'sources/return_stock_out_helper.php';
+require_once 'sources/inventory_approval_helpers.php';
 
 /* -------------------------------------------------------------
  * Inventory Officer access
@@ -192,87 +193,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
+    /*
+     * A return or transfer to another branch needs the Branch Admin's approval
+     * before it becomes In Transit. The form is validated now (same checks as
+     * before) and saved as a Pending request; on approval it is validated again
+     * and recorded In Transit (sources/inventory_approval_helpers.php). The
+     * receiving branch's receipt confirmation is unchanged.
+     */
     if ($action === 'save_return') {
-        try {
-            $itemName = returnManagementPostedText($_POST['item_name'] ?? '', 255, 'item name');
-            $unitId = returnManagementOptionalId($_POST['unit_id'] ?? null);
-            $destinationBranchId = returnManagementPostedText($_POST['destination_branch_id'] ?? '', 10, 'destination branch');
-            $quantity = returnManagementQuantity(returnManagementPostedText($_POST['quantity'] ?? '', 32, 'quantity'));
-            $returnReason = returnManagementPostedText($_POST['return_reason'] ?? '', 100, 'return reason');
-            $remarks = returnManagementPostedText($_POST['remarks'] ?? '', 2000, 'remarks');
-            $transportationDetails = returnManagementPostedText($_POST['transportation_details'] ?? '', 500, 'transportation details');
-            $itemId = returnManagementOptionalId($_POST['inventory_item_id'] ?? null);
-            $stockId = returnManagementOptionalId($_POST['source_stock_id'] ?? null);
-            $sourceReceiptId=returnManagementOptionalId($_POST['source_receipt_transaction_id'] ?? null);
-            $destinationReason=returnManagementPostedText($_POST['destination_reason'] ?? '',500,'destination explanation');
-            if ($itemName === '' || !$unitId || $destinationBranchId === ''
-                || !in_array($returnReason, $allowedReturnReasons, true)) throw new RuntimeException('Complete all required return details.');
-            if ($destinationBranchId === (string)$branch_id) throw new RuntimeException('The destination must differ from your current branch.');
-        } catch (Throwable $e) {
-            returnFlash('danger', $e->getMessage());
-            redirectReturnPage();
-        }
         $conn->begin_transaction();
         try {
             returnManagementRequireActor($conn, $user_id, $branch_id);
-            $stmt = returnManagementStatement($conn,
-                "SELECT branch_id,branch_name FROM branches WHERE branch_id = ? AND status = 'Active' FOR UPDATE");
-            $stmt->bind_param('s', $destinationBranchId);
-            returnManagementExecute($stmt);
-            $destination = $stmt->get_result()->fetch_assoc();
-            $stmt->close();
-            if (!$destination) throw new RuntimeException('The selected destination branch is not active.');
-            $destinationBranchId=(string)$destination['branch_id'];
-            if ($destinationBranchId===(string)$branch_id) throw new RuntimeException('The destination must differ from your current branch.');
-            $stmt = returnManagementStatement($conn, 'SELECT unit_id FROM units WHERE unit_id = ?');
-            $stmt->bind_param('i', $unitId);
-            returnManagementExecute($stmt);
-            $unitExists = $stmt->get_result()->num_rows === 1;
-            $stmt->close();
-            if (!$unitExists) throw new RuntimeException('The selected unit does not exist.');
-            $reference = returnManagementSourceReference($conn, $branch_id, $itemName, $unitId, $quantity, $itemId, $stockId);
-            $route=stockReceiptSourceReturnRoute($conn,$branch_id,$destinationBranchId,$reference,$sourceReceiptId,$destinationReason);
-            $sourceReceiptId=$route['receipt_id']; $destinationReason=$route['reason'];
-            $itemId = $reference['item_id'];
-            $stockId = $reference['stock_id'];
-            $baseQuantity = $reference['base_quantity'];
-            $baseUnit = $reference['base_unit'];
-            $batch = $reference['batch'];
-            $now = date('Y-m-d H:i:s');
-            $stmt = returnManagementStatement($conn, "INSERT INTO inventory_returns
-                (return_number, branch_id, destination_branch_id, item_name, unit_id, quantity,
-                 return_reason, remarks, transportation_details, status, created_by, sent_at, created_at,
-                 item_id, stock_id, inventory_quantity_snapshot, inventory_base_unit_snapshot, source_batch_snapshot,
-                 source_receipt_transaction_id,destination_reason)
-                VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'In Transit', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            $stmt->bind_param('sssissssissiisssis', $branch_id, $destinationBranchId, $itemName, $unitId,
-                $quantity, $returnReason, $remarks, $transportationDetails, $user_id, $now, $now,
-                $itemId, $stockId, $baseQuantity, $baseUnit, $batch,$sourceReceiptId,$destinationReason);
-            returnManagementExecute($stmt);
-            $returnId = (int)$conn->insert_id;
-            $stmt->close();
-            $returnNumber = 'RET-' . date('Y') . '-' . str_pad((string)$returnId, 6, '0', STR_PAD_LEFT);
-            $stmt = returnManagementStatement($conn, 'UPDATE inventory_returns SET return_number = ? WHERE return_id = ?');
-            $stmt->bind_param('si', $returnNumber, $returnId);
-            returnManagementExecute($stmt);
-            $stmt->close();
-            $actionText = 'Recorded return shipment ' . $returnNumber . ' for ' . $itemName . ' (' . $quantity . ') to branch ' . $destinationBranchId;
-            $message = 'Return ' . $returnNumber . ' was recorded for delivery to ' . $destination['branch_name']
-                . '. Item: ' . $itemName . '. Quantity: ' . $quantity . '. Reason: ' . $returnReason . '.';
-            if (!inventoryOfficerRecordReturnActivity($conn, $user_id, $branch_id, $branch_name, $username,
-                $returnId, $returnNumber, $actionText, $message, 'sent')) {
-                throw new RuntimeException('Unable to save the return audit and Branch Admin notification.');
+            $fields = [];
+            foreach (['item_name', 'unit_id', 'destination_branch_id', 'quantity', 'return_reason', 'remarks',
+                'transportation_details', 'inventory_item_id', 'source_stock_id', 'source_receipt_transaction_id',
+                'destination_reason'] as $field) {
+                $fields[$field] = $_POST[$field] ?? null;
             }
-            if (!inventoryOfficerNotifyIncomingReturn($conn,$returnId)) throw new RuntimeException('Unable to save the receiving Inventory Officer notification.');
+            $prepared = returnManagementPrepareShipment($conn, (string)$branch_id, $fields);
+            $stmt = returnManagementStatement($conn, 'SELECT unit_name FROM units WHERE unit_id = ?');
+            $preparedUnit = (int)$prepared['unit_id'];
+            $stmt->bind_param('i', $preparedUnit);
+            returnManagementExecute($stmt);
+            $unitName = (string)($stmt->get_result()->fetch_assoc()['unit_name'] ?? '');
+            $stmt->close();
+            $requestId = inventoryApprovalCreate($conn, [
+                'type' => 'return_transfer', 'branch_id' => (string)$branch_id, 'requested_by' => $user_id,
+                'source' => 'Inventory Officer',
+                'item_id' => $prepared['reference']['item_id'], 'stock_id' => $prepared['reference']['stock_id'],
+                'batch' => $prepared['reference']['batch'], 'item_name' => $prepared['item_name'],
+                'quantity' => $prepared['reference']['item_id'] ? $prepared['reference']['base_quantity'] : null,
+                'unit' => $prepared['reference']['base_unit'] ?: $unitName,
+                'reason' => $prepared['return_reason'], 'remarks' => $prepared['remarks'],
+                'payload' => ['fields' => $prepared['fields'], 'destination_name' => $prepared['destination_name'],
+                    'destination_branch_id' => $prepared['destination_branch_id'], 'item_name' => $prepared['item_name'],
+                    'quantity' => $prepared['quantity'], 'unit_name' => $unitName],
+            ]);
             $conn->commit();
-            returnFlash('success', 'Return ' . $returnNumber . ' was recorded and is now In Transit.');
+            returnFlash('success', 'Return request #' . $requestId . ' to ' . $prepared['destination_name']
+                . ' was sent: Pending approval. It becomes In Transit when the Branch Admin approves it.');
             redirectReturnPage();
         } catch (Throwable $e) {
             $conn->rollback();
-            returnFlash('danger', $e instanceof mysqli_sql_exception ? 'Unable to save this return. No return changes were saved.' : $e->getMessage());
+            returnFlash('danger', $e instanceof mysqli_sql_exception ? 'Unable to save this return request. No return changes were saved.' : $e->getMessage());
             redirectReturnPage();
         }
     }
+
+    if ($action === 'cancel_return_request') {
+        try {
+            $requestId = (int)($_POST['request_id'] ?? 0);
+            if ($requestId < 1) throw new RuntimeException('Select a return request to cancel.');
+            returnFlash('success', inventoryApprovalCancel($conn, $requestId, (int)$user_id));
+        } catch (Throwable $e) {
+            returnFlash('danger', $e->getMessage());
+        }
+        redirectReturnPage();
+    }
+
     if ($action === 'confirm_receipt' || $action === 'link_stock_receipt') {
         try {
             $returnId = returnManagementOptionalId($_POST['return_id'] ?? null);
@@ -351,6 +329,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
  * Page data
  * ----------------------------------------------------------- */
 $flash = $_SESSION['return_management_flash'] ?? null;
+/* Return / transfer approval requests of this branch (latest 20). */
+$returnRequests = inventoryApprovalList($conn, ['branch_id' => (string)$branch_id, 'types' => ['return_transfer'], 'limit' => 20]);
 unset($_SESSION['return_management_flash']);
 
 $stats = [
@@ -1896,6 +1876,39 @@ body {
             </div>
         </div>
 
+        <?php if ($returnRequests): ?>
+        <div class="panel-card mb-4">
+            <div class="p-3">
+                <div class="fw-bold mb-1" style="color:#2B3A8C;"><i class="bi bi-hourglass-split me-1"></i>Return Requests</div>
+                <div class="small text-muted mb-2">Returns and transfers you recorded wait for the Branch Admin's approval before they become In Transit.</div>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead><tr><th>Request</th><th>Details</th><th>Reason</th><th>Status</th><th>Decision</th><th></th></tr></thead>
+                        <tbody>
+                        <?php foreach ($returnRequests as $rr): ?>
+                            <tr>
+                                <td>#<?php echo (int)$rr['request_id']; ?><div class="small text-muted"><?php echo h(date('M d, Y h:i A', strtotime($rr['requested_at']))); ?></div></td>
+                                <td><?php echo h(ucfirst($rr['summary'])); ?></td>
+                                <td><?php echo h($rr['reason'] ?? ''); ?></td>
+                                <td><span class="badge <?php echo h(inventoryApprovalStatusClass($rr['status'])); ?>"><?php echo h($rr['status'] === 'Pending' ? 'Pending approval' : $rr['status']); ?></span><?php if ($rr['result_reference']): ?><div class="small text-muted"><?php echo h($rr['result_reference']); ?></div><?php endif; ?></td>
+                                <td class="small"><?php if ($rr['decided_at']): ?><?php echo h(($rr['decider_name'] ?? '') . ', ' . date('M d, Y', strtotime($rr['decided_at']))); ?><?php if ($rr['decision_remarks']): ?><div class="text-muted"><?php echo h($rr['decision_remarks']); ?></div><?php endif; ?><?php else: ?>—<?php endif; ?></td>
+                                <td><?php if ($rr['status'] === 'Pending' && (int)$rr['requested_by'] === (int)$user_id): ?>
+                                    <form method="POST" action="InventoryOfficer_ReturnManagement.php" onsubmit="return confirm('Cancel this return request?');">
+                                        <input type="hidden" name="csrf_token" value="<?php echo h($returnCsrf); ?>">
+                                        <input type="hidden" name="action" value="cancel_return_request">
+                                        <input type="hidden" name="request_id" value="<?php echo (int)$rr['request_id']; ?>">
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary">Cancel</button>
+                                    </form>
+                                <?php endif; ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <?php endif; ?>
+
         <div class="panel-card">
             <div class="panel-toolbar">
                 <div class="search-wrap">
@@ -2191,15 +2204,15 @@ body {
                     </div>
 
                     <div class="status-flow-note mt-3">
-                        <strong>Delivery tracking:</strong> Saving marks this shipment <strong>In Transit</strong>. The destination confirms physical receipt. Record any stock movement separately in Stock Management.
+                        <strong>Approval and delivery tracking:</strong> Saving sends this return to the Branch Admin for approval. Once approved it is marked <strong>In Transit</strong> and the destination confirms physical receipt. Record any stock movement separately in Stock Management.
                     </div>
                 </div>
 
                 <div class="modal-footer">
                     <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
                     <button type="submit" class="btn btn-primary-custom">
-                        <i class="bi bi-save me-1"></i>
-                        Save Return
+                        <i class="bi bi-send me-1"></i>
+                        Send for Approval
                     </button>
                 </div>
             </form>

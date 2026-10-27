@@ -21,6 +21,9 @@ function notificationTypeLabel(?string $type): string
 function notificationPresentation(?string $type, ?string $title): array
 {
     $value = strtolower(trim((string)$type . ' ' . (string)$title));
+    if ((string)$type === 'approval_request') {
+        return ['bi-patch-check-fill', 'inventory', 'BranchAdmin_Approvals.php', 'Open Pending Approvals'];
+    }
     if (strpos($value, 'forecast') !== false || strpos($value, 'prediction') !== false) {
         return ['bi-graph-up-arrow', 'forecast', 'BranchAdmin_Forecasting.php', 'View Forecast'];
     }
@@ -314,6 +317,7 @@ $flash = workflowTakeFlash();
     </div>
     <nav class="nav-menu" aria-label="Branch Admin navigation"><ul>
          <li><a href="BranchAdmin_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
+         <?php require_once __DIR__ . '/sources/inventory_approval_helpers.php'; echo inventoryApprovalSidebarLink($conn, (int)($_SESSION['user_id'] ?? 0)); ?>
                 <li><a href="BranchAdmin_UserManagement.php"><i class="bi bi-people-fill"></i><span>User Management</span></a></li>
                 <li><a href="BranchAdmin_PatientMonitoring.php"><i class="bi bi-heart-pulse-fill"></i><span>Patient Monitoring</span></a></li>
                 <li><a href="BranchAdmin_PhilhealthWorkflow.php"><i class="bi bi-file-medical-fill"></i><span>PhilHealth Processing</span></a></li>

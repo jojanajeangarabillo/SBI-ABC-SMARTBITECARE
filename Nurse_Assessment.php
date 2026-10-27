@@ -2737,6 +2737,7 @@ $flash = workflowTakeFlash();
         .bite-map-list li.view-front::marker { color: #2b3a8c; font-weight: 700; }
 
     </style>
+    <script src="sources/manila_date.js"></script>
 </head>
 
 <body>
@@ -4787,7 +4788,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const d0 = document.getElementById('d0_date');
     if (!restart || !d0) return;
     const originalD0 = d0.value;
-    const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    const today = sbcManilaToday(); // clinic date (Asia/Manila), same as the server
     function sync() {
         if (restart.checked && (!d0.value || d0.value < today)) d0.value = today;
         if (!restart.checked && d0.value === today && originalD0) d0.value = originalD0;
@@ -4884,7 +4885,7 @@ function sbcInitClinicalForm(form) {
                 + '<input class="form-check-input" type="checkbox" value="1" id="' + checkId + '" name="' + checkName + '">'
                 + '<label class="form-check-label" for="' + checkId + '">' + stage.label + ' given at other clinic</label></div>'
                 + '<input type="date" class="form-control form-control-sm" style="max-width:180px" name="' + dateName + '"'
-                + (isD0 ? ' disabled title="Uses the original Day 0 above"' : '') + ' max="' + new Date().toISOString().slice(0, 10) + '">';
+                + (isD0 ? ' disabled title="Uses the original Day 0 above"' : '') + ' max="' + sbcManilaToday() + '">';
             const check = row.querySelector('input[type="checkbox"]');
             const date = row.querySelector('input[type="date"]');
             check.checked = Boolean(outsideValues[checkName]);
@@ -5028,7 +5029,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (d0Date.value === '') {
                 d0Date.value =
                     lastD0Date
-                    || new Date().toISOString().slice(0, 10);
+                    || sbcManilaToday();
             }
 
             if (nonArvPanel) {

@@ -7,6 +7,7 @@ require_once 'sources/notification_helper.php';
 require_once 'sources/inventory_officer_activity_helper.php';
 require_once 'sources/stock_quantity_helpers.php';
 require_once 'sources/stock_receipt_source_helper.php';
+require_once 'sources/inventory_approval_helpers.php';
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 5) {
     header('Location: login.php');
@@ -249,6 +250,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     /* ------------------------- STOCK IN ------------------------- */
     if ($action === 'stock_in') {
         $batch_lot_no = trim($_POST['batch_lot_no'] ?? '');
+        $restockRequestId = filter_input(INPUT_POST, 'restock_request_id', FILTER_VALIDATE_INT) ?: null;
         $manufacturing_date = trim($_POST['manufacturing_date'] ?? '');
         $expiration_date = trim($_POST['expiration_date'] ?? '');
 
@@ -421,6 +423,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $transactionId = (int)$conn->insert_id;
             $insertTrx->close();
 
+            /* Optional link to an approved restock request (partial deliveries keep it Approved). */
+            $restockResult = null;
+            if ($restockRequestId !== null) {
+                inventoryApprovalAssertReady($conn);
+                $link = $conn->prepare('UPDATE stock_transactions SET approval_request_id = ? WHERE transaction_id = ?');
+                $link->bind_param('ii', $restockRequestId, $transactionId);
+                if (!$link->execute()) throw new Exception('Unable to link the Stock In to the restock request.');
+                $link->close();
+                $restockResult = inventoryApprovalFulfil($conn, (int)$restockRequestId, (string)$branch_id, (int)$item_id,
+                    $quantityScaled, $transactionId, $user_id);
+                $transactionRemarks .= ' | Restock request #' . $restockRequestId;
+            }
+
             if (!inventoryOfficerRecordStockActivity(
                 $conn,
                 $user_id,
@@ -445,156 +460,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             $conn->commit();
-            redirectWithMessage('success', 'Stock In recorded successfully.', 'stockIn');
+            redirectWithMessage('success', 'Stock In recorded successfully.' . ($restockResult === null ? ''
+                : ' Restock request #' . $restockRequestId . ($restockResult['complete']
+                    ? ' is now Fulfilled (' . $restockResult['fulfilled_text'] . ' received).'
+                    : ' stays Approved: ' . $restockResult['fulfilled_text'] . ' of ' . $restockResult['approved_text']
+                        . ' received, ' . $restockResult['remaining_text'] . ' remaining.')), 'stockIn');
         } catch (Throwable $e) {
             $conn->rollback();
             redirectWithMessage('error', $e->getMessage(), 'stockIn');
         }
     }
 
-    /* ------------------------- STOCK OUT ------------------------ */
+    /* ------------------- STOCK OUT (approval request) ------------------- */
+    /*
+     * Stock Out, pull-out and disposal of damaged, contaminated, expired or lost
+     * stock no longer change stock directly: the officer sends a request and the
+     * Branch Admin approves it (BranchAdmin_Approvals.php). On approval the same
+     * FEFO stock-out logic runs (sources/inventory_stock_operations.php), dated
+     * the approval moment, so Daily Inventory shows it as Pull-out that day.
+     */
     if ($action === 'stock_out') {
         $reason = trim($_POST['reason'] ?? '');
-        $allowedReasons = ['Dispensed to Patient', 'Damaged', 'Expired', 'Lost / Wastage', 'Other'];
 
-        if (!$item_id || $item_id <= 0 || !$quantity || $quantity <= 0 || !$validDate || !in_array($reason, $allowedReasons, true)) {
-            redirectWithMessage('error', 'Please enter a valid item, positive quantity, reason, and transaction date.', 'stockOut');
+        if (!$item_id || $item_id <= 0 || !$quantity || $quantity <= 0 || !$validDate || !in_array($reason, INVENTORY_STOCK_OUT_REASONS, true)) {
+            redirectWithMessage('error', 'Please enter a valid item, positive quantity, reason, and date.', 'stockOut');
         }
+        if (mb_strlen($remarks) > 500) redirectWithMessage('error', 'Keep the remarks within 500 characters.', 'stockOut');
 
         $conn->begin_transaction();
-
         try {
-            /* Get category so batch-tracked items can be issued using FEFO. */
-            $itemStmt = $conn->prepare("SELECT i.item_name, i.category_id, c.category_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
-                                        FROM inventory_items i
-                                        INNER JOIN inventory_categories c ON i.category_id = c.category_id
-                                        INNER JOIN units u ON i.unit_id = u.unit_id
-                                        WHERE i.item_id = ? LIMIT 1");
-            if (!$itemStmt) throw new Exception('Unable to verify item.');
-            $itemStmt->bind_param('i', $item_id);
-            $itemStmt->execute();
-            $itemData = $itemStmt->get_result()->fetch_assoc();
-            $itemStmt->close();
-
-            if (!$itemData) throw new Exception('Selected item does not exist.');
-            $requiresBatchTracking = requiresBatchTracking($itemData['category_name']);
-
+            inventoryApprovalAssertReady($conn);
+            $itemData = inventoryOpsItem($conn, (int)$item_id);
             stockQuantityValidateUnit($quantityScaled, $itemData);
-            $remaining = $quantityScaled;
-            $usedBatches = [];
-
-            if ($requiresBatchTracking) {
-                /* FEFO: normal Stock Out uses only unexpired batches. Expired disposal uses only expired batches. */
-                if ($reason === 'Expired') {
-                    $stockStmt = $conn->prepare("SELECT stock_id, quantity_available, batch_lot_no, expiration_date
-                                                 FROM inventory_stocks
-                                                 WHERE item_id = ?
-                                                   AND branch_id = ?
-                                                   AND quantity_available > 0
-                                                   AND expiration_date IS NOT NULL
-                                                   AND expiration_date < CURDATE()
-                                                 ORDER BY expiration_date IS NULL, expiration_date ASC, stock_id ASC
-                                                 FOR UPDATE");
-                } else {
-                    $stockStmt = $conn->prepare("SELECT stock_id, quantity_available, batch_lot_no, expiration_date
-                                                 FROM inventory_stocks
-                                                 WHERE item_id = ?
-                                                   AND branch_id = ?
-                                                   AND quantity_available > 0
-                                                   AND (expiration_date IS NULL OR expiration_date >= CURDATE())
-                                                 ORDER BY expiration_date IS NULL, expiration_date ASC, stock_id ASC
-                                                 FOR UPDATE");
-                }
-                if (!$stockStmt) throw new Exception('Unable to load batch-tracked stock.');
-                $stockStmt->bind_param('is', $item_id, $branch_id);
-            } else {
-                $stockStmt = $conn->prepare("SELECT stock_id, quantity_available, batch_lot_no, expiration_date
-                                             FROM inventory_stocks
-                                             WHERE item_id = ?
-                                               AND branch_id = ?
-                                               AND quantity_available > 0
-                                               AND ((? = 'Expired' AND expiration_date IS NOT NULL AND expiration_date < CURDATE())
-                                                 OR (? <> 'Expired' AND (expiration_date IS NULL OR expiration_date >= CURDATE())))
-                                             ORDER BY expiration_date IS NULL, expiration_date ASC, stock_id ASC
-                                             FOR UPDATE");
-                if (!$stockStmt) throw new Exception('Unable to load stock.');
-                $stockStmt->bind_param('isss', $item_id, $branch_id, $reason, $reason);
+            $availableScaled = inventoryOpsAvailableScaled($conn, (int)$item_id, (string)$branch_id, $reason === 'Expired');
+            if ($quantityScaled > $availableScaled) {
+                throw new Exception('Stock Out cannot exceed the current ' . ($reason === 'Expired' ? 'expired' : 'usable') . ' stock ('
+                    . inventoryQuantityText((float)stockQuantityDecimal($availableScaled), $itemData) . ').');
             }
-
-            $stockStmt->execute();
-            $stockResult = $stockStmt->get_result();
-            $stockRows = [];
-            while ($row = $stockResult->fetch_assoc()) $stockRows[] = $row;
-            $stockStmt->close();
-
-            foreach ($stockRows as $stockRow) {
-                if ($remaining <= 0) break;
-
-                $available = stockQuantityParse($stockRow['quantity_available'], true);
-                if ($available <= 0) continue;
-                $deduct = min($remaining, $available);
-                $newQuantity = stockQuantityDecimal($available - $deduct);
-                $stockId = (int)$stockRow['stock_id'];
-
-                $update = $conn->prepare("UPDATE inventory_stocks
-                                          SET quantity_available = ?
-                                          WHERE stock_id = ? AND branch_id = ?");
-                if (!$update) throw new Exception('Unable to prepare stock out update.');
-                $update->bind_param('sis', $newQuantity, $stockId, $branch_id);
-                if (!$update->execute()) throw new Exception('Unable to update stock: ' . $update->error);
-                $update->close();
-
-                $batch = $stockRow['batch_lot_no'];
-                if ($batch !== null && $batch !== '') {
-                    $usedBatches[] = $batch . ' (-' . stockQuantityText($deduct) . ')';
-                }
-
-                $remaining -= $deduct;
-            }
-
-            if ($remaining > 0) {
-                throw new Exception('Stock Out cannot exceed the current available stock.');
-            }
-
-            $combinedRemarks = 'Reason: ' . $reason;
-            if ($usedBatches) $combinedRemarks .= ' | Batch/Lot: ' . implode(', ', $usedBatches);
-            if ($remarks !== '') $combinedRemarks .= ' | ' . $remarks;
-
-            $transactionDateTime = $transaction_date . ' 00:00:00';
-            $insertTrx = $conn->prepare("INSERT INTO stock_transactions
-                                         (item_id, user_id, vaccination_id, branch_id, transaction_type, quantity, remarks, transaction_date)
-                                         VALUES (?, ?, NULL, ?, 'OUT', ?, ?, ?)");
-            if (!$insertTrx) throw new Exception('Unable to prepare stock transaction.');
-            $insertTrx->bind_param('iissss', $item_id, $user_id, $branch_id, $quantity, $combinedRemarks, $transactionDateTime);
-            if (!$insertTrx->execute()) throw new Exception('Unable to record stock transaction: ' . $insertTrx->error);
-            $transactionId = (int)$conn->insert_id;
-            $insertTrx->close();
-
-            if (!inventoryOfficerRecordStockActivity(
-                $conn,
-                $user_id,
-                $branch_id,
-                $branch_name,
-                $username,
-                $transactionId,
-                'OUT',
-                (string)$itemData['item_name'],
-                (float)$quantity,
-                (string)$itemData['unit_name'],
-                $combinedRemarks
-            )) {
-                throw new Exception('Stock Out was recorded, but its audit log or Branch Admin notification could not be saved.');
-            }
-
+            $requestId = inventoryApprovalCreate($conn, [
+                'type' => 'stock_out', 'branch_id' => (string)$branch_id, 'requested_by' => $user_id, 'source' => 'Inventory Officer',
+                'item_id' => (int)$item_id, 'item_name' => $itemData['item_name'], 'quantity' => $quantity,
+                'unit' => inventoryBaseUnitLabel($itemData), 'reason' => $reason,
+                'remarks' => trim('Noted on ' . $transaction_date . ($remarks !== '' ? ' | ' . $remarks : '')),
+                'payload' => ['reason' => $reason, 'noted_date' => $transaction_date,
+                    'available_at_request' => stockQuantityDecimal($availableScaled)],
+            ]);
             $conn->commit();
-            redirectWithMessage('success', 'Stock Out recorded successfully.', 'stockOut');
+            redirectWithMessage('success', 'Stock Out request #' . $requestId . ' was sent: Pending approval. Stock changes only when the Branch Admin approves it.', 'requests');
         } catch (Throwable $e) {
             $conn->rollback();
             redirectWithMessage('error', $e->getMessage(), 'stockOut');
         }
     }
 
-    /* -------------------- DISPOSE / ARCHIVE EXPIRED -------------------- */
+    /* ------------- DISPOSE / ARCHIVE EXPIRED (approval request) ------------- */
     if ($action === 'archive_expired') {
         $stock_id = filter_input(INPUT_POST, 'stock_id', FILTER_VALIDATE_INT);
 
@@ -603,119 +522,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $conn->begin_transaction();
-
         try {
-            $expiredStmt = $conn->prepare("SELECT
-                                                s.stock_id,
-                                                s.item_id,
-                                                s.batch_lot_no,
-                                                s.manufacturing_date,
-                                                s.quantity_available,
-                                                s.expiration_date,
-                                                s.last_updated,
-                                                i.item_name,
-                                                COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
-                                           FROM inventory_stocks s
-                                           INNER JOIN inventory_items i ON s.item_id = i.item_id
-                                           INNER JOIN units u ON i.unit_id = u.unit_id
-                                           WHERE s.stock_id = ?
-                                             AND s.branch_id = ?
-                                           LIMIT 1
-                                           FOR UPDATE");
-            if (!$expiredStmt) throw new Exception('Unable to load expired stock.');
+            inventoryApprovalAssertReady($conn);
+            $expiredStmt = $conn->prepare("SELECT s.stock_id, s.item_id, s.batch_lot_no, s.quantity_available, s.expiration_date
+                FROM inventory_stocks s WHERE s.stock_id = ? AND s.branch_id = ? LIMIT 1");
             $expiredStmt->bind_param('is', $stock_id, $branch_id);
             $expiredStmt->execute();
             $expiredRow = $expiredStmt->get_result()->fetch_assoc();
             $expiredStmt->close();
-
-            if (!$expiredRow) {
-                throw new Exception('Expired stock record was not found in your branch.');
-            }
-
+            if (!$expiredRow) throw new Exception('Expired stock record was not found in your branch.');
             if (empty($expiredRow['expiration_date']) || $expiredRow['expiration_date'] >= date('Y-m-d')) {
                 throw new Exception('Only already-expired stock can be disposed and archived.');
             }
-
             $disposeScaled = stockQuantityParse($expiredRow['quantity_available'], true);
-            $disposeQty = stockQuantityDecimal($disposeScaled);
-            if ($disposeScaled <= 0) {
-                throw new Exception('This expired batch has no remaining stock to dispose.');
-            }
-
-            $archiveReason = 'Expired stock disposed and archived';
-
-            $archiveStmt = $conn->prepare("INSERT INTO inventory_stocks_archive
-                                           (stock_id, item_id, batch_lot_no, manufacturing_date, branch_id,
-                                            quantity_available, expiration_date, last_updated,
-                                            archived_at, archived_by, archive_reason)
-                                           SELECT stock_id, item_id, batch_lot_no, manufacturing_date, branch_id,
-                                                  quantity_available, expiration_date, last_updated,
-                                                  NOW(), ?, ?
-                                           FROM inventory_stocks
-                                           WHERE stock_id = ? AND branch_id = ?");
-            if (!$archiveStmt) throw new Exception('Unable to prepare expired stock archive.');
-            $archiveStmt->bind_param('isis', $user_id, $archiveReason, $stock_id, $branch_id);
-            if (!$archiveStmt->execute()) {
-                throw new Exception('Unable to archive expired stock: ' . $archiveStmt->error);
-            }
-            $archiveStmt->close();
-
-            $batchText = !empty($expiredRow['batch_lot_no']) ? $expiredRow['batch_lot_no'] : 'N/A';
-            $transactionRemarks = 'Expired stock disposal and archive'
-                . ' | Batch/Lot: ' . $batchText
-                . ' | Expiration Date: ' . $expiredRow['expiration_date']
-                . ' | Original Stock ID: ' . $stock_id;
-            $transactionDateTime = date('Y-m-d H:i:s');
-
-            $insertTrx = $conn->prepare("INSERT INTO stock_transactions
-                                         (item_id, user_id, vaccination_id, branch_id, transaction_type, quantity, remarks, transaction_date)
-                                         VALUES (?, ?, NULL, ?, 'OUT', ?, ?, ?)");
-            if (!$insertTrx) throw new Exception('Unable to prepare expired stock transaction.');
-            $itemIdForTrx = (int)$expiredRow['item_id'];
-            $insertTrx->bind_param('iissss', $itemIdForTrx, $user_id, $branch_id, $disposeQty, $transactionRemarks, $transactionDateTime);
-            if (!$insertTrx->execute()) {
-                throw new Exception('Unable to record expired stock disposal: ' . $insertTrx->error);
-            }
-            $transactionId = (int)$conn->insert_id;
-            $insertTrx->close();
-
-            $deleteStmt = $conn->prepare("DELETE FROM inventory_stocks WHERE stock_id = ? AND branch_id = ?");
-            if (!$deleteStmt) throw new Exception('Unable to prepare removal of archived stock.');
-            $deleteStmt->bind_param('is', $stock_id, $branch_id);
-            if (!$deleteStmt->execute() || $deleteStmt->affected_rows !== 1) {
-                throw new Exception('Unable to remove expired stock from active inventory.');
-            }
-            $deleteStmt->close();
-
-            $expiredDetails = 'Expired stock disposal and archive'
-                . ' | Batch/Lot: ' . $batchText
-                . ' | Expiration: ' . $expiredRow['expiration_date'];
-
-            if (!inventoryOfficerRecordStockActivity(
-                $conn,
-                $user_id,
-                $branch_id,
-                $branch_name,
-                $username,
-                $transactionId,
-                'EXPIRED',
-                (string)$expiredRow['item_name'],
-                (float)$disposeQty,
-                (string)$expiredRow['unit_name'],
-                $expiredDetails
-            )) {
-                throw new Exception('Expired stock was archived, but its audit log or Branch Admin notification could not be saved.');
-            }
-
+            if ($disposeScaled <= 0) throw new Exception('This expired batch has no remaining stock to dispose.');
+            $itemData = inventoryOpsItem($conn, (int)$expiredRow['item_id']);
+            $requestId = inventoryApprovalCreate($conn, [
+                'type' => 'expired_disposal', 'branch_id' => (string)$branch_id, 'requested_by' => $user_id, 'source' => 'Inventory Officer',
+                'item_id' => (int)$expiredRow['item_id'], 'stock_id' => (int)$stock_id, 'batch' => $expiredRow['batch_lot_no'],
+                'item_name' => $itemData['item_name'], 'quantity' => stockQuantityDecimal($disposeScaled),
+                'unit' => inventoryBaseUnitLabel($itemData), 'reason' => 'Expired',
+                'remarks' => 'Dispose and archive the expired batch',
+                'payload' => ['expiration_date' => $expiredRow['expiration_date']],
+                'open_key' => 'dispose:' . (int)$stock_id,
+            ]);
             $conn->commit();
-            redirectWithMessage('success', 'Expired stock disposed and archived successfully.', 'expiration');
+            redirectWithMessage('success', 'Disposal request #' . $requestId . ' was sent: Pending approval. The batch stays in stock until the Branch Admin approves it.', 'expiration');
         } catch (Throwable $e) {
             $conn->rollback();
             redirectWithMessage('error', $e->getMessage(), 'expiration');
         }
     }
 
-    /* ------------------------- ADJUSTMENT ----------------------- */
+    /* ------------------- ADJUSTMENT (approval request) ------------------- */
+    /*
+     * The officer's count becomes a Pending request; stock changes only on
+     * approval. The request keeps the system quantity at the time of the count,
+     * so approval applies the counted difference (usage in between is kept).
+     */
     if ($action === 'adjustment') {
         try {
             $adjustedScaled = stockQuantityParse($_POST['adjusted_quantity'] ?? null, true);
@@ -725,96 +569,88 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $reason = trim($_POST['adjustment_reason'] ?? '');
         $selectedStockId = filter_input(INPUT_POST, 'stock_id', FILTER_VALIDATE_INT);
-        $allowedReasons = ['Miscount / Physical Count Correction', 'Damaged', 'Expired', 'System Correction', 'Other'];
+        $allowedReasons = ['Miscount / Physical Count Correction', 'Damaged', 'Contaminated', 'Expired', 'System Correction', 'Other'];
 
-        if (!$item_id || $item_id <= 0 || $adjustedQuantity === false || $adjustedQuantity === null || $adjustedQuantity < 0 || !$validDate || !in_array($reason, $allowedReasons, true)) {
+        if (!$item_id || $item_id <= 0 || $adjustedScaled < 0 || !$validDate || !in_array($reason, $allowedReasons, true)) {
             redirectWithMessage('error', 'Please enter a valid item, non-negative adjusted quantity, reason, and date.', 'adjustment');
         }
+        if (mb_strlen($remarks) > 500) redirectWithMessage('error', 'Keep the remarks within 500 characters.', 'adjustment');
 
         $conn->begin_transaction();
-
         try {
-            $itemStmt = $conn->prepare("SELECT i.item_name, i.category_id, c.category_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
-                                        FROM inventory_items i
-                                        INNER JOIN inventory_categories c ON i.category_id = c.category_id
-                                        INNER JOIN units u ON i.unit_id = u.unit_id
-                                        WHERE i.item_id = ? LIMIT 1");
-            if (!$itemStmt) throw new Exception('Unable to verify item.');
-            $itemStmt->bind_param('i', $item_id);
-            $itemStmt->execute();
-            $itemData = $itemStmt->get_result()->fetch_assoc();
-            $itemStmt->close();
-
-            if (!$itemData) throw new Exception('Selected item does not exist.');
-            $requiresBatchTracking = requiresBatchTracking($itemData['category_name']);
-
+            inventoryApprovalAssertReady($conn);
+            $itemData = inventoryOpsItem($conn, (int)$item_id);
             if (!$selectedStockId || $selectedStockId <= 0) {
                 throw new Exception('Please select the stock record you want to adjust.');
             }
             $stockStmt = $conn->prepare("SELECT stock_id, quantity_available, batch_lot_no, expiration_date
-                FROM inventory_stocks WHERE stock_id=? AND item_id=? AND branch_id=?
-                LIMIT 1 FOR UPDATE");
-            if (!$stockStmt) throw new Exception('Unable to load the selected stock record.');
+                FROM inventory_stocks WHERE stock_id=? AND item_id=? AND branch_id=? LIMIT 1");
             $stockStmt->bind_param('iis', $selectedStockId, $item_id, $branch_id);
-
             $stockStmt->execute();
             $stockRow = $stockStmt->get_result()->fetch_assoc();
             $stockStmt->close();
-
             if (!$stockRow) throw new Exception('No matching stock record exists for the selected item in this branch.');
 
             stockQuantityValidateUnit($adjustedScaled, $itemData);
             $currentScaled = stockQuantityParse($stockRow['quantity_available'], true);
-            $currentQuantity = stockQuantityDecimal($currentScaled);
-            $deltaScaled = $adjustedScaled - $currentScaled;
-            $delta = stockQuantityDecimal($deltaScaled);
-
-            if ($deltaScaled === 0) {
+            if ($adjustedScaled === $currentScaled) {
                 throw new Exception('The adjusted quantity is the same as the current stock. No change was made.');
             }
-
-            $stockId = (int)$stockRow['stock_id'];
-            $update = $conn->prepare("UPDATE inventory_stocks SET quantity_available = ? WHERE stock_id = ? AND branch_id = ?");
-            if (!$update) throw new Exception('Unable to prepare adjustment update.');
-            $update->bind_param('sis', $adjustedQuantity, $stockId, $branch_id);
-            if (!$update->execute()) throw new Exception('Unable to update stock: ' . $update->error);
-            $update->close();
-
-            $batchText = !empty($stockRow['batch_lot_no']) ? ' | Batch/Lot: ' . $stockRow['batch_lot_no'] : '';
-            $combinedRemarks = 'Reason: ' . $reason . $batchText . ' | Previous Stock: ' . $currentQuantity . ' | New Stock: ' . $adjustedQuantity;
-            if ($remarks !== '') $combinedRemarks .= ' | ' . $remarks;
-
-            $transactionDateTime = $transaction_date . ' 00:00:00';
-            $insertTrx = $conn->prepare("INSERT INTO stock_transactions
-                                         (item_id, user_id, vaccination_id, branch_id, transaction_type, quantity, remarks, transaction_date)
-                                         VALUES (?, ?, NULL, ?, 'ADJUSTMENT', ?, ?, ?)");
-            if (!$insertTrx) throw new Exception('Unable to prepare adjustment transaction.');
-            $insertTrx->bind_param('iissss', $item_id, $user_id, $branch_id, $delta, $combinedRemarks, $transactionDateTime);
-            if (!$insertTrx->execute()) throw new Exception('Unable to record adjustment: ' . $insertTrx->error);
-            $transactionId = (int)$conn->insert_id;
-            $insertTrx->close();
-
-            if (!inventoryOfficerRecordStockActivity(
-                $conn,
-                $user_id,
-                $branch_id,
-                $branch_name,
-                $username,
-                $transactionId,
-                'ADJUSTMENT',
-                (string)$itemData['item_name'],
-                (float)$delta,
-                (string)$itemData['unit_name'],
-                $combinedRemarks
-            )) {
-                throw new Exception('Stock Adjustment was recorded, but its audit log or Branch Admin notification could not be saved.');
-            }
-
+            $requestId = inventoryApprovalCreate($conn, [
+                'type' => 'stock_adjustment', 'branch_id' => (string)$branch_id, 'requested_by' => $user_id, 'source' => 'Inventory Officer',
+                'item_id' => (int)$item_id, 'stock_id' => (int)$selectedStockId, 'batch' => $stockRow['batch_lot_no'],
+                'item_name' => $itemData['item_name'], 'quantity' => stockQuantityDecimal($adjustedScaled - $currentScaled),
+                'unit' => inventoryBaseUnitLabel($itemData), 'reason' => $reason, 'remarks' => $remarks,
+                'payload' => ['counted' => $adjustedQuantity, 'system_at_count' => stockQuantityDecimal($currentScaled),
+                    'count_date' => $transaction_date],
+                'open_key' => 'adjust:' . (int)$selectedStockId,
+            ]);
             $conn->commit();
-            redirectWithMessage('success', 'Stock Adjustment recorded successfully.', 'adjustment');
+            redirectWithMessage('success', 'Adjustment request #' . $requestId . ' was sent: Pending approval. Stock changes only when the Branch Admin approves it.', 'requests');
         } catch (Throwable $e) {
             $conn->rollback();
             redirectWithMessage('error', $e->getMessage(), 'adjustment');
+        }
+    }
+
+    /* ---------------------- RESTOCK REQUEST ---------------------- */
+    /* Quantity in the item's counting unit (vials/ampules), like the Nurse's request. */
+    if ($action === 'restock_request') {
+        $requestedText = trim((string)($_POST['restock_quantity'] ?? ''));
+        $reason = trim((string)($_POST['restock_reason'] ?? ''));
+        if (!$item_id || $item_id <= 0 || $reason === '' || mb_strlen($reason) > 255 || mb_strlen($remarks) > 500) {
+            redirectWithMessage('error', 'Select an item and enter the reason for the restock (up to 255 characters).', 'requests');
+        }
+        $conn->begin_transaction();
+        try {
+            inventoryApprovalAssertReady($conn);
+            $itemData = inventoryOpsItem($conn, (int)$item_id);
+            $displayScaled = stockQuantityParse($requestedText);
+            $baseScaled = stockQuantityParse(number_format(inventoryDisplayToBase((float)stockQuantityDecimal($displayScaled), $itemData), 4, '.', ''));
+            stockQuantityValidateUnit($baseScaled, $itemData);
+            $requestId = inventoryApprovalCreate($conn, [
+                'type' => 'restock', 'branch_id' => (string)$branch_id, 'requested_by' => $user_id, 'source' => 'Inventory Officer',
+                'item_id' => (int)$item_id, 'item_name' => $itemData['item_name'], 'quantity' => stockQuantityDecimal($baseScaled),
+                'unit' => inventoryBaseUnitLabel($itemData), 'reason' => $reason, 'remarks' => $remarks,
+                'payload' => ['display_quantity' => stockQuantityDecimal($displayScaled), 'display_unit' => inventoryDisplayUnitLabel($itemData)],
+                'open_key' => 'restock:' . $branch_id . ':' . (int)$item_id,
+            ]);
+            $conn->commit();
+            redirectWithMessage('success', 'Restock request #' . $requestId . ' was sent: Pending approval.', 'requests');
+        } catch (Throwable $e) {
+            $conn->rollback();
+            redirectWithMessage('error', $e->getMessage(), 'requests');
+        }
+    }
+
+    /* ------------------ CANCEL OWN PENDING REQUEST ------------------ */
+    if ($action === 'cancel_request') {
+        $requestId = filter_input(INPUT_POST, 'request_id', FILTER_VALIDATE_INT);
+        try {
+            if (!$requestId) throw new Exception('Select a request to cancel.');
+            redirectWithMessage('success', inventoryApprovalCancel($conn, (int)$requestId, $user_id), 'requests');
+        } catch (Throwable $e) {
+            redirectWithMessage('error', $e->getMessage(), 'requests');
         }
     }
 }
@@ -837,7 +673,7 @@ if (isset($_GET['panel'])) {
 
 if (!in_array(
     $activePanel,
-    ['stockIn', 'stockOut', 'adjustment', 'expiration', 'archived'],
+    ['stockIn', 'stockOut', 'adjustment', 'expiration', 'archived', 'requests'],
     true
 )) {
     $activePanel = 'stockIn';
@@ -973,6 +809,33 @@ if ($branch_id) {
         $result = $stmt->get_result();
         while ($row = $result->fetch_assoc()) $archivedStocks[] = $row;
         $stmt->close();
+    }
+}
+
+/* -------------------------------------------------------------
+ * APPROVAL REQUESTS (My Requests, open restocks, pending markers)
+ * ----------------------------------------------------------- */
+$approvalsReady = inventoryApprovalReady($conn);
+$myRequests = [];
+$openRestocks = [];
+$openRestocksByItem = [];
+$pendingByStock = [];
+if ($branch_id && $approvalsReady) {
+    $myRequests = inventoryApprovalList($conn, ['branch_id' => (string)$branch_id, 'requested_by' => $user_id, 'limit' => 100]);
+    $openRestocks = array_merge(
+        inventoryApprovalList($conn, ['branch_id' => (string)$branch_id, 'statuses' => ['Pending'], 'types' => ['restock']]),
+        inventoryApprovalOpenRestocks($conn, (string)$branch_id)
+    );
+    foreach (inventoryApprovalOpenRestocks($conn, (string)$branch_id) as $restock) {
+        $openRestocksByItem[(string)$restock['item_id']][] = [
+            'request_id' => (int)$restock['request_id'],
+            'label' => '#' . $restock['request_id'] . ' — ' . ($restock['requester_name'] ?? 'user')
+                . ' (' . ($restock['source'] ?: 'Request') . '), remaining ' . $restock['remaining_text'],
+        ];
+    }
+    foreach (inventoryApprovalList($conn, ['branch_id' => (string)$branch_id, 'statuses' => ['Pending'],
+        'types' => ['stock_adjustment', 'expired_disposal']]) as $pending) {
+        if ($pending['stock_id']) $pendingByStock[(int)$pending['stock_id']][] = $pending;
     }
 }
 
@@ -1604,7 +1467,12 @@ body{
             <button type="button" class="tab-btn <?php echo $activePanel === 'adjustment' ? 'active' : ''; ?>" onclick="showPanel('adjustment', this)">Adjustment</button>
             <button type="button" class="tab-btn <?php echo $activePanel === 'expiration' ? 'active' : ''; ?>" onclick="showPanel('expiration', this)">Expiration Monitoring</button>
             <button type="button" class="tab-btn <?php echo $activePanel === 'archived' ? 'active' : ''; ?>" onclick="showPanel('archived', this)">Archived Stocks</button>
+            <?php $myPendingCount = count(array_filter($myRequests, static fn($r) => $r['status'] === 'Pending')); ?>
+            <button type="button" class="tab-btn <?php echo $activePanel === 'requests' ? 'active' : ''; ?>" onclick="showPanel('requests', this)">My Requests<?php if ($myPendingCount): ?> <span class="badge rounded-pill text-bg-warning"><?php echo $myPendingCount; ?></span><?php endif; ?></button>
         </div>
+        <?php if (!$approvalsReady): ?>
+            <div class="alert alert-warning alert-custom mb-4">Stock Out, Adjustment, disposal and restock requests need the database update. Ask the administrator to run <code>php sources/migrate_inventory_approvals.php --apply</code>.</div>
+        <?php endif; ?>
 
         <!-- =====================================================
              STOCK IN
@@ -1683,6 +1551,13 @@ body{
                             <label for="stockSourceName">Supplier Name / Reference (Optional)</label>
                             <input id="stockSourceName" name="stock_source_name" class="form-control" maxlength="255" disabled>
                         </div>
+                        <div class="col-md-6">
+                            <label for="stockInRestock">Restock Request (Optional)</label>
+                            <select id="stockInRestock" name="restock_request_id" class="form-select">
+                                <option value="">No request</option>
+                            </select>
+                            <div id="stockInRestockHelp" class="form-text-small">Link this delivery to an approved restock request. A partial delivery keeps the request open with the remaining quantity.</div>
+                        </div>
                         <div class="col-12">
                             <label for="stockInRemarks">Remarks</label>
                             <textarea id="stockInRemarks" name="remarks" class="form-control" rows="2" maxlength="500" placeholder="Enter remarks here (Optional)"></textarea>
@@ -1702,9 +1577,10 @@ body{
              ===================================================== -->
         <div class="panel <?php echo $activePanel === 'stockOut' ? 'active' : ''; ?>" id="stockOut">
             <div class="form-card">
-                <div class="section-title">Record Stock Out</div>
+                <div class="section-title">Request Stock Out / Pull-out</div>
+                <div class="form-text-small mb-3">Stock Out, pull-out and disposal of damaged, contaminated, expired or lost stock need the Branch Admin's approval. Stock changes only when the request is approved, and the movement appears as Pull-out in Daily Inventory on the approval date. Patient usage is recorded by the Nurse in Assessment, Vaccination and Medical Supplies.</div>
 
-                <form method="POST" action="InventoryOfficer_StockManagement.php" onsubmit="return openConfirmationModal(this, 'Save this Stock Out transaction?');">
+                <form method="POST" action="InventoryOfficer_StockManagement.php" onsubmit="return openConfirmationModal(this, 'Send this Stock Out request to the Branch Admin for approval?');">
                     <input type="hidden" name="csrf_token" value="<?php echo h($csrfToken); ?>">
                     <input type="hidden" name="action" value="stock_out">
                     <input type="hidden" name="panel" value="stockOut">
@@ -1730,17 +1606,16 @@ body{
                             <label for="stockOutReason">Reason</label>
                             <select id="stockOutReason" name="reason" class="form-select" required>
                                 <option value="">Select reason...</option>
-                                <option>Dispensed to Patient</option>
-                                <option>Damaged</option>
-                                <option>Expired</option>
-                                <option>Lost / Wastage</option>
-                                <option>Other</option>
+                                <?php foreach (INVENTORY_STOCK_OUT_REASONS as $outReason): ?>
+                                    <option><?php echo h($outReason); ?></option>
+                                <?php endforeach; ?>
                             </select>
                         </div>
 
                         <div class="col-md-6">
-                            <label for="stockOutDate">Date of Transaction</label>
+                            <label for="stockOutDate">Date Noted</label>
                             <input id="stockOutDate" name="transaction_date" type="date" class="form-control" value="<?php echo h(date('Y-m-d')); ?>" required>
+                            <div class="form-text-small">The stock movement is dated the day the Branch Admin approves it.</div>
                         </div>
 
                         <div class="col-12">
@@ -1750,7 +1625,7 @@ body{
                     </div>
 
                     <div class="mt-4">
-                        <button type="submit" class="btn-custom">Save Stock Out</button>
+                        <button type="submit" class="btn-custom">Send for Approval</button>
                     </div>
                 </form>
             </div>
@@ -1761,9 +1636,10 @@ body{
              ===================================================== -->
         <div class="panel <?php echo $activePanel === 'adjustment' ? 'active' : ''; ?>" id="adjustment">
             <div class="form-card">
-                <div class="section-title">Record Stock Adjustment</div>
+                <div class="section-title">Request Stock Adjustment</div>
+                <div class="form-text-small mb-3">An adjustment is sent to the Branch Admin for approval. Stock changes only when it is approved; the counted difference is then applied to the batch.</div>
 
-                <form method="POST" action="InventoryOfficer_StockManagement.php" onsubmit="return openConfirmationModal(this, 'Save this Stock Adjustment?');">
+                <form method="POST" action="InventoryOfficer_StockManagement.php" onsubmit="return openConfirmationModal(this, 'Send this Stock Adjustment to the Branch Admin for approval?');">
                     <input type="hidden" name="csrf_token" value="<?php echo h($csrfToken); ?>">
                     <input type="hidden" name="action" value="adjustment">
                     <input type="hidden" name="panel" value="adjustment">
@@ -1803,6 +1679,7 @@ body{
                                 <option value="">Select reason...</option>
                                 <option>Miscount / Physical Count Correction</option>
                                 <option>Damaged</option>
+                                <option>Contaminated</option>
                                 <option>Expired</option>
                                 <option>System Correction</option>
                                 <option>Other</option>
@@ -1810,7 +1687,7 @@ body{
                         </div>
 
                         <div class="col-md-6">
-                            <label for="adjustmentDate">Date of Transaction</label>
+                            <label for="adjustmentDate">Count Date</label>
                             <input id="adjustmentDate" name="transaction_date" type="date" class="form-control" value="<?php echo h(date('Y-m-d')); ?>" required>
                         </div>
 
@@ -1821,7 +1698,7 @@ body{
                     </div>
 
                     <div class="mt-4">
-                        <button type="submit" class="btn-custom">Save Adjustment</button>
+                        <button type="submit" class="btn-custom">Send for Approval</button>
                     </div>
                 </form>
             </div>
@@ -1878,13 +1755,16 @@ body{
                                             <i class="bi bi-eye"></i>
                                         </a>
 
-                                        <?php if ($days !== null && $days < 0 && (float)$row['quantity_available'] > 0): ?>
-                                            <form method="POST" action="InventoryOfficer_StockManagement.php" style="display:inline;" onsubmit="return openConfirmationModal(this, 'Dispose the remaining expired stock and move this batch to Archived Stocks? This action cannot be undone.');">
+                                        <?php $rowPending = array_values(array_filter($pendingByStock[(int)$row['stock_id']] ?? [], static fn($p) => $p['request_type'] === 'expired_disposal')); ?>
+                                        <?php if ($rowPending): ?>
+                                            <span class="badge text-bg-warning" title="Waiting for the Branch Admin">Pending approval #<?php echo (int)$rowPending[0]['request_id']; ?></span>
+                                        <?php elseif ($days !== null && $days < 0 && (float)$row['quantity_available'] > 0): ?>
+                                            <form method="POST" action="InventoryOfficer_StockManagement.php" style="display:inline;" onsubmit="return openConfirmationModal(this, 'Request approval to dispose the remaining expired stock and archive this batch? The batch stays in stock until the Branch Admin approves.');">
                                                 <input type="hidden" name="csrf_token" value="<?php echo h($csrfToken); ?>">
                                                 <input type="hidden" name="action" value="archive_expired">
                                                 <input type="hidden" name="panel" value="expiration">
                                                 <input type="hidden" name="stock_id" value="<?php echo (int)$row['stock_id']; ?>">
-                                                <button type="submit" class="action-btn" title="Dispose & Archive Expired Stock" style="color:#dc3545;">
+                                                <button type="submit" class="action-btn" title="Request disposal & archive (needs Branch Admin approval)" style="color:#dc3545;">
                                                     <i class="bi bi-archive-fill"></i>
                                                 </button>
                                             </form>
@@ -1952,6 +1832,107 @@ body{
             </div>
         </div>
 
+        <!-- =====================================================
+             MY REQUESTS (approval requests of this officer)
+             ===================================================== -->
+        <div class="panel <?php echo $activePanel === 'requests' ? 'active' : ''; ?>" id="requests">
+            <div class="form-card mb-4">
+                <div class="section-title">Request Restock</div>
+                <div class="form-text-small mb-3">The Branch Admin approves or rejects the request (and may adjust the quantity). When the delivery arrives, record Stock In and link it to the request.</div>
+                <form method="POST" action="InventoryOfficer_StockManagement.php" onsubmit="return openConfirmationModal(this, 'Send this restock request to the Branch Admin?');">
+                    <input type="hidden" name="csrf_token" value="<?php echo h($csrfToken); ?>">
+                    <input type="hidden" name="action" value="restock_request">
+                    <input type="hidden" name="panel" value="requests">
+                    <div class="row g-4">
+                        <div class="col-md-6">
+                            <label for="restockItem">Item</label>
+                            <select id="restockItem" name="item_id" class="form-select" required>
+                                <option value="">Select item...</option>
+                                <?php foreach ($items as $restockItem): ?>
+                                    <option value="<?php echo (int)$restockItem['item_id']; ?>" data-display-unit="<?php echo h(inventoryUnitWord(inventoryDisplayUnitLabel($restockItem), 2)); ?>" data-stock-text="<?php echo h(inventoryQuantityText((float)$restockItem['quantity_available'], $restockItem)); ?>"><?php echo h($restockItem['item_name']); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <div id="restockItemHelp" class="form-text-small">Select an item to see its usable stock.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="restockQuantity">Quantity Needed</label>
+                            <input id="restockQuantity" name="restock_quantity" type="number" min="1" step="1" max="99999" class="form-control" required>
+                            <div id="restockQuantityHelp" class="form-text-small">In vials, ampules or the item's counting unit.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="restockReason">Reason</label>
+                            <input id="restockReason" name="restock_reason" class="form-control" maxlength="255" required placeholder="e.g. Low stock before the weekend">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="restockRemarks">Remarks</label>
+                            <textarea id="restockRemarks" name="remarks" class="form-control" rows="1" maxlength="500" placeholder="Optional"></textarea>
+                        </div>
+                    </div>
+                    <div class="mt-4"><button type="submit" class="btn-custom" <?php echo $approvalsReady ? '' : 'disabled'; ?>>Send Restock Request</button></div>
+                </form>
+            </div>
+
+            <div class="form-card mb-4" style="background:transparent;padding:0;box-shadow:none;">
+                <div class="section-title mb-1">Branch Restock Requests</div>
+                <div class="form-text-small mb-3">Pending and approved restock requests of the branch (from Nurses, Inventory Officers and Supply Forecasting). Link a Stock In to an approved request when the delivery arrives.</div>
+                <div class="table-wrap">
+                    <table class="table data-table">
+                        <thead><tr><th>Request</th><th>Item</th><th>Requested</th><th>Approved</th><th>Remaining</th><th>Requested By</th><th>Status</th></tr></thead>
+                        <tbody>
+                        <?php if (!$openRestocks): ?>
+                            <tr><td colspan="7" class="text-center py-4 text-muted">No open restock requests.</td></tr>
+                        <?php else: foreach ($openRestocks as $restock): ?>
+                            <tr>
+                                <td>#<?php echo (int)$restock['request_id']; ?><div class="form-text-small"><?php echo h(date('m/d/Y h:i A', strtotime($restock['requested_at']))); ?></div></td>
+                                <td><?php echo h($restock['item_name']); ?></td>
+                                <td><?php echo h(inventoryApprovalQuantityText($restock['quantity'], $restock)); ?></td>
+                                <td><?php echo $restock['status'] === 'Pending' ? '—' : h(inventoryApprovalQuantityText($restock['approved_quantity'] ?? $restock['quantity'], $restock)); ?></td>
+                                <td><?php echo h($restock['remaining_text'] ?? '—'); ?></td>
+                                <td><?php echo h(($restock['requester_name'] ?? '') . ' (' . ($restock['source'] ?: ($restock['requester_role'] ?? '')) . ')'); ?></td>
+                                <td><span class="badge <?php echo h(inventoryApprovalStatusClass($restock['status'])); ?>"><?php echo h($restock['status'] === 'Pending' ? 'Pending approval' : $restock['status']); ?></span></td>
+                            </tr>
+                        <?php endforeach; endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="form-card" style="background:transparent;padding:0;box-shadow:none;">
+                <div class="section-title mb-1">My Requests</div>
+                <div class="form-text-small mb-3">Stock Out, disposal, adjustment and restock requests you sent. You can cancel a request while it is Pending.</div>
+                <div class="table-wrap">
+                    <table class="table data-table">
+                        <thead><tr><th>Request</th><th>Type</th><th>Details</th><th>Reason / Remarks</th><th>Status</th><th>Decision</th><th class="text-center">Action</th></tr></thead>
+                        <tbody>
+                        <?php if (!$myRequests): ?>
+                            <tr><td colspan="7" class="text-center py-4 text-muted">You have not sent any requests yet.</td></tr>
+                        <?php else: foreach ($myRequests as $req): ?>
+                            <tr>
+                                <td>#<?php echo (int)$req['request_id']; ?><div class="form-text-small"><?php echo h(date('m/d/Y h:i A', strtotime($req['requested_at']))); ?></div></td>
+                                <td><?php echo h(inventoryApprovalTypeLabel($req['request_type'])); ?></td>
+                                <td><?php echo h(ucfirst($req['summary'])); ?></td>
+                                <td><?php echo h(trim(($req['reason'] ?? '') . (($req['remarks'] ?? '') !== '' ? ' — ' . $req['remarks'] : ''))); ?></td>
+                                <td><span class="badge <?php echo h(inventoryApprovalStatusClass($req['status'])); ?>"><?php echo h($req['status'] === 'Pending' ? 'Pending approval' : $req['status']); ?></span></td>
+                                <td><?php if ($req['decided_at']): ?><?php echo h(($req['decider_name'] ?? '') . ', ' . date('m/d/Y h:i A', strtotime($req['decided_at']))); ?><?php if ($req['decision_remarks']): ?><div class="form-text-small"><?php echo h($req['decision_remarks']); ?></div><?php endif; ?><?php else: ?>—<?php endif; ?></td>
+                                <td class="text-center">
+                                    <?php if ($req['status'] === 'Pending'): ?>
+                                        <form method="POST" action="InventoryOfficer_StockManagement.php" style="display:inline;" onsubmit="return openConfirmationModal(this, 'Cancel request #<?php echo (int)$req['request_id']; ?>? Nothing will be changed.');">
+                                            <input type="hidden" name="csrf_token" value="<?php echo h($csrfToken); ?>">
+                                            <input type="hidden" name="action" value="cancel_request">
+                                            <input type="hidden" name="panel" value="requests">
+                                            <input type="hidden" name="request_id" value="<?php echo (int)$req['request_id']; ?>">
+                                            <button type="submit" class="btn btn-sm btn-outline-secondary">Cancel</button>
+                                        </form>
+                                    <?php else: ?>—<?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
     </div>
 </div>
 
@@ -1979,14 +1960,17 @@ body{
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <?php if ($viewDays !== null && $viewDays < 0 && (float)$viewStock['quantity_available'] > 0): ?>
-                        <form method="POST" action="InventoryOfficer_StockManagement.php" class="me-auto" onsubmit="return openConfirmationModal(this, 'Dispose the remaining expired stock and archive this batch? This action cannot be undone.');">
+                    <?php $viewPending = array_values(array_filter($pendingByStock[(int)$viewStock['stock_id']] ?? [], static fn($p) => $p['request_type'] === 'expired_disposal')); ?>
+                    <?php if ($viewPending): ?>
+                        <span class="badge text-bg-warning me-auto">Disposal pending approval #<?php echo (int)$viewPending[0]['request_id']; ?></span>
+                    <?php elseif ($viewDays !== null && $viewDays < 0 && (float)$viewStock['quantity_available'] > 0): ?>
+                        <form method="POST" action="InventoryOfficer_StockManagement.php" class="me-auto" onsubmit="return openConfirmationModal(this, 'Request approval to dispose the remaining expired stock and archive this batch?');">
                             <input type="hidden" name="csrf_token" value="<?php echo h($csrfToken); ?>">
                             <input type="hidden" name="action" value="archive_expired">
                             <input type="hidden" name="panel" value="expiration">
                             <input type="hidden" name="stock_id" value="<?php echo (int)$viewStock['stock_id']; ?>">
                             <button type="submit" class="btn btn-danger">
-                                <i class="bi bi-archive-fill me-1"></i> Dispose & Archive
+                                <i class="bi bi-archive-fill me-1"></i> Request Disposal
                             </button>
                         </form>
                     <?php endif; ?>
@@ -2275,7 +2259,7 @@ function validateStockInForm() {
         }
 
 
-        var today = new Date().toISOString().split('T')[0];
+        var today = sbcManilaToday();
         if (exp < today) {
             alert('Expired stock cannot be received. Please enter a non-expired batch.');
             return false;
@@ -2343,6 +2327,52 @@ function updateStockOutDisplay() {
  * BATCH-SPECIFIC ADJUSTMENT
  * ----------------------------------------------------------- */
 var batchesByItem = <?php echo json_encode($batchesByItem, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+var openRestocksByItem = <?php echo json_encode((object)$openRestocksByItem, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG); ?>;
+var pendingAdjustmentByStock = <?php
+    $pendingAdjustments = [];
+    foreach ($pendingByStock as $pendingStockId => $pendingRows) {
+        foreach ($pendingRows as $pendingRow) {
+            if ($pendingRow['request_type'] === 'stock_adjustment') $pendingAdjustments[(string)$pendingStockId] = (int)$pendingRow['request_id'];
+        }
+    }
+    echo json_encode((object)$pendingAdjustments);
+?>;
+
+/* Approved restock requests of the selected item, for linking a Stock In. */
+function updateStockInRestockOptions() {
+    var item = document.getElementById('stockInItem');
+    var select = document.getElementById('stockInRestock');
+    var help = document.getElementById('stockInRestockHelp');
+    if (!item || !select) return;
+    var current = select.value;
+    select.innerHTML = '<option value="">No request</option>';
+    var rows = openRestocksByItem[String(item.value)] || [];
+    rows.forEach(function (row) {
+        var opt = document.createElement('option');
+        opt.value = row.request_id;
+        opt.textContent = row.label;
+        select.appendChild(opt);
+    });
+    if (current && rows.some(function (row) { return String(row.request_id) === current; })) select.value = current;
+    if (help) help.textContent = rows.length
+        ? 'Link this delivery to an approved restock request. A partial delivery keeps the request open with the remaining quantity.'
+        : 'No approved restock request is open for this item. The Stock In is recorded as "No request".';
+}
+
+function updateRestockRequestHelp() {
+    var item = document.getElementById('restockItem');
+    var help = document.getElementById('restockItemHelp');
+    var qtyHelp = document.getElementById('restockQuantityHelp');
+    if (!item) return;
+    var option = item.options[item.selectedIndex];
+    if (!option || !option.value) {
+        if (help) help.textContent = 'Select an item to see its usable stock.';
+        if (qtyHelp) qtyHelp.textContent = "In vials, ampules or the item's counting unit.";
+        return;
+    }
+    if (help) help.textContent = 'Usable stock now: ' + (option.getAttribute('data-stock-text') || '—');
+    if (qtyHelp) qtyHelp.textContent = 'Enter whole ' + (option.getAttribute('data-display-unit') || 'units') + '.';
+}
 
 function updateAdjustmentItemDetails() {
     updateQuantityInput('adjustmentItem', 'adjustedQuantity', 'adjustedQuantityHelp', true);
@@ -2383,6 +2413,10 @@ function updateAdjustmentItemDetails() {
         var label = batch.batch_lot_no || ('Unlabelled stock #' + batch.stock_id);
         label += ' — ' + (batch.quantity_text || (batch.quantity_available + ' ' + (batch.unit_name || unit)));
         if (batch.expiration_date) label += ' — Exp: ' + batch.expiration_date;
+        if (pendingAdjustmentByStock[String(batch.stock_id)]) {
+            label += ' — adjustment #' + pendingAdjustmentByStock[String(batch.stock_id)] + ' pending approval';
+            opt.disabled = true;
+        }
         opt.textContent = label;
         batchSelect.appendChild(opt);
     });
@@ -2489,7 +2523,14 @@ document.addEventListener('DOMContentLoaded', function() {
     var stockInItem = document.getElementById('stockInItem');
     if (stockInItem) {
         stockInItem.addEventListener('change', updateStockInItemDetails);
+        stockInItem.addEventListener('change', updateStockInRestockOptions);
         updateStockInItemDetails();
+        updateStockInRestockOptions();
+    }
+    var restockItem = document.getElementById('restockItem');
+    if (restockItem) {
+        restockItem.addEventListener('change', updateRestockRequestHelp);
+        updateRestockRequestHelp();
     }
 
     var outItem = document.getElementById('stockOutItem');
@@ -2532,5 +2573,6 @@ document.addEventListener('DOMContentLoaded', function() {
 </script>
 
 <script>document.addEventListener('DOMContentLoaded', updateStockSource);</script>
+<script src="sources/manila_date.js"></script>
 </body>
 </html>

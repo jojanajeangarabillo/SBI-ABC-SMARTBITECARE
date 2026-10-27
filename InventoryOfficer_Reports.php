@@ -4,6 +4,7 @@ require_once 'sources/db_connect.php';
 require_once 'sources/inventory_stock_helpers.php';
 $stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
+require_once 'sources/inventory_approval_helpers.php';
 
 if (
     !isset($_SESSION['user_id']) ||
@@ -322,8 +323,10 @@ AND s.usable_stock<=i.minimum_stock ORDER BY s.usable_stock,i.item_name";
             break;
 
         case 'transactions':
+            $approvalHistory = inventoryApprovalHistorySql($conn, 'st');
             $sql = "
                 SELECT
+                    {$approvalHistory['select']},
                     st.transaction_id,
                     st.transaction_type,
                     i.item_name,
@@ -345,6 +348,7 @@ AND s.usable_stock<=i.minimum_stock ORDER BY s.usable_stock,i.item_name";
                     ON u.unit_id = i.unit_id
                 INNER JOIN users usr
                     ON usr.user_id = st.user_id
+                {$approvalHistory['join']}
                 WHERE st.branch_id = ?
                   AND DATE(st.transaction_date) BETWEEN ? AND ?
                   AND (
@@ -744,10 +748,12 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
         fputcsv($output, [
             'Transaction No.', 'Type', 'Item', 'Category', 'Unit',
             'Quantity', 'Transaction Date', 'By', 'Remarks',
-            'Quantity (Display)'
+            'Quantity (Display)', 'Request', 'Requested By', 'Requested At',
+            'Approved By', 'Approved At', 'Request Reason'
         ]);
 
         foreach ($exportRows as $row) {
+            $ap = inventoryApprovalHistoryFields($row);
             fputcsv($output, [
                 'TRX-' . str_pad($row['transaction_id'], 4, '0', STR_PAD_LEFT),
                 $row['transaction_type'],
@@ -758,7 +764,9 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
                 $row['transaction_date'],
                 $row['username'],
                 $row['remarks'],
-                inventoryQuantityText((float)$row['quantity'], $row)
+                inventoryQuantityText((float)$row['quantity'], $row),
+                $ap['request'], $ap['requested_by'], $ap['requested_at'],
+                $ap['approved_by'], $ap['approved_at'], $ap['reason']
             ]);
         }
 
@@ -1779,7 +1787,7 @@ No usage data for the selected date range.
 <?php elseif ($report_type === 'stock_usage'): ?>
 <tr><th>Usage Date</th><th>Item</th><th>Category</th><th>Unit</th><th>Qty Used</th><th>Usage Type</th><th>Patients</th><th>Stock Received</th></tr>
 <?php elseif ($report_type === 'transactions'): ?>
-<tr><th>Trx No.</th><th>Type</th><th>Item</th><th>Unit</th><th>Qty</th><th>Date</th><th>By</th><th>Remarks</th></tr>
+<tr><th>Trx No.</th><th>Type</th><th>Item</th><th>Unit</th><th>Qty</th><th>Date</th><th>By</th><th>Request / Approval</th><th>Remarks</th></tr>
 <?php elseif ($report_type === 'returns'): ?>
 <tr>
     <th>Return No.</th>
@@ -1848,6 +1856,7 @@ No usage data for the selected date range.
 <td><?php echo h(inventoryQuantityText((float)$row['quantity'], $row)); ?></td>
 <td><?php echo h(date('m/d/Y H:i', strtotime($row['transaction_date']))); ?></td>
 <td><?php echo h($row['username']); ?></td>
+<td style="font-size:12px;"><?php $ap = inventoryApprovalHistoryFields($row); ?><?php if ($ap['linked']): ?><strong><?php echo h($ap['request']); ?></strong><div>Requested by <?php echo h($ap['requested_by']); ?>, <?php echo h($ap['requested_at']); ?></div><div>Approved by <?php echo h($ap['approved_by'] ?: '—'); ?><?php echo $ap['approved_at'] !== '' ? ', ' . h($ap['approved_at']) : ''; ?></div><?php if ($ap['reason'] !== ''): ?><div>Reason: <?php echo h($ap['reason']); ?></div><?php endif; ?><?php else: ?>No request<?php endif; ?></td>
 <td><?php echo h($row['remarks'] ?: '—'); ?></td>
 </tr>
 <?php elseif ($report_type === 'returns'): ?>

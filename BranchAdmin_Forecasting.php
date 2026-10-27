@@ -9,6 +9,8 @@ require_once 'sources/db_connect.php';
 require_once 'sources/forecast_generation_helper.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/inventory_unit_helpers.php';
+require_once 'sources/workflow_helpers.php';
+require_once 'sources/inventory_approval_helpers.php';
 
 // Check if user is logged in and is Branch Admin (role_id = 2)
 if (
@@ -34,6 +36,44 @@ $branch_id=(string)$user_data['branch_id'];
 $username=$user_data['username']; $branch_name=$user_data['branch_name'] ?? $branch_id;
 $notification_count=getUnreadNotificationCount($conn,$user_id);
 $accuracy_setup_ready = !forecastAccuracySchemaProblems($conn);
+$reorder_csrf = workflowCsrfToken();
+
+// ============================================
+// REQUEST REORDER (from a Shortage Risk / Reorder Needed forecast row)
+// Creates an APPROVED restock request (the Branch Admin is the approver)
+// with the recommended quantity in whole vials/ampules, and notifies the
+// Inventory Officer, who fulfils it through a linked Stock In. The quantity
+// is read again from the saved forecast; nothing posted is trusted. Only
+// the request is created: forecasts and training data are not changed.
+// ============================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'request_reorder') {
+    $reorderDays = (int)($_POST['days'] ?? 30);
+    if (!in_array($reorderDays, [7, 14, 30], true)) $reorderDays = 30;
+    try {
+        workflowVerifyCsrf();
+        $reorderItemId = (int)($_POST['item_id'] ?? 0);
+        $reorderRow = null;
+        foreach (forecastStatusLatestRows($conn, $branch_id, $reorderDays) as $candidate) {
+            if ((int)$candidate['item_id'] === $reorderItemId) { $reorderRow = $candidate; break; }
+        }
+        if (!$reorderRow || !in_array($reorderRow['forecast_status'], ['Shortage Risk', 'Reorder Needed'], true)) {
+            throw new RuntimeException('This item has no current Shortage Risk or Reorder Needed forecast.');
+        }
+        $reorderUnits = inventoryReorderUnits(max(0.0, (float)$reorderRow['recommended_reorder']), $reorderRow);
+        $reorderRemarks = 'Forecast horizon: ' . $reorderDays . ' days (' . date('M d, Y', strtotime($reorderRow['forecast_start_date']))
+            . ' to ' . date('M d, Y', strtotime($reorderRow['forecast_end_date'])) . '), status ' . $reorderRow['forecast_status']
+            . ', forecast generated ' . date('M d, Y', strtotime($reorderRow['forecast_date']))
+            . ', recommended ' . inventoryReorderText((float)$reorderRow['recommended_reorder'], $reorderRow) . '.';
+        $reorderId = inventoryApprovalReorderFromForecast($conn, $user_id, $branch_id, $reorderItemId, $reorderUnits, $reorderRemarks);
+        workflowFlash('success', 'Reorder request #' . $reorderId . ' for ' . inventoryReorderText((float)$reorderRow['recommended_reorder'], $reorderRow)
+            . ' of ' . $reorderRow['item_name'] . ' was approved and sent to the Inventory Officer.');
+    } catch (Throwable $e) {
+        workflowFlash('error', $e->getMessage());
+    }
+    header('Location: BranchAdmin_Forecasting.php?days=' . $reorderDays);
+    exit;
+}
+$reorder_flash = workflowTakeFlash();
 
 // ============================================
 // AUDIT LOG FUNCTION
@@ -235,6 +275,16 @@ if (!$accuracy_setup_ready) {
 } elseif ($eligible_item_count === 0) {
     $forecast_message = "Automatic forecasting is waiting for at least $minimum_records_per_item records per forecastable item.";
     $forecast_message_type = 'warning';
+}
+if ($reorder_flash) {
+    $forecast_message = (string)$reorder_flash['message'];
+    $forecast_message_type = $reorder_flash['type'] === 'success' ? 'success' : 'error';
+}
+
+// Open restock requests by item (one per item), so a row shows "Requested #N" instead of a second request.
+$open_restock_by_item = [];
+foreach (inventoryApprovalList($conn, ['branch_id' => $branch_id, 'statuses' => ['Pending', 'Approved'], 'types' => ['restock']]) as $openRestock) {
+    $open_restock_by_item[(int)$openRestock['item_id']] ??= $openRestock;
 }
 
 // ============================================
@@ -1163,6 +1213,7 @@ while ($row = $items_result->fetch_assoc()) {
     <nav class="nav-menu">
         <ul>
             <li><a href="BranchAdmin_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
+            <?php echo inventoryApprovalSidebarLink($conn, $user_id); ?>
             <li><a href="BranchAdmin_UserManagement.php"><i class="bi bi-people-fill"></i><span>User Management</span></a></li>
             <li><a href="BranchAdmin_PatientMonitoring.php"><i class="bi bi-heart-pulse-fill"></i><span>Patient Monitoring</span></a></li>
             <li><a href="BranchAdmin_PhilhealthWorkflow.php"><i class="bi bi-file-medical-fill"></i><span>PhilHealth Processing</span></a></li>
@@ -1506,6 +1557,25 @@ while ($row = $items_result->fetch_assoc()) {
                                                 Rounded up to whole <?php echo htmlspecialchars(inventoryUnitWord($displayUnit, 2)); ?>
                                                 (<?php echo htmlspecialchars(inventoryForecastQuantityText($reorderBase, $forecast)); ?> needed)
                                             </div>
+                                            <?php if (in_array($forecast['forecast_status'], ['Shortage Risk', 'Reorder Needed'], true)): ?>
+                                                <?php $openRestock = $open_restock_by_item[(int)$forecast['item_id']] ?? null; ?>
+                                                <?php if ($openRestock): ?>
+                                                    <div class="mt-1" style="font-size:12px;">
+                                                        <span class="badge <?php echo htmlspecialchars(inventoryApprovalStatusClass($openRestock['status'])); ?>">Requested #<?php echo (int)$openRestock['request_id']; ?> · <?php echo htmlspecialchars($openRestock['status'] === 'Pending' ? 'Pending approval' : 'Approved'); ?></span>
+                                                    </div>
+                                                <?php else: ?>
+                                                    <form method="POST" action="BranchAdmin_Forecasting.php" class="mt-1"
+                                                          onsubmit="return confirm(<?php echo htmlspecialchars(json_encode('Request a reorder of ' . inventoryReorderText($reorderBase, $forecast) . ' of ' . $forecast['item_name'] . '? The request is approved and sent to the Inventory Officer.'), ENT_QUOTES); ?>);">
+                                                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($reorder_csrf); ?>">
+                                                        <input type="hidden" name="action" value="request_reorder">
+                                                        <input type="hidden" name="item_id" value="<?php echo (int)$forecast['item_id']; ?>">
+                                                        <input type="hidden" name="days" value="<?php echo (int)$forecast_days; ?>">
+                                                        <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size:12px;">
+                                                            <i class="bi bi-cart-plus me-1"></i>Request reorder
+                                                        </button>
+                                                    </form>
+                                                <?php endif; ?>
+                                            <?php endif; ?>
                                         <?php else: ?>
                                             <span class="text-success fw-semibold">
                                                 <i class="bi bi-check-circle-fill me-1"></i>No reorder

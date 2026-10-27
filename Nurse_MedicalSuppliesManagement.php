@@ -9,6 +9,7 @@ require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/forecast_training_helper.php';
 require_once 'sources/daily_inventory_helpers.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/inventory_approval_helpers.php';
 
 /* ============================================================
  * NURSE - MEDICAL SUPPLY MANAGEMENT
@@ -17,7 +18,7 @@ require_once 'sources/notification_helper.php';
  *   - Branch medical supply monitoring and consumption recording
  *   - Low/out-of-stock and expiration monitoring
  *   - Medical-supply usage history and batch stock deductions
- *   - Restock requests to the branch Inventory Officer
+ *   - Restock requests (approved by the Branch Admin, delivered by the Inventory Officer)
  *
  * IMPORTANT:
  *   Only Record Supply Usage deducts stock here. Never re-enter consumption
@@ -66,47 +67,6 @@ function supplyStatus(array $item): array
     }
 
     return ['In Stock', 'normal'];
-}
-
-function restockRecipientIds(mysqli $conn, string $branchId): array
-{
-    $ids = [];
-
-    $stmt = $conn->prepare(
-        "SELECT user_id
-         FROM users
-         WHERE branch_id=?
-           AND role_id=5
-           AND status='Active'
-         ORDER BY user_id"
-    );
-    $stmt->bind_param('s', $branchId);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    while ($row = $result->fetch_assoc()) {
-        $ids[] = (int)$row['user_id'];
-    }
-    $stmt->close();
-
-    if ($ids) {
-        return array_values(array_unique($ids));
-    }
-
-    // Fallback only when this branch has no active Inventory Officer.
-    $fallback = $conn->query(
-        "SELECT user_id
-         FROM users
-         WHERE role_id=1
-           AND status='Active'
-         ORDER BY user_id"
-    );
-    if ($fallback) {
-        while ($row = $fallback->fetch_assoc()) {
-            $ids[] = (int)$row['user_id'];
-        }
-    }
-
-    return array_values(array_unique(array_filter($ids)));
 }
 
 function fetchMedicalSupply(mysqli $conn, int $itemId): ?array
@@ -300,6 +260,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             header('Location: Nurse_MedicalSuppliesManagement.php');
             exit;
         }
+        if ($action === 'cancel_restock') {
+            $requestId = (int)($_POST['request_id'] ?? 0);
+            if ($requestId < 1) throw new RuntimeException('Select a restock request to cancel.');
+            workflowFlash('success', inventoryApprovalCancel($conn, $requestId, $userId));
+            header('Location: Nurse_MedicalSuppliesManagement.php#myRestockRequests');
+            exit;
+        }
         if ($action !== 'request_restock') {
             throw new RuntimeException('Unsupported medical-supply action.');
         }
@@ -331,42 +298,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $requestedText .= ' (' . inventoryFormatNumber($baseEquivalent) . ' ' . $baseUnit . ' equivalent)';
         }
 
-        $recipients = restockRecipientIds($conn, $branchId);
-        if (!$recipients) {
-            throw new RuntimeException('No Inventory Officer or Super Admin is available to receive the request.');
-        }
-
-        $title = 'Restock Request: ' . $item['item_name'];
-        $message =
-            "Requested Quantity: {$requestedText}\n" .
-            'Current Usable Stock: ' . inventoryStockBreakdown($currentStock, $item) . "\n" .
-            'Reason: ' . ($reason !== '' ? $reason : 'No reason provided') . "\n" .
-            "Branch: {$branchName}\n" .
-            "Requested By: {$username}";
-
+        /*
+         * The restock request is a tracked approval request: Pending until the
+         * Branch Admin approves (possibly with an adjusted quantity) or rejects
+         * it. Once approved the Inventory Officers are notified and the Stock In
+         * that receives the delivery is linked to it (Fulfilled when complete).
+         * One open restock request per item and branch.
+         */
+        $baseScaled = stockQuantityParse(number_format($baseEquivalent, 4, '.', ''));
+        if ($baseScaled <= 0) throw new RuntimeException('Enter a valid requested quantity.');
         $conn->begin_transaction();
-
-        $insert = $conn->prepare(
-            "INSERT INTO notifications
-             (user_id,title,message,notification_type,is_read,created_at)
-             VALUES (?,?,?,'restock_request',0,NOW())"
-        );
-        foreach ($recipients as $recipientId) {
-            $insert->bind_param('iss', $recipientId, $title, $message);
-            $insert->execute();
-        }
-        $insert->close();
-
-        workflowAudit(
-            $conn,
-            $userId,
-            $branchId,
-            'Requested restock for ' . $item['item_name'] . ': ' . $requestedText,
-            'Medical Supplies'
-        );
-
+        $requestId = inventoryApprovalCreate($conn, [
+            'type' => 'restock', 'branch_id' => $branchId, 'requested_by' => $userId, 'source' => 'Nurse',
+            'item_id' => $itemId, 'item_name' => (string)$item['item_name'], 'quantity' => stockQuantityDecimal($baseScaled),
+            'unit' => $baseUnit,
+            'reason' => $reason !== '' ? mb_substr($reason, 0, 255) : 'No reason provided',
+            'remarks' => mb_strlen($reason) > 255 ? $reason : 'Usable stock when requested: ' . inventoryStockBreakdown($currentStock, $item),
+            'payload' => ['display_quantity' => inventoryFormatNumber($requestedDisplayQty), 'display_unit' => $displayUnit,
+                'requested_text' => $requestedText],
+            'open_key' => 'restock:' . $branchId . ':' . $itemId,
+        ]);
         $conn->commit();
-        workflowFlash('success', 'Restock request sent successfully.');
+        workflowFlash('success', 'Restock request #' . $requestId . ' for ' . $requestedText
+            . ' was sent: Pending approval by the Branch Admin.');
+        header('Location: Nurse_MedicalSuppliesManagement.php#myRestockRequests');
+        exit;
     } catch (Throwable $e) {
         try { $conn->rollback(); } catch (Throwable $ignored) {}
         workflowFlash('danger', $e->getMessage());
@@ -375,6 +331,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Location: Nurse_MedicalSuppliesManagement.php');
     exit;
 }
+
+/* My restock requests (status: Pending, Approved with remaining, Fulfilled, Rejected, Cancelled). */
+$myRestocks = inventoryApprovalList($conn, ['branch_id' => $branchId, 'requested_by' => $userId, 'types' => ['restock'], 'limit' => 50]);
+foreach ($myRestocks as &$restockRow) {
+    $approvedScaled = stockQuantityParse((string)($restockRow['approved_quantity'] ?? $restockRow['quantity']), true);
+    $receivedScaled = stockQuantityParse((string)$restockRow['fulfilled_quantity'], true);
+    $restockRow['received_text'] = inventoryQuantityText((float)stockQuantityDecimal($receivedScaled), $restockRow);
+    $restockRow['remaining_text'] = inventoryQuantityText((float)stockQuantityDecimal(max(0, $approvedScaled - $receivedScaled)), $restockRow);
+}
+unset($restockRow);
 
 /* ============================================================
  * FILTERS
@@ -926,6 +892,46 @@ $flash = workflowTakeFlash();
                 </div>
             <?php endif; ?>
             <div class="pagination-info">Showing <?= $totalFiltered ? ($offset+1) : 0 ?>–<?= min($offset+$perPage,$totalFiltered) ?> of <?= $totalFiltered ?> item(s)</div>
+        </section>
+
+        <section class="content-card" id="myRestockRequests">
+            <div class="card-head">
+                <div>
+                    <h2><span class="section-icon"><i class="bi bi-send-check"></i></span>My Restock Requests</h2>
+                    <p>Each request waits for the Branch Admin's approval. Once approved, the Inventory Officer links the delivery (Stock In) to it; a partial delivery shows the remaining quantity.</p>
+                </div>
+            </div>
+            <div class="table-responsive">
+                <table class="table inventory-table align-middle" style="min-width:900px">
+                    <thead><tr><th>Request</th><th>Item</th><th>Requested</th><th>Approved</th><th>Received</th><th>Status</th><th>Decision</th><th></th></tr></thead>
+                    <tbody>
+                    <?php if (!$myRestocks): ?>
+                        <tr><td colspan="8" class="empty"><i class="bi bi-inbox me-1"></i>You have not sent any restock requests.</td></tr>
+                    <?php endif; ?>
+                    <?php foreach ($myRestocks as $restock): ?>
+                        <tr>
+                            <td>#<?= (int)$restock['request_id'] ?><div class="small text-muted"><?= workflowH(date('M d, Y h:i A', strtotime((string)$restock['requested_at']))) ?></div></td>
+                            <td class="item-name"><?= workflowH((string)$restock['item_name']) ?><div class="small text-muted"><?= workflowH((string)($restock['reason'] ?? '')) ?></div></td>
+                            <td><?= workflowH(inventoryApprovalQuantityText($restock['quantity'], $restock)) ?></td>
+                            <td><?= in_array($restock['status'], ['Approved', 'Fulfilled'], true) ? workflowH(inventoryApprovalQuantityText($restock['approved_quantity'] ?? $restock['quantity'], $restock)) : '—' ?></td>
+                            <td><?php if (in_array($restock['status'], ['Approved', 'Fulfilled'], true)): ?><?= workflowH($restock['received_text']) ?><?php if ($restock['status'] === 'Approved'): ?><div class="small text-muted">Remaining: <?= workflowH($restock['remaining_text']) ?></div><?php endif; ?><?php else: ?>—<?php endif; ?></td>
+                            <td><span class="badge <?= workflowH(inventoryApprovalStatusClass((string)$restock['status'])) ?>"><?= workflowH($restock['status'] === 'Pending' ? 'Pending approval' : (string)$restock['status']) ?></span></td>
+                            <td class="small"><?php if ($restock['decided_at']): ?><?= workflowH((string)($restock['decider_name'] ?? '')) ?>, <?= workflowH(date('M d, Y', strtotime((string)$restock['decided_at']))) ?><?php if ($restock['decision_remarks']): ?><div class="text-muted"><?= workflowH((string)$restock['decision_remarks']) ?></div><?php endif; ?><?php else: ?>—<?php endif; ?></td>
+                            <td>
+                                <?php if ($restock['status'] === 'Pending'): ?>
+                                    <form method="post" onsubmit="return confirm('Cancel restock request #<?= (int)$restock['request_id'] ?>?');">
+                                        <input type="hidden" name="csrf_token" value="<?= workflowH($csrf) ?>">
+                                        <input type="hidden" name="action" value="cancel_restock">
+                                        <input type="hidden" name="request_id" value="<?= (int)$restock['request_id'] ?>">
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary">Cancel</button>
+                                    </form>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
         </section>
 
         <section class="content-card">

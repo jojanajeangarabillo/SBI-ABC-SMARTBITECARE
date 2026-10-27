@@ -5,6 +5,7 @@ require_once 'sources/inventory_stock_helpers.php';
 $stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/inventory_approval_helpers.php';
 
 $user = workflowRequireUser($conn, 2);
 $userId = (int)$user['user_id'];
@@ -175,8 +176,10 @@ $monthlyMovementCount = (int)($movementStmt->get_result()->fetch_assoc()['total'
 $movementStmt->close();
 
 // Recent movements provide decision context while remaining read-only.
+$recentApproval = inventoryApprovalHistorySql($conn, 'st');
 $recentSql = "
     SELECT
+        {$recentApproval['select']},
         st.transaction_id,
         st.transaction_type,
         st.quantity,
@@ -192,6 +195,7 @@ $recentSql = "
     INNER JOIN inventory_items i ON i.item_id = st.item_id
     INNER JOIN units un ON un.unit_id = i.unit_id
     LEFT JOIN users u ON u.user_id = st.user_id
+    {$recentApproval['join']}
     WHERE st.branch_id = ?
     ORDER BY st.transaction_date DESC, st.transaction_id DESC
     LIMIT 10
@@ -910,6 +914,7 @@ $recentStmt->close();
         <nav class="nav-menu">
             <ul>
                 <li><a href="BranchAdmin_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
+                <?php require_once __DIR__ . '/sources/inventory_approval_helpers.php'; echo inventoryApprovalSidebarLink($conn, (int)($_SESSION['user_id'] ?? 0)); ?>
                 <li><a href="BranchAdmin_UserManagement.php"><i class="bi bi-people-fill"></i><span>User Management</span></a></li>
                 <li><a href="BranchAdmin_PatientMonitoring.php"><i class="bi bi-heart-pulse-fill"></i><span>Patient Monitoring</span></a></li>
                 <li><a href="BranchAdmin_PhilhealthWorkflow.php"><i class="bi bi-file-medical-fill"></i><span>PhilHealth Processing</span></a></li>
@@ -1075,9 +1080,9 @@ $recentStmt->close();
                 </div>
                 <div class="table-responsive">
                     <table class="table movement-table align-middle">
-                        <thead><tr><th>Date and Time</th><th>Item</th><th>Type</th><th>Quantity</th><th>Recorded By</th><th>Remarks</th></tr></thead>
+                        <thead><tr><th>Date and Time</th><th>Item</th><th>Type</th><th>Quantity</th><th>Recorded By</th><th>Request / Approval</th><th>Remarks</th></tr></thead>
                         <tbody>
-                            <?php if (!$recentMovements): ?><tr><td colspan="6" class="empty-state"><i class="bi bi-clock-history"></i>No stock movements have been recorded for this branch.</td></tr><?php endif; ?>
+                            <?php if (!$recentMovements): ?><tr><td colspan="7" class="empty-state"><i class="bi bi-clock-history"></i>No stock movements have been recorded for this branch.</td></tr><?php endif; ?>
                             <?php foreach ($recentMovements as $movement): ?>
                                 <tr>
                                     <td><?php echo workflowH(date('M d, Y', strtotime($movement['transaction_date']))); ?><div class="stock-unit"><?php echo workflowH(date('h:i A', strtotime($movement['transaction_date']))); ?></div></td>
@@ -1085,6 +1090,14 @@ $recentStmt->close();
                                     <td><span class="movement-type <?php echo workflowH(inventoryTransactionClass($movement['transaction_type'])); ?>"><?php echo workflowH(str_replace('_', ' ', $movement['transaction_type'])); ?></span></td>
                                     <td><span class="quantity-change"><?php echo workflowH(inventoryTransactionQuantity($movement['transaction_type'], $movement['quantity'], $movement)); ?></span></td>
                                     <td><?php echo workflowH($movement['performed_by']); ?></td>
+                                    <td style="font-size:12px;"><?php $ap = inventoryApprovalHistoryFields($movement); ?>
+                                        <?php if ($ap['linked']): ?>
+                                            <strong><?php echo workflowH($ap['request']); ?></strong>
+                                            <div class="stock-unit">Requested by <?php echo workflowH($ap['requested_by']); ?>, <?php echo workflowH($ap['requested_at']); ?></div>
+                                            <div class="stock-unit">Approved by <?php echo workflowH($ap['approved_by'] ?: '—'); ?><?php echo $ap['approved_at'] !== '' ? ', ' . workflowH($ap['approved_at']) : ''; ?></div>
+                                            <?php if ($ap['reason'] !== ''): ?><div class="stock-unit">Reason: <?php echo workflowH($ap['reason']); ?></div><?php endif; ?>
+                                        <?php else: ?><span class="stock-unit">No request</span><?php endif; ?>
+                                    </td>
                                     <td><div class="remarks-cell" title="<?php echo workflowH($movement['remarks'] ?? ''); ?>"><?php echo workflowH($movement['remarks'] ?: 'No remarks'); ?></div></td>
                                 </tr>
                             <?php endforeach; ?>

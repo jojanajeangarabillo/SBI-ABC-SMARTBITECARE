@@ -6,6 +6,7 @@ require_once 'sources/forecast_status_helper.php';
 $stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
 require_once 'sources/dashboard_patient_metrics.php';
+require_once 'sources/inventory_approval_helpers.php';
 
 // Check if user is logged in and is branch admin
 if (
@@ -1095,6 +1096,7 @@ $username = $userInfo['username'] ?? 'Admin';
         <nav class="nav-menu">
             <ul>
                 <li><a class="active" href="BranchAdmin_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
+                <?php require_once __DIR__ . '/sources/inventory_approval_helpers.php'; echo inventoryApprovalSidebarLink($conn, (int)($_SESSION['user_id'] ?? 0)); ?>
                 <li><a href="BranchAdmin_UserManagement.php"><i class="bi bi-people-fill"></i><span>User Management</span></a></li>
                 <li><a href="BranchAdmin_PatientMonitoring.php"><i class="bi bi-heart-pulse-fill"></i><span>Patient Monitoring</span></a></li>
                 <li><a href="BranchAdmin_PhilhealthWorkflow.php"><i class="bi bi-file-medical-fill"></i><span>PhilHealth Processing</span></a></li>
@@ -1158,6 +1160,43 @@ $username = $userInfo['username'] ?? 'Admin';
             <!-- =========================
          ROW 1
     ========================== -->
+    <!-- Pending Approvals (inventory requests and daily closings waiting for the Branch Admin) -->
+    <?php
+        $approvalPending = inventoryApprovalReady($conn)
+            ? inventoryApprovalList($conn, ['branch_id' => (string)$branch_id, 'statuses' => ['Pending'], 'limit' => 500]) : [];
+        $approvalByType = [];
+        foreach ($approvalPending as $approvalRow) {
+            $approvalLabel = inventoryApprovalTypeLabel($approvalRow['request_type']);
+            $approvalByType[$approvalLabel] = ($approvalByType[$approvalLabel] ?? 0) + 1;
+        }
+        $approvalClosings = inventoryApprovalClosingsToReview($conn, (string)$branch_id);
+    ?>
+    <div class="row g-4 mb-4" aria-label="Pending approvals">
+        <div class="col-12">
+            <a href="BranchAdmin_Approvals.php" class="text-decoration-none">
+                <div class="stat-card stat-primary">
+                    <div class="stat-icon"><i class="bi bi-patch-check-fill"></i></div>
+                    <div class="stat-content">
+                        <div class="stat-label">Pending Approvals
+                            <?php if (count($approvalPending) + $approvalClosings > 0): ?>
+                                <span class="badge rounded-pill text-bg-danger ms-1"><?php echo count($approvalPending) + $approvalClosings; ?></span>
+                            <?php endif; ?>
+                        </div>
+                        <div class="stat-number"><?php echo number_format(count($approvalPending)); ?></div>
+                        <div class="stat-description">
+                            <?php if ($approvalByType): ?>
+                                <?php echo htmlspecialchars(implode(' · ', array_map(static fn($label, $count) => $count . ' ' . $label, array_keys($approvalByType), $approvalByType)), ENT_QUOTES, 'UTF-8'); ?>
+                            <?php else: ?>
+                                No inventory requests waiting
+                            <?php endif; ?>
+                            · <?php echo number_format($approvalClosings); ?> daily closing<?php echo $approvalClosings === 1 ? '' : 's'; ?> to review
+                        </div>
+                    </div>
+                </div>
+            </a>
+        </div>
+    </div>
+
     <!-- Patient visit workflow -->
     <div class="row g-4 mb-4" aria-label="Patient visits today">
         <div class="col-lg-3 col-md-6">
