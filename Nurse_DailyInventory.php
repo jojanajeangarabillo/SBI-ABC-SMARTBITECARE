@@ -10,7 +10,6 @@ require_once 'sources/forecast_training_helper.php';
 require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/forecast_auto_evaluation.php';
-require_once __DIR__ . '/fpdf/fpdf.php';
 
 // Authenticate before reading session data or loading notifications.
 $user = workflowRequireUser($conn, 3);
@@ -51,404 +50,33 @@ function dailyInventoryStartAutoEvaluation(mysqli $conn, string $branchId): void
     }
 }
 
-function dailyInventoryPdfText($value): string
-{
-    $text = trim((string)$value);
-
-    if ($text === '') {
-        return '';
-    }
-
-    if (function_exists('iconv')) {
-        $converted = @iconv(
-            'UTF-8',
-            'windows-1252//TRANSLIT//IGNORE',
-            $text
-        );
-
-        if ($converted !== false) {
-            return $converted;
-        }
-    }
-
-    return preg_replace('/[^\\x20-\\x7E]/', '', $text) ?: '';
-}
-
-function dailyInventoryPdfShort($value, int $max = 28): string
-{
-    $text = dailyInventoryPdfText($value);
-
-    if (strlen($text) <= $max) {
-        return $text;
-    }
-
-    return substr($text, 0, max(0, $max - 3)) . '...';
-}
-
-class DailyInventoryClosingPdf extends FPDF
-{
-    private array $branch;
-    private string $inventoryDate;
-
-    public function __construct(array $branch, string $inventoryDate)
-    {
-        parent::__construct('L', 'mm', 'A4');
-
-        $this->branch = $branch;
-        $this->inventoryDate = $inventoryDate;
-
-        $this->SetMargins(12, 12, 12);
-        $this->SetAutoPageBreak(true, 18);
-        $this->AliasNbPages();
-    }
-
-    public function Header(): void
-    {
-        $logo = __DIR__ . DIRECTORY_SEPARATOR . 'logo.png';
-
-        if (is_file($logo)) {
-            $this->Image($logo, 12, 8, 20, 20);
-        }
-
-        $this->SetXY(36, 9);
-        $this->SetTextColor(43, 58, 140);
-        $this->SetFont('Arial', 'B', 15);
-
-        $this->Cell(
-            0,
-            6,
-            dailyInventoryPdfText(
-                $this->branch['branch_name'] ?? 'Smart Bite Care'
-            ),
-            0,
-            1
-        );
-
-        $this->SetX(36);
-        $this->SetFont('Arial', '', 8.5);
-        $this->SetTextColor(75, 83, 105);
-
-        $this->Cell(
-            0,
-            4.5,
-            dailyInventoryPdfText(
-                $this->branch['branch_address'] ?? ''
-            ),
-            0,
-            1
-        );
-
-        $this->SetX(36);
-
-        $contact = trim(
-            (string)($this->branch['contact_number'] ?? '')
-        );
-        $email = trim((string)($this->branch['email'] ?? ''));
-
-        $this->Cell(
-            0,
-            4.5,
-            dailyInventoryPdfText(
-                trim($contact . ($contact && $email ? ' | ' : '') . $email)
-            ),
-            0,
-            1
-        );
-
-        $this->SetDrawColor(43, 58, 140);
-        $this->SetLineWidth(0.5);
-        $this->Line(12, 31, 285, 31);
-        $this->Ln(8);
-
-        $this->SetTextColor(43, 58, 140);
-        $this->SetFont('Arial', 'B', 16);
-
-        $this->Cell(
-            0,
-            7,
-            'DAILY INVENTORY CLOSING REPORT',
-            0,
-            1,
-            'C'
-        );
-
-        $this->SetFont('Arial', '', 9);
-        $this->SetTextColor(85, 93, 115);
-
-        $this->Cell(
-            0,
-            5,
-            'Inventory Date: ' .
-                date('F d, Y', strtotime($this->inventoryDate)),
-            0,
-            1,
-            'C'
-        );
-
-        $this->Ln(4);
-    }
-
-    public function Footer(): void
-    {
-        $this->SetY(-12);
-        $this->SetFont('Arial', '', 8);
-        $this->SetTextColor(120, 126, 140);
-
-        $this->Cell(
-            0,
-            5,
-            'SmartBiteCare - Daily Inventory | Page ' .
-                $this->PageNo() . '/{nb}',
-            0,
-            0,
-            'C'
-        );
-    }
-}
-
-function fetchDailyInventoryClosingsForDate(
-    mysqli $conn,
-    string $branchId,
-    string $date
-): array {
-    $stmt = $conn->prepare(
-        "SELECT d.*, i.item_name, u2.unit_name,
-                COALESCE(NULLIF(i.base_unit_label,''),u2.unit_name)
-                    AS base_unit_label,
-                COALESCE(NULLIF(i.display_unit_label,''),u2.unit_name)
-                    AS display_unit_label,
-                COALESCE(NULLIF(i.conversion_to_base,0),1)
-                    AS conversion_to_base,
-                u.username
-         FROM daily_inventory_closings d
-         INNER JOIN inventory_items i ON i.item_id=d.item_id
-         INNER JOIN inventory_categories c ON c.category_id=i.category_id
-         INNER JOIN users u ON u.user_id=d.submitted_by
-         INNER JOIN units u2 ON u2.unit_id=i.unit_id
-         WHERE d.branch_id=? AND d.inventory_date=? AND " . dailyInventoryItemSql('i', 'c') . "
-         ORDER BY i.item_name"
-    );
-
-    $stmt->bind_param('ss', $branchId, $date);
-    $stmt->execute();
-
-    $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-    $stmt->close();
-
-    return $rows;
-}
-
-// Export the selected day's closing report.
-if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
+// Export (PDF or CSV, shared builders): one day (?date=) or the closing
+// history range shown on the page (?range=today|7|30|all).
+if (in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
+    require_once 'sources/report_catalog.php';
+    $exportFormat = (string)$_GET['export'];
     $exportDate = trim((string)($_GET['date'] ?? ''));
-
-    if (!dailyInventoryValidDate($exportDate)) {
-        http_response_code(400);
-        exit('Invalid inventory date.');
-    }
-
-    $exportRows = fetchDailyInventoryClosingsForDate(
-        $conn,
-        $branchId,
-        $exportDate
-    );
-
-    if (!$exportRows) {
-        http_response_code(404);
-        exit(
-            'No daily inventory closing records were found ' .
-            'for the selected date.'
-        );
-    }
-
-    $branchStmt = $conn->prepare(
-        "SELECT branch_name, branch_address, contact_number, email
-         FROM branches
-         WHERE branch_id=?
-         LIMIT 1"
-    );
-
-    $branchStmt->bind_param('s', $branchId);
-    $branchStmt->execute();
-
-    $branchInfo = $branchStmt->get_result()->fetch_assoc() ?: [
-        'branch_name' => (string)($user['branch_name'] ?? $branchId),
-        'branch_address' => '',
-        'contact_number' => '',
-        'email' => ''
-    ];
-
-    $branchStmt->close();
-
-    $pdf = new DailyInventoryClosingPdf($branchInfo, $exportDate);
-
-    $pdf->SetTitle(
-        dailyInventoryPdfText('Daily Inventory - ' . $exportDate)
-    );
-    $pdf->SetAuthor('SmartBiteCare');
-    $pdf->AddPage();
-
-    $headers = [
-        'Item',
-        'Beginning',
-        'Delivery',
-        'Consumed',
-        'Pull-out',
-        'Computed',
-        'Actual',
-        'Variance',
-        'Status'
-    ];
-
-    $widths = [55, 28, 25, 28, 25, 29, 29, 27, 24];
-
-    $pdf->SetFillColor(43, 58, 140);
-    $pdf->SetTextColor(255, 255, 255);
-    $pdf->SetFont('Arial', 'B', 8);
-
-    foreach ($headers as $i => $header) {
-        $pdf->Cell(
-            $widths[$i],
-            8,
-            $header,
-            1,
-            0,
-            'C',
-            true
-        );
-    }
-
-    $pdf->Ln();
-    $pdf->SetFont('Arial', '', 7.6);
-
-    $tallied = 0;
-    $differences = 0;
-
-    foreach ($exportRows as $row) {
-        $variance = (float)$row['variance'];
-        $isTallied = abs($variance) < 0.00005;
-
-        if ($isTallied) {
-            $tallied++;
-        } else {
-            $differences++;
+    if ($exportDate !== '') {
+        if (!dailyInventoryValidDate($exportDate)) {
+            http_response_code(400);
+            exit('Invalid inventory date.');
         }
-
-        $cells = [
-            dailyInventoryPdfShort($row['item_name'], 34),
-            inventoryStockBreakdown(
-                (float)$row['beginning_stock'],
-                $row
-            ),
-            inventoryStockBreakdown((float)$row['delivery'], $row),
-            inventoryStockBreakdown((float)$row['consumed'], $row),
-            inventoryStockBreakdown((float)$row['pull_out'], $row),
-            inventoryStockBreakdown(
-                (float)$row['computed_ending'],
-                $row
-            ),
-            inventoryStockBreakdown(
-                (float)$row['actual_count'],
-                $row
-            ),
-            inventoryUsageDescription($variance, $row),
-            $isTallied ? 'Tallied' : 'Variance'
-        ];
-
-        $pdf->SetTextColor(45, 52, 70);
-
-        foreach ($cells as $i => $cell) {
-            $align = $i === 0 ? 'L' : 'C';
-
-            $pdf->Cell(
-                $widths[$i],
-                7.5,
-                dailyInventoryPdfShort($cell, $i === 0 ? 34 : 20),
-                1,
-                0,
-                $align
-            );
-        }
-
-        $pdf->Ln();
+        [$exportFrom, $exportTo] = [$exportDate, $exportDate];
+    } else {
+        $exportRange = (string)($_GET['range'] ?? 'today');
+        $exportTo = date('Y-m-d');
+        $exportFrom = match ($exportRange) {
+            '7' => date('Y-m-d', strtotime('-6 days')),
+            '30' => date('Y-m-d', strtotime('-29 days')),
+            'all' => '2000-01-01',
+            default => $exportTo,
+        };
     }
-
-    $pdf->Ln(4);
-    $pdf->SetFont('Arial', 'B', 9);
-    $pdf->SetTextColor(43, 58, 140);
-    $pdf->Cell(0, 5, 'Daily Closing Summary', 0, 1);
-
-    $pdf->SetFont('Arial', '', 9);
-    $pdf->SetTextColor(60, 68, 88);
-
-    $pdf->Cell(
-        0,
-        5,
-        'Items closed: ' . count($exportRows) .
-            ' | Tallied: ' . $tallied .
-            ' | With variance: ' . $differences,
-        0,
-        1
-    );
-    // Same read-only counts as the page and the training sync (check-ins and doses).
-    $exportCounts = dailyInventoryDayCounts($conn, $branchId, $exportDate);
-    $pdf->Cell(
-        0,
-        5,
-        'Patients checked in: ' . (int)$exportCounts['patient_count'] .
-            ' | Animal-bite cases: ' . (int)$exportCounts['animal_bite_cases'] .
-            ' | Vaccine doses given: ' . (int)$exportCounts['vaccinations_administered'],
-        0,
-        1
-    );
-
-    $remarks = array_values(
-        array_filter(
-            $exportRows,
-            fn($row) => trim((string)($row['remarks'] ?? '')) !== ''
-        )
-    );
-
-    if ($remarks) {
-        $pdf->Ln(2);
-        $pdf->SetFont('Arial', 'B', 9);
-        $pdf->SetTextColor(43, 58, 140);
-        $pdf->Cell(0, 5, 'Remarks / Adjustments', 0, 1);
-
-        $pdf->SetFont('Arial', '', 8.5);
-        $pdf->SetTextColor(60, 68, 88);
-
-        foreach ($remarks as $row) {
-            $line = $row['item_name'] . ': ' . $row['remarks'];
-
-            $pdf->MultiCell(
-                0,
-                4.5,
-                dailyInventoryPdfText($line),
-                0,
-                'L'
-            );
-        }
-    }
-
-    workflowAudit(
-        $conn,
-        $userId,
-        $branchId,
-        'Exported daily inventory closing PDF for ' . $exportDate,
-        'Daily Inventory'
-    );
-
-    $filename = 'Daily_Inventory_' .
-        preg_replace(
-            '/[^A-Za-z0-9_-]/',
-            '_',
-            (string)($branchInfo['branch_name'] ?? $branchId)
-        ) .
-        '_' . $exportDate . '.pdf';
-
-    $pdf->Output('D', $filename);
-    exit;
+    $exportReport = reportBuild($conn, 'daily_closing', ['branch_id' => $branchId, 'from' => $exportFrom, 'to' => $exportTo]);
+    $exportPeriod = $exportFrom === '2000-01-01' ? 'All closing history' : reportPeriodText($exportFrom, $exportTo);
+    workflowAudit($conn, $userId, $branchId, 'Exported daily inventory closing (' . strtoupper($exportFormat) . ') for ' . $exportPeriod, 'Daily Inventory');
+    reportSend($exportReport, reportMeta($conn, $userId, (string)($user['branch_name'] ?? $branchId), $exportPeriod), $exportFormat,
+        'Daily_Inventory_' . $branchId . '_' . ($exportFrom === $exportTo ? $exportFrom : str_replace('2000-01-01', 'all', $exportFrom) . '_to_' . $exportTo));
 }
 
 /** Read usage and the selected day's closing context; never invent an opening. */
@@ -2487,6 +2115,13 @@ $flash = workflowTakeFlash();
                         <i class="bi bi-arrow-counterclockwise me-1"></i>
                         Today
                     </a>
+
+                    <a class="btn btn-outline-danger" href="Nurse_DailyInventory.php?export=pdf&amp;<?= workflowH($historyDate !== '' ? 'date=' . $historyDate : 'range=' . $historyRange) ?>">
+                        <i class="bi bi-file-earmark-pdf-fill me-1"></i>History PDF
+                    </a>
+                    <a class="btn btn-outline-success" href="Nurse_DailyInventory.php?export=csv&amp;<?= workflowH($historyDate !== '' ? 'date=' . $historyDate : 'range=' . $historyRange) ?>">
+                        <i class="bi bi-filetype-csv me-1"></i>History CSV
+                    </a>
                 </form>
             </div>
 
@@ -2594,6 +2229,13 @@ $flash = workflowTakeFlash();
                                     class="bi bi-file-earmark-pdf-fill me-1"
                                 ></i>
                                 Export PDF
+                            </a>
+                            <a
+                                class="btn btn-sm btn-outline-success"
+                                href="Nurse_DailyInventory.php?export=csv&amp;date=<?= workflowH($closingDate) ?>"
+                            >
+                                <i class="bi bi-filetype-csv me-1"></i>
+                                Export CSV
                             </a>
                         </div>
                     </div>

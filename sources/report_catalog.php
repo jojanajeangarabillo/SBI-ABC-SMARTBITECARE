@@ -364,6 +364,7 @@ function reportDailyClosing(mysqli $conn, string $branchId, string $from, string
             (string)($c['submitter_name'] ?? ''),
             trim(($c['reviewer_name'] ?? '') . ($c['reviewed_at'] ? ', ' . reportDate($c['reviewed_at']) : '')
                 . (trim((string)($c['review_remarks'] ?? '')) !== '' ? ' — ' . $c['review_remarks'] : ''), ', '),
+            trim((string)($c['remarks'] ?? '')),
         ];
     }
     $dayRows = [];
@@ -383,7 +384,7 @@ function reportDailyClosing(mysqli $conn, string $branchId, string $from, string
                 ['label' => 'Pull-out', 'width' => 1.4, 'align' => 'R'], ['label' => 'Ending', 'width' => 1.6, 'align' => 'R'],
                 ['label' => 'Actual', 'width' => 1.6, 'align' => 'R'], ['label' => 'Variance', 'width' => 1.4, 'align' => 'R'],
                 ['label' => 'Wastage', 'width' => 1.3, 'align' => 'R'], ['label' => 'Review Status', 'width' => 1.6],
-                ['label' => 'Nurse', 'width' => 1.6], ['label' => 'Reviewed By', 'width' => 2.4],
+                ['label' => 'Nurse', 'width' => 1.6], ['label' => 'Reviewed By', 'width' => 2.4], ['label' => 'Remarks', 'width' => 2.2],
             ], 'rows' => $rows],
             ['title' => 'Patients, cases and doses per day', 'columns' => [
                 ['label' => 'Date', 'width' => 2], ['label' => 'Items Closed', 'width' => 1, 'align' => 'R'],
