@@ -86,6 +86,12 @@ if (!in_array($forecastDays, $allowedForecastDays, true)) {
     $forecastDays = 30;
 }
 
+// Read-only export of the latest saved forecast (PDF/CSV); no forecast is run.
+if (in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
+    require_once 'sources/report_center.php';
+    reportForecastExport($conn, (int)$user['user_id'], $branchId, $forecastDays, (string)$_GET['export']);
+}
+
 /* =========================================================
    LATEST VALID / NON-STALE FORECAST DATE
    ========================================================= */
@@ -1146,6 +1152,10 @@ $chartRiskValues = array_map(
                 <small>
                     View the latest 7-day, 14-day, or 30-day forecast for your branch.
                 </small>
+                <div class="mt-2 d-flex gap-2 flex-wrap">
+                    <a class="btn btn-sm btn-outline-primary" href="Nurse_Supplyforecasting.php?days=<?= (int)$forecastDays ?>&amp;export=pdf"><i class="bi bi-file-earmark-pdf me-1"></i>Export <?= (int)$forecastDays ?>-day PDF</a>
+                    <a class="btn btn-sm btn-outline-primary" href="Nurse_Supplyforecasting.php?days=<?= (int)$forecastDays ?>&amp;export=csv"><i class="bi bi-filetype-csv me-1"></i>Export <?= (int)$forecastDays ?>-day CSV</a>
+                </div>
             </div>
 
             <div class="horizon-options" role="group" aria-label="Forecast horizon">

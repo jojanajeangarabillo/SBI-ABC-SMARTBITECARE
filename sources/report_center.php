@@ -345,3 +345,28 @@ function reportCenterRender(array $state, string $heading = 'Generate a report')
     <?php
     return (string)ob_get_clean();
 }
+
+/**
+ * Supply Forecasting export (PDF or CSV) of the latest SAVED forecast for one
+ * horizon. Never runs a forecast. Call it before a page could start one.
+ */
+function reportForecastExport(mysqli $conn, int $userId, string $branchId, int $horizon, string $format, string $module = 'Forecasting'): void
+{
+    $format = strtolower($format);
+    if (!in_array($format, ['pdf', 'csv'], true)) return;
+    if (!in_array($horizon, [7, 14, 30], true)) $horizon = 30;
+    $report = reportBuild($conn, 'forecast', ['branch_id' => $branchId, 'horizon' => $horizon]);
+    $meta = reportMeta($conn, $userId, reportBranchName($conn, $branchId), 'Latest saved forecast as of ' . date('M d, Y h:i A'),
+        'Horizon: ' . $horizon . ' days');
+    workflowAudit($conn, $userId, $branchId, 'Exported ' . $report['title'] . ' (' . strtoupper($format) . ') - Branch: ' . $meta['branch'], $module);
+    reportSend($report, $meta, $format, 'Supply_Forecast_' . $horizon . '_days_' . $branchId . '_' . date('Ymd_His'));
+}
+
+/** PDF and CSV buttons for a page's export URL (format is appended). */
+function reportExportButtons(string $baseUrl, string $class = 'btn btn-sm btn-outline-primary'): string
+{
+    $sep = str_contains($baseUrl, '?') ? '&' : '?';
+    $h = static fn($v) => htmlspecialchars($v, ENT_QUOTES, 'UTF-8');
+    return '<a class="' . $h($class) . '" href="' . $h($baseUrl . $sep . 'export=pdf') . '"><i class="bi bi-file-earmark-pdf me-1"></i>Export PDF</a> '
+        . '<a class="' . $h($class) . '" href="' . $h($baseUrl . $sep . 'export=csv') . '"><i class="bi bi-filetype-csv me-1"></i>Export CSV</a>';
+}
