@@ -3,3 +3,6 @@ __pycache__/
 *.sql
 !database/smartbitecare.sql
 !database/data/update_minimum_stock.sql
+
+# Generated report files are downloaded, never stored in the repository.
+reports/
