@@ -375,20 +375,28 @@ function inventoryApprovalSidebarLink(mysqli $conn, int $userId, bool $active = 
 {
     $requests = 0;
     $closings = 0;
+    $deliveries = 0;
     try {
         $user = inventoryApprovalUser($conn, $userId);
         if ($user && (int)$user['role_id'] === 2 && $user['branch_id']) {
             $requests = inventoryApprovalPendingCount($conn, (string)$user['branch_id']);
             $closings = inventoryApprovalClosingsToReview($conn, (string)$user['branch_id']);
+            $deliveries = array_sum(array_column(inventoryApprovalPendingDeliveries($conn, (string)$user['branch_id']), 'count'));
         }
     } catch (Throwable $e) {
-        $requests = $closings = 0;
+        $requests = $closings = $deliveries = 0;
     }
     $count = $requests + $closings;
-    $title = $requests . ' pending request' . ($requests === 1 ? '' : 's') . ', ' . $closings . ' closing'
-        . ($closings === 1 ? '' : 's') . ' to review';
+    $title = $requests . ' pending request' . ($requests === 1 ? '' : 's')
+        . ($deliveries > 0 ? ' (' . $deliveries . ' ' . ($deliveries === 1 ? 'delivery' : 'deliveries') . ' waiting to be received)' : '')
+        . ', ' . $closings . ' closing' . ($closings === 1 ? '' : 's') . ' to review';
+    // Pending deliveries (stock-in requests) also get their own line under the
+    // link, so stock waiting to be received is never missed.
     return '<li><a href="BranchAdmin_Approvals.php" class="notification-link' . ($active ? ' active' : '') . '"'
-        . ($active ? ' aria-current="page"' : '') . '><i class="bi bi-patch-check-fill"></i><span>Pending Approvals</span>'
+        . ($active ? ' aria-current="page"' : '') . ' title="' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '"><i class="bi bi-patch-check-fill"></i><span>Pending Approvals'
+        . ($deliveries > 0 ? '<small class="d-block" style="font-size:11px;color:#ffd54f;font-weight:600;line-height:1.2"><i class="bi bi-truck me-1" style="font-size:11px"></i>'
+            . $deliveries . ' ' . ($deliveries === 1 ? 'delivery' : 'deliveries') . ' to receive</small>' : '')
+        . '</span>'
         . ($count > 0 ? '<span class="notification-badge" title="' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '">' . $count . '</span>' : '')
         . '</a></li>';
 }

@@ -182,7 +182,8 @@ function reportCenterRender(array $state, string $heading = 'Generate a report')
 .rc-list td{vertical-align:middle;font-size:14px}
 .rc-list .rc-desc{color:#6b7280;font-size:13px}
 .rc-preview table{font-size:12.5px}
-.rc-preview thead th{background:#2B3A8C;color:#fff;font-weight:600;position:sticky;top:0;z-index:1}
+.rc-preview .table thead th{background:#2B3A8C!important;color:#fff!important;font-weight:600;font-size:12px!important;padding:7px 9px!important;position:sticky;top:0;z-index:1;vertical-align:bottom;text-transform:none!important;letter-spacing:0!important}
+.rc-preview .table tbody td{padding:6px 9px!important;font-size:12.5px!important;vertical-align:top;min-width:64px}
 .rc-preview .rc-total td{font-weight:700;background:#eef1fb}
 .rc-meta{font-size:13px;color:#374151}
 .rc-sum{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0 16px}
