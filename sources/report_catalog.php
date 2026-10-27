@@ -648,7 +648,11 @@ function reportDataQuality(mysqli $conn, string $branchId, string $from, string 
         }
         if (!$issues) continue;
         foreach ($issues as $issue) $problems[$issue] = ($problems[$issue] ?? 0) + 1;
-        $url = $linkBase !== '' ? $linkBase . (str_contains($linkBase, '?') ? '&' : '?') . 'edit_case=' . (int)$c['case_id'] : '';
+        // link_base is a page with {case_id} / {patient} placeholders, or a page
+        // that opens the case for editing with ?edit_case=ID.
+        $url = $linkBase === '' ? '' : (str_contains($linkBase, '{')
+            ? strtr($linkBase, ['{case_id}' => (string)(int)$c['case_id'], '{patient}' => rawurlencode((string)$c['full_name'])])
+            : $linkBase . (str_contains($linkBase, '?') ? '&' : '?') . 'edit_case=' . (int)$c['case_id']);
         $rows[] = [
             (string)$c['case_number'], (string)$c['full_name'], reportDate($c['admission_date']), (string)$c['shared_status'],
             implode('; ', $issues),
