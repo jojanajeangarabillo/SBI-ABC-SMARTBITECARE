@@ -423,37 +423,39 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
     $stmt->execute();
     $exportResult = $stmt->get_result();
     
-    $filename = 'follow_ups_' . date('Y-m-d');
-    if (!empty($exportDate)) {
-        $filename .= '_' . $exportDate;
-    }
-    
-    header('Content-Type: text/csv; charset=utf-8');
-    header('Content-Disposition: attachment; filename="' . $filename . '.csv"');
-    
-    $output = fopen('php://output', 'w');
-    fputcsv($output, ['Case No.', 'Registry No.', 'Patient Name', 'Gender', 'Age', 'Contact', 'Animal Type', 'Site of Bite', 'Vaccine', 'Dose', 'Scheduled Date', 'Administered Date', 'Status']);
-    
+    // PDF or CSV (?format=pdf|csv, CSV by default) with every row (shared builders).
+    require_once __DIR__ . '/sources/report_export.php';
+    $exportRows = [];
     while ($row = $exportResult->fetch_assoc()) {
         $row = patientNormalizeScheduleRow($conn, $row);
-        fputcsv($output, [
-            $row['case_no'] ?? 'N/A',
-            $row['registry_no'] ?? '',
-            $row['patient_name'],
-            $row['gender'] ?? 'N/A',
-            $row['age'] ?? 'N/A',
-            $row['contact_number'] ?? 'N/A',
-            $row['animal_type'] ?? 'N/A',
-            $row['bite_location'] ?? 'N/A',
-            $row['vaccine_name'] ?? 'N/A',
-            $row['dose_label'] ?? ('Dose ' . ($row['dose_number'] ?? '')),
-            $row['scheduled_date'],
-            $row['date_administered'] ?? 'N/A',
-            $row['display_status'] ?? $row['vaccination_status']
-        ]);
+        $exportRows[] = [
+            (string)($row['case_no'] ?? 'N/A'), (string)($row['registry_no'] ?? ''), (string)$row['patient_name'], (string)($row['gender'] ?? ''),
+            (string)($row['age'] ?? ''), (string)($row['contact_number'] ?? ''), (string)($row['animal_type'] ?? ''), (string)($row['bite_location'] ?? ''),
+            (string)($row['vaccine_name'] ?? ''), (string)($row['dose_label'] ?? ('Dose ' . ($row['dose_number'] ?? ''))),
+            (string)$row['scheduled_date'], (string)($row['date_administered'] ?? ''), (string)($row['display_status'] ?? $row['vaccination_status']),
+        ];
     }
-    fclose($output);
-    exit();
+    $stmt->close();
+    $statusCounts = array_count_values(array_column($exportRows, 12));
+    $exportReport = [
+        'title' => 'Follow-up Schedule', 'orientation' => 'L',
+        'summary' => ['Scheduled doses' => (string)count($exportRows)] + array_map('strval', $statusCounts),
+        'sections' => [[
+            'columns' => [['label' => 'Case No.', 'width' => 1.1], ['label' => 'Registry No.', 'width' => 1.1], ['label' => 'Patient Name', 'width' => 2],
+                ['label' => 'Gender', 'width' => 0.9], ['label' => 'Age', 'width' => 0.6, 'align' => 'R'], ['label' => 'Contact', 'width' => 1.4],
+                ['label' => 'Animal Type', 'width' => 1], ['label' => 'Site of Bite', 'width' => 1.6], ['label' => 'Vaccine', 'width' => 1.5],
+                ['label' => 'Dose', 'width' => 1.2], ['label' => 'Scheduled Date', 'width' => 1.2], ['label' => 'Administered Date', 'width' => 1.2],
+                ['label' => 'Status', 'width' => 1]],
+            'rows' => $exportRows,
+            'empty' => 'No scheduled doses match the filters.',
+        ]],
+    ];
+    $exportFormat = ($_GET['format'] ?? 'csv') === 'pdf' ? 'pdf' : 'csv';
+    $exportPeriod = !empty($exportDate) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$exportDate) ? reportPeriodText((string)$exportDate, (string)$exportDate) : 'All dates';
+    workflowAudit($conn, (int)$_SESSION['user_id'], (string)$branch_id, 'Exported follow-up schedule (' . strtoupper($exportFormat) . ') - ' . $exportPeriod . ' (' . count($exportRows) . ' doses)', 'Calendar');
+    reportSend($exportReport, reportMeta($conn, (int)$_SESSION['user_id'], reportBranchName($conn, (string)$branch_id), $exportPeriod,
+        $exportStatus !== 'all' ? 'Status: ' . ucfirst((string)$exportStatus) : ''), $exportFormat,
+        'Follow_ups_' . $branch_id . (!empty($exportDate) ? '_' . $exportDate : '') . '_' . date('Ymd_His'));
 }
 
 // ----------------------------------------------------------------------
@@ -2728,9 +2730,14 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
 
                         <div class="table-page-buttons" id="calendarPageButtons" aria-label="Follow-up table pages"></div>
 
-                        <button class="export-btn" id="exportBtn">
-                            <i class="bi bi-download"></i> Export
+                        <span class="d-inline-flex gap-2">
+                        <button class="export-btn" id="exportPdfBtn" type="button">
+                            <i class="bi bi-file-earmark-pdf"></i> PDF
                         </button>
+                        <button class="export-btn" id="exportBtn" type="button">
+                            <i class="bi bi-filetype-csv"></i> CSV
+                        </button>
+                        </span>
                     </div>
 
                     <span id="recordCountDisplayFooter" class="d-none"><?php echo count($followUpRecords); ?></span>
@@ -3732,15 +3739,16 @@ document.getElementById('clearFiltersBtn').addEventListener('click', function() 
 
     });
 
-    document.getElementById('exportBtn').addEventListener('click', function() {
+    function exportFollowUps(format) {
         const date = document.getElementById('filterDate').value;
         const status = currentStatus;
-        const url = window.location.pathname + '?export=true';
-        const params = [];
-        if (date) params.push('date=' + date);
-        if (status && status != 'all') params.push('status=' + status);
-        window.location.href = url + (params.length ? '&' + params.join('&') : '');
-    });
+        const params = ['export=true', 'format=' + format];
+        if (date) params.push('date=' + encodeURIComponent(date));
+        if (status && status != 'all') params.push('status=' + encodeURIComponent(status));
+        window.location.href = window.location.pathname + '?' + params.join('&');
+    }
+    document.getElementById('exportBtn').addEventListener('click', () => exportFollowUps('csv'));
+    document.getElementById('exportPdfBtn').addEventListener('click', () => exportFollowUps('pdf'));
 
     // Press Enter to apply filters
     document.getElementById('filterSearch').addEventListener('keypress', function(e) {

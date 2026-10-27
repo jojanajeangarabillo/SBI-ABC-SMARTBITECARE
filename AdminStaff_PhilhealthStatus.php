@@ -190,62 +190,54 @@ while ($row = $recordsResult->fetch_assoc()) {
 }
 
 // ----------------------------------------------------------------------
+// EXPORT (?export=pdf|csv): every PhilHealth record of the branch, shared
+// builders. Archived cases, patients and records are left out.
+// ----------------------------------------------------------------------
+if ($branch_id && in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
+    require_once __DIR__ . '/sources/report_export.php';
+    require_once __DIR__ . '/sources/workflow_helpers.php';
+    $stmt = $conn->prepare("SELECT p.full_name AS patient_name,
+            COALESCE(NULLIF(TRIM(c.case_number), ''), (SELECT MAX(rr.registry_number) FROM registry_records rr WHERE rr.case_id = c.case_id AND rr.is_archived = 0)) AS case_no,
+            DATE(c.created_at) AS admission_date, ph.status AS philhealth_status, ph.remarks AS philhealth_remarks, ph.philhealth_membership,
+            (SELECT MAX(v.date_administered) FROM vaccination_records v WHERE v.case_id = c.case_id AND v.branch_id = c.branch_id
+                AND v.is_archived = 0 AND v.vaccination_status = 'Completed') AS discharge_date
+        FROM philhealth_records ph
+        INNER JOIN animal_bite_cases c ON c.case_id = ph.case_id
+        INNER JOIN patients p ON p.patient_id = c.patient_id
+        WHERE c.branch_id = ? AND ph.is_archived = 0 AND c.is_archived = 0 AND p.is_archived = 0
+        ORDER BY c.created_at DESC, c.case_id DESC");
+    $stmt->bind_param('s', $branch_id);
+    $stmt->execute();
+    $exportRows = [];
+    foreach ($stmt->get_result()->fetch_all(MYSQLI_ASSOC) as $row) {
+        $exportRows[] = [(string)$row['patient_name'], (string)($row['case_no'] ?? ''), (string)($row['admission_date'] ?? ''),
+            (string)($row['discharge_date'] ?? ''), (string)($row['philhealth_status'] ?? ''), (string)($row['philhealth_remarks'] ?? ''),
+            (string)($row['philhealth_membership'] ?? '')];
+    }
+    $stmt->close();
+    $exportReport = [
+        'title' => 'PhilHealth Records', 'orientation' => 'L',
+        'summary' => ['Records' => (string)count($exportRows)] + array_map('strval', array_count_values(array_map(static fn($r) => $r[4] ?: 'No status', $exportRows))),
+        'sections' => [[
+            'columns' => [['label' => 'Patient Name', 'width' => 2.2], ['label' => 'Case No.', 'width' => 1.1], ['label' => 'Admission Date', 'width' => 1.2],
+                ['label' => 'Discharge Date', 'width' => 1.2], ['label' => 'Status', 'width' => 1.4], ['label' => 'Remarks', 'width' => 3], ['label' => 'PhilHealth Type', 'width' => 1.4]],
+            'rows' => $exportRows,
+            'empty' => 'No PhilHealth records.',
+        ]],
+        'notes' => ['Discharge Date is the date of the last completed dose.'],
+    ];
+    $exportFormat = (string)$_GET['export'];
+    workflowAudit($conn, (int)$user_id, (string)$branch_id, 'Exported PhilHealth records (' . strtoupper($exportFormat) . ') (' . count($exportRows) . ' records)', 'PhilHealth');
+    reportSend($exportReport, reportMeta($conn, (int)$user_id, reportBranchName($conn, (string)$branch_id), 'All dates'), $exportFormat,
+        'PhilHealth_Records_' . $branch_id . '_' . date('Ymd_His'));
+}
+
+// ----------------------------------------------------------------------
 // HANDLE AJAX REQUESTS (for real-time updates)
 // ----------------------------------------------------------------------
 if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
     header('Content-Type: application/json');
     
-    // Check if this is an export request
-    if (isset($_GET['export']) && $_GET['export'] == 'true') {
-        // Generate CSV export
-        $exportQuery = "
-            SELECT 
-                p.full_name as patient_name,
-                COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
-                DATE(COALESCE(c.date_of_bite, c.created_at)) as admission_date,
-                ph.status as philhealth_status,
-                ph.remarks as philhealth_remarks,
-                ph.philhealth_membership,
-                (
-                    SELECT MAX(date_administered) 
-                    FROM vaccination_records v 
-                    WHERE v.case_id = c.case_id 
-                    AND v.branch_id = c.branch_id
-                    AND v.vaccination_status = 'Completed'
-                ) as discharge_date
-            FROM animal_bite_cases c
-            INNER JOIN philhealth_records ph ON c.case_id = ph.case_id
-            INNER JOIN patients p ON c.patient_id = p.patient_id
-            LEFT JOIN registry_records r ON c.case_id = r.case_id
-            WHERE c.branch_id = ?
-            ORDER BY c.created_at DESC
-        ";
-        $stmt = $conn->prepare($exportQuery);
-        $stmt->bind_param("s", $branch_id);
-        $stmt->execute();
-        $exportResult = $stmt->get_result();
-        
-        $filename = 'philhealth_records_' . date('Y-m-d') . '.csv';
-        header('Content-Type: text/csv');
-        header('Content-Disposition: attachment; filename="' . $filename . '"');
-        
-        $output = fopen('php://output', 'w');
-        fputcsv($output, ['Patient Name', 'Case No.', 'Admission Date', 'Discharge Date', 'Status', 'Remarks', 'PhilHealth Type']);
-        
-        while ($row = $exportResult->fetch_assoc()) {
-            fputcsv($output, [
-                $row['patient_name'],
-                $row['case_no'] ?? 'N/A',
-                $row['admission_date'] ?? '',
-                $row['discharge_date'] ?? '',
-                $row['philhealth_status'] ?? 'N/A',
-                $row['philhealth_remarks'] ?? '',
-                $row['philhealth_membership'] ?? ''
-            ]);
-        }
-        fclose($output);
-        exit();
-    }
     
     // Get updated stats
     $statusQuery = "
@@ -1073,8 +1065,11 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
                         <i class="bi bi-eraser"></i> Clear
                     </button>
 
-                    <button class="toolbar-btn" id="exportBtn">
-                        <i class="bi bi-file-earmark-arrow-down"></i> Export
+                    <button class="toolbar-btn" id="exportPdfBtn" type="button">
+                        <i class="bi bi-file-earmark-pdf"></i> PDF
+                    </button>
+                    <button class="toolbar-btn" id="exportBtn" type="button">
+                        <i class="bi bi-filetype-csv"></i> CSV
                     </button>
                 </div>
 
@@ -1272,34 +1267,8 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
         // ----------------------------------------------------------------
         // EXPORT
         // ----------------------------------------------------------------
-        document.getElementById('exportBtn').addEventListener('click', function() {
-            showLoading();
-            
-            const params = new URLSearchParams(window.location.search);
-            const exportUrl = window.location.pathname + '?export=true&' + params.toString();
-            
-            fetch(exportUrl, {
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
-            })
-            .then(response => response.blob())
-            .then(blob => {
-                const link = document.createElement('a');
-                link.href = URL.createObjectURL(blob);
-                link.download = 'philhealth_records_' + new Date().toISOString().slice(0,10) + '.csv';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                URL.revokeObjectURL(link.href);
-                hideLoading();
-                showToast('Export completed successfully');
-            })
-            .catch(error => {
-                console.error('Export error:', error);
-                hideLoading();
-                showToast('Export failed', error.message, true);
-            });
+        document.getElementById('exportBtn').addEventListener('click', () => { window.location.href = window.location.pathname + '?export=csv'; });
+        document.getElementById('exportPdfBtn').addEventListener('click', () => { window.location.href = window.location.pathname + '?export=pdf'; });
         });
 
         // ----------------------------------------------------------------

@@ -930,6 +930,39 @@ if ($action) {
                 }
 
                 $resultArray = array_values($resultArray);
+                // ?export=pdf|csv: the same list (date, search and filter of the
+                // page) as a PDF or CSV with every row (shared builders).
+                if (in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
+                    require_once __DIR__ . '/sources/report_export.php';
+                    $listRows = array_map(static fn(array $p): array => [
+                        patientDisplayCaseNumber($p['case_no'] ?? '', null), (string)$p['patient_name'], (string)$p['contact_number'],
+                        (string)$p['dob'], (string)($p['age'] ?? ''), (string)$p['gender'], (string)$p['address'], (string)$p['admission_date'],
+                        (string)$p['vaccination_status'], $p['philhealth'], (string)$p['philhealth_type'],
+                        $p['philhealth'] === 'Yes' ? ((string)$p['status'] ?: 'For Writing') : 'Not Applicable',
+                    ], $resultArray);
+                    $listFilters = array_filter([
+                        $search !== '' ? 'Search: ' . $search : '',
+                        $filter !== 'all' ? 'Vaccination: ' . ucfirst((string)$filter) : '',
+                    ]);
+                    $listReport = [
+                        'title' => 'Patient Record List', 'orientation' => 'L',
+                        'summary' => ['Patients' => (string)count($listRows),
+                            'With PhilHealth' => (string)count(array_filter($resultArray, static fn($p) => $p['philhealth'] === 'Yes'))],
+                        'sections' => [[
+                            'columns' => [['label' => 'Case No.', 'width' => 1.2], ['label' => 'Patient Name', 'width' => 2.2], ['label' => 'Contact No.', 'width' => 1.5],
+                                ['label' => 'Birth Date', 'width' => 1.2], ['label' => 'Age', 'width' => 0.6, 'align' => 'R'], ['label' => 'Gender', 'width' => 0.9],
+                                ['label' => 'Address', 'width' => 2.6], ['label' => 'Admission', 'width' => 1.2], ['label' => 'Vaccination Status', 'width' => 1.3],
+                                ['label' => 'PhilHealth', 'width' => 0.9], ['label' => 'PhilHealth Type', 'width' => 1.3], ['label' => 'Record Status', 'width' => 1.4]],
+                            'rows' => $listRows,
+                            'empty' => 'No patients match the filters.',
+                        ]],
+                    ];
+                    $listPeriod = !empty($date) ? reportPeriodText((string)$date, (string)$date) : 'All dates';
+                    workflowAudit($conn, (int)$_SESSION['user_id'], (string)$logged_branch_id,
+                        'Exported patient record list (' . strtoupper((string)$_GET['export']) . ') - ' . $listPeriod . ' (' . count($listRows) . ' patients)', 'Patient Records');
+                    reportSend($listReport, reportMeta($conn, (int)$_SESSION['user_id'], reportBranchName($conn, (string)$logged_branch_id), $listPeriod,
+                        implode(' · ', $listFilters)), (string)$_GET['export'], 'Patient_Records_' . $logged_branch_id . '_' . date('Ymd_His'));
+                }
                 jsonResponse($resultArray);
             } catch (Exception $e) {
                 jsonResponse(['error' => 'Failed to fetch patients: ' . $e->getMessage()], 500);
@@ -3926,9 +3959,14 @@ body.sidebar-collapsed .main {
                             Patients for <span id="selectedDateDisplay2">Today</span> 
                             <span id="patientCountBadge" class="vacc-status-badge pending">0</span>
                         </div>
-                        <button class="export-btn" id="exportBtn">
-                            <i class="bi bi-download"></i> Export
-                        </button>
+                        <span class="d-inline-flex gap-2">
+                            <button class="export-btn" id="exportPdfBtn" type="button">
+                                <i class="bi bi-file-earmark-pdf"></i> PDF
+                            </button>
+                            <button class="export-btn" id="exportBtn" type="button">
+                                <i class="bi bi-filetype-csv"></i> CSV
+                            </button>
+                        </span>
                     </div>
                     <div class="table-responsive-custom">
                         <table>
@@ -4837,11 +4875,13 @@ body.sidebar-collapsed .main {
         }
     });
 
+    let lastFetchUrl = null;
     async function fetchPatients(dateApi = null, search = '') {
         let url = `${apiBase}?action=fetch`;
         if (dateApi) url += `&date=${encodeURIComponent(dateApi)}`;
         if (search) url += `&search=${encodeURIComponent(search)}`;
         url += `&filter=${encodeURIComponent(currentFilter)}`;
+        lastFetchUrl = url;
         const res = await fetch(url);
         if (!res.ok) {
             const data = await res.json();
@@ -5807,51 +5847,17 @@ body.sidebar-collapsed .main {
         });
     });
 
-    document.getElementById('exportBtn').addEventListener('click', async function() {
-        try {
-            let data = allPatients;
-            if (!data || data.length === 0) {
-                showToast('No data to export', '', true);
-                return;
-            }
-
-            const headers = [
-                'Case No.', 'Patient Name', 'PhilHealth', 'PhilHealth Type', 
-                'Birth Date', 'Age', 'Gender', 'Address', 
-                'Vaccination Status', 'Record Status'
-            ];
-            
-            let csv = headers.join(',') + '\n';
-            data.forEach(p => {
-                const row = [
-                    `"${(p.case_no || '').replace(/"/g, '""')}"`,
-                    `"${(p.patient_name || '').replace(/"/g, '""')}"`,
-                    p.philhealth || 'No',
-                    `"${(p.philhealth_type || '').replace(/"/g, '""')}"`,
-                    p.dob || '',
-                    p.age ?? '',
-                    p.gender || '',
-                    `"${(p.address || '').replace(/"/g, '""')}"`,
-                    p.vaccination_status || 'Pending',
-                    p.philhealth === 'Yes' ? (p.status || 'For Writing') : 'Not Applicable'
-                ];
-                csv += row.join(',') + '\n';
-            });
-
-            const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = `patients_${new Date().toISOString().slice(0,10)}.csv`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(link.href);
-            
-            showToast('Export successful', `${data.length} records exported`);
-        } catch (e) {
-            showToast('Export failed', e.message, true);
+    // Exports are generated on the server from the same list (date, search,
+    // filter) as the table: every row, PDF or CSV with the report header.
+    function exportPatients(format) {
+        if (!allPatients || allPatients.length === 0) {
+            showToast('No data to export', '', true);
+            return;
         }
-    });
+        window.location.href = (lastFetchUrl || `${apiBase}?action=fetch&filter=${encodeURIComponent(currentFilter)}`) + `&export=${format}`;
+    }
+    document.getElementById('exportBtn').addEventListener('click', () => exportPatients('csv'));
+    document.getElementById('exportPdfBtn').addEventListener('click', () => exportPatients('pdf'));
 
     document.getElementById('dob').addEventListener('change', function() {
         const dob = this.value;
