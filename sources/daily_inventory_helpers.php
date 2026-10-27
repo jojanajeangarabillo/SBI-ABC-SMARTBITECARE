@@ -299,7 +299,8 @@ function dailyInventoryContext(
     $stmt = $conn->prepare(
         'SELECT closing_id,inventory_date,beginning_stock,delivery,consumed,pull_out,
                 computed_ending,actual_count,variance,remarks,status,submitted_by,submitted_at,
-                reviewed_by,reviewed_at
+                reviewed_by,reviewed_at'
+        . (workflowColumnExists($conn, 'daily_inventory_closings', 'review_remarks') ? ',review_remarks' : '') . '
          FROM daily_inventory_closings
          WHERE branch_id=? AND item_id=? AND inventory_date IN (?,?)'
         . ($lock ? ' FOR UPDATE' : '')
@@ -335,7 +336,8 @@ function dailyInventoryContext(
     }
     $stmt->close();
     $consumed = stockQuantityDecimal($consumedScaled);
-    $needsCount = $closing !== null && ($closing['status'] === 'Draft'
+    // 'Returned': the Branch Admin returned the closing for a recount (Closing Review).
+    $needsCount = $closing !== null && (in_array($closing['status'], ['Draft', 'Returned'], true)
         || stockQuantityParse((string)$closing['consumed'], true) !== $consumedScaled);
     $source = 'manual';
     $beginning = '';
@@ -343,7 +345,11 @@ function dailyInventoryContext(
         $source = 'saved_closing';
         $beginning = (string)$closing['beginning_stock'];
         $message = 'Saved closing loaded for ' . $date . '. Verify the opening, movements and physical count before correcting it.';
-        if ($needsCount) {
+        if ($closing['status'] === 'Returned') {
+            $message .= ' The Branch Admin returned this closing for a recount'
+                . (trim((string)($closing['review_remarks'] ?? '')) !== '' ? ': ' . trim((string)$closing['review_remarks']) : '')
+                . '. Enter a fresh physical count and save the closing again.';
+        } elseif ($needsCount) {
             $message .= ' Usage changed or the closing requires resubmission. Enter a fresh physical count.';
         }
     } elseif ($previous !== null && in_array($previous['status'], ['Submitted', 'Reviewed'], true)
@@ -391,7 +397,7 @@ function dailyInventoryContext(
     $token = hash('sha256', json_encode([$branchId, $itemId, $date, $consumed, $closing, $previous, $previousConsumedScaled], JSON_THROW_ON_ERROR));
     $breakdown = dailyInventoryUsageBreakdown($conn, $branchId, $itemId, $date);
     // A closing whose Consumed no longer matches the recorded usage is out of date.
-    $outOfDate = $closing !== null && ($closing['status'] === 'Draft'
+    $outOfDate = $closing !== null && (in_array($closing['status'], ['Draft', 'Returned'], true)
         || stockQuantityParse((string)$closing['consumed'], true) !== $consumedScaled);
     return [
         'success' => true,

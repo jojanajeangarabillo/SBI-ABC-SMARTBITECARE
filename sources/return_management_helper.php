@@ -214,3 +214,126 @@ function returnManagementReferenceLabel(array $row): string
     }
     return 'Inventory item referenced; stock receipt recorded separately';
 }
+
+/** Return reasons accepted by the return form (same list as the page). */
+function returnManagementAllowedReasons(): array
+{
+    return ['Wrong Item', 'Incorrect Quantity', 'Damaged Item', 'Expired Item', 'Other Reason for Return'];
+}
+
+/**
+ * Validate one outgoing return/transfer exactly as the return form always has
+ * (destination, unit, optional inventory reference and original receipt) and
+ * return the normalized values. Used when the Inventory Officer REQUESTS the
+ * shipment and again when the Branch Admin approves it (stock and receipts may
+ * have changed in between). The caller holds a transaction; rows are locked.
+ * $fields: item_name, unit_id, destination_branch_id, quantity, return_reason,
+ * remarks, transportation_details, inventory_item_id, source_stock_id,
+ * source_receipt_transaction_id, destination_reason.
+ */
+function returnManagementPrepareShipment(mysqli $conn, string $branchId, array $fields): array
+{
+    $itemName = returnManagementPostedText($fields['item_name'] ?? '', 255, 'item name');
+    $unitId = returnManagementOptionalId(isset($fields['unit_id']) ? (string)$fields['unit_id'] : null);
+    $destinationBranchId = returnManagementPostedText($fields['destination_branch_id'] ?? '', 10, 'destination branch');
+    $quantity = returnManagementQuantity(returnManagementPostedText((string)($fields['quantity'] ?? ''), 32, 'quantity'));
+    $returnReason = returnManagementPostedText($fields['return_reason'] ?? '', 100, 'return reason');
+    $remarks = returnManagementPostedText($fields['remarks'] ?? '', 2000, 'remarks');
+    $transportationDetails = returnManagementPostedText($fields['transportation_details'] ?? '', 500, 'transportation details');
+    $itemId = returnManagementOptionalId(isset($fields['inventory_item_id']) && $fields['inventory_item_id'] !== null ? (string)$fields['inventory_item_id'] : null);
+    $stockId = returnManagementOptionalId(isset($fields['source_stock_id']) && $fields['source_stock_id'] !== null ? (string)$fields['source_stock_id'] : null);
+    $sourceReceiptId = returnManagementOptionalId(isset($fields['source_receipt_transaction_id']) && $fields['source_receipt_transaction_id'] !== null ? (string)$fields['source_receipt_transaction_id'] : null);
+    $destinationReason = returnManagementPostedText($fields['destination_reason'] ?? '', 500, 'destination explanation');
+    if ($itemName === '' || !$unitId || $destinationBranchId === ''
+        || !in_array($returnReason, returnManagementAllowedReasons(), true)) {
+        throw new RuntimeException('Complete all required return details.');
+    }
+    if ($destinationBranchId === $branchId) throw new RuntimeException('The destination must differ from your current branch.');
+    $stmt = returnManagementStatement($conn,
+        "SELECT branch_id,branch_name FROM branches WHERE branch_id = ? AND status = 'Active' FOR UPDATE");
+    $stmt->bind_param('s', $destinationBranchId);
+    returnManagementExecute($stmt);
+    $destination = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    if (!$destination) throw new RuntimeException('The selected destination branch is not active.');
+    $destinationBranchId = (string)$destination['branch_id'];
+    if ($destinationBranchId === $branchId) throw new RuntimeException('The destination must differ from your current branch.');
+    $stmt = returnManagementStatement($conn, 'SELECT unit_id FROM units WHERE unit_id = ?');
+    $stmt->bind_param('i', $unitId);
+    returnManagementExecute($stmt);
+    $unitExists = $stmt->get_result()->num_rows === 1;
+    $stmt->close();
+    if (!$unitExists) throw new RuntimeException('The selected unit does not exist.');
+    $reference = returnManagementSourceReference($conn, $branchId, $itemName, $unitId, $quantity, $itemId, $stockId);
+    $route = stockReceiptSourceReturnRoute($conn, $branchId, $destinationBranchId, $reference, $sourceReceiptId, $destinationReason);
+    return [
+        'item_name' => $itemName, 'unit_id' => $unitId, 'destination_branch_id' => $destinationBranchId,
+        'destination_name' => (string)$destination['branch_name'], 'quantity' => $quantity,
+        'return_reason' => $returnReason, 'remarks' => $remarks, 'transportation_details' => $transportationDetails,
+        'reference' => $reference, 'route' => $route,
+        // The posted form values, stored with a request and validated again on approval.
+        'fields' => [
+            'item_name' => $itemName, 'unit_id' => $unitId, 'destination_branch_id' => $destinationBranchId,
+            'quantity' => $quantity, 'return_reason' => $returnReason, 'remarks' => $remarks,
+            'transportation_details' => $transportationDetails, 'inventory_item_id' => $itemId,
+            'source_stock_id' => $stockId, 'source_receipt_transaction_id' => $sourceReceiptId,
+            'destination_reason' => $destinationReason,
+        ],
+    ];
+}
+
+/**
+ * Record a prepared return shipment as In Transit (moved unchanged from the
+ * return form): the inventory_returns row, its RET number, the audit entry and
+ * the Branch Admin and receiving Inventory Officer notifications. $actor is the
+ * sending Inventory Officer (user_id, branch_id, branch_name, username). The
+ * caller holds the transaction. Returns return_id and return_number.
+ */
+function returnManagementInsertShipment(mysqli $conn, array $actor, array $prepared): array
+{
+    $userId = (int)$actor['user_id'];
+    $branchId = (string)$actor['branch_id'];
+    returnManagementRequireActor($conn, $userId, $branchId);
+    $reference = $prepared['reference'];
+    $itemId = $reference['item_id'];
+    $stockId = $reference['stock_id'];
+    $baseQuantity = $reference['base_quantity'];
+    $baseUnit = $reference['base_unit'];
+    $batch = $reference['batch'];
+    $sourceReceiptId = $prepared['route']['receipt_id'];
+    $destinationReason = $prepared['route']['reason'];
+    $now = date('Y-m-d H:i:s');
+    $stmt = returnManagementStatement($conn, "INSERT INTO inventory_returns
+        (return_number, branch_id, destination_branch_id, item_name, unit_id, quantity,
+         return_reason, remarks, transportation_details, status, created_by, sent_at, created_at,
+         item_id, stock_id, inventory_quantity_snapshot, inventory_base_unit_snapshot, source_batch_snapshot,
+         source_receipt_transaction_id,destination_reason)
+        VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'In Transit', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    $destinationBranchId = $prepared['destination_branch_id'];
+    $itemName = $prepared['item_name'];
+    $unitId = $prepared['unit_id'];
+    $quantity = $prepared['quantity'];
+    $returnReason = $prepared['return_reason'];
+    $remarks = $prepared['remarks'];
+    $transportationDetails = $prepared['transportation_details'];
+    $stmt->bind_param('sssissssissiisssis', $branchId, $destinationBranchId, $itemName, $unitId,
+        $quantity, $returnReason, $remarks, $transportationDetails, $userId, $now, $now,
+        $itemId, $stockId, $baseQuantity, $baseUnit, $batch, $sourceReceiptId, $destinationReason);
+    returnManagementExecute($stmt);
+    $returnId = (int)$conn->insert_id;
+    $stmt->close();
+    $returnNumber = 'RET-' . date('Y') . '-' . str_pad((string)$returnId, 6, '0', STR_PAD_LEFT);
+    $stmt = returnManagementStatement($conn, 'UPDATE inventory_returns SET return_number = ? WHERE return_id = ?');
+    $stmt->bind_param('si', $returnNumber, $returnId);
+    returnManagementExecute($stmt);
+    $stmt->close();
+    $actionText = 'Recorded return shipment ' . $returnNumber . ' for ' . $itemName . ' (' . $quantity . ') to branch ' . $destinationBranchId;
+    $message = 'Return ' . $returnNumber . ' was recorded for delivery to ' . $prepared['destination_name']
+        . '. Item: ' . $itemName . '. Quantity: ' . $quantity . '. Reason: ' . $returnReason . '.';
+    if (!inventoryOfficerRecordReturnActivity($conn, $userId, $branchId, (string)$actor['branch_name'], (string)$actor['username'],
+        $returnId, $returnNumber, $actionText, $message, 'sent')) {
+        throw new RuntimeException('Unable to save the return audit and Branch Admin notification.');
+    }
+    if (!inventoryOfficerNotifyIncomingReturn($conn, $returnId)) throw new RuntimeException('Unable to save the receiving Inventory Officer notification.');
+    return ['return_id' => $returnId, 'return_number' => $returnNumber];
+}

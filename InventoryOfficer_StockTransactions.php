@@ -2,6 +2,7 @@
 session_start();
 require_once __DIR__ . '/sources/db_connect.php';
 require_once __DIR__ . '/sources/notification_helper.php';
+require_once __DIR__ . '/sources/inventory_approval_helpers.php';
 
 if (
     !isset($_SESSION['user_id']) ||
@@ -149,8 +150,10 @@ if ($branch_id) {
         $transactionError = 'Unable to count stock transactions.';
     }
 
+    $approvalHistory = inventoryApprovalHistorySql($conn, 'st');
     $transactionQuery = "
         SELECT
+            {$approvalHistory['select']},
             st.transaction_id,
             st.transaction_type,
             st.quantity,
@@ -166,6 +169,7 @@ if ($branch_id) {
             ON ii.unit_id = u.unit_id
         INNER JOIN users usr
             ON st.user_id = usr.user_id
+        {$approvalHistory['join']}
         WHERE $whereSql
         ORDER BY st.transaction_date DESC, st.transaction_id DESC
         LIMIT ? OFFSET ?
@@ -220,7 +224,8 @@ if ($branch_id) {
                 'item' => $row['item_name'] ?? 'Unknown Item',
                 'qty' => $sign . $quantityText . ($unitName !== '' ? ' ' . $unitName : ''),
                 'date' => date('m/d/Y', strtotime($row['transaction_date'])),
-                'by' => $row['username'] ?? 'Unknown User'
+                'by' => $row['username'] ?? 'Unknown User',
+                'approval' => inventoryApprovalHistoryFields($row)
             ];
         }
 
@@ -775,19 +780,20 @@ margin-left:90px;
 <th>Qty</th>
 <th>Date</th>
 <th>By</th>
+<th>Request / Approval</th>
 </tr>
 </thead>
 <tbody id="transactionsBody">
 <?php if (!empty($transactionError)): ?>
 <tr>
-<td colspan="6" class="text-center text-danger py-4">
+<td colspan="7" class="text-center text-danger py-4">
     <?php echo htmlspecialchars($transactionError); ?>
 </td>
 </tr>
 
 <?php elseif (empty($transactions)): ?>
 <tr id="noTransactionsRow">
-<td colspan="6" class="text-center text-muted py-4">
+<td colspan="7" class="text-center text-muted py-4">
     <?php if ($search !== '' || $selectedType !== ''): ?>
         No transactions match the selected search or type.
     <?php else: ?>
@@ -818,6 +824,17 @@ margin-left:90px;
 <td><?php echo htmlspecialchars($t['qty']); ?></td>
 <td><?php echo htmlspecialchars($t['date']); ?></td>
 <td><?php echo htmlspecialchars($t['by']); ?></td>
+<td style="font-size:12px;">
+    <?php $ap = $t['approval']; ?>
+    <?php if ($ap['linked']): ?>
+        <strong><?php echo htmlspecialchars($ap['request']); ?></strong>
+        <div>Requested by <?php echo htmlspecialchars($ap['requested_by']); ?>, <?php echo htmlspecialchars($ap['requested_at']); ?></div>
+        <div>Approved by <?php echo htmlspecialchars($ap['approved_by'] ?: '—'); ?><?php echo $ap['approved_at'] !== '' ? ', ' . htmlspecialchars($ap['approved_at']) : ''; ?></div>
+        <?php if ($ap['reason'] !== ''): ?><div class="text-muted">Reason: <?php echo htmlspecialchars($ap['reason']); ?></div><?php endif; ?>
+    <?php else: ?>
+        <span class="text-muted">No request</span>
+    <?php endif; ?>
+</td>
 </tr>
 <?php endforeach; ?>
 

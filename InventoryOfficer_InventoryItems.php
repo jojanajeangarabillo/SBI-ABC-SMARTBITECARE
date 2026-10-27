@@ -6,6 +6,7 @@ require_once 'sources/db_connect.php';
 require_once 'sources/inventory_stock_helpers.php';
 $stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
+require_once 'sources/inventory_approval_helpers.php';
 
 
 /* =========================================================
@@ -871,143 +872,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         /* -----------------------------------------------
            UPDATE ITEM
+           Name, description, category and unit change at once.
+           Minimum stock and "include in forecasting" need the
+           Branch Admin's approval: they are sent as one
+           item_settings request and stay unchanged until it is
+           approved (BranchAdmin_Approvals.php).
            ----------------------------------------------- */
 
-        $updateSQL = "
-            UPDATE inventory_items
+        $settingsNew = [];
+        if ((int)$oldItem['minimum_stock'] !== $minimum_stock) {
+            $settingsNew['minimum_stock'] = $minimum_stock;
+        }
+        if ((int)$oldItem['is_forecastable'] !== $is_forecastable) {
+            $settingsNew['is_forecastable'] = $is_forecastable;
+        }
+        $applyMinimum = (int)$oldItem['minimum_stock'];
+        $applyForecastable = (int)$oldItem['is_forecastable'];
 
-            SET
-                category_id = ?,
-                unit_id = ?,
-                item_name = ?,
-                minimum_stock = ?,
-                description = ?,
-                is_forecastable = ?
+        $changes = [];
+        if ((int)$oldItem['category_id'] !== $category_id) $changes[] = 'category changed';
+        if ((int)$oldItem['unit_id'] !== $unit_id) $changes[] = 'unit changed';
+        if ($oldItem['item_name'] !== $item_name) $changes[] = 'name changed';
+        if ((string)$oldItem['description'] !== $description) $changes[] = 'description changed';
 
-            WHERE item_id = ?
-        ";
+        $conn->begin_transaction();
+        try {
+            $settingsRequestId = null;
+            if ($settingsNew) {
+                if (empty($branch_id)) throw new RuntimeException('Your account has no branch assigned.');
+                $settingsItem = inventoryApprovalItem($conn, (int)$item_id);
+                $settingsOld = [];
+                foreach (array_keys($settingsNew) as $settingKey) $settingsOld[$settingKey] = (int)$oldItem[$settingKey];
+                $settingsRequestId = inventoryApprovalCreate($conn, [
+                    'type' => 'item_settings', 'branch_id' => (string)$branch_id, 'requested_by' => $user_id,
+                    'source' => 'Inventory Officer', 'item_id' => (int)$item_id, 'item_name' => $item_name,
+                    'unit' => inventoryBaseUnitLabel($settingsItem), 'reason' => 'Item settings change',
+                    'payload' => ['old' => $settingsOld, 'new' => $settingsNew],
+                    'open_key' => 'item_settings:' . (int)$item_id,
+                ]);
+            }
 
-        $updateStmt =
-            $conn->prepare($updateSQL);
-
-        if (!$updateStmt) {
-
-            redirectWithMessage(
-                'error',
-                'Unable to prepare item update.'
-            );
+            if ($changes) {
+                $updateStmt = $conn->prepare("UPDATE inventory_items
+                    SET category_id = ?, unit_id = ?, item_name = ?, minimum_stock = ?, description = ?, is_forecastable = ?
+                    WHERE item_id = ?");
+                if (!$updateStmt) throw new RuntimeException('Unable to prepare item update.');
+                $updateStmt->bind_param("iisisii", $category_id, $unit_id, $item_name, $applyMinimum, $description,
+                    $applyForecastable, $item_id);
+                if (!$updateStmt->execute()) throw new RuntimeException('Unable to update inventory item: ' . $updateStmt->error);
+                $updateStmt->close();
+                addInventoryAuditLog($conn, $user_id, $branch_id,
+                    "Updated inventory item: {$item_name} (ID: {$item_id}) - " . implode(', ', $changes));
+            }
+            $conn->commit();
+        } catch (Throwable $e) {
+            $conn->rollback();
+            redirectWithMessage('error', $e->getMessage() . ' No changes were saved.');
         }
 
-
-        $updateStmt->bind_param(
-            "iisisii",
-            $category_id,
-            $unit_id,
-            $item_name,
-            $minimum_stock,
-            $description,
-            $is_forecastable,
-            $item_id
+        if (!$changes && $settingsRequestId === null) {
+            redirectWithMessage('success', 'No field changes.');
+        }
+        redirectWithMessage(
+            'success',
+            trim(($changes ? 'Inventory item updated successfully.' : '')
+                . ($settingsRequestId !== null
+                    ? ' The minimum stock / forecasting change was sent to the Branch Admin as request #' . $settingsRequestId
+                        . ' (Pending approval); it applies only when approved.'
+                    : ''))
         );
-
-
-        if ($updateStmt->execute()) {
-
-            $changes = [];
-
-
-            if (
-                (int)$oldItem['category_id']
-                !== $category_id
-            ) {
-                $changes[] =
-                    'category changed';
-            }
-
-
-            if (
-                (int)$oldItem['unit_id']
-                !== $unit_id
-            ) {
-                $changes[] =
-                    'unit changed';
-            }
-
-
-            if (
-                $oldItem['item_name']
-                !== $item_name
-            ) {
-                $changes[] =
-                    'name changed';
-            }
-
-
-            if (
-                (int)$oldItem['minimum_stock']
-                !== $minimum_stock
-            ) {
-                $changes[] =
-                    'minimum stock changed';
-            }
-
-
-            if (
-                (string)$oldItem['description']
-                !== $description
-            ) {
-                $changes[] =
-                    'description changed';
-            }
-
-
-            if (
-                (int)$oldItem['is_forecastable']
-                !== $is_forecastable
-            ) {
-                $changes[] =
-                    'forecasting setting changed';
-            }
-
-
-            $changeText =
-                empty($changes)
-                ? 'No field changes'
-                : implode(
-                    ', ',
-                    $changes
-                );
-
-
-            addInventoryAuditLog(
-                $conn,
-                $user_id,
-                $branch_id,
-                "Updated inventory item: {$item_name} (ID: {$item_id}) - {$changeText}"
-            );
-
-
-            $updateStmt->close();
-
-
-            redirectWithMessage(
-                'success',
-                'Inventory item updated successfully.'
-            );
-
-        } else {
-
-            $dbError =
-                $updateStmt->error;
-
-            $updateStmt->close();
-
-            redirectWithMessage(
-                'error',
-                'Unable to update inventory item: ' .
-                $dbError
-            );
-        }
     }
 
 
@@ -1184,65 +1117,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 
         /* -----------------------------------------------
-           DELETE
+           DELETE REQUEST
+           Deleting an item needs the Branch Admin's approval.
+           The checks above run again when it is approved.
            ----------------------------------------------- */
 
-        $deleteStmt =
-            $conn->prepare(
-                "
-                DELETE FROM inventory_items
-                WHERE item_id = ?
-                "
-            );
-
-
-        if (!$deleteStmt) {
-
-            redirectWithMessage(
-                'error',
-                'Unable to prepare item deletion.'
-            );
+        $conn->begin_transaction();
+        try {
+            if (empty($branch_id)) throw new RuntimeException('Your account has no branch assigned.');
+            $deleteRequestId = inventoryApprovalCreate($conn, [
+                'type' => 'item_delete', 'branch_id' => (string)$branch_id, 'requested_by' => $user_id,
+                'source' => 'Inventory Officer', 'item_id' => (int)$item_id, 'item_name' => (string)$itemData['item_name'],
+                'reason' => 'Delete inventory item', 'payload' => [],
+                'open_key' => 'item_delete:' . (int)$item_id,
+            ]);
+            $conn->commit();
+        } catch (Throwable $e) {
+            $conn->rollback();
+            redirectWithMessage('error', $e->getMessage());
         }
-
-
-        $deleteStmt->bind_param(
-            "i",
-            $item_id
+        redirectWithMessage(
+            'success',
+            'Delete request #' . $deleteRequestId . ' for ' . $itemData['item_name']
+                . ' was sent: Pending approval. The item stays until the Branch Admin approves it.'
         );
-
-
-        if ($deleteStmt->execute()) {
-
-            addInventoryAuditLog(
-                $conn,
-                $user_id,
-                $branch_id,
-                "Deleted inventory item: {$itemData['item_name']} (ID: {$item_id})"
-            );
-
-            $deleteStmt->close();
-
-            redirectWithMessage(
-                'success',
-                'Inventory item deleted successfully.'
-            );
-
-        } else {
-
-            $dbError =
-                $deleteStmt->error;
-
-            $deleteStmt->close();
-
-            redirectWithMessage(
-                'error',
-                'Unable to delete inventory item: ' .
-                $dbError
-            );
-        }
     }
 }
 
+
+/* Pending minimum stock / forecasting / delete requests per item (shown as badges). */
+$pendingItemRequests = [];
+if (!empty($branch_id)) {
+    foreach (inventoryApprovalList($conn, ['branch_id' => (string)$branch_id, 'statuses' => ['Pending'],
+        'types' => ['item_settings', 'item_delete']]) as $pendingItemRequest) {
+        $pendingItemRequests[(int)$pendingItemRequest['item_id']][] = $pendingItemRequest;
+    }
+}
 
 /* =========================================================
    LOAD CATEGORIES
@@ -3026,6 +2936,13 @@ body {
                                     ?>
 
                                 </strong>
+                                <?php foreach ($pendingItemRequests[(int)$item['item_id']] ?? [] as $pendingItemRequest): ?>
+                                    <div class="mt-1">
+                                        <span class="badge text-bg-warning" title="<?php echo h(ucfirst($pendingItemRequest['summary'])); ?>">
+                                            <?php echo h(($pendingItemRequest['request_type'] === 'item_delete' ? 'Delete' : 'Settings change') . ' pending approval #' . (int)$pendingItemRequest['request_id']); ?>
+                                        </span>
+                                    </div>
+                                <?php endforeach; ?>
 
                             </td>
 
@@ -3915,6 +3832,9 @@ body {
                                 id="editMinimumStockHint"
                                 class="form-text"
                             ></div>
+                            <div class="form-text text-warning-emphasis">
+                                Changing the minimum stock or the forecasting setting sends a request to the Branch Admin; it applies only when approved.
+                            </div>
 
                         </div>
 

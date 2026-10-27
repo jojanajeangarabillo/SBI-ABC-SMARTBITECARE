@@ -971,6 +971,7 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
         <nav class="nav-menu">
             <ul>
                 <li><a href="BranchAdmin_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
+                <?php require_once __DIR__ . '/sources/inventory_approval_helpers.php'; echo inventoryApprovalSidebarLink($conn, (int)($_SESSION['user_id'] ?? 0)); ?>
                 <li><a class="active" href="BranchAdmin_UserManagement.php"><i class="bi bi-people-fill"></i><span>User Management</span></a></li>
                 <li><a href="BranchAdmin_PatientMonitoring.php"><i class="bi bi-heart-pulse-fill"></i><span>Patient Monitoring</span></a></li>
                 <li><a href="BranchAdmin_PhilhealthWorkflow.php"><i class="bi bi-file-medical-fill"></i><span>PhilHealth Processing</span></a></li>
