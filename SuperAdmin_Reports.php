@@ -41,6 +41,9 @@ $reportEntries = [
     'branch_performance' => ['title' => 'Branch Performance Report', 'icon' => 'bi-bar-chart-line', 'dates' => true, 'horizon' => false, 'all_branches' => true,
         'description' => 'Cases, patients, vaccinations given and activity per branch in the period, with totals.',
         'build' => static fn(mysqli $c, array $p): array => reportStdBranchPerformance($c, $p)],
+    'forecast_accuracy' => ['title' => 'Forecast Accuracy Report', 'icon' => 'bi-bullseye', 'dates' => false, 'horizon' => false, 'all_branches' => false,
+        'description' => 'Scores of the branch\'s latest saved forecast evaluation (MAE, RMSE, SMAPE, review band). Choose a branch. Read-only.',
+        'build' => static fn(mysqli $c, array $p): array => reportStdForecastAccuracy($c, $p)],
 ] + reportCenterCatalogEntries(1);
 $reportCenter = reportCenterRun($conn, $reportEntries, [
     'user_id' => $user_id, 'role_id' => 1, 'branch_id' => $superAdminBranch,

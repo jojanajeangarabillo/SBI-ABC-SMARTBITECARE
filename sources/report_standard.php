@@ -334,3 +334,67 @@ function reportStdBranchPerformance(mysqli $conn, array $p): array
         'notes' => $notes,
     ];
 }
+
+/* ---------------- Forecast Accuracy (latest saved evaluation) ----------------
+ * Read-only copy of the Forecast Accuracy page's saved scores, so they can be
+ * downloaded as PDF as well as CSV (ForecastAccuracy.php itself is unchanged).
+ * Errors are in vials/ampules like the page's default view; review bands use
+ * the page's provisional targets (SMAPE <= 10% High, <= 20% Moderate, at
+ * least 7 test observations). Nothing is evaluated or saved here. */
+const REPORT_ACCURACY_HIGH_MAX = 10.0;
+const REPORT_ACCURACY_MODERATE_MAX = 20.0;
+const REPORT_ACCURACY_MIN_TEST_RECORDS = 7;
+
+function reportStdAccuracyBand(array $r): string
+{
+    if ($r['evaluation_status'] !== 'Available' || $r['actual_total'] === null || $r['smape_percent'] === null
+        || (float)$r['smape_percent'] < 0 || (float)$r['smape_percent'] > 200) return 'Not rated';
+    if ((int)$r['training_records'] < 1 || (int)$r['testing_records'] < REPORT_ACCURACY_MIN_TEST_RECORDS) return 'Limited test data';
+    if ((float)$r['actual_total'] === 0.0) return 'No observed demand';
+    $smape = (float)$r['smape_percent'];
+    return $smape <= REPORT_ACCURACY_HIGH_MAX ? 'High' : ($smape <= REPORT_ACCURACY_MODERATE_MAX ? 'Moderate' : 'Low');
+}
+
+function reportStdForecastAccuracy(mysqli $conn, array $p): array
+{
+    require_once __DIR__ . '/forecast_accuracy_units.php';
+    $branchId = (string)$p['branch_id'];
+    $runs = reportStdFetch($conn, 'SELECT * FROM forecast_evaluation_runs WHERE branch_id = ? ORDER BY evaluation_id DESC LIMIT 1', 's', [$branchId]);
+    $base = ['title' => 'Forecast Accuracy Report', 'orientation' => 'L'];
+    if (!$runs) {
+        return $base + ['summary' => ['Evaluation' => 'none saved'],
+            'sections' => [['columns' => [reportStdCol('Item', 1)], 'rows' => [], 'empty' => 'No saved forecast evaluation for this branch. Open Forecast Accuracy to run one.']]];
+    }
+    $run = $runs[0];
+    $map = forecastAccuracyUnitMap($conn);
+    $rows = reportStdFetch($conn, 'SELECT * FROM forecast_evaluation_items WHERE evaluation_id = ?
+        ORDER BY item_name, item_id, horizon_days, method, evaluation_item_id', 'i', [(int)$run['evaluation_id']]);
+    $bands = ['High' => 0, 'Moderate' => 0, 'Low' => 0, 'Not rated' => 0];
+    $num = static fn($v, int $d = 2): string => $v === null ? '—' : rtrim(rtrim(number_format((float)$v, $d, '.', ','), '0'), '.');
+    $data = [];
+    foreach ($rows as $raw) {
+        $band = reportStdAccuracyBand($raw);
+        $bands[isset($bands[$band]) ? $band : 'Not rated']++;
+        $r = forecastAccuracyConvertRow($raw, $map, 'display', false);
+        $data[] = [(string)$r['item_name'], (string)$r['base_unit'], $r['method'] === 'one_step' ? 'One-step' : ($r['method'] === 'recursive' ? 'Recursive' : (string)$r['method']),
+            (string)$r['horizon_days'], (string)$r['evaluation_status'], (string)$r['training_records'], (string)$r['testing_records'],
+            $r['testing_start'] ? reportDate($r['testing_start']) . ' – ' . reportDate($r['testing_end'] ?? $r['testing_start']) : '—',
+            $num($r['mae'], 4), $num($r['rmse'], 4), $r['smape_percent'] === null ? '—' : $num($r['smape_percent'], 2) . '%',
+            $num($r['actual_total']), $num($r['forecast_total']), $band];
+    }
+    return $base + [
+        'period_text' => 'Saved evaluation #' . (int)$run['evaluation_id'] . ' of ' . reportDateTime($run['generated_at']),
+        'summary' => ['Evaluation' => '#' . (int)$run['evaluation_id'], 'Saved at' => reportDateTime($run['generated_at']),
+            'Generated horizon' => $run['generated_horizon'] . ' days', 'Rows' => (string)count($rows)] + array_map('strval', $bands),
+        'sections' => [[
+            'columns' => [reportStdCol('Item', 2.2), reportStdCol('Unit', 0.9), reportStdCol('Method', 1.1), reportStdCol('Test Horizon (days)', 1, 'R'),
+                reportStdCol('Status', 1.1), reportStdCol('Training', 0.9, 'R'), reportStdCol('Testing', 0.8, 'R'), reportStdCol('Test Window', 2.2),
+                reportStdCol('MAE', 1, 'R'), reportStdCol('RMSE', 1, 'R'), reportStdCol('SMAPE', 0.9, 'R'), reportStdCol('Actual Total', 1, 'R'),
+                reportStdCol('Forecast Total', 1, 'R'), reportStdCol('Review Band', 1.2)],
+            'rows' => $data,
+        ]],
+        'notes' => ['Historical test of saved forecasts: error scores describe past performance and do not certify future forecasts.',
+            'MAE, RMSE and totals are in vials/ampules (the page default); SMAPE does not depend on the unit.',
+            'Review bands are provisional targets: SMAPE up to 10% High, up to 20% Moderate, above that Low; at least 7 test observations are required.'],
+    ];
+}

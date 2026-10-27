@@ -66,6 +66,9 @@ $reportEntries = [
     'vaccination' => ['title' => 'Vaccination Report', 'icon' => 'bi-eyedropper', 'dates' => true, 'horizon' => false,
         'description' => 'Every dose administered or scheduled in the period, with dose label and status.',
         'build' => static fn(mysqli $c, array $p): array => reportStdVaccinations($c, $p)],
+    'forecast_accuracy' => ['title' => 'Forecast Accuracy Report', 'icon' => 'bi-bullseye', 'dates' => false, 'horizon' => false,
+        'description' => 'Scores of the latest saved forecast evaluation (MAE, RMSE, SMAPE, review band) per item. Read-only; no evaluation is run.',
+        'build' => static fn(mysqli $c, array $p): array => reportStdForecastAccuracy($c, $p)],
 ] + reportCenterCatalogEntries(2, null, [
     'data_quality' => ['description' => 'Patients and cases with missing or invalid required fields, with a count per problem. Links open the patient in Patient Monitoring; Admin Staff correct the record.'],
 ]);
