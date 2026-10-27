@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/report_catalog.php';
+require_once __DIR__ . '/report_center.php';
 require_once __DIR__ . '/inventory_stock_helpers.php';
 require_once __DIR__ . '/patient_display_helper.php';
 require_once __DIR__ . '/dashboard_patient_metrics.php';
@@ -397,4 +398,76 @@ function reportStdForecastAccuracy(mysqli $conn, array $p): array
             'MAE, RMSE and totals are in vials/ampules (the page default); SMAPE does not depend on the unit.',
             'Review bands are provisional targets: SMAPE up to 10% High, up to 20% Moderate, above that Low; at least 7 test observations are required.'],
     ];
+}
+
+/* ---------------- Audit Logs (Branch Admin / Super Admin pages) ----------------
+ * $f: branch_id (null = all branches), search, module, action (text), user_id,
+ *     date_from, date_to: the filters of the Audit Logs page. All rows. */
+function reportStdAuditLogs(mysqli $conn, array $f): array
+{
+    $where = ['1 = 1'];
+    $types = '';
+    $params = [];
+    $add = static function (string $sql, string $t, array $values) use (&$where, &$types, &$params): void {
+        $where[] = $sql; $types .= $t; array_push($params, ...$values);
+    };
+    if (!empty($f['branch_id'])) $add('al.branch_id = ?', 's', [(string)$f['branch_id']]);
+    if (($f['search'] ?? '') !== '') {
+        $like = '%' . $f['search'] . '%';
+        $add('(al.action LIKE ? OR al.module LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR b.branch_name LIKE ?)', 'sssss', [$like, $like, $like, $like, $like]);
+    }
+    if (($f['module'] ?? '') !== '') $add('al.module = ?', 's', [(string)$f['module']]);
+    if (($f['action'] ?? '') !== '') $add('al.action LIKE ?', 's', ['%' . $f['action'] . '%']);
+    if (!empty($f['user_id'])) $add('al.user_id = ?', 'i', [(int)$f['user_id']]);
+    if (reportCenterDateOk($f['date_from'] ?? '')) $add('al.created_at >= ?', 's', [$f['date_from'] . ' 00:00:00']);
+    if (reportCenterDateOk($f['date_to'] ?? '')) $add('al.created_at < DATE_ADD(?, INTERVAL 1 DAY)', 's', [(string)$f['date_to']]);
+    $rows = reportStdFetch($conn, "SELECT al.log_id, al.action, al.module, al.created_at, u.username, r.role_name, b.branch_name, al.branch_id
+        FROM audit_logs al
+        LEFT JOIN users u ON u.user_id = al.user_id
+        LEFT JOIN roles r ON r.role_id = u.role_id
+        LEFT JOIN branches b ON b.branch_id = al.branch_id
+        WHERE " . implode(' AND ', $where) . "
+        ORDER BY al.created_at DESC, al.log_id DESC", $types, $params);
+    $allBranches = empty($f['branch_id']);
+    $users = [];
+    $modules = [];
+    $data = [];
+    $n = 0;
+    foreach ($rows as $r) {
+        $users[(string)$r['username']] = true;
+        $m = (string)($r['module'] ?: 'N/A');
+        $modules[$m] = ($modules[$m] ?? 0) + 1;
+        $row = [(string)++$n, reportDateTime($r['created_at']), $r['username'] ?: 'System', $r['role_name'] ?: '—'];
+        if ($allBranches) $row[] = $r['branch_name'] ?: ($r['branch_id'] ?: '—');
+        array_push($row, $m, $r['action'] ?: '—');
+        $data[] = $row;
+    }
+    arsort($modules);
+    $columns = [reportStdCol('#', 0.6, 'R'), reportStdCol('Date / Time', 1.7), reportStdCol('User', 1.6), reportStdCol('Role', 1.3)];
+    if ($allBranches) $columns[] = reportStdCol('Branch', 1.4);
+    array_push($columns, reportStdCol('Module', 1.4), reportStdCol('Action', $allBranches ? 6 : 7));
+    $filters = [];
+    foreach (['search' => 'Search', 'module' => 'Module', 'action' => 'Action', 'user_name' => 'User'] as $k => $label) {
+        if (($f[$k] ?? '') !== '' && ($f[$k] ?? 0) !== 0) $filters[] = $label . ': ' . $f[$k];
+    }
+    return [
+        'title' => 'Audit Log Report', 'orientation' => 'L',
+        'filters_text' => implode(' · ', $filters),
+        'summary' => ['Log entries' => (string)count($rows), 'Users' => (string)count($users), 'Modules' => (string)count($modules),
+            'Most active modules' => implode(', ', array_map(static fn($k, $v) => "$k ($v)", array_slice(array_keys($modules), 0, 3), array_slice($modules, 0, 3))) ?: '—'],
+        'sections' => [['columns' => $columns, 'rows' => $data, 'empty' => 'No audit log entries match the filters.']],
+    ];
+}
+
+/** Send the audit log report of a page's filters (PDF or CSV) and stop. */
+function reportStdAuditLogsSend(mysqli $conn, int $userId, string $auditBranch, array $f, string $format): void
+{
+    $report = reportStdAuditLogs($conn, $f);
+    $from = reportCenterDateOk($f['date_from'] ?? '') ? (string)$f['date_from'] : null;
+    $to = reportCenterDateOk($f['date_to'] ?? '') ? (string)$f['date_to'] : null;
+    $meta = reportMeta($conn, $userId, reportBranchName($conn, empty($f['branch_id']) ? null : (string)$f['branch_id']),
+        reportPeriodText($from, $to), (string)$report['filters_text']);
+    workflowAudit($conn, $userId, $auditBranch, 'Exported audit logs (' . strtoupper($format) . ') - Branch: ' . $meta['branch']
+        . ' - Period: ' . $meta['period'] . ' (' . count($report['sections'][0]['rows']) . ' entries)', 'Audit Logs');
+    reportSend($report, $meta, $format, 'Audit_Logs_' . ($f['branch_id'] ?: 'All_branches') . '_' . date('Ymd_His'));
 }

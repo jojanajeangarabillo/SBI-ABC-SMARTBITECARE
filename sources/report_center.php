@@ -53,6 +53,11 @@ function reportCenterDate($value): ?string
     return $date && $date->format('Y-m-d') === $value ? $value : null;
 }
 
+function reportCenterDateOk($value): bool
+{
+    return reportCenterDate($value) !== null;
+}
+
 /**
  * Read the request, and for format=pdf|csv send the file (and stop).
  * $ctx: user_id, role_id, branch_id (the user's branch), branches [id => name]
