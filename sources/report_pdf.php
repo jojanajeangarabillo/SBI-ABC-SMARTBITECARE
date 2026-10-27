@@ -14,7 +14,7 @@ require_once __DIR__ . '/../fpdf/fpdf.php';
  *  - "Page X of Y" in the footer, and nothing from the browser.
  * Text is converted from UTF-8 to Windows-1252 (the core fonts' encoding)
  * so "–", "ñ" and "é" print correctly; a cell that is only "✓" is drawn
- * with the ZapfDingbats check mark.
+ * as a drawn check mark.
  *
  * A report is an array (see sources/report_export.php):
  *   title, orientation ('P'|'L'), summary [label => value],
@@ -43,7 +43,7 @@ class SbcReportPdf extends FPDF
     private array $tableWidths = [];
     private bool $inTable = false;
     private float $lineHeight = 4.2;
-    private int $bodyFont = 8;
+    private float $bodyFont = 8;
 
     /** $meta: title, branch, period, filters, generated_by, generated_at, orientation */
     public function __construct(array $meta)
@@ -51,7 +51,8 @@ class SbcReportPdf extends FPDF
         $orientation = strtoupper((string)($meta['orientation'] ?? 'P')) === 'L' ? 'L' : 'P';
         parent::__construct($orientation, 'mm', 'A4');
         $this->meta = $meta;
-        $this->SetMargins(12, 12, 12);
+        $margin = (float)($meta['margin'] ?? 12);
+        $this->SetMargins($margin, 12, $margin);
         $this->SetAutoPageBreak(true, 18);
         $this->AliasNbPages('{nb}');
         $this->SetTitle(reportPdfEncode((string)($meta['title'] ?? 'Report')));
@@ -214,8 +215,9 @@ class SbcReportPdf extends FPDF
         $sum = array_sum(array_map(static fn($c) => (float)($c['width'] ?? 1), $columns)) ?: 1;
         $this->tableColumns = $columns;
         $this->tableWidths = array_map(static fn($c) => $w * (float)($c['width'] ?? 1) / $sum, $columns);
-        $this->bodyFont = count($columns) > 14 ? 6 : (count($columns) > 10 ? 7 : 8);
-        $this->lineHeight = $this->bodyFont <= 6 ? 3.2 : ($this->bodyFont === 7 ? 3.7 : 4.2);
+        // Font: the section's own size, else smaller for wide tables.
+        $this->bodyFont = isset($section['font']) ? (float)$section['font'] : (count($columns) > 14 ? 6 : (count($columns) > 10 ? 7 : 8));
+        $this->lineHeight = round($this->bodyFont * 0.53, 2);
 
         if (!empty($section['title'])) {
             if ($this->GetY() + 20 > $this->PageBreakTrigger) $this->AddPage();
@@ -269,10 +271,16 @@ class SbcReportPdf extends FPDF
             $this->Rect($x, $y, $w, $h, 'DF');
             $raw = (string)$row[$i];
             if ($raw === '✓' || $raw === '✔') {
-                $this->SetFont('ZapfDingbats', '', $this->bodyFont + 1);
-                $this->SetXY($x, $y + 0.8);
-                $this->Cell($w, $this->lineHeight, '4', 0, 0, 'C');
-                $this->SetFont('Helvetica', $bold ? 'B' : '', $this->bodyFont);
+                // Drawn as lines, so every PDF viewer shows it (no symbol font needed).
+                $size = max(1.6, $this->lineHeight * 0.75);
+                $cx = $x + $w / 2;
+                $cy = $y + $h / 2;
+                $this->SetDrawColor(20, 110, 60);
+                $this->SetLineWidth(0.35);
+                $this->Line($cx - $size * 0.5, $cy, $cx - $size * 0.12, $cy + $size * 0.4);
+                $this->Line($cx - $size * 0.12, $cy + $size * 0.4, $cx + $size * 0.55, $cy - $size * 0.45);
+                $this->SetLineWidth(0.2);
+                $this->SetDrawColor(215, 220, 230);
             } else {
                 $this->SetXY($x, $y + 0.8);
                 $this->MultiCell($w, $this->lineHeight, $text, 0, in_array($align, ['L', 'C', 'R'], true) ? $align : 'L');
@@ -302,6 +310,7 @@ function reportPdfBuild(array $report, array $meta): string
 {
     $meta['orientation'] = $report['orientation'] ?? ($meta['orientation'] ?? 'P');
     $meta['title'] = $report['title'] ?? ($meta['title'] ?? 'Report');
+    if (isset($report['margin'])) $meta['margin'] = $report['margin'];
     $pdf = new SbcReportPdf($meta);
     if (!empty($report['summary'])) $pdf->summary($report['summary'], (string)($report['summary_title'] ?? 'Summary'));
     foreach ($report['sections'] ?? [] as $section) $pdf->table($section);
