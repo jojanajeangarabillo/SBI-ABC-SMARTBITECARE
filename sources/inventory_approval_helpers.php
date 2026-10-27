@@ -239,6 +239,8 @@ function inventoryApprovalList(mysqli $conn, array $filters = []): array
     if (isset($filters['branch_id'])) { $where[] = 'r.branch_id = ?'; $types .= 's'; $params[] = (string)$filters['branch_id']; }
     if (isset($filters['requested_by'])) { $where[] = 'r.requested_by = ?'; $types .= 'i'; $params[] = (int)$filters['requested_by']; }
     if (isset($filters['item_id'])) { $where[] = 'r.item_id = ?'; $types .= 'i'; $params[] = (int)$filters['item_id']; }
+    if (!empty($filters['requested_from'])) { $where[] = 'r.requested_at >= ?'; $types .= 's'; $params[] = $filters['requested_from'] . ' 00:00:00'; }
+    if (!empty($filters['requested_to'])) { $where[] = 'r.requested_at < DATE_ADD(?, INTERVAL 1 DAY)'; $types .= 's'; $params[] = (string)$filters['requested_to']; }
     foreach (['statuses' => 'r.status', 'types' => 'r.request_type'] as $key => $column) {
         if (!empty($filters[$key])) {
             $where[] = $column . ' IN (' . implode(',', array_fill(0, count($filters[$key]), '?')) . ')';
@@ -246,7 +248,7 @@ function inventoryApprovalList(mysqli $conn, array $filters = []): array
             foreach ($filters[$key] as $value) $params[] = (string)$value;
         }
     }
-    $limit = max(1, min(1000, (int)($filters['limit'] ?? 200)));
+    $limit = max(1, min(20000, (int)($filters['limit'] ?? 200)));
     $sql = "SELECT r.*, COALESCE(i.item_name, r.item_name_snapshot) AS item_name,
                    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), un.unit_name, r.unit_snapshot) AS base_unit_label,
                    COALESCE(NULLIF(TRIM(i.display_unit_label), ''), un.unit_name, r.unit_snapshot) AS display_unit_label,
@@ -267,7 +269,15 @@ function inventoryApprovalList(mysqli $conn, array $filters = []): array
     $stmt->execute();
     $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
     $stmt->close();
+    // Branch names are looked up separately: this table can have a different
+    // collation from branches on MySQL 8/9, so a text join could fail.
+    $branchNames = [];
+    if ($rows) {
+        $res = $conn->query('SELECT branch_id, branch_name FROM branches');
+        while ($b = $res->fetch_assoc()) $branchNames[(string)$b['branch_id']] = (string)$b['branch_name'];
+    }
     foreach ($rows as &$row) {
+        $row['branch_name'] = $branchNames[(string)$row['branch_id']] ?? (string)$row['branch_id'];
         $row['payload_data'] = json_decode((string)($row['payload'] ?? ''), true) ?: [];
         $row['summary'] = inventoryApprovalDescribe($row);
     }
@@ -502,13 +512,17 @@ function inventoryApprovalDecide(
         $finalApproved = $result['approved_quantity'] ?? null;
         $transactionId = $result['transaction_id'] ?? null;
         $reference = $result['reference'] ?? null;
+        // The before/after values are kept with the request for the reports.
+        $payloadData = $request['payload_data'];
+        $payloadData['result'] = ['before' => $result['before'] ?? null, 'after' => $result['after'] ?? null];
+        $payloadJson = json_encode($payloadData, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
         $stmt = $conn->prepare("UPDATE inventory_approval_requests
             SET status = ?, decided_by = ?, decided_at = NOW(), decision_remarks = NULLIF(?, ''),
                 approved_quantity = COALESCE(?, approved_quantity), result_transaction_id = ?, result_reference = ?,
-                open_key = IF(?, open_key, NULL)
+                open_key = IF(?, open_key, NULL), payload = ?
             WHERE request_id = ? AND status = 'Pending'");
         $keep = $keepOpen ? 1 : 0;
-        $stmt->bind_param('sissisii', $status, $approverId, $remarks, $finalApproved, $transactionId, $reference, $keep, $requestId);
+        $stmt->bind_param('sissisisi', $status, $approverId, $remarks, $finalApproved, $transactionId, $reference, $keep, $payloadJson, $requestId);
         $stmt->execute();
         if ($stmt->affected_rows !== 1) throw new RuntimeException('The request changed. Refresh and try again.');
         $stmt->close();
