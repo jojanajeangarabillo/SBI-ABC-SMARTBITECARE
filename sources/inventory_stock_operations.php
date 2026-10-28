@@ -373,3 +373,158 @@ function inventoryStockAdjustmentApply(
     return ['transaction_id' => $transactionId, 'remarks' => $combinedRemarks, 'item' => $itemData,
         'before' => $currentScaled, 'after' => $newScaled];
 }
+
+/**
+ * Form checks of a Stock In (moved from the Stock Management page): batch,
+ * manufacturing and expiration dates are required for vaccines and medical
+ * supplies, the expiration must follow manufacturing and must not have
+ * passed, and an archived (disposed) batch number cannot be received again.
+ * Read-only; run when the officer requests the Stock In and again on approval.
+ * Returns the item and the normalized batch fields.
+ */
+function inventoryStockInValidate(mysqli $conn, string $branchId, int $itemId, int $quantityScaled,
+    ?string $batch, ?string $manufacturingDate, ?string $expirationDate): array
+{
+    if ($quantityScaled <= 0) throw new Exception('Please enter a valid item, positive quantity, and transaction date.');
+    $itemData = inventoryOpsItem($conn, $itemId);
+    stockQuantityValidateUnit($quantityScaled, $itemData);
+    $batch = $batch !== null ? trim($batch) : '';
+    $manufacturingDate = $manufacturingDate !== null && trim($manufacturingDate) !== '' ? trim($manufacturingDate) : null;
+    $expirationDate = $expirationDate !== null && trim($expirationDate) !== '' ? trim($expirationDate) : null;
+    $validDate = static function (?string $d): bool {
+        if ($d === null) return false;
+        $p = DateTime::createFromFormat('Y-m-d', $d);
+        return $p !== false && $p->format('Y-m-d') === $d;
+    };
+    $tracked = inventoryOpsRequiresBatchTracking($itemData['category_name']);
+    if ($tracked) {
+        if ($batch === '') throw new Exception('Batch/Lot No. is required for Vaccines and Medical Supplies.');
+        if (mb_strlen($batch) > 100) throw new Exception('Batch/Lot No. must not exceed 100 characters.');
+        if (!$validDate($manufacturingDate)) throw new Exception('A valid Manufacturing Date is required for Vaccines and Medical Supplies.');
+        if (!$validDate($expirationDate)) throw new Exception('A valid Expiration Date is required for Vaccines and Medical Supplies.');
+        if ($expirationDate <= $manufacturingDate) throw new Exception('Expiration Date must be later than Manufacturing Date.');
+        if ($expirationDate < date('Y-m-d')) throw new Exception('Expired stock cannot be received. Please enter a valid non-expired batch.');
+        $stmt = $conn->prepare("SELECT stock_id FROM inventory_stocks_archive WHERE item_id = ? AND branch_id = ? AND batch_lot_no = ? LIMIT 1");
+        if (!$stmt) throw new Exception('Unable to check archived batch history.');
+        $stmt->bind_param('iss', $itemId, $branchId, $batch);
+        $stmt->execute();
+        $archived = $stmt->get_result()->num_rows > 0;
+        $stmt->close();
+        if ($archived) throw new Exception('This Batch/Lot No. was already disposed and archived. Use a new Batch/Lot No. for newly received stock.');
+        $stmt = $conn->prepare("SELECT manufacturing_date, expiration_date FROM inventory_stocks
+            WHERE item_id = ? AND branch_id = ? AND batch_lot_no = ? LIMIT 1");
+        $stmt->bind_param('iss', $itemId, $branchId, $batch);
+        $stmt->execute();
+        $existing = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+        if ($existing && (($existing['manufacturing_date'] ?? null) !== $manufacturingDate || ($existing['expiration_date'] ?? null) !== $expirationDate)) {
+            throw new Exception('This Batch/Lot No. already exists with different Manufacturing or Expiration Dates. Please use the existing batch details or enter a new Batch/Lot No.');
+        }
+    } else {
+        $batch = '';
+        $manufacturingDate = null;
+        $expirationDate = null;
+    }
+    return ['item' => $itemData, 'tracked' => $tracked, 'batch' => $batch !== '' ? $batch : null,
+        'manufacturing_date' => $manufacturingDate, 'expiration_date' => $expirationDate];
+}
+
+/**
+ * STOCK IN (moved from InventoryOfficer_StockManagement.php): create or add
+ * to the batch, write the IN transaction with its receipt source, the audit
+ * entry and the Nurse receipt notices. Runs only when the Branch Admin
+ * APPROVES a stock-in request; the caller owns the transaction. $origin is
+ * stockReceiptSourceFromForm(): type, branch, name. Dated $transactionDateTime
+ * (the approval moment), so Daily Inventory shows it as Delivery that day.
+ */
+function inventoryStockInApply(
+    mysqli $conn,
+    array $actor,
+    int $itemId,
+    int $quantityScaled,
+    ?string $batch,
+    ?string $manufacturingDate,
+    ?string $expirationDate,
+    array $origin,
+    string $remarks,
+    string $transactionDateTime,
+    ?int $approvalRequestId = null
+): array {
+    $branchId = (string)$actor['branch_id'];
+    $userId = (int)$actor['user_id'];
+    $valid = inventoryStockInValidate($conn, $branchId, $itemId, $quantityScaled, $batch, $manufacturingDate, $expirationDate);
+    $itemData = $valid['item'];
+    $batch = $valid['batch'];
+    $manufacturingDate = $valid['manufacturing_date'];
+    $expirationDate = $valid['expiration_date'];
+    $quantity = stockQuantityDecimal($quantityScaled);
+    $before = inventoryOpsAvailableScaled($conn, $itemId, $branchId, false);
+
+    if ($valid['tracked']) {
+        $stockStmt = $conn->prepare("SELECT stock_id, quantity_available, manufacturing_date, expiration_date
+                                     FROM inventory_stocks
+                                     WHERE item_id = ? AND branch_id = ? AND batch_lot_no = ?
+                                     LIMIT 1 FOR UPDATE");
+        if (!$stockStmt) throw new Exception('Unable to check existing batch stock.');
+        $stockStmt->bind_param('iss', $itemId, $branchId, $batch);
+    } else {
+        $stockStmt = $conn->prepare("SELECT stock_id, quantity_available
+                                     FROM inventory_stocks
+                                     WHERE item_id = ? AND branch_id = ? AND batch_lot_no IS NULL AND expiration_date IS NULL
+                                     LIMIT 1 FOR UPDATE");
+        if (!$stockStmt) throw new Exception('Unable to check existing stock.');
+        $stockStmt->bind_param('is', $itemId, $branchId);
+    }
+    $stockStmt->execute();
+    $stockRow = $stockStmt->get_result()->fetch_assoc();
+    $stockStmt->close();
+
+    if ($stockRow) {
+        if ($valid['tracked'] && (($stockRow['manufacturing_date'] ?? null) !== $manufacturingDate
+            || ($stockRow['expiration_date'] ?? null) !== $expirationDate)) {
+            throw new Exception('This Batch/Lot No. already exists with different Manufacturing or Expiration Dates. Please use the existing batch details or enter a new Batch/Lot No.');
+        }
+        $stockId = (int)$stockRow['stock_id'];
+        $newQuantity = stockQuantityDecimal(stockQuantityParse($stockRow['quantity_available'], true) + $quantityScaled);
+        $update = $conn->prepare("UPDATE inventory_stocks SET quantity_available = ? WHERE stock_id = ? AND branch_id = ?");
+        if (!$update) throw new Exception('Unable to prepare stock update.');
+        $update->bind_param('sis', $newQuantity, $stockId, $branchId);
+        if (!$update->execute()) throw new Exception('Unable to update stock: ' . $update->error);
+        $update->close();
+    } else {
+        $insertStock = $conn->prepare("INSERT INTO inventory_stocks
+            (item_id, batch_lot_no, manufacturing_date, branch_id, quantity_available, expiration_date)
+            VALUES (?, ?, ?, ?, ?, ?)");
+        if (!$insertStock) throw new Exception('Unable to prepare stock insert.');
+        $insertStock->bind_param('isssss', $itemId, $batch, $manufacturingDate, $branchId, $quantity, $expirationDate);
+        if (!$insertStock->execute()) throw new Exception('Unable to create the stock record: ' . $insertStock->error);
+        $stockId = (int)$conn->insert_id;
+        $insertStock->close();
+    }
+
+    $transactionRemarks = $valid['tracked'] ? 'Batch/Lot No.: ' . $batch . ($remarks !== '' ? ' | ' . $remarks : '') : $remarks;
+    $transactionRemarks = ltrim($transactionRemarks . ' | Source: ' . $origin['name'] . ' (' . $origin['type'] . ')', ' |');
+    $sourceBranch = $origin['branch'];
+    $sourceType = (string)$origin['type'];
+    $sourceName = (string)$origin['name'];
+    $baseUnit = (string)$itemData['unit_name'];
+    $insertTrx = $conn->prepare("INSERT INTO stock_transactions
+        (item_id, user_id, vaccination_id, branch_id, transaction_type, quantity, remarks, transaction_date,
+         source_branch_id, receipt_source_type, source_name_snapshot, receipt_stock_id, receipt_batch_snapshot,
+         receipt_base_unit_snapshot, approval_request_id)
+        VALUES (?, ?, NULL, ?, 'IN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    if (!$insertTrx) throw new Exception('Unable to prepare stock transaction.');
+    $insertTrx->bind_param('iisssssssissi', $itemId, $userId, $branchId, $quantity, $transactionRemarks, $transactionDateTime,
+        $sourceBranch, $sourceType, $sourceName, $stockId, $batch, $baseUnit, $approvalRequestId);
+    if (!$insertTrx->execute()) throw new Exception('Unable to record the stock transaction: ' . $insertTrx->error);
+    $transactionId = (int)$conn->insert_id;
+    $insertTrx->close();
+
+    inventoryOpsAuditMovement($conn, $actor, $transactionId, 'IN', (string)$itemData['item_name'], $quantity, $baseUnit, $transactionRemarks);
+    // Nurse receipt notices are saved with the Stock In: the stock is usable now.
+    if ($valid['tracked'] && !inventoryOfficerNotifyNursesStockIn($conn, $branchId, $transactionId, $stockId)) {
+        throw new Exception('Unable to save the nurse receipt notification. Stock In was not saved. Try again.');
+    }
+    return ['transaction_id' => $transactionId, 'stock_id' => $stockId, 'item' => $itemData,
+        'before' => $before, 'after' => inventoryOpsAvailableScaled($conn, $itemId, $branchId, false)];
+}

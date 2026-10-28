@@ -15,6 +15,7 @@ require_once 'sources/workflow_helpers.php';
 require_once 'sources/patient_display_helper.php';
 require_once 'sources/case_number_helper.php';
 require_once 'sources/philhealth_requirements_helper.php';
+require_once 'sources/registry_lock_helpers.php';
 
 // Check if user is logged in and is an admin staff
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || $_SESSION['role_id'] != 4) {
@@ -929,6 +930,39 @@ if ($action) {
                 }
 
                 $resultArray = array_values($resultArray);
+                // ?export=pdf|csv: the same list (date, search and filter of the
+                // page) as a PDF or CSV with every row (shared builders).
+                if (in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
+                    require_once __DIR__ . '/sources/report_export.php';
+                    $listRows = array_map(static fn(array $p): array => [
+                        patientDisplayCaseNumber($p['case_no'] ?? '', null), (string)$p['patient_name'], (string)$p['contact_number'],
+                        (string)$p['dob'], (string)($p['age'] ?? ''), (string)$p['gender'], (string)$p['address'], (string)$p['admission_date'],
+                        (string)$p['vaccination_status'], $p['philhealth'], (string)$p['philhealth_type'],
+                        $p['philhealth'] === 'Yes' ? ((string)$p['status'] ?: 'For Writing') : 'Not Applicable',
+                    ], $resultArray);
+                    $listFilters = array_filter([
+                        $search !== '' ? 'Search: ' . $search : '',
+                        $filter !== 'all' ? 'Vaccination: ' . ucfirst((string)$filter) : '',
+                    ]);
+                    $listReport = [
+                        'title' => 'Patient Record List', 'orientation' => 'L',
+                        'summary' => ['Patients' => (string)count($listRows),
+                            'With PhilHealth' => (string)count(array_filter($resultArray, static fn($p) => $p['philhealth'] === 'Yes'))],
+                        'sections' => [[
+                            'columns' => [['label' => 'Case No.', 'width' => 1.2], ['label' => 'Patient Name', 'width' => 2.2], ['label' => 'Contact No.', 'width' => 1.5],
+                                ['label' => 'Birth Date', 'width' => 1.2], ['label' => 'Age', 'width' => 0.6, 'align' => 'R'], ['label' => 'Gender', 'width' => 0.9],
+                                ['label' => 'Address', 'width' => 2.6], ['label' => 'Admission', 'width' => 1.2], ['label' => 'Vaccination Status', 'width' => 1.3],
+                                ['label' => 'PhilHealth', 'width' => 0.9], ['label' => 'PhilHealth Type', 'width' => 1.3], ['label' => 'Record Status', 'width' => 1.4]],
+                            'rows' => $listRows,
+                            'empty' => 'No patients match the filters.',
+                        ]],
+                    ];
+                    $listPeriod = !empty($date) ? reportPeriodText((string)$date, (string)$date) : 'All dates';
+                    workflowAudit($conn, (int)$_SESSION['user_id'], (string)$logged_branch_id,
+                        'Exported patient record list (' . strtoupper((string)$_GET['export']) . ') - ' . $listPeriod . ' (' . count($listRows) . ' patients)', 'Patient Records');
+                    reportSend($listReport, reportMeta($conn, (int)$_SESSION['user_id'], reportBranchName($conn, (string)$logged_branch_id), $listPeriod,
+                        implode(' · ', $listFilters)), (string)$_GET['export'], 'Patient_Records_' . $logged_branch_id . '_' . date('Ymd_His'));
+                }
                 jsonResponse($resultArray);
             } catch (Exception $e) {
                 jsonResponse(['error' => 'Failed to fetch patients: ' . $e->getMessage()], 500);
@@ -1111,6 +1145,17 @@ if ($action) {
                     'remarks' => $row['case_remarks'] ?: ($row['philhealth_remarks'] ?? ''),
                     'history' => $history,
                 ];
+                // Verified registry: clinical and registry fields are read-only on the form.
+                $viewCaseLock = registryLockForCase($conn, (int)$row['case_id']);
+                $viewPatientLock = $viewCaseLock ?: registryLockForPatient($conn, (int)$row['patient_id']);
+                $details['registry_lock'] = $viewPatientLock ? [
+                    'case_locked' => (bool)$viewCaseLock,
+                    'patient_locked' => true,
+                    'status' => (string)$viewPatientLock['registry_status'],
+                    'message' => 'Registry ' . ($viewPatientLock['registry_number'] ?? '') . ' was ' . registryLockLabel($viewPatientLock)
+                        . '. Its clinical and registry fields are read-only.',
+                    'correction_url' => registryCorrectionUrl((int)$viewPatientLock['case_id']),
+                ] : null;
 
                 jsonResponse($details);
             } catch (Exception $e) {
@@ -1194,6 +1239,29 @@ if ($action) {
 
                 if (caseNoExists($conn, $caseNo, (string)$logged_branch_id, $caseId)) {
                     throw new Exception("Case number '{$caseNo}' already exists in this branch.");
+                }
+
+                /*
+                 * Verified registry records are read-only (sources/registry_lock_helpers.php):
+                 * a save that changes a locked patient, case or registry field is refused
+                 * and the user is pointed to Request correction. Other fields
+                 * (PhilHealth) still save. The registry row of a locked case is not
+                 * rewritten here.
+                 */
+                $lockedCase = $caseId ? registryLockForCase($conn, (int)$caseId) : null;
+                $lockPosted = [
+                    'patient.full_name' => $fullName, 'patient.birthday' => $dob, 'patient.gender' => $gender,
+                    'patient.address' => $address, 'patient.contact_number' => $contact,
+                ];
+                if ($caseId) {
+                    $lockPosted += [
+                        'case.case_number' => $caseNo, 'case.admission_date' => $admissionDate, 'case.date_of_bite' => $biteDate,
+                        'case.bite_location' => $siteBite, 'case.animal_type' => $animal, 'case.animal_status' => $animalStat,
+                        'registry.active_regimen' => $regimen,
+                    ];
+                }
+                if ($caseId || $patientId) {
+                    registryLockAssertUnchanged($conn, (int)$caseId, $patientId, $lockPosted);
                 }
 
                 $conn->begin_transaction();
@@ -1382,7 +1450,9 @@ if ($action) {
 
                 $registryId = $regRow['registry_id'] ?? null;
 
-                if ($registryId) {
+                if ($registryId && $lockedCase) {
+                    // Verified: registry fields change only through Request correction.
+                } elseif ($registryId) {
                     $updReg = $conn->prepare("
                         UPDATE registry_records
                         SET registry_number = ?,
@@ -3777,6 +3847,7 @@ body.sidebar-collapsed .main {
                 <li><a href="AdminStaff_Registry.php"><i class="bi bi-journal-check"></i><span>Registry Queue</span></a></li>
                 <li><a href="AdminStaff_PhilhealthWorkflow.php"><i class="bi bi-check2-all"></i><span>PhilHealth Workflow</span></a></li>
                 <li><a href="AdminStaff_MedicalDocuments.php"><i class="bi bi-file-earmark-ruled"></i><span>Medical Documents</span></a></li>
+                <li><a href="AdminStaff_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
                 <li>
                     <a href="AdminStaff_Notifications.php" style="position: relative;">
                         <i class="bi bi-bell-fill"></i>
@@ -3888,9 +3959,14 @@ body.sidebar-collapsed .main {
                             Patients for <span id="selectedDateDisplay2">Today</span> 
                             <span id="patientCountBadge" class="vacc-status-badge pending">0</span>
                         </div>
-                        <button class="export-btn" id="exportBtn">
-                            <i class="bi bi-download"></i> Export
-                        </button>
+                        <span class="d-inline-flex gap-2">
+                            <button class="export-btn" id="exportPdfBtn" type="button">
+                                <i class="bi bi-file-earmark-pdf"></i> PDF
+                            </button>
+                            <button class="export-btn" id="exportBtn" type="button">
+                                <i class="bi bi-filetype-csv"></i> CSV
+                            </button>
+                        </span>
                     </div>
                     <div class="table-responsive-custom">
                         <table>
@@ -4799,11 +4875,13 @@ body.sidebar-collapsed .main {
         }
     });
 
+    let lastFetchUrl = null;
     async function fetchPatients(dateApi = null, search = '') {
         let url = `${apiBase}?action=fetch`;
         if (dateApi) url += `&date=${encodeURIComponent(dateApi)}`;
         if (search) url += `&search=${encodeURIComponent(search)}`;
         url += `&filter=${encodeURIComponent(currentFilter)}`;
+        lastFetchUrl = url;
         const res = await fetch(url);
         if (!res.ok) {
             const data = await res.json();
@@ -5246,6 +5324,47 @@ body.sidebar-collapsed .main {
         }
     }
 
+    /*
+     * Verified registry (sources/registry_lock_helpers.php): the clinical and
+     * registry fields are read-only; changes go through Request correction.
+     * The server refuses a changed locked field even if this is bypassed.
+     */
+    const REGISTRY_PATIENT_FIELDS = ['patientName', 'address', 'dob', 'contactNumber'];
+    const REGISTRY_CASE_FIELDS = ['caseNo', 'admissionDate', 'dateOfBite', 'siteOfBite', 'bitingAnimal', 'customAnimal', 'animalStatus', 'activeRegimen'];
+    function applyRegistryLock(lock) {
+        const modalBody = document.querySelector('#patientModal .modal-body');
+        let notice = document.getElementById('registryLockNotice');
+        if (!notice && modalBody) {
+            notice = document.createElement('div');
+            notice.id = 'registryLockNotice';
+            notice.className = 'alert alert-info d-flex flex-wrap gap-2 align-items-center';
+            modalBody.prepend(notice);
+        }
+        const setLocked = (ids, locked) => ids.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (el.tagName === 'SELECT') el.disabled = locked; else el.readOnly = locked;
+            el.classList.toggle('bg-light', locked);
+            el.title = locked ? 'Verified registry field: use Request correction' : '';
+        });
+        const patientLocked = Boolean(lock && lock.patient_locked);
+        const caseLocked = Boolean(lock && lock.case_locked);
+        setLocked(REGISTRY_PATIENT_FIELDS, patientLocked);
+        setLocked(REGISTRY_CASE_FIELDS, caseLocked);
+        document.querySelectorAll('input[name="gender"]').forEach(el => { el.disabled = patientLocked; });
+        if (notice) {
+            if (lock) {
+                notice.innerHTML = '<i class="bi bi-lock-fill"></i><span></span>'
+                    + '<a class="btn btn-sm btn-outline-primary ms-auto" target="_self"><i class="bi bi-pencil-square me-1"></i>Request correction</a>';
+                notice.querySelector('span').textContent = lock.message;
+                notice.querySelector('a').href = lock.correction_url;
+                notice.classList.remove('d-none');
+            } else {
+                notice.classList.add('d-none');
+            }
+        }
+    }
+
     async function editPatient(caseId) {
         try {
             const res = await fetch(`${apiBase}?action=view&case_id=${caseId}`);
@@ -5325,6 +5444,7 @@ body.sidebar-collapsed .main {
             }
 
             togglePhilhealthStatus();
+            applyRegistryLock(data.registry_lock || null);
 
             if (data.patient_id) {
                 const histRes = await fetch(`${apiBase}?action=patient_history&patient_id=${data.patient_id}`);
@@ -5389,6 +5509,8 @@ body.sidebar-collapsed .main {
             document.getElementById('editPatientId').value = data.patient_id;
             caseServerStatus = null;
             document.getElementById('modalTitle').textContent = 'New Case for Returning Patient';
+            // The new case is not verified; the shared patient details stay locked if verified.
+            applyRegistryLock(data.registry_lock ? Object.assign({}, data.registry_lock, { case_locked: false }) : null);
             document.getElementById('patientName').value = data.patient_name || '';
             document.getElementById('address').value = data.address || '';
             document.getElementById('dob').value = data.dob || '';
@@ -5635,6 +5757,7 @@ body.sidebar-collapsed .main {
         document.getElementById('editPatientId').value = '';
         caseServerStatus = null;
         document.getElementById('modalTitle').textContent = 'Add New Patient';
+        applyRegistryLock(null);
         document.getElementById('patientForm').reset();
         setPhilhealthType('');
         document.getElementById('caseNo').value = '';
@@ -5724,51 +5847,17 @@ body.sidebar-collapsed .main {
         });
     });
 
-    document.getElementById('exportBtn').addEventListener('click', async function() {
-        try {
-            let data = allPatients;
-            if (!data || data.length === 0) {
-                showToast('No data to export', '', true);
-                return;
-            }
-
-            const headers = [
-                'Case No.', 'Patient Name', 'PhilHealth', 'PhilHealth Type', 
-                'Birth Date', 'Age', 'Gender', 'Address', 
-                'Vaccination Status', 'Record Status'
-            ];
-            
-            let csv = headers.join(',') + '\n';
-            data.forEach(p => {
-                const row = [
-                    `"${(p.case_no || '').replace(/"/g, '""')}"`,
-                    `"${(p.patient_name || '').replace(/"/g, '""')}"`,
-                    p.philhealth || 'No',
-                    `"${(p.philhealth_type || '').replace(/"/g, '""')}"`,
-                    p.dob || '',
-                    p.age ?? '',
-                    p.gender || '',
-                    `"${(p.address || '').replace(/"/g, '""')}"`,
-                    p.vaccination_status || 'Pending',
-                    p.philhealth === 'Yes' ? (p.status || 'For Writing') : 'Not Applicable'
-                ];
-                csv += row.join(',') + '\n';
-            });
-
-            const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = `patients_${new Date().toISOString().slice(0,10)}.csv`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(link.href);
-            
-            showToast('Export successful', `${data.length} records exported`);
-        } catch (e) {
-            showToast('Export failed', e.message, true);
+    // Exports are generated on the server from the same list (date, search,
+    // filter) as the table: every row, PDF or CSV with the report header.
+    function exportPatients(format) {
+        if (!allPatients || allPatients.length === 0) {
+            showToast('No data to export', '', true);
+            return;
         }
-    });
+        window.location.href = (lastFetchUrl || `${apiBase}?action=fetch&filter=${encodeURIComponent(currentFilter)}`) + `&export=${format}`;
+    }
+    document.getElementById('exportBtn').addEventListener('click', () => exportPatients('csv'));
+    document.getElementById('exportPdfBtn').addEventListener('click', () => exportPatients('pdf'));
 
     document.getElementById('dob').addEventListener('change', function() {
         const dob = this.value;
@@ -5842,6 +5931,9 @@ body.sidebar-collapsed .main {
             searchTerm = initialSearch;
         }
         renderTable();
+        // ?edit_case=ID (e.g. a "Fix" link in the Data Quality report) opens that case for editing.
+        const editCaseId = parseInt(new URLSearchParams(window.location.search).get('edit_case') || '', 10);
+        if (editCaseId > 0) editPatient(editCaseId);
         
         const category = document.getElementById('vaccCategory').value;
         const route = document.getElementById('route').value;

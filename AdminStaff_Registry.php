@@ -4,6 +4,7 @@ require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/patient_display_helper.php';
+require_once 'sources/registry_lock_helpers.php';
 
 $user = workflowRequireUser($conn, 4);
 
@@ -22,6 +23,19 @@ if (preg_match('/^db_(\d+)$/', (string)($_GET['notification'] ?? ''), $notificat
 }
 $notification_count = getAdminStaffNotificationCount($conn, $branchId);
 $csrf = workflowCsrfToken();
+
+// Verify again a record corrected after verification (For Re-verification).
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reverify') {
+    try {
+        workflowVerifyCsrf();
+        workflowFlash('success', registryReverify($conn, $userId, $branchId, (int)($_POST['registry_id'] ?? 0),
+            (string)($_POST['verification_remarks'] ?? '')));
+    } catch (Throwable $e) {
+        workflowFlash('danger', $e->getMessage());
+    }
+    header('Location: AdminStaff_Registry.php');
+    exit;
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
@@ -77,6 +91,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $existingStmt->close();
         $animalStatus = (string)($visit['animal_status'] ?? '');
         if ($regimen === '') $regimen = (string)($visit['assessed_regimen'] ?? '');
+        // A verified record keeps its registry values: verifying the next dose
+        // only adds that dose. Other changes go through Request correction.
+        $registryLock = registryLockForCase($conn, $caseId);
+        if ($registryLock) {
+            if ($registryLock['registry_status'] === 'For Re-verification') {
+                throw new RuntimeException('This record has a correction waiting for re-verification. Verify the correction first (For Re-verification list above).');
+            }
+            registryLockAssertUnchanged($conn, $caseId, null, [
+                'registry.registry_number' => $registryNumber, 'registry.erig' => (string)$erig, 'registry.ats' => (string)$ats,
+                'registry.tt' => (string)$tt, 'registry.active_regimen' => $regimen, 'registry.remarks' => $remarks,
+            ]);
+        }
 
         if ($existing) {
             $registryId = (int)$existing['registry_id'];
@@ -134,7 +160,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $queueStmt = $conn->prepare(
     "SELECT v.visit_id,v.visit_date,v.workflow_status,p.full_name,p.contact_number,c.case_id,c.case_number,
             c.animal_status,a.bite_category,a.treatment_profile,a.route,a.active_regimen,a.chart_signed_at,
-            r.registry_number,r.erig,r.ats,r.tt,r.remarks,
+            r.registry_number,r.erig,r.ats,r.tt,r.remarks,r.registry_status,
             " . patientCaseVaccinationStatusSql('c') . " AS treatment_status
      FROM patient_visits v INNER JOIN patients p ON p.patient_id=v.patient_id
      INNER JOIN animal_bite_cases c ON c.case_id=v.case_id
@@ -161,6 +187,9 @@ foreach ($records as $record) {
 $branchName = (string)($user['branch_name'] ?? $branchId);
 $username = (string)($user['username'] ?? 'Administrative Staff');
 $flash = workflowTakeFlash();
+$pendingCorrections = registryCorrectionsPending($conn, $branchId);
+$correctionsByRegistry = [];
+foreach ($pendingCorrections as $correction) $correctionsByRegistry[(int)$correction['registry_id']][] = $correction;
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -779,6 +808,7 @@ $flash = workflowTakeFlash();
                 <li><a class="active" href="AdminStaff_Registry.php"><i class="bi bi-journal-check"></i><span>Registry Queue</span></a></li>
                 <li><a href="AdminStaff_PhilhealthWorkflow.php"><i class="bi bi-check2-all"></i><span>PhilHealth Workflow</span></a></li>
                 <li><a href="AdminStaff_MedicalDocuments.php"><i class="bi bi-file-earmark-ruled"></i><span>Medical Documents</span></a></li>
+                <li><a href="AdminStaff_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
                 <li>
                     <a href="AdminStaff_Notifications.php" class="notification-link">
                         <i class="bi bi-bell-fill"></i>
@@ -853,6 +883,56 @@ $flash = workflowTakeFlash();
                     <p>Registry verification completed</p>
                 </div>
             </div>
+
+            <?php if ($correctionsByRegistry): ?>
+            <section class="content-card mb-4" id="reverification">
+                <div class="content-card-header">
+                    <div>
+                        <h5><span class="section-icon"><i class="bi bi-arrow-repeat"></i></span>For Re-verification</h5>
+                        <p>Verified records that were corrected. Check the old and new values and the reason, then verify again to lock the record.</p>
+                    </div>
+                    <span class="badge rounded-pill text-bg-warning"><?php echo count($correctionsByRegistry); ?></span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table registry-table align-middle">
+                        <thead><tr><th>Patient and Case</th><th>Correction</th><th>Changes (old → new)</th><th>Verify again</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($correctionsByRegistry as $registryId => $corrections): ?>
+                            <?php $first = $corrections[0]; ?>
+                            <tr>
+                                <td>
+                                    <div class="patient-name"><?php echo workflowH($first['full_name']); ?></div>
+                                    <div class="case-number"><?php echo workflowH($first['case_number']); ?> · Registry <?php echo workflowH((string)$first['registry_number']); ?></div>
+                                    <a class="small" href="<?php echo workflowH(registryCorrectionUrl((int)$first['case_id'])); ?>">Open correction page</a>
+                                </td>
+                                <td class="small">
+                                    <?php foreach ($corrections as $c): ?>
+                                        <div class="mb-2">#<?php echo (int)$c['correction_id']; ?> by <?php echo workflowH(($c['requester_name'] ?? '') . ' (' . ($c['requester_role'] ?? '') . ')'); ?>,
+                                            <?php echo workflowH(date('M d, Y h:i A', strtotime($c['requested_at']))); ?>
+                                            <div class="text-muted">Reason: <?php echo workflowH($c['reason']); ?></div></div>
+                                    <?php endforeach; ?>
+                                </td>
+                                <td class="small">
+                                    <?php foreach ($corrections as $c): foreach ($c['changes_list'] as $ch): ?>
+                                        <div><strong><?php echo workflowH($ch['label']); ?>:</strong> <?php echo workflowH($ch['old'] === '' ? '—' : $ch['old']); ?> → <?php echo workflowH($ch['new'] === '' ? '—' : $ch['new']); ?></div>
+                                    <?php endforeach; endforeach; ?>
+                                </td>
+                                <td style="min-width:220px;">
+                                    <form method="post" onsubmit="return confirm('Verify this corrected record again? It will be locked.');">
+                                        <input type="hidden" name="csrf_token" value="<?php echo workflowH($csrf); ?>">
+                                        <input type="hidden" name="action" value="reverify">
+                                        <input type="hidden" name="registry_id" value="<?php echo (int)$registryId; ?>">
+                                        <input class="form-control form-control-sm mb-2" name="verification_remarks" maxlength="500" placeholder="Remark (optional)">
+                                        <button type="submit" class="btn-verify w-100"><i class="bi bi-check2-circle"></i> Verify again</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+            <?php endif; ?>
 
             <section class="content-card">
                 <div class="content-card-header">
@@ -931,6 +1011,11 @@ $flash = workflowTakeFlash();
                                         </div>
                                     </td>
                                     <td>
+                                        <?php $rowLocked = in_array((string)($row['registry_status'] ?? ''), REGISTRY_LOCKED_STATUSES, true); ?>
+                                        <?php if ($row['workflow_status'] === 'For Registry' && $rowLocked): ?>
+                                            <div class="small text-info mb-2"><i class="bi bi-lock-fill"></i> This case was verified before: its registry values are locked. Verifying adds this dose only.
+                                                <a href="<?php echo workflowH(registryCorrectionUrl((int)$row['case_id'])); ?>">Request correction</a></div>
+                                        <?php endif; ?>
                                         <?php if ($row['workflow_status'] === 'For Registry'): ?>
                                             <form method="post" class="registry-form"
                                                   data-patient="<?php echo workflowH($row['full_name']); ?>"
@@ -944,6 +1029,7 @@ $flash = workflowTakeFlash();
                                                         <input
                                                             class="form-control form-control-sm"
                                                             name="registry_number"
+                                                            <?php echo $rowLocked ? 'readonly' : ''; ?>
                                                             required
                                                             value="<?php echo workflowH($row['registry_number'] ?: $row['case_number']); ?>"
                                                             placeholder="Registry number"
@@ -957,6 +1043,7 @@ $flash = workflowTakeFlash();
                                                             min="0"
                                                             class="form-control form-control-sm"
                                                             name="erig"
+                                                            <?php echo $rowLocked ? 'readonly' : ''; ?>
                                                             value="<?php echo workflowH((string)($row['erig'] ?? 0)); ?>"
                                                         >
                                                     </div>
@@ -968,6 +1055,7 @@ $flash = workflowTakeFlash();
                                                             min="0"
                                                             class="form-control form-control-sm"
                                                             name="ats"
+                                                            <?php echo $rowLocked ? 'readonly' : ''; ?>
                                                             value="<?php echo workflowH((string)($row['ats'] ?? 0)); ?>"
                                                         >
                                                     </div>
@@ -978,6 +1066,7 @@ $flash = workflowTakeFlash();
                                                                 class="form-check-input"
                                                                 type="checkbox"
                                                                 name="tt"
+                                                                <?php echo $rowLocked ? 'onclick="return false;" title="Locked: use Request correction"' : ''; ?>
                                                                 id="tt-<?php echo (int)$row['visit_id']; ?>"
                                                                 <?php echo !empty($row['tt']) ? 'checked' : ''; ?>
                                                             >
@@ -991,6 +1080,7 @@ $flash = workflowTakeFlash();
                                                         <input
                                                             class="form-control form-control-sm"
                                                             name="active_regimen"
+                                                            <?php echo $rowLocked ? 'readonly' : ''; ?>
                                                             value="<?php echo workflowH($row['active_regimen'] ?? ''); ?>"
                                                             placeholder="Active regimen"
                                                         >
@@ -1000,6 +1090,7 @@ $flash = workflowTakeFlash();
                                                         <input
                                                             class="form-control form-control-sm"
                                                             name="remarks"
+                                                            <?php echo $rowLocked ? 'readonly' : ''; ?>
                                                             value="<?php echo workflowH($row['remarks'] ?? ''); ?>"
                                                             placeholder="Registry remarks"
                                                         >
@@ -1016,6 +1107,11 @@ $flash = workflowTakeFlash();
                                             </form>
                                         <?php else: ?>
                                             <div class="registered-summary">
+                                                <?php if (($row['registry_status'] ?? '') === 'For Re-verification'): ?>
+                                                    <span class="badge text-bg-warning mb-2">For Re-verification</span>
+                                                <?php elseif ($rowLocked): ?>
+                                                    <span class="badge text-bg-success mb-2"><i class="bi bi-lock-fill"></i> Verified · locked</span>
+                                                <?php endif; ?>
                                                 <div class="detail-label">Registry Number</div>
                                                 <strong><?php echo workflowH($row['registry_number'] ?? 'Registered'); ?></strong>
                                                 <div class="small text-muted mt-2">
@@ -1025,6 +1121,9 @@ $flash = workflowTakeFlash();
                                                     &nbsp;|&nbsp;
                                                     TT: <?php echo !empty($row['tt']) ? 'Yes' : 'No'; ?>
                                                 </div>
+                                                <?php if ($rowLocked): ?>
+                                                    <a class="btn btn-sm btn-outline-primary mt-2" href="<?php echo workflowH(registryCorrectionUrl((int)$row['case_id'])); ?>"><i class="bi bi-pencil-square me-1"></i>Request correction</a>
+                                                <?php endif; ?>
                                             </div>
                                         <?php endif; ?>
                                     </td>

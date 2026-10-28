@@ -3,6 +3,7 @@ session_start();
 
 require_once __DIR__ . '/sources/db_connect.php';
 require_once __DIR__ . '/sources/mailer.php';
+require_once __DIR__ . '/sources/login_security_helpers.php';
 
 if (!isset($_SESSION['user_id'], $_SESSION['role_id'])) {
     header('Location: login.php');
@@ -84,28 +85,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new RuntimeException('The current password is incorrect.');
         }
 
-        if (strlen($newPassword) < 8) {
-            throw new RuntimeException('The new password must contain at least 8 characters.');
-        }
-
-        if (strlen($newPassword) > 128) {
-            throw new RuntimeException('The new password must not exceed 128 characters.');
-        }
-
-        if (!preg_match('/[A-Z]/', $newPassword)) {
-            throw new RuntimeException('The new password must contain an uppercase letter.');
-        }
-
-        if (!preg_match('/[a-z]/', $newPassword)) {
-            throw new RuntimeException('The new password must contain a lowercase letter.');
-        }
-
-        if (!preg_match('/[0-9]/', $newPassword)) {
-            throw new RuntimeException('The new password must contain a number.');
-        }
-
-        if (!preg_match('/[^A-Za-z0-9]/', $newPassword)) {
-            throw new RuntimeException('The new password must contain a special character.');
+        // Shared rule (sources/login_security_helpers.php): 8+ characters with letters and numbers.
+        if (($passwordProblem = passwordPolicyProblem($newPassword)) !== null) {
+            throw new RuntimeException($passwordProblem);
         }
 
         if ($newPassword !== $confirmPassword) {
@@ -647,7 +629,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 type="password"
                                 autocomplete="new-password"
                                 minlength="8"
-                                maxlength="128"
+                                maxlength="72"
                                 required
                             >
                             <button class="password-toggle" type="button" data-password-target="new_password" aria-label="Show new password">
@@ -671,7 +653,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 type="password"
                                 autocomplete="new-password"
                                 minlength="8"
-                                maxlength="128"
+                                maxlength="72"
                                 required
                             >
                             <button class="password-toggle" type="button" data-password-target="confirm_password" aria-label="Show password confirmation">
@@ -682,11 +664,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     <ul class="password-rules mb-4" id="passwordRules">
                         <li data-rule="length">At least 8 characters</li>
-                        <li data-rule="upper">One uppercase letter</li>
-                        <li data-rule="lower">One lowercase letter</li>
-                        <li data-rule="number">One number</li>
-                        <li data-rule="special">One special character</li>
+                        <li data-rule="letter">At least one letter</li>
+                        <li data-rule="number">At least one number</li>
                         <li data-rule="match">Passwords match</li>
+                        <li data-rule="upper" class="text-muted">Optional, for a stronger password: an uppercase letter and a special character</li>
                     </ul>
 
                     <div class="button-row d-flex justify-content-end gap-2">
@@ -725,7 +706,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             const value = newPassword.value;
             const checks = {
                 length: value.length >= 8,
-                upper: /[A-Z]/.test(value),
+                letter: /[A-Za-z]/.test(value),
+                upper: /[A-Z]/.test(value) && /[^A-Za-z0-9]/.test(value),
                 lower: /[a-z]/.test(value),
                 number: /[0-9]/.test(value),
                 special: /[^A-Za-z0-9]/.test(value),
@@ -736,7 +718,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 item.classList.toggle('met', Boolean(checks[item.dataset.rule]));
             });
 
-            const score = ['length', 'upper', 'lower', 'number', 'special']
+            const score = ['length', 'letter', 'number', 'lower', 'special']
                 .filter(function (key) { return checks[key]; })
                 .length;
 

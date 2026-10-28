@@ -2,6 +2,7 @@
 session_start();
 
 require_once __DIR__ . '/sources/db_connect.php';
+require_once __DIR__ . '/sources/login_security_helpers.php';
 
 $error = '';
 $success = '';
@@ -100,23 +101,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $validRequest && $account) {
         if ($password === '' || $confirmPassword === '') {
             throw new RuntimeException('Enter and confirm your new password.');
         }
-        if (strlen($password) < 8) {
-            throw new RuntimeException('The new password must contain at least 8 characters.');
-        }
-        if (strlen($password) > 128) {
-            throw new RuntimeException('The new password must not exceed 128 characters.');
-        }
-        if (!preg_match('/[A-Z]/', $password)) {
-            throw new RuntimeException('The new password must contain an uppercase letter.');
-        }
-        if (!preg_match('/[a-z]/', $password)) {
-            throw new RuntimeException('The new password must contain a lowercase letter.');
-        }
-        if (!preg_match('/[0-9]/', $password)) {
-            throw new RuntimeException('The new password must contain a number.');
-        }
-        if (!preg_match('/[^A-Za-z0-9]/', $password)) {
-            throw new RuntimeException('The new password must contain a special character.');
+        // Shared rule (sources/login_security_helpers.php): 8+ characters with letters and numbers.
+        if (($passwordProblem = passwordPolicyProblem($password)) !== null) {
+            throw new RuntimeException($passwordProblem);
         }
         if ($password !== $confirmPassword) {
             throw new RuntimeException('The new password and confirmation do not match.');
@@ -410,7 +397,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $validRequest && $account) {
                     <div class="mb-3">
                         <label for="password" class="form-label">New Password</label>
                         <div class="password-wrap">
-                            <input type="password" class="form-control" id="password" name="password" required minlength="8" maxlength="128" autocomplete="new-password">
+                            <input type="password" class="form-control" id="password" name="password" required minlength="8" maxlength="72" autocomplete="new-password">
                             <button type="button" class="password-toggle" data-target="password" aria-label="Show or hide password">
                                 <i class="bi bi-eye"></i>
                             </button>
@@ -420,7 +407,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $validRequest && $account) {
                     <div class="mb-2">
                         <label for="confirm_password" class="form-label">Confirm New Password</label>
                         <div class="password-wrap">
-                            <input type="password" class="form-control" id="confirm_password" name="confirm_password" required minlength="8" maxlength="128" autocomplete="new-password">
+                            <input type="password" class="form-control" id="confirm_password" name="confirm_password" required minlength="8" maxlength="72" autocomplete="new-password">
                             <button type="button" class="password-toggle" data-target="confirm_password" aria-label="Show or hide password">
                                 <i class="bi bi-eye"></i>
                             </button>
@@ -428,7 +415,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $validRequest && $account) {
                     </div>
 
                     <div class="requirements">
-                        Use at least 8 characters with an uppercase letter, lowercase letter, number, and special character.
+                        Use at least 8 characters with both letters and numbers.
                     </div>
 
                     <button type="submit" class="btn-reset mt-4">

@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once __DIR__ . '/sources/login_security_helpers.php';
 require_once 'sources/mailer.php';
 
 if (
@@ -69,7 +70,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             addAuditLog($conn, $_SESSION['user_id'], "Failed to create branch admin - Username or email already exists: $username, $email");
         } else {
             // Generate temporary password
-            $temp_password = bin2hex(random_bytes(6)); // 12 characters
+            $temp_password = passwordGenerateTemporary(12); // 12 characters, letters and numbers
             $hashed_password = password_hash($temp_password, PASSWORD_DEFAULT);
             
             // Insert user

@@ -168,6 +168,13 @@ if (!in_array($forecast_days, $allowed_forecast_days, true)) {
     $forecast_days = 30;
 }
 
+// Export the latest SAVED forecast (PDF/CSV) before anything below could
+// start a forecast run: exporting never runs a new forecast.
+if (in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
+    require_once 'sources/report_center.php';
+    reportForecastExport($conn, $user_id, $branch_id, $forecast_days, (string)$_GET['export']);
+}
+
 $minimum_records_per_item = 15;
 $forecast_message = '';
 $forecast_message_type = 'info';
@@ -1275,6 +1282,8 @@ while ($row = $items_result->fetch_assoc()) {
                 <h6><i class="bi bi-calendar-range me-2"></i>Forecast Horizon</h6>
                 <p>Select how far ahead the system should forecast. Each horizon is saved separately.</p>
                 <a href="ForecastAccuracy.php" class="btn btn-sm btn-outline-primary mt-2"><i class="bi bi-clipboard-data me-1"></i>View Forecast Accuracy</a>
+                <a href="BranchAdmin_Forecasting.php?days=<?php echo (int)$forecast_days; ?>&amp;export=pdf" class="btn btn-sm btn-outline-primary mt-2"><i class="bi bi-file-earmark-pdf me-1"></i>Export <?php echo (int)$forecast_days; ?>-day PDF</a>
+                <a href="BranchAdmin_Forecasting.php?days=<?php echo (int)$forecast_days; ?>&amp;export=csv" class="btn btn-sm btn-outline-primary mt-2"><i class="bi bi-filetype-csv me-1"></i>Export <?php echo (int)$forecast_days; ?>-day CSV</a>
             </div>
             <div class="forecast-horizon-options" role="group" aria-label="Forecast horizon">
                 <?php foreach ($allowed_forecast_days as $days_option): ?>

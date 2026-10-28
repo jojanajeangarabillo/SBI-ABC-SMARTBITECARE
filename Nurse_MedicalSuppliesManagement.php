@@ -655,6 +655,7 @@ $flash = workflowTakeFlash();
             <li><a href="Nurse_DailyInventory.php"><i class="bi bi-clipboard-data-fill"></i><span>Daily Inventory</span></a></li>
             <li><a class="active" href="Nurse_MedicalSuppliesManagement.php" aria-current="page"><i class="bi bi-box2-heart-fill"></i><span>Medical Supply Monitoring</span></a></li>
             <li><a href="Nurse_Supplyforecasting.php"><i class="bi bi-graph-up-arrow"></i><span>Supply Forecasting</span></a></li>
+            <li><a href="Nurse_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
             <li><a  href="Nurse_Notification.php" class="notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
                         <?php if ($notification_count > 0): ?>
                             <span class="notification-badge"><?php echo $notification_count; ?></span>
@@ -705,6 +706,8 @@ $flash = workflowTakeFlash();
             <div class="col-xl-3 col-md-6"><div class="stat-card out"><div class="stat-icon"><i class="bi bi-x-octagon-fill"></i></div><div><div class="stat-label">Out of Stock</div><div class="stat-value"><?= (int)$stats['out'] ?></div></div></div></div>
             <div class="col-xl-3 col-md-6"><div class="stat-card expiring"><div class="stat-icon"><i class="bi bi-calendar2-exclamation-fill"></i></div><div><div class="stat-label">Expiring Within 30 Days</div><div class="stat-value"><?= (int)$stats['expiring'] ?></div></div></div></div>
         </div>
+
+        <?= inventoryApprovalPendingDeliveriesNote($conn, $branchId, 'Ask the Branch Admin to approve it if the item is needed now.') ?>
 
         <section class="content-card" id="recordSupplyUsage">
             <div class="card-head">

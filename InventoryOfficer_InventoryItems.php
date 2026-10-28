@@ -2741,6 +2741,9 @@ body {
         <?php endif; ?>
 
 
+        <?php echo !empty($branch_id) ? inventoryApprovalPendingDeliveriesNote($conn, (string)$branch_id) : ''; ?>
+
+
         <!-- TOOLBAR -->
 
         <div class="toolbar">

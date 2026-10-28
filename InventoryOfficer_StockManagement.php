@@ -247,224 +247,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $validDate = validYmdDate($transaction_date);
 
-    /* ------------------------- STOCK IN ------------------------- */
+    /* ------------------- STOCK IN (approval request) ------------------- */
+    /*
+     * A delivery (new batch or added quantity) is saved as a Pending stock_in
+     * request; nothing is added to inventory_stocks until the Branch Admin
+     * approves it. On approval the same Stock In code runs once
+     * (inventoryStockInApply), dated the approval moment, and a linked
+     * restock request is fulfilled then.
+     */
     if ($action === 'stock_in') {
-        $batch_lot_no = trim($_POST['batch_lot_no'] ?? '');
+        $batch_lot_no = trim((string)($_POST['batch_lot_no'] ?? ''));
         $restockRequestId = filter_input(INPUT_POST, 'restock_request_id', FILTER_VALIDATE_INT) ?: null;
-        $manufacturing_date = trim($_POST['manufacturing_date'] ?? '');
-        $expiration_date = trim($_POST['expiration_date'] ?? '');
-
-        if ($expiration_date === '') $expiration_date = null;
-        if ($manufacturing_date === '') $manufacturing_date = null;
+        $manufacturing_date = trim((string)($_POST['manufacturing_date'] ?? ''));
+        $expiration_date = trim((string)($_POST['expiration_date'] ?? ''));
 
         if (!$item_id || $item_id <= 0 || !$quantity || $quantity <= 0 || !$validDate) {
             redirectWithMessage('error', 'Please enter a valid item, positive quantity, and transaction date.', 'stockIn');
         }
-
-        $itemStmt = $conn->prepare("SELECT i.item_id, i.item_name, i.category_id, i.unit_id,
-                                           c.category_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), u.unit_name) AS unit_name
-                                    FROM inventory_items i
-                                    INNER JOIN inventory_categories c ON i.category_id = c.category_id
-                                    INNER JOIN units u ON i.unit_id = u.unit_id
-                                    WHERE i.item_id = ?
-                                    LIMIT 1");
-        if (!$itemStmt) redirectWithMessage('error', 'Unable to verify the selected item.', 'stockIn');
-        $itemStmt->bind_param('i', $item_id);
-        $itemStmt->execute();
-        $itemData = $itemStmt->get_result()->fetch_assoc();
-        $itemStmt->close();
-
-        if (!$itemData) {
-            redirectWithMessage('error', 'Selected item does not exist.', 'stockIn');
-        }
-
-        try {
-            stockQuantityValidateUnit($quantityScaled, $itemData);
-        } catch (InvalidArgumentException $e) {
-            redirectWithMessage('error', $e->getMessage(), 'stockIn');
-        }
-        $requiresBatchTracking = requiresBatchTracking($itemData['category_name']);
-
-        if ($requiresBatchTracking) {
-            if ($batch_lot_no === '') {
-                redirectWithMessage('error', 'Batch/Lot No. is required for Vaccines and Medical Supplies.', 'stockIn');
-            }
-
-            if ($manufacturing_date === null || !validYmdDate($manufacturing_date)) {
-                redirectWithMessage('error', 'A valid Manufacturing Date is required for Vaccines and Medical Supplies.', 'stockIn');
-            }
-
-            if ($expiration_date === null || !validYmdDate($expiration_date)) {
-                redirectWithMessage('error', 'A valid Expiration Date is required for Vaccines and Medical Supplies.', 'stockIn');
-            }
-
-            if ($expiration_date <= $manufacturing_date) {
-                redirectWithMessage('error', 'Expiration Date must be later than Manufacturing Date.', 'stockIn');
-            }
-
-
-            if ($expiration_date < date('Y-m-d')) {
-                redirectWithMessage('error', 'Expired stock cannot be received. Please enter a valid non-expired batch.', 'stockIn');
-            }
-        } else {
-            $batch_lot_no = null;
-            $manufacturing_date = null;
-            $expiration_date = null;
-        }
+        if (mb_strlen($remarks) > 500) redirectWithMessage('error', 'Keep the remarks within 500 characters.', 'stockIn');
 
         $conn->begin_transaction();
-
         try {
-            $origin=stockReceiptSourceFromForm($conn,(string)$branch_id,$_POST);
-            if ($requiresBatchTracking) {
-                $archivedBatchStmt = $conn->prepare("SELECT stock_id
-                                                     FROM inventory_stocks_archive
-                                                     WHERE item_id = ?
-                                                       AND branch_id = ?
-                                                       AND batch_lot_no = ?
-                                                     LIMIT 1");
-                if (!$archivedBatchStmt) throw new Exception('Unable to check archived batch history.');
-                $archivedBatchStmt->bind_param('iss', $item_id, $branch_id, $batch_lot_no);
-                $archivedBatchStmt->execute();
-                $archivedBatchExists = $archivedBatchStmt->get_result()->num_rows > 0;
-                $archivedBatchStmt->close();
-
-                if ($archivedBatchExists) {
-                    throw new Exception('This Batch/Lot No. was already disposed and archived. Use a new Batch/Lot No. for newly received stock.');
-                }
-
-                $stockStmt = $conn->prepare("SELECT stock_id, quantity_available, manufacturing_date, expiration_date
-                                             FROM inventory_stocks
-                                             WHERE item_id = ?
-                                               AND branch_id = ?
-                                               AND batch_lot_no = ?
-                                             LIMIT 1
-                                             FOR UPDATE");
-                if (!$stockStmt) throw new Exception('Unable to check existing batch stock.');
-                $stockStmt->bind_param('iss', $item_id, $branch_id, $batch_lot_no);
-            } else {
-                $stockStmt = $conn->prepare("SELECT stock_id, quantity_available
-                                             FROM inventory_stocks
-                                             WHERE item_id = ?
-                                               AND branch_id = ?
-                                               AND batch_lot_no IS NULL
-                                               AND expiration_date IS NULL
-                                             LIMIT 1
-                                             FOR UPDATE");
-                if (!$stockStmt) throw new Exception('Unable to check existing stock.');
-                $stockStmt->bind_param('is', $item_id, $branch_id);
-            }
-
-            $stockStmt->execute();
-            $stockRow = $stockStmt->get_result()->fetch_assoc();
-            $stockStmt->close();
-
-            if ($stockRow) {
-                $newQuantity = stockQuantityDecimal(stockQuantityParse($stockRow['quantity_available'], true) + $quantityScaled);
-
-                if ($requiresBatchTracking) {
-                    if (($stockRow['manufacturing_date'] ?? null) !== $manufacturing_date ||
-                        ($stockRow['expiration_date'] ?? null) !== $expiration_date) {
-                        throw new Exception('This Batch/Lot No. already exists with different Manufacturing or Expiration Dates. Please use the existing batch details or enter a new Batch/Lot No.');
-                    }
-
-                    $update = $conn->prepare("UPDATE inventory_stocks
-                                              SET quantity_available = ?
-                                              WHERE stock_id = ?
-                                                AND branch_id = ?");
-                    if (!$update) throw new Exception('Unable to prepare stock update.');
-                    $stockId = (int)$stockRow['stock_id'];
-                    $update->bind_param('sis', $newQuantity, $stockId, $branch_id);
-                } else {
-                    $update = $conn->prepare("UPDATE inventory_stocks
-                                              SET quantity_available = ?
-                                              WHERE stock_id = ?
-                                                AND branch_id = ?");
-                    if (!$update) throw new Exception('Unable to prepare stock update.');
-                    $stockId = (int)$stockRow['stock_id'];
-                    $update->bind_param('sis', $newQuantity, $stockId, $branch_id);
-                }
-
-                if (!$update->execute()) throw new Exception('Unable to update stock: ' . $update->error);
-                $update->close();
-            } else {
-                $insertStock = $conn->prepare("INSERT INTO inventory_stocks
-                                                (item_id, batch_lot_no, manufacturing_date, branch_id, quantity_available, expiration_date)
-                                                VALUES (?, ?, ?, ?, ?, ?)");
-                if (!$insertStock) throw new Exception('Unable to prepare stock insert. Make sure batch_lot_no and manufacturing_date exist in inventory_stocks.');
-                $insertStock->bind_param('isssss', $item_id, $batch_lot_no, $manufacturing_date, $branch_id, $quantity, $expiration_date);
-
-                if (!$insertStock->execute()) throw new Exception('Unable to create the stock record: ' . $insertStock->error);
-                $stockId = (int)$conn->insert_id;
-                $insertStock->close();
-            }
-
-            /* Record the Stock In transaction. */
-            $transactionDateTime = $transaction_date . ' 00:00:00';
-            $transactionRemarks = $remarks;
-
-            if ($requiresBatchTracking) {
-                $batchRemark = 'Batch/Lot No.: ' . $batch_lot_no;
-                $transactionRemarks = $batchRemark . ($remarks !== '' ? ' | ' . $remarks : '');
-            }
-
-            $transactionRemarks .= ' | Source: ' . $origin['name'] . ' (' . $origin['type'] . ')';
-            $sourceBranch=$origin['branch']; $sourceType=$origin['type']; $sourceName=$origin['name'];
-            $baseUnit=(string)$itemData['unit_name'];
-            $insertTrx = $conn->prepare("INSERT INTO stock_transactions
-                                         (item_id, user_id, vaccination_id, branch_id, transaction_type, quantity, remarks, transaction_date,
-                                          source_branch_id,receipt_source_type,source_name_snapshot,receipt_stock_id,receipt_batch_snapshot,receipt_base_unit_snapshot)
-                                         VALUES (?, ?, NULL, ?, 'IN', ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            if (!$insertTrx) throw new Exception('Unable to prepare stock transaction.');
-            $insertTrx->bind_param('iisssssssiss', $item_id, $user_id, $branch_id, $quantity, $transactionRemarks, $transactionDateTime,
-                $sourceBranch,$sourceType,$sourceName,$stockId,$batch_lot_no,$baseUnit);
-
-            if (!$insertTrx->execute()) throw new Exception('Unable to record the stock transaction: ' . $insertTrx->error);
-            $transactionId = (int)$conn->insert_id;
-            $insertTrx->close();
-
-            /* Optional link to an approved restock request (partial deliveries keep it Approved). */
-            $restockResult = null;
+            inventoryApprovalAssertReady($conn);
+            $valid = inventoryStockInValidate($conn, (string)$branch_id, (int)$item_id, $quantityScaled,
+                $batch_lot_no, $manufacturing_date, $expiration_date);
+            $origin = stockReceiptSourceFromForm($conn, (string)$branch_id, $_POST);
             if ($restockRequestId !== null) {
-                inventoryApprovalAssertReady($conn);
-                $link = $conn->prepare('UPDATE stock_transactions SET approval_request_id = ? WHERE transaction_id = ?');
-                $link->bind_param('ii', $restockRequestId, $transactionId);
-                if (!$link->execute()) throw new Exception('Unable to link the Stock In to the restock request.');
-                $link->close();
-                $restockResult = inventoryApprovalFulfil($conn, (int)$restockRequestId, (string)$branch_id, (int)$item_id,
-                    $quantityScaled, $transactionId, $user_id);
-                $transactionRemarks .= ' | Restock request #' . $restockRequestId;
+                $restock = inventoryApprovalLoad($conn, (int)$restockRequestId);
+                if (!$restock || $restock['request_type'] !== 'restock' || (string)$restock['branch_id'] !== (string)$branch_id
+                    || $restock['status'] !== 'Approved') {
+                    throw new Exception('Select an approved restock request of this branch.');
+                }
+                if ((int)$restock['item_id'] !== (int)$item_id) {
+                    throw new Exception('Restock request #' . $restockRequestId . ' is for ' . $restock['item_name'] . ', not the item received.');
+                }
             }
-
-            if (!inventoryOfficerRecordStockActivity(
-                $conn,
-                $user_id,
-                $branch_id,
-                $branch_name,
-                $username,
-                $transactionId,
-                'IN',
-                (string)$itemData['item_name'],
-                (float)$quantity,
-                (string)$itemData['unit_name'],
-                $transactionRemarks
-            )) {
-                throw new Exception('Stock In was recorded, but its audit log or Branch Admin notification could not be saved.');
-            }
-
-            // Save nurse receipt notices in the same transaction as this Stock In.
-            if ($requiresBatchTracking && !inventoryOfficerNotifyNursesStockIn(
-                $conn, (string)$branch_id, $transactionId, $stockId
-            )) {
-                throw new Exception('Unable to save the nurse receipt notification. Stock In was not saved. Try again.');
-            }
-
+            $requestId = inventoryApprovalCreate($conn, [
+                'type' => 'stock_in', 'branch_id' => (string)$branch_id, 'requested_by' => $user_id, 'source' => 'Inventory Officer',
+                'item_id' => (int)$item_id, 'item_name' => $valid['item']['item_name'], 'batch' => $valid['batch'],
+                'quantity' => $quantity, 'unit' => inventoryBaseUnitLabel($valid['item']),
+                'reason' => 'Delivery from ' . $origin['name'] . ' (' . $origin['type'] . ')',
+                'remarks' => trim('Received on ' . $transaction_date . ($remarks !== '' ? ' | ' . $remarks : '')),
+                'payload' => [
+                    'batch_lot_no' => $valid['batch'], 'manufacturing_date' => $valid['manufacturing_date'],
+                    'expiration_date' => $valid['expiration_date'], 'received_date' => $transaction_date,
+                    'stock_source_type' => $origin['type'], 'stock_source_branch_id' => (string)($origin['branch'] ?? ''),
+                    'stock_source_name' => $origin['type'] === 'External' ? (string)($_POST['stock_source_name'] ?? '') : '',
+                    'source_label' => $origin['name'], 'restock_request_id' => $restockRequestId, 'remarks' => $remarks,
+                ],
+            ]);
             $conn->commit();
-            redirectWithMessage('success', 'Stock In recorded successfully.' . ($restockResult === null ? ''
-                : ' Restock request #' . $restockRequestId . ($restockResult['complete']
-                    ? ' is now Fulfilled (' . $restockResult['fulfilled_text'] . ' received).'
-                    : ' stays Approved: ' . $restockResult['fulfilled_text'] . ' of ' . $restockResult['approved_text']
-                        . ' received, ' . $restockResult['remaining_text'] . ' remaining.')), 'stockIn');
+            redirectWithMessage('success', 'Stock In request #' . $requestId . ' for '
+                . inventoryQuantityText((float)$quantity, $valid['item']) . ' of ' . $valid['item']['item_name']
+                . ' was sent: Pending approval. The stock is added (and can be used) only when the Branch Admin approves it.'
+                . ($restockRequestId !== null ? ' Restock request #' . $restockRequestId . ' is updated on approval.' : ''), 'requests');
         } catch (Throwable $e) {
             $conn->rollback();
             redirectWithMessage('error', $e->getMessage(), 'stockIn');
@@ -830,7 +666,8 @@ if ($branch_id && $approvalsReady) {
         $openRestocksByItem[(string)$restock['item_id']][] = [
             'request_id' => (int)$restock['request_id'],
             'label' => '#' . $restock['request_id'] . ' — ' . ($restock['requester_name'] ?? 'user')
-                . ' (' . ($restock['source'] ?: 'Request') . '), remaining ' . $restock['remaining_text'],
+                . ' (' . ($restock['source'] ?: 'Request') . '), remaining ' . $restock['remaining_text']
+                . ($restock['pending_delivery_text'] !== '' ? ', ' . $restock['pending_delivery_text'] . ' awaiting approval' : ''),
         ];
     }
     foreach (inventoryApprovalList($conn, ['branch_id' => (string)$branch_id, 'statuses' => ['Pending'],
@@ -1461,6 +1298,8 @@ body{
             </div>
         <?php endif; ?>
 
+        <?php echo $branch_id ? inventoryApprovalPendingDeliveriesNote($conn, (string)$branch_id) : ''; ?>
+
         <div class="tab-row">
             <button type="button" class="tab-btn <?php echo $activePanel === 'stockIn' ? 'active' : ''; ?>" onclick="showPanel('stockIn', this)">Stock In</button>
             <button type="button" class="tab-btn <?php echo $activePanel === 'stockOut' ? 'active' : ''; ?>" onclick="showPanel('stockOut', this)">Stock Out</button>
@@ -1479,7 +1318,8 @@ body{
              ===================================================== -->
         <div class="panel <?php echo $activePanel === 'stockIn' ? 'active' : ''; ?>" id="stockIn">
             <div class="form-card">
-                <div class="section-title">Record Stock In</div>
+                <div class="section-title">Request Stock In</div>
+                <div class="form-text-small mb-3">A delivery is sent to the Branch Admin for approval. The stock is added to inventory (and can be used) only when the request is approved, and it appears as Delivery in Daily Inventory on the approval date. A linked restock request is updated at that moment.</div>
 
                 <form method="POST" action="InventoryOfficer_StockManagement.php" id="stockInForm" onsubmit="return validateStockInForm();">
                     <input type="hidden" name="csrf_token" value="<?php echo h($csrfToken); ?>">
@@ -1566,7 +1406,7 @@ body{
                     </div>
 
                     <div class="mt-4">
-                        <button type="submit" class="btn-custom">Save Stock In</button>
+                        <button type="submit" class="btn-custom">Send for Approval</button>
                     </div>
                 </form>
             </div>
@@ -2266,7 +2106,7 @@ function validateStockInForm() {
         }
     }
 
-    return openConfirmationModal(document.getElementById('stockInForm'), 'Save this Stock In transaction?');
+    return openConfirmationModal(document.getElementById('stockInForm'), 'Send this Stock In to the Branch Admin for approval?');
 }
 
 /* -------------------------------------------------------------
@@ -2402,7 +2242,7 @@ function updateAdjustmentItemDetails() {
     currentStock.value = '—';
     if (stockHelp) stockHelp.textContent = batches.length
         ? 'Select the stock record whose remaining quantity you counted.'
-        : 'No stock record exists for this item in your branch. Record Stock In first.';
+        : 'No stock record exists for this item in your branch. Request a Stock In first.';
     batches.forEach(function(batch) {
         var opt = document.createElement('option');
         opt.value = batch.stock_id;

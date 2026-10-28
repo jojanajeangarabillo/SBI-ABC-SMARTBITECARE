@@ -4,247 +4,6 @@ require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
 
 // ============================================
-// FPDF CLASS WITH BETTER FORMATTING
-// ============================================
-require_once('fpdf/fpdf.php');
-
-// Turn off error display for PDF generation
-error_reporting(0);
-
-class PDF_AuditReport extends FPDF
-{
-    /** @var array<string, string> Filter parameters */
-    private $filters;
-    
-    /** @var string Logo file path */
-    private $logoPath;
-
-    /**
-     * PDF_AuditReport constructor
-     *
-     * @param array<string, string> $filters Filter parameters for display
-     */
-    function __construct($filters = [])
-    {
-        parent::__construct('L', 'mm', 'A4');
-        $this->filters = $filters;
-        $this->logoPath = __DIR__ . '/logo.png';
-        $this->SetMargins(15, 15, 15);
-        $this->SetAutoPageBreak(true, 25);
-        $this->AddPage();
-    }
-
-    function Header()
-    {
-        $this->SetFillColor(240, 244, 255);
-        $this->Rect(0, 0, 297, 50, 'F');
-        
-        if (file_exists($this->logoPath)) {
-            $this->Image($this->logoPath, 15, 6, 25);
-        }
-        
-        $this->SetY(8);
-        $this->SetFont('Arial', 'B', 13);
-        $this->SetTextColor(43, 58, 140);
-        $this->Cell(0, 6, 'SBI MEDICAL AND ANIMAL BITE CENTER', 0, 1, 'C');
-        
-        $this->SetFont('Arial', 'B', 11);
-        $this->SetTextColor(80, 80, 80);
-        $this->Cell(0, 5, 'AND VACCINATION CLINIC', 0, 1, 'C');
-        
-        $this->SetDrawColor(43, 58, 140);
-        $this->SetLineWidth(0.5);
-        $this->Line(50, 28, 247, 28);
-        
-        $this->SetY(33);
-        $this->SetFont('Arial', 'B', 15);
-        $this->SetTextColor(43, 58, 140);
-        $this->Cell(0, 7, 'AUDIT LOGS REPORT', 0, 1, 'C');
-        
-        // Filter summary
-        $this->SetY(43);
-        $this->SetFont('Arial', '', 8);
-        $this->SetTextColor(80, 80, 80);
-        
-        $filterText = '';
-        if (!empty($this->filters['date_from']) && !empty($this->filters['date_to'])) {
-            $filterText .= 'Date: ' . $this->filters['date_from'] . ' to ' . $this->filters['date_to'];
-        }
-        if (!empty($this->filters['module'])) {
-            if ($filterText) $filterText .= ' | ';
-            $filterText .= 'Module: ' . $this->filters['module'];
-        }
-        if (!empty($this->filters['username'])) {
-            if ($filterText) $filterText .= ' | ';
-            $filterText .= 'User: ' . $this->filters['username'];
-        }
-        if (!empty($this->filters['branch_name'])) {
-            if ($filterText) $filterText .= ' | ';
-            $filterText .= 'Branch: ' . $this->filters['branch_name'];
-        }
-        if (!empty($this->filters['action_type'])) {
-            if ($filterText) $filterText .= ' | ';
-            $filterText .= 'Action: ' . $this->filters['action_type'];
-        }
-        if (!empty($this->filters['search'])) {
-            if ($filterText) $filterText .= ' | ';
-            $filterText .= 'Search: "' . $this->filters['search'] . '"';
-        }
-        if (empty($filterText)) {
-            $filterText = 'All Logs';
-        }
-        
-        $this->Cell(0, 4, 'Filters: ' . $filterText, 0, 1, 'C');
-        
-        $this->SetY(55);
-        $this->SetDrawColor(200, 200, 200);
-        $this->SetLineWidth(0.3);
-        $this->Line(15, 55, 282, 55);
-        $this->SetY(60);
-    }
-
-    function Footer()
-    {
-        $this->SetY(-18);
-        $this->SetFont('Arial', 'I', 8);
-        $this->SetTextColor(150, 150, 150);
-        $this->Cell(0, 5, 'Generated on: ' . date('Y-m-d H:i:s'), 0, 0, 'L');
-        $this->Cell(0, 5, 'Page ' . $this->PageNo() . ' of {nb}', 0, 0, 'R');
-        $this->SetY(-15);
-        $this->SetDrawColor(200, 200, 200);
-        $this->SetLineWidth(0.2);
-        $this->Line(15, $this->GetY(), 282, $this->GetY());
-    }
-
-    /**
-     * Create a statistics box with key metrics
-     *
-     * @param array<string, int|string> $stats Associative array of stat key => value
-     */
-    function CreateStatsBox($stats)
-    {
-        $boxHeight = 45;
-        $this->SetFont('Arial', 'B', 11);
-        $this->SetFillColor(240, 244, 255);
-        $this->SetDrawColor(43, 58, 140);
-        $this->SetLineWidth(0.5);
-        
-        $x = $this->GetX();
-        $y = $this->GetY();
-        $boxWidth = 267;
-        
-        $this->Rect($x, $y, $boxWidth, $boxHeight);
-        
-        $this->SetXY($x + 5, $y + 3);
-        $this->SetFont('Arial', 'B', 10);
-        $this->SetTextColor(43, 58, 140);
-        $this->Cell(0, 5, 'REPORT SUMMARY', 0, 1, 'L');
-        
-        // Layout: 2 columns
-        $col1_x = $x + 5;
-        $col2_x = $x + 140;
-        $col_width = 120;
-        $row_height = 10;
-        
-        $items = [];
-        foreach ($stats as $key => $value) {
-            $items[] = ['key' => $key, 'value' => $value];
-        }
-        
-        $currentY = $y + 12;
-        $half = (int)ceil(count($items) / 2);
-        
-        // Column 1
-        for ($i = 0; $i < $half && $i < count($items); $i++) {
-            $this->SetXY($col1_x, $currentY + ($i * $row_height));
-            $this->SetFont('Arial', 'B', 8);
-            $this->SetTextColor(80, 80, 80);
-            // Fix: Cast height parameter to int
-            $this->Cell(45, (int)6, $items[$i]['key'] . ':', 0, 0, 'L');
-            
-            $this->SetFont('Arial', 'B', 9);
-            $this->SetTextColor(43, 58, 140);
-            // Fix: Cast height parameter to int
-            $this->Cell($col_width - 50, (int)6, $items[$i]['value'], 0, 0, 'L');
-        }
-        
-        // Column 2
-        for ($i = $half; $i < count($items); $i++) {
-            $idx = $i - $half;
-            $this->SetXY($col2_x, $currentY + ($idx * $row_height));
-            $this->SetFont('Arial', 'B', 8);
-            $this->SetTextColor(80, 80, 80);
-            // Fix: Cast height parameter to int
-            $this->Cell(45, (int)6, $items[$i]['key'] . ':', 0, 0, 'L');
-            
-            $this->SetFont('Arial', 'B', 9);
-            $this->SetTextColor(43, 58, 140);
-            // Fix: Cast height parameter to int
-            $this->Cell($col_width - 50, (int)6, $items[$i]['value'], 0, 0, 'L');
-        }
-        
-        $this->SetY($y + $boxHeight + 8);
-    }
-
-    function CreateTable($headers, $data, $columnWidths = null, $fontSize = 7)
-    {
-        if ($columnWidths === null) {
-            $columnWidths = array_fill(0, count($headers), 40);
-        }
-        
-        $totalWidth = array_sum($columnWidths);
-        if ($totalWidth > 267) {
-            $scale = 267 / $totalWidth;
-            $columnWidths = array_map(function($w) use ($scale) { return $w * $scale; }, $columnWidths);
-        }
-        
-        // Header
-        $this->SetFont('Arial', 'B', (int)$fontSize + 1);
-        $this->SetFillColor(43, 58, 140);
-        $this->SetTextColor(255, 255, 255);
-        $this->SetDrawColor(43, 58, 140);
-        $this->SetLineWidth(0.3);
-        
-        foreach ($headers as $i => $header) {
-            $this->Cell($columnWidths[$i], 8, $header, 1, 0, 'C', true);
-        }
-        $this->Ln();
-        
-        // Data
-        $this->SetFont('Arial', '', (int)$fontSize);
-        $this->SetTextColor(40, 40, 40);
-        $this->SetDrawColor(220, 220, 220);
-        $fill = false;
-        $rowCount = 0;
-        
-        foreach ($data as $row) {
-            if ($rowCount % 2 == 0) {
-                $this->SetFillColor(248, 250, 255);
-                $fill = true;
-            } else {
-                $this->SetFillColor(255, 255, 255);
-                $fill = false;
-            }
-            
-            // Calculate max height for this row
-            $maxLines = 1;
-            foreach ($row as $cell) {
-                $lines = substr_count($cell, "\n") + 1;
-                if ($lines > $maxLines) $maxLines = $lines;
-            }
-            $rowHeight = max(6, $maxLines * 5);
-            
-            foreach ($row as $i => $cell) {
-                $this->Cell($columnWidths[$i], $rowHeight, $cell, 1, 0, 'L', $fill);
-            }
-            $this->Ln();
-            $rowCount++;
-        }
-        $this->Ln(3);
-    }
-}
-
-// ============================================
 // CHECK USER PERMISSIONS
 // ============================================
 if (
@@ -260,239 +19,34 @@ if (
 $user_id = (int)$_SESSION['user_id'];
 $notification_count = getUnreadNotificationCount($conn, $user_id);
 // ============================================
-// AUDIT LOG FUNCTION
+// EXPORT (PDF or CSV) of the filtered logs, all rows, shared builders
+// (sources/report_standard.php). ?generate_pdf=1 / ?export_csv=1.
 // ============================================
-function addAuditLog($conn, $user_id, $action, $module = 'Audit Logs') {
-    $branch_id = null;
-    $user_sql = "SELECT branch_id FROM users WHERE user_id = ?";
-    $user_stmt = $conn->prepare($user_sql);
-    if ($user_stmt) {
-        $user_stmt->bind_param("i", $user_id);
-        $user_stmt->execute();
-        $user_result = $user_stmt->get_result();
-        if ($user_row = $user_result->fetch_assoc()) {
-            $branch_id = $user_row['branch_id'];
-        }
-        $user_stmt->close();
+if ((($_GET['generate_pdf'] ?? '') === '1') || (($_GET['export_csv'] ?? '') === '1')) {
+    require_once 'sources/report_standard.php';
+    $exportUserId = (int)($_GET['user_id'] ?? 0);
+    $exportUserName = '';
+    if ($exportUserId > 0) {
+        $nameStmt = $conn->prepare('SELECT username FROM users WHERE user_id = ?');
+        $nameStmt->bind_param('i', $exportUserId);
+        $nameStmt->execute();
+        $exportUserName = (string)($nameStmt->get_result()->fetch_assoc()['username'] ?? $exportUserId);
+        $nameStmt->close();
     }
-    
-    $log_sql = "INSERT INTO audit_logs (user_id, branch_id, action, module) VALUES (?, ?, ?, ?)";
-    $log_stmt = $conn->prepare($log_sql);
-    if ($log_stmt) {
-        $log_stmt->bind_param("isss", $user_id, $branch_id, $action, $module);
-        $result = $log_stmt->execute();
-        $log_stmt->close();
-        return $result;
-    }
-    return false;
-}
-
-// ============================================
-// GENERATE PDF REPORT
-// ============================================
-if (isset($_GET['generate_pdf']) && $_GET['generate_pdf'] == '1') {
-    // Clear all output buffers
-    while (ob_get_level()) {
-        ob_end_clean();
-    }
-    
-    // Start clean output buffer
-    ob_start();
-    
-    try {
-        $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-        $module_filter = isset($_GET['module']) ? trim($_GET['module']) : '';
-        $user_filter = isset($_GET['user_id']) ? intval($_GET['user_id']) : 0;
-        $branch_filter = isset($_GET['branch_id']) ? trim($_GET['branch_id']) : '';
-        $action_type = isset($_GET['action_type']) ? trim($_GET['action_type']) : '';
-        $date_from = isset($_GET['date_from']) ? trim($_GET['date_from']) : '';
-        $date_to = isset($_GET['date_to']) ? trim($_GET['date_to']) : '';
-        
-        $query = "SELECT al.log_id, al.action, al.module, al.created_at,
-                  u.user_id, u.username, u.email, u.role_id, r.role_name,
-                  b.branch_id, b.branch_name 
-                  FROM audit_logs al 
-                  LEFT JOIN users u ON al.user_id = u.user_id 
-                  LEFT JOIN roles r ON u.role_id = r.role_id
-                  LEFT JOIN branches b ON al.branch_id = b.branch_id 
-                  WHERE 1=1";
-        
-        $params = [];
-        $types = "";
-        
-        if ($search) {
-            $search_param = "%$search%";
-            $query .= " AND (al.action LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR al.module LIKE ? OR b.branch_name LIKE ?)";
-            $params[] = $search_param;
-            $params[] = $search_param;
-            $params[] = $search_param;
-            $params[] = $search_param;
-            $params[] = $search_param;
-            $types .= "sssss";
-        }
-        
-        if ($module_filter) {
-            $query .= " AND al.module = ?";
-            $params[] = $module_filter;
-            $types .= "s";
-        }
-        
-        if ($user_filter > 0) {
-            $query .= " AND al.user_id = ?";
-            $params[] = $user_filter;
-            $types .= "i";
-        }
-        
-        if ($branch_filter) {
-            $query .= " AND al.branch_id = ?";
-            $params[] = $branch_filter;
-            $types .= "s";
-        }
-        
-        if ($action_type) {
-            $query .= " AND al.action LIKE ?";
-            $params[] = "%$action_type%";
-            $types .= "s";
-        }
-        
-        if ($date_from) {
-            $query .= " AND DATE(al.created_at) >= ?";
-            $params[] = $date_from;
-            $types .= "s";
-        }
-        
-        if ($date_to) {
-            $query .= " AND DATE(al.created_at) <= ?";
-            $params[] = $date_to;
-            $types .= "s";
-        }
-        
-        $query .= " ORDER BY al.created_at DESC LIMIT 2000";
-        
-        $stmt = $conn->prepare($query);
-        if (!empty($params) && $types) {
-            $stmt->bind_param($types, ...$params);
-        }
-        $stmt->execute();
-        $result = $stmt->get_result();
-        $logs = [];
-        while ($row = $result->fetch_assoc()) {
-            $logs[] = $row;
-        }
-        $stmt->close();
-        
-        // Get filter names for display
-        $filterDisplay = [];
-        if ($date_from && $date_to) {
-            $filterDisplay['date_from'] = $date_from;
-            $filterDisplay['date_to'] = $date_to;
-        }
-        if ($module_filter) {
-            $filterDisplay['module'] = $module_filter;
-        }
-        if ($user_filter > 0) {
-            $userName = '';
-            $userStmt = $conn->prepare("SELECT username FROM users WHERE user_id = ?");
-            $userStmt->bind_param("i", $user_filter);
-            $userStmt->execute();
-            $userResult = $userStmt->get_result();
-            if ($userRow = $userResult->fetch_assoc()) {
-                $userName = $userRow['username'];
-            }
-            $userStmt->close();
-            $filterDisplay['username'] = $userName;
-        }
-        if ($branch_filter) {
-            $branchName = '';
-            $branchStmt = $conn->prepare("SELECT branch_name FROM branches WHERE branch_id = ?");
-            $branchStmt->bind_param("s", $branch_filter);
-            $branchStmt->execute();
-            $branchResult = $branchStmt->get_result();
-            if ($branchRow = $branchResult->fetch_assoc()) {
-                $branchName = $branchRow['branch_name'];
-            }
-            $branchStmt->close();
-            $filterDisplay['branch_name'] = $branchName;
-        }
-        if ($action_type) {
-            $filterDisplay['action_type'] = $action_type;
-        }
-        if ($search) {
-            $filterDisplay['search'] = $search;
-        }
-        
-        $pdf = new PDF_AuditReport($filterDisplay);
-        
-        // Calculate stats
-        $moduleList = array_filter(array_column($logs, 'module'), function($val) {
-            return $val !== null && $val !== '';
-        });
-        $moduleCount = array_count_values($moduleList);
-        arsort($moduleCount);
-        $topModules = array_slice($moduleCount, 0, 3);
-        
-        // Format top modules with line breaks if too long
-        $topModulesStr = '';
-        if (!empty($topModules)) {
-            $topModulesParts = array_map(function($k, $v) { 
-                return "$k ($v)"; 
-            }, array_keys($topModules), $topModules);
-            $topModulesStr = implode(', ', $topModulesParts);
-            // Truncate if too long
-            if (strlen($topModulesStr) > 50) {
-                $topModulesStr = substr($topModulesStr, 0, 47) . '...';
-            }
-        } else {
-            $topModulesStr = 'None';
-        }
-        
-        $userList = array_filter(array_column($logs, 'username'), function($val) {
-            return $val !== null;
-        });
-        $uniqueUsers = count(array_unique($userList));
-        
-        $pdf->CreateStatsBox([
-            'Total Logs' => count($logs),
-            'Modules Used' => count($moduleCount),
-            'Top Modules' => $topModulesStr,
-            'Unique Users' => $uniqueUsers
-        ]);
-        
-        // Better column widths - increased action column
-        $headers = ['Date/Time', 'User', 'Role', 'Module', 'Action', 'Branch'];
-        $columnWidths = [35, 30, 25, 32, 90, 35];
-        
-        $data = array_map(function($log) {
-            // Format action to wrap
-            $action = $log['action'] ?: 'N/A';
-            if (strlen($action) > 65) {
-                $action = wordwrap($action, 60, "\n", true);
-            }
-            
-            return [
-                date('Y-m-d H:i', strtotime($log['created_at'])),
-                substr($log['username'] ?: 'System', 0, 12),
-                $log['role_name'] ?: 'N/A',
-                $log['module'] ?: 'N/A',
-                $action,
-                $log['branch_name'] ?: 'N/A'
-            ];
-        }, $logs);
-        
-        $pdf->CreateTable($headers, $data, $columnWidths, 7);
-        
-        $pdf->AliasNbPages();
-        
-        // Clean buffer and output PDF
-        ob_clean();
-        $pdf->Output('D', 'Audit_Logs_Report_' . date('Y-m-d') . '.pdf');
-        exit;
-        
-    } catch (Exception $e) {
-        // If there's an error, show it
-        ob_clean();
-        die('PDF Generation Error: ' . $e->getMessage());
-    }
+    $selfStmt = $conn->prepare('SELECT branch_id FROM users WHERE user_id = ?');
+    $selfStmt->bind_param('i', $user_id);
+    $selfStmt->execute();
+    $selfBranch = (string)($selfStmt->get_result()->fetch_assoc()['branch_id'] ?? '');
+    $selfStmt->close();
+    reportStdAuditLogsSend($conn, $user_id, $selfBranch, [
+        'branch_id' => trim((string)($_GET['branch_id'] ?? '')) ?: null,
+        'search' => trim((string)($_GET['search'] ?? '')),
+        'module' => trim((string)($_GET['module'] ?? '')),
+        'action' => trim((string)($_GET['action_type'] ?? '')),
+        'user_id' => $exportUserId, 'user_name' => $exportUserName,
+        'date_from' => trim((string)($_GET['date_from'] ?? '')),
+        'date_to' => trim((string)($_GET['date_to'] ?? '')),
+    ], ($_GET['export_csv'] ?? '') === '1' ? 'csv' : 'pdf');
 }
 
 // ============================================
@@ -661,8 +215,8 @@ if ($branch_filter) $filter_params['branch_id'] = $branch_filter;
 if ($action_type) $filter_params['action_type'] = $action_type;
 if ($date_from) $filter_params['date_from'] = $date_from;
 if ($date_to) $filter_params['date_to'] = $date_to;
-$filter_params['generate_pdf'] = '1';
-$pdf_url = '?' . http_build_query($filter_params);
+$pdf_url = '?' . http_build_query($filter_params + ['generate_pdf' => '1']);
+$csv_url = '?' . http_build_query($filter_params + ['export_csv' => '1']);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1777,8 +1331,11 @@ $pdf_url = '?' . http_build_query($filter_params);
 
         <!-- Report Actions -->
         <div class="report-actions">
-            <a href="<?php echo $pdf_url; ?>" class="btn-filter-outline" target="_blank">
-                <i class="bi bi-file-earmark-pdf"></i> Generate PDF Report
+            <a href="<?php echo htmlspecialchars($pdf_url, ENT_QUOTES, 'UTF-8'); ?>" class="btn-filter-outline">
+                <i class="bi bi-file-earmark-pdf"></i> Export PDF
+            </a>
+            <a href="<?php echo htmlspecialchars($csv_url, ENT_QUOTES, 'UTF-8'); ?>" class="btn-filter-outline">
+                <i class="bi bi-filetype-csv"></i> Export CSV
             </a>
             <span style="font-size:12px;color:#8a96b8;">
                 <i class="bi bi-info-circle"></i> 
