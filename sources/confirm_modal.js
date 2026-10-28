@@ -88,7 +88,9 @@
         }
         // Esc always cancels, even before the dialog has finished opening.
         document.addEventListener('keydown', function (e) {
-            if (e.key !== 'Escape' || !state || !el.classList.contains('show')) return;
+            // state is set from the moment the dialog starts opening (the
+            // "show" class only arrives after the backdrop has faded in).
+            if (e.key !== 'Escape' || !state) return;
             e.preventDefault();
             state.result = state.single ? undefined : (state.remark ? null : false);
             state.cancelRequested = true;
