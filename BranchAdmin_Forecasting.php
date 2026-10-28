@@ -168,9 +168,9 @@ if (!in_array($forecast_days, $allowed_forecast_days, true)) {
     $forecast_days = 30;
 }
 
-// Export the latest SAVED forecast (PDF/CSV) before anything below could
+// Export the latest SAVED forecast (PDF; &inline=1 for Print) before anything below could
 // start a forecast run: exporting never runs a new forecast.
-if (in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
+if (($_GET['export'] ?? '') === 'pdf') {
     require_once 'sources/report_center.php';
     reportForecastExport($conn, $user_id, $branch_id, $forecast_days, (string)$_GET['export']);
 }
@@ -1282,8 +1282,8 @@ while ($row = $items_result->fetch_assoc()) {
                 <h6><i class="bi bi-calendar-range me-2"></i>Forecast Horizon</h6>
                 <p>Select how far ahead the system should forecast. Each horizon is saved separately.</p>
                 <a href="ForecastAccuracy.php" class="btn btn-sm btn-outline-primary mt-2"><i class="bi bi-clipboard-data me-1"></i>View Forecast Accuracy</a>
-                <a href="BranchAdmin_Forecasting.php?days=<?php echo (int)$forecast_days; ?>&amp;export=pdf" class="btn btn-sm btn-outline-primary mt-2"><i class="bi bi-file-earmark-pdf me-1"></i>Export <?php echo (int)$forecast_days; ?>-day PDF</a>
-                <a href="BranchAdmin_Forecasting.php?days=<?php echo (int)$forecast_days; ?>&amp;export=csv" class="btn btn-sm btn-outline-primary mt-2"><i class="bi bi-filetype-csv me-1"></i>Export <?php echo (int)$forecast_days; ?>-day CSV</a>
+                <a href="BranchAdmin_Forecasting.php?days=<?php echo (int)$forecast_days; ?>&amp;export=pdf" class="btn btn-sm btn-outline-primary mt-2" title="Latest saved <?php echo (int)$forecast_days; ?>-day forecast"><i class="bi bi-file-earmark-pdf me-1"></i>Export PDF</a>
+                <button type="button" data-print-pdf="BranchAdmin_Forecasting.php?days=<?php echo (int)$forecast_days; ?>&amp;export=pdf" class="btn btn-sm btn-outline-primary mt-2"><i class="bi bi-printer me-1"></i>Print</button>
             </div>
             <div class="forecast-horizon-options" role="group" aria-label="Forecast horizon">
                 <?php foreach ($allowed_forecast_days as $days_option): ?>

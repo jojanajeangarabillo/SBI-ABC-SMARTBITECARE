@@ -44,10 +44,10 @@ if (!$branch_id) {
 }
 
 // ============================================
-// EXPORT (PDF or CSV) of the filtered logs, all rows, shared builders
-// (sources/report_standard.php). ?generate_pdf=1 / ?export_csv=1 as before.
+// EXPORT PDF of the filtered logs, all rows, shared builders
+// (sources/report_standard.php). ?generate_pdf=1 (&inline=1 for Print).
 // ============================================
-if ($branch_id && ((($_GET['generate_pdf'] ?? '') === '1') || (($_GET['export_csv'] ?? '') === '1'))) {
+if ($branch_id && ($_GET['generate_pdf'] ?? '') === '1') {
     require_once 'sources/report_standard.php';
     reportStdAuditLogsSend($conn, (int)$user_id, (string)$branch_id, [
         'branch_id' => (string)$branch_id,
@@ -56,7 +56,7 @@ if ($branch_id && ((($_GET['generate_pdf'] ?? '') === '1') || (($_GET['export_cs
         'action' => trim((string)($_GET['action'] ?? '')),
         'date_from' => trim((string)($_GET['date_from'] ?? '')),
         'date_to' => trim((string)($_GET['date_to'] ?? '')),
-    ], ($_GET['export_csv'] ?? '') === '1' ? 'csv' : 'pdf');
+    ], 'pdf');
 }
 
 // Pagination settings
@@ -1204,26 +1204,18 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
                     </form>
                 </div>
 
-                <!-- Export -->
-                <div class="dropdown">
-                    <button class="btn btn-filter dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                        <i class="bi bi-file-earmark-arrow-down-fill"></i>
-                        Export
-                    </button>
-                    <ul class="dropdown-menu filter-dropdown">
-                        <li>
-                            <a class="dropdown-item" href="#" onclick="exportLogs('csv')">
-                                <i class="bi bi-filetype-csv"></i>
-                                Export as CSV
-                            </a>
-                        </li>
-                        <li>
-                            <a class="dropdown-item" href="#" onclick="exportLogs('pdf')">
-                                <i class="bi bi-filetype-pdf"></i>
-                                Export as PDF
-                            </a>
-                        </li>
-                    </ul>
+                <!-- Export PDF / Print (the filtered logs, all rows) -->
+                <?php
+                $pdfParams = ['generate_pdf' => '1'];
+                foreach (['search', 'module', 'action', 'date_from', 'date_to'] as $pdfKey) {
+                    $pdfValue = trim((string)($_GET[$pdfKey] ?? ''));
+                    if ($pdfValue !== '') $pdfParams[$pdfKey] = $pdfValue;
+                }
+                $pdfUrl = '?' . http_build_query($pdfParams);
+                ?>
+                <div class="d-flex gap-2">
+                    <a class="btn btn-filter" href="<?php echo htmlspecialchars($pdfUrl, ENT_QUOTES, 'UTF-8'); ?>"><i class="bi bi-file-earmark-pdf"></i> Export PDF</a>
+                    <button type="button" class="btn btn-filter" data-print-pdf="<?php echo htmlspecialchars($pdfUrl, ENT_QUOTES, 'UTF-8'); ?>"><i class="bi bi-printer"></i> Print</button>
                 </div>
             </div>
 
@@ -1415,27 +1407,12 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
 </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
     <script src="sources/sidebar.js"></script>
     <script>
         function toggleFilters() {
             const filterSection = document.getElementById('filterSection');
             filterSection.classList.toggle('show');
-        }
-
-        function exportLogs(format) {
-            // Get current URL parameters
-            const params = new URLSearchParams(window.location.search);
-            
-            if (format === 'csv') {
-                params.set('export_csv', '1');
-                params.delete('generate_pdf');
-            } else if (format === 'pdf') {
-                params.set('generate_pdf', '1');
-                params.delete('export_csv');
-            }
-            
-            // Redirect to the same page with export parameter
-            window.location.href = window.location.pathname + '?' + params.toString();
         }
 
         // Auto-submit filters on change
@@ -1445,14 +1422,6 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
             });
         });
 
-        // Check if export was triggered and show success message
-        document.addEventListener('DOMContentLoaded', function() {
-            const urlParams = new URLSearchParams(window.location.search);
-            if (urlParams.has('export_csv') || urlParams.has('generate_pdf')) {
-                // Show a success message or handle as needed
-                console.log('Export completed');
-            }
-        });
     </script>
 </body>
 </html>

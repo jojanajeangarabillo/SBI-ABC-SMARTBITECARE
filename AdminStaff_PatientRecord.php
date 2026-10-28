@@ -930,9 +930,9 @@ if ($action) {
                 }
 
                 $resultArray = array_values($resultArray);
-                // ?export=pdf|csv: the same list (date, search and filter of the
-                // page) as a PDF or CSV with every row (shared builders).
-                if (in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
+                // ?export=pdf: the same list (date, search and filter of the
+                // page) as a PDF with every row (shared builders); &inline=1 for Print.
+                if (($_GET['export'] ?? '') === 'pdf') {
                     require_once __DIR__ . '/sources/report_export.php';
                     $listRows = array_map(static fn(array $p): array => [
                         patientDisplayCaseNumber($p['case_no'] ?? '', null), (string)$p['patient_name'], (string)$p['contact_number'],
@@ -959,7 +959,7 @@ if ($action) {
                     ];
                     $listPeriod = !empty($date) ? reportPeriodText((string)$date, (string)$date) : 'All dates';
                     workflowAudit($conn, (int)$_SESSION['user_id'], (string)$logged_branch_id,
-                        'Exported patient record list (' . strtoupper((string)$_GET['export']) . ') - ' . $listPeriod . ' (' . count($listRows) . ' patients)', 'Patient Records');
+                        reportExportVerb() . ' patient record list (PDF) - ' . $listPeriod . ' (' . count($listRows) . ' patients)', 'Patient Records');
                     reportSend($listReport, reportMeta($conn, (int)$_SESSION['user_id'], reportBranchName($conn, (string)$logged_branch_id), $listPeriod,
                         implode(' · ', $listFilters)), (string)$_GET['export'], 'Patient_Records_' . $logged_branch_id . '_' . date('Ymd_His'));
                 }
@@ -3977,10 +3977,10 @@ body.sidebar-collapsed .main {
                         </div>
                         <span class="d-inline-flex gap-2">
                             <button class="export-btn" id="exportPdfBtn" type="button">
-                                <i class="bi bi-file-earmark-pdf"></i> PDF
+                                <i class="bi bi-file-earmark-pdf"></i> Export PDF
                             </button>
-                            <button class="export-btn" id="exportBtn" type="button">
-                                <i class="bi bi-filetype-csv"></i> CSV
+                            <button class="export-btn" id="printPdfBtn" type="button">
+                                <i class="bi bi-printer"></i> Print
                             </button>
                         </span>
                     </div>
@@ -4403,6 +4403,7 @@ body.sidebar-collapsed .main {
     <!-- JavaScript Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
     <script src="sources/sidebar.js"></script>
 
     <script>
@@ -5878,16 +5879,23 @@ body.sidebar-collapsed .main {
     });
 
     // Exports are generated on the server from the same list (date, search,
-    // filter) as the table: every row, PDF or CSV with the report header.
-    function exportPatients(format) {
+    // filter) as the table: every row, as a PDF with the report header.
+    // Print loads the same PDF inline and opens the print dialog for it.
+    function patientListPdfUrl() {
         if (!allPatients || allPatients.length === 0) {
             showToast('No data to export', '', true);
-            return;
+            return null;
         }
-        window.location.href = (lastFetchUrl || `${apiBase}?action=fetch&filter=${encodeURIComponent(currentFilter)}`) + `&export=${format}`;
+        return (lastFetchUrl || `${apiBase}?action=fetch&filter=${encodeURIComponent(currentFilter)}`) + '&export=pdf';
     }
-    document.getElementById('exportBtn').addEventListener('click', () => exportPatients('csv'));
-    document.getElementById('exportPdfBtn').addEventListener('click', () => exportPatients('pdf'));
+    document.getElementById('exportPdfBtn').addEventListener('click', () => {
+        const url = patientListPdfUrl();
+        if (url) window.location.href = url;
+    });
+    document.getElementById('printPdfBtn').addEventListener('click', (event) => {
+        const url = patientListPdfUrl();
+        if (url) SbcPrint.print(url, event.currentTarget);
+    });
 
     document.getElementById('dob').addEventListener('change', function() {
         const dob = this.value;

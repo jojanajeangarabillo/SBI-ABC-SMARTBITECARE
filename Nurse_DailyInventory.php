@@ -50,9 +50,9 @@ function dailyInventoryStartAutoEvaluation(mysqli $conn, string $branchId): void
     }
 }
 
-// Export (PDF or CSV, shared builders): one day (?date=) or the closing
+// Export PDF (shared builders; &inline=1 for Print): one day (?date=) or the closing
 // history range shown on the page (?range=today|7|30|all).
-if (in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
+if (($_GET['export'] ?? '') === 'pdf') {
     require_once 'sources/report_catalog.php';
     $exportFormat = (string)$_GET['export'];
     $exportDate = trim((string)($_GET['date'] ?? ''));
@@ -74,7 +74,7 @@ if (in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
     }
     $exportReport = reportBuild($conn, 'daily_closing', ['branch_id' => $branchId, 'from' => $exportFrom, 'to' => $exportTo]);
     $exportPeriod = $exportFrom === '2000-01-01' ? 'All closing history' : reportPeriodText($exportFrom, $exportTo);
-    workflowAudit($conn, $userId, $branchId, 'Exported daily inventory closing (' . strtoupper($exportFormat) . ') for ' . $exportPeriod, 'Daily Inventory');
+    workflowAudit($conn, $userId, $branchId, reportExportVerb() . ' daily inventory closing (PDF) for ' . $exportPeriod, 'Daily Inventory');
     reportSend($exportReport, reportMeta($conn, $userId, (string)($user['branch_name'] ?? $branchId), $exportPeriod), $exportFormat,
         'Daily_Inventory_' . $branchId . '_' . ($exportFrom === $exportTo ? $exportFrom : str_replace('2000-01-01', 'all', $exportFrom) . '_to_' . $exportTo));
 }
@@ -2146,11 +2146,11 @@ $flash = workflowTakeFlash();
                     </a>
 
                     <a class="btn btn-outline-danger" href="Nurse_DailyInventory.php?export=pdf&amp;<?= workflowH($historyDate !== '' ? 'date=' . $historyDate : 'range=' . $historyRange) ?>">
-                        <i class="bi bi-file-earmark-pdf-fill me-1"></i>History PDF
+                        <i class="bi bi-file-earmark-pdf-fill me-1"></i>Export PDF
                     </a>
-                    <a class="btn btn-outline-success" href="Nurse_DailyInventory.php?export=csv&amp;<?= workflowH($historyDate !== '' ? 'date=' . $historyDate : 'range=' . $historyRange) ?>">
-                        <i class="bi bi-filetype-csv me-1"></i>History CSV
-                    </a>
+                    <button type="button" class="btn btn-outline-danger" data-print-pdf="Nurse_DailyInventory.php?export=pdf&amp;<?= workflowH($historyDate !== '' ? 'date=' . $historyDate : 'range=' . $historyRange) ?>">
+                        <i class="bi bi-printer me-1"></i>Print
+                    </button>
                 </form>
             </div>
 
@@ -2259,13 +2259,14 @@ $flash = workflowTakeFlash();
                                 ></i>
                                 Export PDF
                             </a>
-                            <a
-                                class="btn btn-sm btn-outline-success"
-                                href="Nurse_DailyInventory.php?export=csv&amp;date=<?= workflowH($closingDate) ?>"
+                            <button
+                                type="button"
+                                class="btn btn-sm btn-outline-danger"
+                                data-print-pdf="Nurse_DailyInventory.php?export=pdf&amp;date=<?= workflowH($closingDate) ?>"
                             >
-                                <i class="bi bi-filetype-csv me-1"></i>
-                                Export CSV
-                            </a>
+                                <i class="bi bi-printer me-1"></i>
+                                Print
+                            </button>
                         </div>
                     </div>
 

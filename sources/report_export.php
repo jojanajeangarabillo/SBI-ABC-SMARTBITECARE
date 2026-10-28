@@ -104,14 +104,35 @@ function reportFileName(string $title, string $suffix = ''): string
     return trim((string)$name, '_') ?: 'Report';
 }
 
-/** Send the report as a PDF or CSV download and stop. */
+/** True when the PDF is requested for printing (Print button: shown inline, not downloaded). */
+function reportIsInline(): bool
+{
+    return ($_GET['inline'] ?? '') === '1';
+}
+
+/** "Printed" or "Exported", for the audit entry of a report request. */
+function reportExportVerb(): string
+{
+    return reportIsInline() ? 'Printed' : 'Exported';
+}
+
+/**
+ * Send the report as a PDF (download, or inline for the Print button) or CSV
+ * and stop. Callers check the login, role and branch before calling this,
+ * so the inline PDF has exactly the same access rules as the download.
+ */
 function reportSend(array $report, array $meta, string $format, string $fileBase): void
 {
     $format = strtolower($format) === 'csv' ? 'csv' : 'pdf';
+    $inline = $format === 'pdf' && reportIsInline();
     $body = $format === 'csv' ? reportCsvBuild($report, $meta) : reportPdfBuild($report, $meta);
     while (ob_get_level() > 0) ob_end_clean();
     header('Content-Type: ' . ($format === 'csv' ? 'text/csv; charset=UTF-8' : 'application/pdf'));
-    header('Content-Disposition: attachment; filename="' . reportFileName($fileBase) . '.' . $format . '"');
+    header('Content-Disposition: ' . ($inline ? 'inline' : 'attachment') . '; filename="' . reportFileName($fileBase) . '.' . $format . '"');
+    // Only this site may show the PDF in a frame (the Print button's hidden iframe).
+    header('X-Frame-Options: SAMEORIGIN');
+    header("Content-Security-Policy: frame-ancestors 'self'");
+    header('X-Content-Type-Options: nosniff');
     header('Content-Length: ' . strlen($body));
     header('Cache-Control: private, no-store');
     echo $body;

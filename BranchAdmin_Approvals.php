@@ -68,9 +68,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-// Decision History export (PDF or CSV): every decided request of the branch,
+// Decision History export (PDF; &inline=1 for Print): every decided request of the branch,
 // optionally limited to the requested dates, with the Approval report's columns.
-if ($tab === 'history' && in_array($_GET['export'] ?? '', ['pdf', 'csv'], true) && inventoryApprovalReady($conn)) {
+if ($tab === 'history' && ($_GET['export'] ?? '') === 'pdf' && inventoryApprovalReady($conn)) {
     require_once 'sources/report_center.php';
     $exportFrom = reportCenterDate($_GET['from'] ?? '');
     $exportTo = reportCenterDate($_GET['to'] ?? '');
@@ -79,7 +79,7 @@ if ($tab === 'history' && in_array($_GET['export'] ?? '', ['pdf', 'csv'], true) 
     $exportReport['title'] = 'Approval Decision History';
     $exportReport['orientation'] = 'L';
     $exportPeriod = ($exportFrom || $exportTo) ? reportPeriodText($exportFrom ?? $exportTo, $exportTo ?? $exportFrom) : 'All dates';
-    workflowAudit($conn, $userId, $branchId, 'Exported approval decision history (' . strtoupper((string)$_GET['export']) . ') - ' . $exportPeriod, 'Approvals');
+    workflowAudit($conn, $userId, $branchId, reportExportVerb() . ' approval decision history (PDF) - ' . $exportPeriod, 'Approvals');
     reportSend($exportReport, reportMeta($conn, $userId, $branchName, $exportPeriod, 'Status: Approved, Rejected, Cancelled, Fulfilled'),
         (string)$_GET['export'], 'Approval_Decision_History_' . $branchId . '_' . date('Ymd_His'));
 }
@@ -674,10 +674,10 @@ function approvalsDate(?string $value): string
 
             <?php else: ?>
                 <section class="content-card">
-                    <div class="content-card-header"><div><h5>Decision History</h5><p>Approved, rejected, cancelled and fulfilled requests of the branch (latest 300 on screen; the exports have every request).</p></div>
+                    <div class="content-card-header"><div><h5>Decision History</h5><p>Approved, rejected, cancelled and fulfilled requests of the branch, newest first (the PDF has every request).</p></div>
                         <div class="d-flex gap-2 flex-wrap">
                             <a class="btn btn-sm btn-outline-primary" href="BranchAdmin_Approvals.php?tab=history&amp;export=pdf"><i class="bi bi-file-earmark-pdf me-1"></i>Export PDF</a>
-                            <a class="btn btn-sm btn-outline-success" href="BranchAdmin_Approvals.php?tab=history&amp;export=csv"><i class="bi bi-filetype-csv me-1"></i>Export CSV</a>
+                            <button type="button" class="btn btn-sm btn-outline-primary" data-print-pdf="BranchAdmin_Approvals.php?tab=history&amp;export=pdf"><i class="bi bi-printer me-1"></i>Print</button>
                         </div></div>
                     <div class="table-responsive">
                         <table class="table approval-table">

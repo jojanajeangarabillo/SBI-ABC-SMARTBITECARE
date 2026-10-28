@@ -13,7 +13,7 @@ require_once __DIR__ . '/patient_display_helper.php';
  * CONTROL AND OPERATIONS REPORTS (read-only, live data).
  * Every report takes a branch (null = all branches, Super Admin only) and a
  * date range, and returns one report array that both the screen preview and
- * the PDF/CSV exports use (sources/report_export.php). Quantities are shown
+ * the PDF exports use (sources/report_export.php). Quantities are shown
  * in vials/ampules/pieces where the item has a counting unit, like on screen.
  * Forecast data is only READ from the saved forecast_results; no forecast
  * is run and no training data is touched.

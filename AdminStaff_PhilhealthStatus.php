@@ -98,7 +98,7 @@ $fetch = static function (string $sql, string $t, array $p) use ($conn): array {
 };
 
 // ---------------------------------------------------------------- export (every row of the filters)
-if (in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
+if (($_GET['export'] ?? '') === 'pdf') {
     require_once __DIR__ . '/sources/report_export.php';
     $exportFormat = (string)$_GET['export'];
     $rows = $fetch($selectSql . $orderSql, $types, $params);
@@ -124,7 +124,7 @@ if (in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
         'notes' => ['Discharge is the date of the last completed dose. Statuses are changed on the PhilHealth Workflow page.'],
     ];
     $period = ($dateFrom || $dateTo) ? reportPeriodText($dateFrom ?: $dateTo, $dateTo ?: $dateFrom) : 'All dates';
-    workflowAudit($conn, $userId, $branchId, 'Exported PhilHealth patient status (' . strtoupper($exportFormat) . ') - ' . $period . ' (' . count($exportRows) . ' records)', 'PhilHealth');
+    workflowAudit($conn, $userId, $branchId, reportExportVerb() . ' PhilHealth patient status (PDF) - ' . $period . ' (' . count($exportRows) . ' records)', 'PhilHealth');
     reportSend($exportReport, reportMeta($conn, $userId, $branchName, $period, implode(' · ', $filters)), $exportFormat,
         'PhilHealth_Status_' . $branchId . '_' . date('Ymd_His'));
 }
@@ -228,7 +228,7 @@ ob_start();
         </div>
         <div class="d-flex gap-2 flex-wrap" id="phExportButtons">
             <a class="ph-btn outline" href="AdminStaff_PhilhealthStatus.php?<?= $h($exportQuery . ($exportQuery !== '' ? '&' : '') . 'export=pdf') ?>"><i class="bi bi-file-earmark-pdf"></i>Export PDF</a>
-            <a class="ph-btn outline" href="AdminStaff_PhilhealthStatus.php?<?= $h($exportQuery . ($exportQuery !== '' ? '&' : '') . 'export=csv') ?>"><i class="bi bi-filetype-csv"></i>Export CSV</a>
+            <button type="button" class="ph-btn outline" data-print-pdf="AdminStaff_PhilhealthStatus.php?<?= $h($exportQuery . ($exportQuery !== '' ? '&' : '') . 'export=pdf') ?>"><i class="bi bi-printer"></i>Print</button>
         </div>
     </div>
     <form method="get" class="ph-filters" action="AdminStaff_PhilhealthStatus.php#queue">

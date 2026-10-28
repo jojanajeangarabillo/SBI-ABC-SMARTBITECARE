@@ -1,8 +1,9 @@
 <?php
-// Preserve the existing generated-PDF URL and use the protected file endpoint.
+// Preserve the existing generated-PDF URL and use the protected file endpoint
+// (same login, role, branch and owner checks). &inline=1 is the Print button.
 if (isset($_GET['download_generated'])) {
     $_GET['id'] = $_GET['download_generated'];
-    $_GET['download'] = '1';
+    $_GET['download'] = ($_GET['inline'] ?? '') === '1' ? '0' : '1';
     require __DIR__ . '/download_document.php';
     exit;
 }
@@ -2717,9 +2718,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 var notice = document.createElement('div');
                 notice.className = 'alert-toast alert alert-success alert-dismissible fade show';
                 notice.setAttribute('role', 'alert');
+                if (!data.download_url) {
+                    throw new Error('The PDF was generated, but no download URL was returned.');
+                }
+
+                // The message offers Print for the generated PDF (same file, inline).
                 notice.innerHTML =
                     '<i class="bi bi-check-circle-fill me-2"></i>' +
                     escapeHtml(data.message || 'PDF generated successfully.') +
+                    ' <button type="button" class="btn btn-sm btn-outline-success ms-2" data-print-pdf="' + escapeHtml(data.download_url) + '">' +
+                    '<i class="bi bi-printer me-1"></i>Print</button>' +
                     '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
                 document.body.appendChild(notice);
 
@@ -2727,16 +2735,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (notice && notice.parentNode) {
                         bootstrap.Alert.getOrCreateInstance(notice).close();
                     }
-                }, 8000);
-
-                if (!data.download_url) {
-                    throw new Error('The PDF was generated, but no download URL was returned.');
-                }
+                }, 20000);
 
                 /*
                  * IMPORTANT:
                  * This URL points to a PHP endpoint that sends
-                 * Content-Disposition: attachment and Content-Type: application/pdf.
+                 * Content-Disposition: attachment and Content-Type: application/pdf
+                 * (Print in the message above asks for the same file inline).
                  * That forces a real PDF download and does not depend on the browser
                  * honoring a scripted <a download> click.
                  */
