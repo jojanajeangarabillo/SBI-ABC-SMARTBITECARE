@@ -10,6 +10,7 @@ require_once 'sources/forecast_training_helper.php';
 require_once 'sources/daily_inventory_helpers.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/inventory_approval_helpers.php';
+require_once 'sources/pagination_helper.php';
 
 /* ============================================================
  * NURSE - MEDICAL SUPPLY MANAGEMENT
@@ -333,7 +334,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 /* My restock requests (status: Pending, Approved with remaining, Fulfilled, Rejected, Cancelled). */
-$myRestocks = inventoryApprovalList($conn, ['branch_id' => $branchId, 'requested_by' => $userId, 'types' => ['restock'], 'limit' => 50]);
+// Server-side pages (rs_page / rs_per_page); counts use every matching request.
+$myRestocksFilter = ['branch_id' => $branchId, 'requested_by' => $userId, 'types' => ['restock']];
+$myRestocksPage = paginationApply(paginationFromRequest('rs_', 10), inventoryApprovalCount($conn, $myRestocksFilter));
+$myRestocks = inventoryApprovalList($conn, $myRestocksFilter + ['limit' => $myRestocksPage['per_page'], 'offset' => $myRestocksPage['offset']]);
 foreach ($myRestocks as &$restockRow) {
     $approvedScaled = stockQuantityParse((string)($restockRow['approved_quantity'] ?? $restockRow['quantity']), true);
     $receivedScaled = stockQuantityParse((string)$restockRow['fulfilled_quantity'], true);
@@ -935,6 +939,7 @@ $flash = workflowTakeFlash();
                     </tbody>
                 </table>
             </div>
+            <?= paginationRender($myRestocksPage, '#myRestockRequests', 'restock requests') ?>
         </section>
 
         <section class="content-card">

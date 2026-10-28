@@ -4,6 +4,7 @@ require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/inventory_approval_helpers.php';
+require_once 'sources/pagination_helper.php';
 
 /*
  * PENDING APPROVALS (Branch Admin). Requests from the Inventory Officer and
@@ -22,12 +23,17 @@ $csrf = workflowCsrfToken();
 
 $tab = (string)($_GET['tab'] ?? 'pending');
 if (!in_array($tab, ['pending', 'history', 'closings'], true)) $tab = 'pending';
-$closingFilter = ($_GET['closings'] ?? '') === 'all' ? 'all' : 'needs';
+$closingFilter = inventoryApprovalClosingFilter((string)($_GET['closings'] ?? 'needs'));
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = (string)($_POST['action'] ?? '');
-    $back = 'BranchAdmin_Approvals.php?tab=' . urlencode((string)($_POST['tab'] ?? 'pending'))
-        . (($_POST['closings'] ?? '') === 'all' ? '&closings=all' : '');
+    // Back to the same tab, filter and page after a decision.
+    $back = 'BranchAdmin_Approvals.php?' . http_build_query(array_filter([
+        'tab' => (string)($_POST['tab'] ?? 'pending'),
+        'closings' => in_array($_POST['closings'] ?? '', INVENTORY_CLOSING_FILTERS, true) && $_POST['closings'] !== 'needs' ? (string)$_POST['closings'] : '',
+        'page' => (int)($_POST['page'] ?? 0) > 1 ? (int)$_POST['page'] : '',
+        'per_page' => in_array((int)($_POST['per_page'] ?? 0), PAGINATION_SIZES, true) ? (int)$_POST['per_page'] : '',
+    ], static fn($v) => $v !== ''));
     try {
         workflowVerifyCsrf();
         if ($action === 'decide') {
@@ -72,14 +78,29 @@ if ($tab === 'history' && in_array($_GET['export'] ?? '', ['pdf', 'csv'], true) 
 $flash = workflowTakeFlash();
 $notification_count = getUnreadNotificationCount($conn, $userId);
 $ready = inventoryApprovalReady($conn);
-$pending = $ready ? inventoryApprovalList($conn, ['branch_id' => $branchId, 'statuses' => ['Pending'], 'limit' => 500]) : [];
-$history = ($ready && $tab === 'history')
-    ? inventoryApprovalList($conn, ['branch_id' => $branchId, 'statuses' => ['Approved', 'Rejected', 'Cancelled', 'Fulfilled'], 'limit' => 300])
-    : [];
-$closingRows = $tab === 'closings' ? inventoryApprovalClosingList($conn, $branchId, $closingFilter === 'all') : [];
+// Server-side pagination (sources/pagination_helper.php): badges and group
+// counts count every matching row; only the table shows one page.
+$pendingFilter = ['branch_id' => $branchId, 'statuses' => ['Pending']];
+$historyFilter = ['branch_id' => $branchId, 'statuses' => ['Approved', 'Rejected', 'Cancelled', 'Fulfilled']];
+$pendingTotal = $ready ? inventoryApprovalCount($conn, $pendingFilter) : 0;
+$pendingByType = $ready ? inventoryApprovalCountByType($conn, $pendingFilter) : [];
+$pg = paginationFromRequest('', $tab === 'pending' ? 10 : 25);
+$pending = [];
+$history = [];
+$closingRows = [];
+if ($ready && $tab === 'pending') {
+    $pg = paginationApply($pg, $pendingTotal);
+    $pending = inventoryApprovalList($conn, $pendingFilter + ['order' => 'type', 'limit' => $pg['per_page'], 'offset' => $pg['offset']]);
+} elseif ($ready && $tab === 'history') {
+    $pg = paginationApply($pg, inventoryApprovalCount($conn, $historyFilter));
+    $history = inventoryApprovalList($conn, $historyFilter + ['limit' => $pg['per_page'], 'offset' => $pg['offset']]);
+} elseif ($tab === 'closings') {
+    $pg = paginationApply($pg, inventoryApprovalClosingCount($conn, $branchId, $closingFilter));
+    $closingRows = inventoryApprovalClosingList($conn, $branchId, $closingFilter, 60, $pg['per_page'], $pg['offset']);
+}
 $closingsToReview = inventoryApprovalClosingsToReview($conn, $branchId);
 
-// Pending requests grouped by type, in the order of INVENTORY_APPROVAL_TYPES.
+// Pending requests of this page grouped by type, in the order of INVENTORY_APPROVAL_TYPES.
 $grouped = [];
 foreach (array_keys(INVENTORY_APPROVAL_TYPES) as $type) $grouped[$type] = [];
 foreach ($pending as $row) $grouped[$row['request_type']][] = $row;
@@ -449,7 +470,7 @@ function approvalsDate(?string $value): string
             <div class="tab-row" role="tablist">
                 <a class="tab-link <?php echo $tab === 'pending' ? 'active' : ''; ?>" href="BranchAdmin_Approvals.php?tab=pending">
                     <i class="bi bi-hourglass-split"></i> Pending Requests
-                    <?php if ($pending): ?><span class="badge rounded-pill text-bg-danger"><?php echo count($pending); ?></span><?php endif; ?>
+                    <?php if ($pendingTotal): ?><span class="badge rounded-pill text-bg-danger"><?php echo (int)$pendingTotal; ?></span><?php endif; ?>
                 </a>
                 <a class="tab-link <?php echo $tab === 'closings' ? 'active' : ''; ?>" href="BranchAdmin_Approvals.php?tab=closings">
                     <i class="bi bi-clipboard-check"></i> Closing Review
@@ -470,7 +491,8 @@ function approvalsDate(?string $value): string
                 <?php foreach ($grouped as $type => $rows): ?>
                     <section class="content-card">
                         <div class="content-card-header">
-                            <div><h5><?php echo workflowH(inventoryApprovalTypeLabel($type)); ?> <span class="badge rounded-pill text-bg-warning"><?php echo count($rows); ?></span></h5></div>
+                            <div><h5><?php echo workflowH(inventoryApprovalTypeLabel($type)); ?> <span class="badge rounded-pill text-bg-warning" title="Pending requests of this type (all pages)"><?php echo (int)($pendingByType[$type] ?? count($rows)); ?></span></h5>
+                                <?php if (($pendingByType[$type] ?? 0) > count($rows)): ?><p class="muted mb-0"><?php echo count($rows); ?> on this page</p><?php endif; ?></div>
                         </div>
                         <div class="table-responsive">
                             <table class="table approval-table">
@@ -508,6 +530,8 @@ function approvalsDate(?string $value): string
                                                     <input type="hidden" name="csrf_token" value="<?php echo workflowH($csrf); ?>">
                                                     <input type="hidden" name="action" value="decide">
                                                     <input type="hidden" name="tab" value="pending">
+                                                    <input type="hidden" name="page" value="<?php echo (int)$pg['page']; ?>">
+                                                    <input type="hidden" name="per_page" value="<?php echo (int)$pg['per_page']; ?>">
                                                     <input type="hidden" name="request_id" value="<?php echo (int)$row['request_id']; ?>">
                                                     <?php if ($type === 'restock'): ?>
                                                         <label class="muted mb-1" for="aq<?php echo (int)$row['request_id']; ?>">Approved quantity (<?php echo workflowH(inventoryUnitWord(inventoryDisplayUnitLabel($row), 2)); ?>)</label>
@@ -528,6 +552,9 @@ function approvalsDate(?string $value): string
                         </div>
                     </section>
                 <?php endforeach; ?>
+                <?php if ($pendingTotal > 0): ?>
+                    <div class="content-card"><?php echo paginationRender($pg, '', 'pending requests'); ?></div>
+                <?php endif; ?>
 
             <?php elseif ($tab === 'closings'): ?>
                 <div class="info-note"><i class="bi bi-info-circle me-1"></i>
@@ -576,6 +603,8 @@ function approvalsDate(?string $value): string
                                                 <input type="hidden" name="action" value="review_closing">
                                                 <input type="hidden" name="tab" value="closings">
                                                 <input type="hidden" name="closings" value="<?php echo workflowH($closingFilter); ?>">
+                                                <input type="hidden" name="page" value="<?php echo (int)$pg['page']; ?>">
+                                                <input type="hidden" name="per_page" value="<?php echo (int)$pg['per_page']; ?>">
                                                 <input type="hidden" name="closing_id" value="<?php echo (int)$c['closing_id']; ?>">
                                                 <textarea name="review_remarks" class="form-control form-control-sm mb-2" rows="2" maxlength="1000" placeholder="Remark (required to return)"></textarea>
                                                 <div class="d-flex gap-2">
@@ -592,6 +621,7 @@ function approvalsDate(?string $value): string
                             </tbody>
                         </table>
                     </div>
+                    <?php echo paginationRender($pg, '', 'closings'); ?>
                 </section>
 
             <?php else: ?>
@@ -632,6 +662,7 @@ function approvalsDate(?string $value): string
                             </tbody>
                         </table>
                     </div>
+                    <?php echo paginationRender($pg, '', 'decided requests'); ?>
                 </section>
             <?php endif; ?>
         </div>

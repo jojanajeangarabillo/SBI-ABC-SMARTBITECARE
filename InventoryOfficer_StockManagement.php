@@ -8,6 +8,7 @@ require_once 'sources/inventory_officer_activity_helper.php';
 require_once 'sources/stock_quantity_helpers.php';
 require_once 'sources/stock_receipt_source_helper.php';
 require_once 'sources/inventory_approval_helpers.php';
+require_once 'sources/pagination_helper.php';
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 5) {
     header('Location: login.php');
@@ -653,11 +654,17 @@ if ($branch_id) {
  * ----------------------------------------------------------- */
 $approvalsReady = inventoryApprovalReady($conn);
 $myRequests = [];
+$myPendingCount = 0;
+$myRequestsPage = paginationApply(paginationFromRequest('req_', 10), 0);
 $openRestocks = [];
 $openRestocksByItem = [];
 $pendingByStock = [];
 if ($branch_id && $approvalsReady) {
-    $myRequests = inventoryApprovalList($conn, ['branch_id' => (string)$branch_id, 'requested_by' => $user_id, 'limit' => 100]);
+    // My Requests: server-side pages (req_page / req_per_page); the badge counts all pending.
+    $myRequestsFilter = ['branch_id' => (string)$branch_id, 'requested_by' => $user_id];
+    $myPendingCount = inventoryApprovalCount($conn, $myRequestsFilter + ['statuses' => ['Pending']]);
+    $myRequestsPage = paginationApply(paginationFromRequest('req_', 10), inventoryApprovalCount($conn, $myRequestsFilter));
+    $myRequests = inventoryApprovalList($conn, $myRequestsFilter + ['limit' => $myRequestsPage['per_page'], 'offset' => $myRequestsPage['offset']]);
     $openRestocks = array_merge(
         inventoryApprovalList($conn, ['branch_id' => (string)$branch_id, 'statuses' => ['Pending'], 'types' => ['restock']]),
         inventoryApprovalOpenRestocks($conn, (string)$branch_id)
@@ -1306,7 +1313,6 @@ body{
             <button type="button" class="tab-btn <?php echo $activePanel === 'adjustment' ? 'active' : ''; ?>" onclick="showPanel('adjustment', this)">Adjustment</button>
             <button type="button" class="tab-btn <?php echo $activePanel === 'expiration' ? 'active' : ''; ?>" onclick="showPanel('expiration', this)">Expiration Monitoring</button>
             <button type="button" class="tab-btn <?php echo $activePanel === 'archived' ? 'active' : ''; ?>" onclick="showPanel('archived', this)">Archived Stocks</button>
-            <?php $myPendingCount = count(array_filter($myRequests, static fn($r) => $r['status'] === 'Pending')); ?>
             <button type="button" class="tab-btn <?php echo $activePanel === 'requests' ? 'active' : ''; ?>" onclick="showPanel('requests', this)">My Requests<?php if ($myPendingCount): ?> <span class="badge rounded-pill text-bg-warning"><?php echo $myPendingCount; ?></span><?php endif; ?></button>
         </div>
         <?php if (!$approvalsReady): ?>
@@ -1770,6 +1776,7 @@ body{
                         </tbody>
                     </table>
                 </div>
+                <?php echo paginationRender($myRequestsPage, '', 'requests', ['panel' => 'requests', 'msg' => null, 'type' => null]); ?>
             </div>
         </div>
 

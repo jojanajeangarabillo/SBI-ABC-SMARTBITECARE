@@ -49,9 +49,13 @@ function paginationSlice(array $rows, array &$pg): array
 }
 
 /** Current URL with this table's page parameters replaced (other parameters kept). */
-function paginationUrl(array $pg, array $changes, string $anchor = ''): string
+function paginationUrl(array $pg, array $changes, string $anchor = '', array $extra = []): string
 {
     $query = $_GET;
+    // $extra: other parameters to set on the link (null removes one), e.g. the tab to reopen.
+    foreach ($extra as $key => $value) {
+        if ($value === null) unset($query[$key]); else $query[$key] = $value;
+    }
     foreach ($changes as $key => $value) {
         $name = $pg['prefix'] . $key;
         if ($value === null) unset($query[$name]); else $query[$name] = $value;
@@ -64,7 +68,7 @@ function paginationUrl(array $pg, array $changes, string $anchor = ''): string
 }
 
 /** "Showing 1-10 of 35", page buttons and the rows-per-page choice. */
-function paginationRender(array $pg, string $anchor = '', string $noun = 'rows'): string
+function paginationRender(array $pg, string $anchor = '', string $noun = 'rows', array $extra = []): string
 {
     $h = static fn($v): string => htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8');
     $page = (int)$pg['page'];
@@ -76,10 +80,10 @@ function paginationRender(array $pg, string $anchor = '', string $noun = 'rows')
     $out .= '<div class="sbc-pagination-controls">';
     if ($pages > 1) {
         $out .= '<nav class="sbc-pagination-pages" aria-label="Pages">';
-        $link = static function (int $target, string $label, string $aria, bool $disabled = false, bool $active = false) use ($pg, $anchor, $h): string {
+        $link = static function (int $target, string $label, string $aria, bool $disabled = false, bool $active = false) use ($pg, $anchor, $h, $extra): string {
             if ($disabled) return '<span class="sbc-page disabled" aria-disabled="true" aria-label="' . $h($aria) . '">' . $label . '</span>';
             return '<a class="sbc-page' . ($active ? ' active' : '') . '"' . ($active ? ' aria-current="page"' : '')
-                . ' href="' . $h(paginationUrl($pg, ['page' => $target], $anchor)) . '" aria-label="' . $h($aria) . '">' . $label . '</a>';
+                . ' href="' . $h(paginationUrl($pg, ['page' => $target], $anchor, $extra)) . '" aria-label="' . $h($aria) . '">' . $label . '</a>';
         };
         $out .= $link($page - 1, '<i class="bi bi-chevron-left"></i>', 'Previous page', $page <= 1);
         $numbers = array_unique(array_filter([1, $page - 1, $page, $page + 1, $pages], static fn($n) => $n >= 1 && $n <= $pages));
@@ -95,7 +99,11 @@ function paginationRender(array $pg, string $anchor = '', string $noun = 'rows')
     }
     // Rows per page: a tiny GET form that keeps every other parameter.
     $out .= '<form method="get" class="sbc-per-page" action="' . $h(strtok(basename((string)($_SERVER['PHP_SELF'] ?? '')), '?')) . $h($anchor) . '">';
-    foreach ($_GET as $key => $value) {
+    $formQuery = $_GET;
+    foreach ($extra as $key => $value) {
+        if ($value === null) unset($formQuery[$key]); else $formQuery[$key] = $value;
+    }
+    foreach ($formQuery as $key => $value) {
         if (in_array($key, array_merge([$pg['prefix'] . 'page', $pg['prefix'] . 'per_page'], PAGINATION_DROP_PARAMS), true)) continue;
         foreach ((array)$value as $sub => $item) {
             if (is_array($item)) continue;
