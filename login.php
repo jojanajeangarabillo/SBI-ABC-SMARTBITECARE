@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/login_security_helpers.php';
 
 $error = '';
 
@@ -68,45 +69,50 @@ function logLoginAttempt(
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = trim((string)($_POST['username'] ?? ''));
     $password = (string)($_POST['password'] ?? '');
-    
-    if (!empty($username) && !empty($password)) {
-        // Prepare statement to prevent SQL injection
-        $stmt = $conn->prepare("SELECT u.*, r.role_name, b.branch_name 
-                                FROM users u 
-                                LEFT JOIN roles r ON u.role_id = r.role_id 
-                                LEFT JOIN branches b ON u.branch_id = b.branch_id 
+
+    if ($username !== '' && $password !== '') {
+        $stmt = $conn->prepare("SELECT u.*, r.role_name, b.branch_name
+                                FROM users u
+                                LEFT JOIN roles r ON u.role_id = r.role_id
+                                LEFT JOIN branches b ON u.branch_id = b.branch_id
                                 WHERE u.username = ?
                                 LIMIT 1");
         $stmt->bind_param("s", $username);
         $stmt->execute();
-        $result = $stmt->get_result();
-        
-        if ($result->num_rows === 1) {
-            $user = $result->fetch_assoc();
-            
-            // Check if user is active
-            if ($user['status'] !== 'Active') {
+        $user = $stmt->get_result()->fetch_assoc() ?: null;
+        $stmt->close();
+
+        /*
+         * Lockout (sources/login_security_helpers.php): checked before the
+         * password, so while locked even the correct password is refused.
+         * Unknown usernames are counted and locked the same way, and get the
+         * same messages, so the page never reveals whether a username exists.
+         */
+        if (loginIsLocked($conn, $username)) {
+            $error = LOGIN_LOCKED_MESSAGE;
+            logLoginAttempt($conn, $user ? (int)$user['user_id'] : null, $username, 'Failed', 'Account is temporarily locked');
+        } else {
+            // Same password check work for an unknown username (no timing difference).
+            $passwordOk = password_verify($password, $user ? (string)$user['password']
+                : '$2y$10$c/LPOVmYUIXcKMGJ/thw3.TQLPmFCxiD7aD8gu8HsvKM5sfSGsBUy');
+
+            if ($user && $passwordOk && $user['status'] !== 'Active') {
+                // Shown only with the correct password, so it reveals nothing to a guesser.
                 $error = 'Your account has been deactivated. Please contact your administrator.';
-                // Log failed login - inactive account
-                logLoginAttempt($conn, $user['user_id'], $username, 'Failed', 
-                    "Account is inactive");
-            }
-            // Verify password
-            elseif (password_verify($password, $user['password'])) {
+                logLoginAttempt($conn, (int)$user['user_id'], $username, 'Failed', 'Account is inactive');
+            } elseif ($user && $passwordOk) {
                 // Prevent session fixation after successful authentication.
                 session_regenerate_id(true);
+                loginResetAttempts($conn, $username);
 
-                // Update last login
                 $updateStmt = $conn->prepare("UPDATE users SET last_login = NOW() WHERE user_id = ?");
                 $updateStmt->bind_param("i", $user['user_id']);
                 $updateStmt->execute();
                 $updateStmt->close();
-                
-                // Log successful login
-                logLoginAttempt($conn, $user['user_id'], $username, 'Success', 
+
+                logLoginAttempt($conn, (int)$user['user_id'], $username, 'Success',
                     "Role: " . $user['role_name'] . ", Branch: " . ($user['branch_name'] ?? 'N/A'));
-                
-                // Set session variables
+
                 $_SESSION['user_id'] = $user['user_id'];
                 $_SESSION['username'] = $user['username'];
                 $_SESSION['email'] = $user['email'];
@@ -115,46 +121,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['branch_id'] = $user['branch_id'];
                 $_SESSION['branch_name'] = $user['branch_name'];
                 $_SESSION['logged_in'] = true;
-                
-                // Redirect based on role
-                switch ($user['role_id']) {
-                    case 1: // Super Admin
-                        header("Location: SuperAdmin_Dashboard.php");
-                        break;
-                    case 2: // Branch Admin
-                        header("Location: BranchAdmin_Dashboard.php");
-                        break;
-                    case 3: // Nurse
-                        header("Location: Nurse_Dashboard.php");
-                        break;
-                    case 4: // Administrative Staff
-                        header("Location: AdminStaff_Dashboard.php");
-                        break;
-                    case 5: // Inventory Officer
-                        header("Location: InventoryOfficer_Dashboard.php");
-                        break;
-                    default:
-                        header("Location: dashboard.php");
+
+                switch ((int)$user['role_id']) {
+                    case 1: header("Location: SuperAdmin_Dashboard.php"); break;
+                    case 2: header("Location: BranchAdmin_Dashboard.php"); break;
+                    case 3: header("Location: Nurse_Dashboard.php"); break;
+                    case 4: header("Location: AdminStaff_Dashboard.php"); break;
+                    case 5: header("Location: InventoryOfficer_Dashboard.php"); break;
+                    default: header("Location: dashboard.php");
                 }
                 exit();
             } else {
-                $error = 'Invalid username or password.';
-                // Log failed login - wrong password
-                logLoginAttempt($conn, $user['user_id'], $username, 'Failed', 
-                    "Incorrect password");
+                $locked = loginRecordFailure($conn, $username, $user);
+                $error = $locked ? LOGIN_LOCKED_MESSAGE : LOGIN_INVALID_MESSAGE;
+                logLoginAttempt($conn, $user ? (int)$user['user_id'] : null, $username, 'Failed',
+                    $user ? 'Incorrect password' : 'Username not found');
             }
-        } else {
-            $error = 'Invalid username or password.';
-            // Log failed login - user not found
-            logLoginAttempt($conn, null, $username, 'Failed', 
-                "Username not found");
         }
-        $stmt->close();
     } else {
         $error = 'Please enter both username and password.';
-        // Log empty credentials attempt
-        logLoginAttempt($conn, null, 'Unknown', 'Failed', 
-            "Empty username or password");
+        logLoginAttempt($conn, null, 'Unknown', 'Failed', "Empty username or password");
     }
 }
 ?>

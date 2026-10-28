@@ -10,6 +10,7 @@ require_once 'sources/inventory_unit_helpers.php';
 require_once 'sources/forecast_training_helper.php';
 require_once 'sources/daily_inventory_helpers.php';
 require_once 'sources/patient_display_helper.php';
+require_once 'sources/registry_lock_helpers.php';
 
 // ============================================================
 // AUTHENTICATED NURSE
@@ -330,6 +331,34 @@ function assessmentValidDate(string $date, string $message): void
  * one-time (non-ARV) save paths. Animal fields are optional, so non-bite and
  * non-rabies services (Hepa B, Flu, PPD, rusty-object punctures) save without them.
  */
+/**
+ * Verified registry record (sources/registry_lock_helpers.php): a follow-up
+ * visit's chart keeps the verified bite details (date, site, animal, its
+ * status, category), so neither the case nor the chart that the pages show
+ * can change them. Different posted values are reported; changes go through
+ * Request correction.
+ */
+function assessmentKeepVerifiedCaseDetails(mysqli $conn, int $caseId, array $data): array
+{
+    if (!registryLockForCase($conn, $caseId)) return $data;
+    $values = registryLockSnapshot($conn, $caseId)['values'];
+    $map = ['date_of_exposure' => 'case.date_of_bite', 'exposure_site' => 'case.bite_location', 'animal_type' => 'case.animal_type',
+        'animal_status' => 'case.animal_status', 'bite_category' => 'case.bite_category'];
+    $posted = [];
+    foreach ($map as $field => $key) $posted[$key] = $data[$field] ?? '';
+    $changes = registryLockChanges($values, $posted);
+    foreach ($map as $field => $key) {
+        if ($field === 'date_of_exposure' && ($values[$key] ?? '') === '') continue;
+        $data[$field] = $values[$key] ?? '';
+    }
+    if ($changes) {
+        $GLOBALS['assessmentRegistryLockKept'] = 'The verified case details were kept ('
+            . implode(', ', array_map(static fn($c) => $c[0], $changes)) . ' differed on this chart). '
+            . 'To change them, use Request correction on the patient record.';
+    }
+    return $data;
+}
+
 function assessmentCollectExposure(array $payload): array
 {
     $history = trim((string)($payload['exposure_history'] ?? ''));
@@ -416,7 +445,27 @@ function assessmentUpsert(mysqli $conn, array $data): void
 /** Copy the nurse-confirmed exposure details to the case and mark the visit Under Assessment. */
 function assessmentUpdateCaseAndVisit(mysqli $conn, array $data, int $visitId, int $userId, string $branchId): void
 {
-    $caseUpdate = $conn->prepare(
+    /*
+     * A verified registry record keeps its case details (date, site, animal,
+     * category, status of animal): a follow-up visit's chart is saved, but the
+     * verified case values are not overwritten. Changes go through Request
+     * correction (Registry_Correction.php).
+     */
+    $lock = registryLockForCase($conn, (int)$data['case_id']);
+    if ($lock) {
+        $snapshot = registryLockSnapshot($conn, (int)$data['case_id']);
+        $changes = registryLockChanges($snapshot['values'], [
+            'case.animal_type' => $data['animal_type'], 'case.bite_location' => $data['exposure_site'],
+            'case.bite_category' => $data['bite_category'], 'case.animal_status' => $data['animal_status'],
+            'case.date_of_bite' => $data['date_of_exposure'],
+        ]);
+        if ($changes) {
+            $GLOBALS['assessmentRegistryLockKept'] = 'The verified case details were kept ('
+                . implode(', ', array_map(static fn($c) => $c[0], $changes)) . ' differ on this chart). '
+                . 'To change them, use Request correction on the patient record.';
+        }
+    }
+    $caseUpdate = $lock ? null : $conn->prepare(
         "UPDATE animal_bite_cases
          SET
             animal_type = NULLIF(?, ''),
@@ -428,11 +477,11 @@ function assessmentUpdateCaseAndVisit(mysqli $conn, array $data, int $visitId, i
          WHERE case_id = ?
            AND branch_id = ?"
     );
-    if (!$caseUpdate) {
+    if (!$lock && !$caseUpdate) {
         throw new RuntimeException('Unable to prepare the case update.');
     }
     $caseId = (int)$data['case_id'];
-    $caseUpdate->bind_param(
+    if ($caseUpdate) $caseUpdate->bind_param(
         'ssssssis',
         $data['animal_type'],
         $data['exposure_site'],
@@ -443,8 +492,10 @@ function assessmentUpdateCaseAndVisit(mysqli $conn, array $data, int $visitId, i
         $caseId,
         $branchId
     );
-    $caseUpdate->execute();
-    $caseUpdate->close();
+    if ($caseUpdate) {
+        $caseUpdate->execute();
+        $caseUpdate->close();
+    }
 
     $visitUpdate = $conn->prepare(
         "UPDATE patient_visits
@@ -505,7 +556,7 @@ function assessmentSaveNonArvAssessment(
     string $branchId,
     array $payload
 ): void {
-    $data = assessmentCollectExposure($payload);
+    $data = assessmentKeepVerifiedCaseDetails($conn, (int)$visit['case_id'], assessmentCollectExposure($payload));
     assessmentArchiveVisitSchedule($conn, $visitId, $userId, $branchId);
     $data += [
         'visit_id' => $visitId,
@@ -611,7 +662,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 );
             }
 
-            $data = assessmentCollectExposure($_POST);
+            $data = assessmentKeepVerifiedCaseDetails($conn, (int)$visit['case_id'], assessmentCollectExposure($_POST));
             $isNonRabies = isset($_POST['not_anti_rabies'])
                 && (string)$_POST['not_anti_rabies'] === '1';
 
@@ -906,6 +957,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($outsideRecorded > 0) {
                 $message .= ' ' . $outsideRecorded . ' dose(s) given at ' . $outsideClinic
                     . ' were recorded as completed (no stock used); only the remaining doses were scheduled.';
+            }
+            if (!empty($GLOBALS['assessmentRegistryLockKept'])) {
+                $warnings[] = $GLOBALS['assessmentRegistryLockKept'];
             }
             if ($warnings) {
                 workflowFlash('warning', $message . ' ' . implode(' ', $warnings));
@@ -2824,6 +2878,7 @@ $flash = workflowTakeFlash();
                     <span>Supply Forecasting</span>
                 </a>
             </li>
+            <li><a href="Nurse_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
 
             <li><a  href="Nurse_Notification.php" class="notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
                         <?php if ($notification_count > 0): ?>
@@ -3480,6 +3535,12 @@ $flash = workflowTakeFlash();
                         </div>
 
                         <div class="content-card-body">
+
+                            <?php $selectedRegistryLock = registryLockForCase($conn, (int)($selected['case_id'] ?? 0)); ?>
+                            <?php if ($selectedRegistryLock): ?>
+                                <?= registryLockNoticeHtml($selectedRegistryLock) ?>
+                                <div class="small text-muted mb-3">This visit's chart can be saved, but the verified case details (date, site and category of bite, biting animal and its status) are kept.</div>
+                            <?php endif; ?>
 
                             <form method="post" class="row g-3" id="assessmentForm">
 

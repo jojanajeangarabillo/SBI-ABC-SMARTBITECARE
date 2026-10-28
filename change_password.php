@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/login_security_helpers.php';
 
 $error = '';
 $success = '';
@@ -19,8 +20,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'Invalid request. Missing token or email.';
     } elseif (empty($password) || empty($confirm_password)) {
         $error = 'Please enter and confirm your password.';
-    } elseif (strlen($password) < 8) {
-        $error = 'Password must be at least 8 characters long.';
+    } elseif (($passwordProblem = passwordPolicyProblem($password)) !== null) {
+        $error = $passwordProblem;
     } elseif ($password !== $confirm_password) {
         $error = 'Passwords do not match.';
     } else {
@@ -271,14 +272,14 @@ if (!empty($token) && !empty($email) && $_SERVER['REQUEST_METHOD'] !== 'POST') {
                     <label class="form-label">New Password</label>
                     <div class="position-relative">
                         <input type="password" class="form-control" id="password" name="password" 
-                               placeholder="Enter new password" required minlength="8" />
+                               placeholder="Enter new password" required minlength="8" maxlength="72" />
                         <button type="button" class="toggle-password" onclick="togglePassword('password')">
                             <i class="bi bi-eye" id="passwordIcon"></i>
                         </button>
                     </div>
                     <ul class="password-requirements mt-2">
                         <li>At least 8 characters long</li>
-                        <li>Use a combination of letters, numbers, and symbols</li>
+                        <li>Contains both letters and numbers (symbols are optional)</li>
                     </ul>
                 </div>
                 

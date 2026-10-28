@@ -70,12 +70,6 @@ function reportLabel(string $type): string
     return $labels[$type] ?? $labels['low_stock'];
 }
 
-function csvCell($value): string
-{
-    $value = (string)$value;
-    return '"' . str_replace('"', '""', $value) . '"';
-}
-
 /* -------------------------------------------------------------
  * Authenticated user + branch
  * ----------------------------------------------------------- */
@@ -641,196 +635,6 @@ if ($pieTotal > 0) {
 }
 
 /* -------------------------------------------------------------
- * CSV export
- * ----------------------------------------------------------- */
-if (isset($_GET['export']) && $_GET['export'] === 'csv') {
-
-    /*
-     * Re-fetch using the exact same validated filters. The branch is still
-     * taken only from the authenticated user, never from GET.
-     */
-    try {
-        $exportRows = fetchReportRows(
-            $conn,
-            $report_type,
-            (string)$branch_id,
-            $date_from,
-            $date_to,
-            $search
-        );
-    } catch (Throwable $e) {
-        http_response_code(500);
-        die('Unable to export report: ' . h($e->getMessage()));
-    }
-
-    $filename = 'SmartBiteCare_' . preg_replace('/[^A-Za-z0-9_-]/', '_', reportLabel($report_type))
-              . '_' . $date_from . '_to_' . $date_to . '.csv';
-
-    header('Content-Type: text/csv; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="' . $filename . '"');
-    header('Pragma: no-cache');
-    header('Expires: 0');
-
-    $output = fopen('php://output', 'w');
-
-    /* UTF-8 BOM for Excel compatibility. */
-    fwrite($output, "\xEF\xBB\xBF");
-
-    if ($report_type === 'low_stock') {
-        fputcsv($output, [
-            'Item', 'Category', 'Unit', 'Minimum Stock', 'Current Stock', 'Status',
-            'Minimum Stock (Display)', 'Current Stock (Display)'
-        ]);
-
-        foreach ($exportRows as $row) {
-            $status = ((float)$row['current_stock'] <= 0)
-                ? 'Critical'
-                : 'Low';
-
-            fputcsv($output, [
-                $row['item_name'],
-                $row['category_name'],
-                $row['unit_name'],
-                $row['minimum_stock'],
-                $row['current_stock'],
-                $status,
-                inventoryQuantityText((float)$row['minimum_stock'], $row),
-                inventoryQuantityText((float)$row['current_stock'], $row)
-            ]);
-        }
-
-    } elseif ($report_type === 'expiring_stock') {
-        fputcsv($output, [
-            'Item', 'Category', 'Unit', 'Batch/Lot No.', 'Manufacturing Date',
-            'Expiration Date', 'Quantity', 'Days Remaining', 'Status',
-            'Quantity (Display)'
-        ]);
-
-        foreach ($exportRows as $row) {
-            fputcsv($output, [
-                $row['item_name'],
-                $row['category_name'],
-                $row['unit_name'],
-                $row['batch_lot_no'],
-                $row['manufacturing_date'],
-                $row['expiration_date'],
-                $row['quantity_available'],
-                $row['days_remaining'],
-                $row['expiry_status'],
-                inventoryQuantityText((float)$row['quantity_available'], $row)
-            ]);
-        }
-
-    } elseif ($report_type === 'stock_usage') {
-        fputcsv($output, [
-            'Usage ID', 'Usage Date', 'Item', 'Category', 'Unit',
-            'Quantity Used', 'Usage Type', 'Patient Count', 'Stock Received',
-            'Quantity Used (Display)', 'Stock Received (Display)'
-        ]);
-
-        foreach ($exportRows as $row) {
-            fputcsv($output, [
-                $row['usage_id'],
-                $row['usage_date'],
-                $row['item_name'],
-                $row['category_name'],
-                $row['unit_name'],
-                $row['quantity_used'],
-                $row['usage_type_label'],
-                $row['patient_count'],
-                $row['stock_received'],
-                inventoryQuantityText((float)$row['quantity_used'], $row),
-                inventoryQuantityText((float)$row['stock_received'], $row)
-            ]);
-        }
-
-    } elseif ($report_type === 'transactions') {
-        fputcsv($output, [
-            'Transaction No.', 'Type', 'Item', 'Category', 'Unit',
-            'Quantity', 'Transaction Date', 'By', 'Remarks',
-            'Quantity (Display)', 'Request', 'Requested By', 'Requested At',
-            'Approved By', 'Approved At', 'Request Reason'
-        ]);
-
-        foreach ($exportRows as $row) {
-            $ap = inventoryApprovalHistoryFields($row);
-            fputcsv($output, [
-                'TRX-' . str_pad($row['transaction_id'], 4, '0', STR_PAD_LEFT),
-                $row['transaction_type'],
-                $row['item_name'],
-                $row['category_name'],
-                $row['unit_name'],
-                $row['quantity'],
-                $row['transaction_date'],
-                $row['username'],
-                $row['remarks'],
-                inventoryQuantityText((float)$row['quantity'], $row),
-                $ap['request'], $ap['requested_by'], $ap['requested_at'],
-                $ap['approved_by'], $ap['approved_at'], $ap['reason']
-            ]);
-        }
-
-    } elseif ($report_type === 'returns') {
-        fputcsv($output, [
-            'Return No.', 'Direction', 'Source Branch', 'Destination Branch',
-            'Item', 'Unit', 'Quantity', 'Reason', 'Status',
-            'Created At', 'Sent At', 'Received At',
-            'Created By', 'Received By', 'Transportation Details', 'Remarks'
-        ]);
-
-        foreach ($exportRows as $row) {
-            fputcsv($output, [
-                $row['return_number'] ?: ('RET-' . $row['return_id']),
-                $row['direction'],
-                $row['source_branch'] ?: $row['branch_id'],
-                $row['destination_branch'] ?: $row['destination_branch_id'],
-                $row['item_name'],
-                $row['unit_name'],
-                $row['quantity'],
-                $row['return_reason'],
-                $row['status'],
-                $row['created_at'],
-                $row['sent_at'],
-                $row['received_at'],
-                $row['created_by_name'],
-                $row['processed_by_name'],
-                $row['transportation_details'],
-                $row['remarks']
-            ]);
-        }
-
-    } elseif ($report_type === 'shortage') {
-        fputcsv($output, [
-            'Forecast ID', 'Forecast Date', 'Item', 'Category', 'Unit',
-            'Probability Score', 'Status', 'Recommended Reorder',
-            'Forecasted Consumption', 'Forecast Days', 'Generated By',
-            'Recommended Reorder (Display)', 'Forecasted Consumption (Display)'
-        ]);
-
-        foreach ($exportRows as $row) {
-            fputcsv($output, [
-                $row['forecast_id'],
-                $row['forecast_date'],
-                $row['item_name'],
-                $row['category_name'],
-                $row['unit_name'],
-                $row['shortage_probability'],
-                $row['forecast_status'],
-                $row['recommended_reorder'],
-                $row['forecasted_consumption'],
-                $row['forecast_days'],
-                $row['generated_by_name'],
-                inventoryReorderText((float)$row['recommended_reorder'], $row),
-                inventoryForecastQuantityText((float)$row['forecasted_consumption'], $row)
-            ]);
-        }
-    }
-
-    fclose($output);
-    exit();
-}
-
-/* -------------------------------------------------------------
  * Summary calculations for the selected report
  * ----------------------------------------------------------- */
 $summary = [
@@ -869,6 +673,104 @@ foreach ($reportRows as $row) {
 if ($report_type !== 'returns') {
     $summary['quantity'] = round($summary['quantity'], 1);
 }
+
+/* -------------------------------------------------------------
+ * PDF / CSV export: one report array (sources/report_export.php) with
+ * the same columns as the screen table and ALL rows (the screen table
+ * is paginated). The branch always comes from the signed-in account.
+ * ----------------------------------------------------------- */
+function ioReportArray(string $type, array $rows, array $summary): array
+{
+    $dt = static fn($v) => $v ? date('M d, Y h:i A', strtotime((string)$v)) : '—';
+    $d = static fn($v) => $v ? date('M d, Y', strtotime((string)$v)) : '—';
+    $col = static fn(string $label, float $w, string $align = 'L') => ['label' => $label, 'width' => $w, 'align' => $align];
+    $orientation = 'L';
+    $columns = [];
+    $data = [];
+    $sum = ['Report rows' => (string)$summary['rows'], 'Quantity (vials / ampules / pcs)' => inventoryFormatNumber((float)$summary['quantity'])];
+    switch ($type) {
+        case 'low_stock':
+            $orientation = 'P';
+            $columns = [$col('Category', 2), $col('Item', 3), $col('Unit', 2), $col('Minimum Stock', 2, 'R'), $col('Current Stock', 2, 'R'), $col('Status', 1.2)];
+            foreach ($rows as $r) $data[] = [$r['category_name'], $r['item_name'], reportUnitText($r), inventoryQuantityText((float)$r['minimum_stock'], $r),
+                inventoryQuantityText((float)$r['current_stock'], $r), (float)$r['current_stock'] <= 0 ? 'Critical' : 'Low'];
+            break;
+        case 'expiring_stock':
+            $columns = [$col('Item', 2.6), $col('Category', 1.8), $col('Batch / Lot No.', 1.8), $col('Unit', 1.6), $col('Stock', 1.8, 'R'),
+                $col('Manufacturing Date', 1.5), $col('Expiration Date', 1.5), $col('Days Remaining', 1.2, 'R'), $col('Status', 1.4)];
+            foreach ($rows as $r) $data[] = [$r['item_name'], $r['category_name'], $r['batch_lot_no'] ?: '—', reportUnitText($r),
+                inventoryQuantityText((float)$r['quantity_available'], $r), $d($r['manufacturing_date']), $d($r['expiration_date']), (string)$r['days_remaining'], $r['expiry_status']];
+            break;
+        case 'stock_usage':
+            $columns = [$col('Usage Date', 1.4), $col('Item', 2.6), $col('Category', 1.8), $col('Unit', 1.6), $col('Qty Used', 1.8, 'R'),
+                $col('Usage Type', 2), $col('Patients', 1, 'R'), $col('Stock Received', 1.8, 'R')];
+            foreach ($rows as $r) $data[] = [$d($r['usage_date']), $r['item_name'], $r['category_name'], reportUnitText($r), inventoryQuantityText((float)$r['quantity_used'], $r),
+                $r['usage_type_label'], inventoryFormatNumber((float)$r['patient_count']), inventoryQuantityText((float)$r['stock_received'], $r)];
+            $sum['Patients'] = inventoryFormatNumber((float)$summary['patients']);
+            break;
+        case 'transactions':
+            $columns = [$col('Trx No.', 1.1), $col('Type', 1), $col('Item', 2.2), $col('Unit', 1.5), $col('Qty', 1.6, 'R'), $col('Date', 1.6),
+                $col('By', 1.4), $col('Request / Approval', 3.2), $col('Remarks', 2.4)];
+            foreach ($rows as $r) {
+                $ap = inventoryApprovalHistoryFields($r);
+                $approval = $ap['linked']
+                    ? $ap['request'] . "\nRequested by " . $ap['requested_by'] . ', ' . $ap['requested_at'] . "\nApproved by " . ($ap['approved_by'] ?: '—')
+                        . ($ap['approved_at'] !== '' ? ', ' . $ap['approved_at'] : '') . ($ap['reason'] !== '' ? "\nReason: " . $ap['reason'] : '')
+                    : 'No request';
+                $data[] = ['TRX-' . str_pad((string)$r['transaction_id'], 4, '0', STR_PAD_LEFT), $r['transaction_type'], $r['item_name'], reportUnitText($r),
+                    inventoryQuantityText((float)$r['quantity'], $r), $dt($r['transaction_date']), (string)$r['username'], $approval, $r['remarks'] ?: '—'];
+            }
+            $sum['Transactions'] = (string)$summary['transactions'];
+            break;
+        case 'returns':
+            $columns = [$col('Return No.', 1.3), $col('Direction', 1), $col('Route', 1.8), $col('Item', 1.8), $col('Unit', 1), $col('Qty', 0.8, 'R'),
+                $col('Reason', 1.5), $col('Status', 1.1), $col('Created', 1.3), $col('Sent', 1.3), $col('Received', 1.3), $col('Created By', 1.2),
+                $col('Received By', 1.2), $col('Transportation', 1.4), $col('Remarks', 1.4)];
+            foreach ($rows as $r) $data[] = [$r['return_number'] ?: ('RET-' . $r['return_id']), $r['direction'],
+                ($r['source_branch'] ?: $r['branch_id']) . ' → ' . ($r['destination_branch'] ?: $r['destination_branch_id']), $r['item_name'], $r['unit_name'] ?: '—',
+                rtrim(rtrim(number_format((float)$r['quantity'], 2, '.', ''), '0'), '.'), $r['return_reason'], $r['status'], $dt($r['created_at']), $dt($r['sent_at']),
+                $dt($r['received_at']), $r['created_by_name'] ?: '—', $r['processed_by_name'] ?: '—', $r['transportation_details'] ?: '—', $r['remarks'] ?: '—'];
+            $sum['Quantity (vials / ampules / pcs)'] = inventoryFormatNumber((float)$summary['quantity']);
+            $sum['Received'] = (string)$summary['returns_received'];
+            $sum['In transit'] = (string)$summary['returns_in_transit'];
+            break;
+        case 'shortage':
+            $columns = [$col('Date', 1.3), $col('Item', 2.4), $col('Category', 1.7), $col('Unit', 1.6), $col('Probability', 1.1, 'R'), $col('Status', 1.5),
+                $col('Recommended Reorder', 1.8, 'R'), $col('Predicted Consumption', 1.9, 'R'), $col('Forecast Days', 1, 'R'), $col('Generated By', 1.4)];
+            foreach ($rows as $r) $data[] = [$d($r['forecast_date']), $r['item_name'], $r['category_name'], reportUnitText($r),
+                $r['shortage_probability'] !== null ? $r['shortage_probability'] . '%' : '—', $r['forecast_status'] ?: '—', inventoryReorderText((float)$r['recommended_reorder'], $r),
+                inventoryForecastQuantityText((float)$r['forecasted_consumption'], $r), $r['forecast_days'] !== null ? (string)$r['forecast_days'] : '—', $r['generated_by_name'] ?: '—'];
+            unset($sum['Quantity (vials / ampules / pcs)']);
+            $sum['Recommended reorder (vials / ampules / pcs)'] = inventoryFormatNumber((float)$summary['quantity']);
+            break;
+    }
+    return ['title' => reportLabel($type), 'orientation' => $orientation, 'summary' => $sum,
+        'sections' => [['title' => 'Detailed line items', 'columns' => $columns, 'rows' => $data, 'empty' => 'No records found for the selected filters.']]];
+}
+
+$exportFormat = strtolower((string)($_GET['export'] ?? ''));
+if (in_array($exportFormat, ['pdf', 'csv'], true)) {
+    if ($reportError !== '') {
+        http_response_code(500);
+        die('Unable to export report: ' . h($reportError));
+    }
+    require_once __DIR__ . '/sources/report_export.php';
+    require_once __DIR__ . '/sources/workflow_helpers.php';
+    $period = reportPeriodText($date_from, $date_to);
+    $meta = reportMeta($conn, $user_id, (string)$branch_name, $period, $search !== '' ? 'Search: ' . $search : '');
+    workflowAudit($conn, $user_id, (string)$branch_id, 'Exported ' . reportLabel($report_type) . ' (' . strtoupper($exportFormat) . ') - Branch: '
+        . $branch_name . ' - Period: ' . $period . ($search !== '' ? ' - Search: ' . $search : ''), 'Reports');
+    reportSend(ioReportArray($report_type, $reportRows, $summary), $meta, $exportFormat,
+        reportLabel($report_type) . '_' . $branch_id . '_' . $date_from . '_to_' . $date_to);
+}
+
+/* Control reports (Stock Adjustment & Disposal, Restock Request, Wastage):
+ * the shared report center (sources/report_center.php). */
+require_once __DIR__ . '/sources/report_center.php';
+$reportCenter = reportCenterRun($conn, reportCenterCatalogEntries(5), [
+    'user_id' => $user_id, 'role_id' => 5, 'branch_id' => (string)$branch_id,
+    'page' => 'InventoryOfficer_Reports.php', 'module' => 'Reports',
+]);
 
 /* Pie CSS gradient. */
 $gradientParts = [];
@@ -1677,13 +1579,13 @@ margin-left:90px;
 <button type="submit" class="btn-custom">
 <i class="bi bi-file-earmark-bar-graph me-1"></i> Generate Report
 </button>
-<a class="btn-outline-custom" target="_blank"
-   href="?export=csv&amp;report_type=<?php echo urlencode($report_type); ?>&amp;date_from=<?php echo urlencode($date_from); ?>&amp;date_to=<?php echo urlencode($date_to); ?>&amp;search=<?php echo urlencode($search); ?>">
-<i class="bi bi-download me-1"></i> Export CSV
+<?php $exportQuery = 'report_type=' . urlencode($report_type) . '&amp;date_from=' . urlencode($date_from) . '&amp;date_to=' . urlencode($date_to) . '&amp;search=' . urlencode($search); ?>
+<a class="btn-outline-custom" href="?export=pdf&amp;<?php echo $exportQuery; ?>">
+<i class="bi bi-file-earmark-pdf me-1"></i> Export PDF
 </a>
-<button type="button" class="btn-outline-custom" onclick="window.print();">
-<i class="bi bi-printer me-1"></i> Print
-</button>
+<a class="btn-outline-custom" href="?export=csv&amp;<?php echo $exportQuery; ?>">
+<i class="bi bi-filetype-csv me-1"></i> Export CSV
+</a>
 </div>
 </form>
 
@@ -1931,6 +1833,10 @@ No usage data for the selected date range.
 </div>
 </div>
 
+</div>
+
+<div class="mt-4" id="controlReports">
+<?php echo reportCenterRender($reportCenter, 'Control reports'); ?>
 </div>
 
 </div>

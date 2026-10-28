@@ -5,6 +5,7 @@ require_once 'sources/app_config.php';
 require_once 'sources/mailer.php';
 require_once 'sources/notification_helper.php';
 require_once __DIR__ . '/sources/user_management_security.php';
+require_once __DIR__ . '/sources/login_security_helpers.php';
 
 $managementActor = managementRequireUser($conn, 1);
 $managementCsrf = managementCsrfToken();
@@ -23,7 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     if (isset($_POST['action'])) {
-        if (!in_array($_POST['action'], ['add_admin', 'archive_admin'], true)) {
+        if (!in_array($_POST['action'], ['add_admin', 'archive_admin', 'unlock_user'], true)) {
             managementDeny(400, 'Select a valid management action.');
         }
         $managementActions++;
@@ -358,7 +359,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             throw new RuntimeException('Username or email already exists.');
         }
 
-        $temp_password = bin2hex(random_bytes(6));
+        $temp_password = passwordGenerateTemporary(12);
         $hashed_password = password_hash($temp_password, PASSWORD_DEFAULT);
         $token = bin2hex(random_bytes(32));
         $expires_at = date('Y-m-d H:i:s', strtotime('+24 hours'));
@@ -627,6 +628,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'archi
         $_SESSION['error'] = 'Unable to archive Branch Admin: ' . $e->getMessage();
     }
     
+    header('Location: SuperAdmin_CombinedManagement.php?tab=admins');
+    exit();
+}
+
+// Handle Unlock (any account locked after 5 failed logins; Branch Admin accounts are unlocked here)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'unlock_user') {
+    try {
+        $_SESSION['success'] = loginUnlockAccount($conn, (int)$_SESSION['user_id'], (int)($_POST['user_id'] ?? 0));
+    } catch (Throwable $e) {
+        $_SESSION['error'] = 'Unable to unlock the account: ' . $e->getMessage();
+    }
     header('Location: SuperAdmin_CombinedManagement.php?tab=admins');
     exit();
 }
@@ -1715,6 +1727,40 @@ if (isset($_GET['archive_id'])) {
                         <i class="bi bi-person-plus"></i> Add Branch Admin
                     </button>
                 </div>
+
+                <?php
+                    // Accounts locked after 5 failed logins (all roles and branches).
+                    $lockedAccounts = [];
+                    if (loginSecurityReady($conn)) {
+                        $lockedResult = $conn->query("SELECT u.user_id, u.username, u.role_id, r.role_name, b.branch_name
+                            FROM users u LEFT JOIN roles r ON r.role_id = u.role_id LEFT JOIN branches b ON b.branch_id = u.branch_id
+                            ORDER BY u.username");
+                        $allAccounts = $lockedResult ? $lockedResult->fetch_all(MYSQLI_ASSOC) : [];
+                        $lockStates = loginLockStates($conn, $allAccounts);
+                        foreach ($allAccounts as $account) {
+                            if (isset($lockStates[(int)$account['user_id']])) {
+                                $lockedAccounts[] = $account + ['locked_until' => $lockStates[(int)$account['user_id']]['locked_until']];
+                            }
+                        }
+                    }
+                ?>
+                <?php if ($lockedAccounts): ?>
+                    <div class="alert alert-danger mb-3">
+                        <div class="fw-bold mb-2"><i class="bi bi-lock-fill me-1"></i>Locked accounts (<?php echo count($lockedAccounts); ?>)</div>
+                        <div class="small mb-2">Locked for <?php echo LOGIN_LOCK_MINUTES; ?> minutes after <?php echo LOGIN_MAX_FAILED_ATTEMPTS; ?> failed login attempts. Unlock an account early only after confirming it is the account owner.</div>
+                        <?php foreach ($lockedAccounts as $account): ?>
+                            <form method="POST" class="d-flex align-items-center gap-2 mb-1" onsubmit="return confirm('Unlock this account now?');">
+                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($managementCsrf, ENT_QUOTES, 'UTF-8'); ?>">
+                                <input type="hidden" name="action" value="unlock_user">
+                                <input type="hidden" name="user_id" value="<?php echo (int)$account['user_id']; ?>">
+                                <span><strong><?php echo htmlspecialchars($account['username']); ?></strong>
+                                    (<?php echo htmlspecialchars(($account['role_name'] ?? '') . ', ' . ($account['branch_name'] ?? 'No branch')); ?>)
+                                    — locked until <?php echo htmlspecialchars(date('h:i A', strtotime($account['locked_until']))); ?></span>
+                                <button type="submit" class="btn btn-sm btn-light">Unlock</button>
+                            </form>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
 
                 <!-- Admin Table -->
                 <div class="table-wrap">

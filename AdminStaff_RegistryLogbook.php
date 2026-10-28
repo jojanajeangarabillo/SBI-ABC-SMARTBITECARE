@@ -7,7 +7,7 @@ require_once 'sources/patient_display_helper.php';
 
 /*
  * Registry logbook: the clinic's paper logbook columns, read-only, with a
- * date-range filter and CSV export (opens in Excel). ERIG, ATS and TT come from
+ * date-range filter and PDF (landscape) and CSV exports (shared builders). ERIG, ATS and TT come from
  * the registry fields or, when those are empty, from the administered product
  * records. Dose columns show the date given, or a check mark when only the
  * registry flag is known.
@@ -45,7 +45,7 @@ $casesStmt = $conn->prepare(
             " . patientCaseVaccinationStatusSql('c') . " AS treatment_status,
             p.full_name, p.address, p.gender, p.contact_number, p.birthday,
             " . patientDisplayAgeSql('p') . " AS age,
-            r.registry_number, r.status_of_biting_animal, r.erig, r.ats, r.tt, r.active_regimen,
+            r.registry_number, r.registry_status, r.status_of_biting_animal, r.erig, r.ats, r.tt, r.active_regimen,
             r.dose_d0, r.dose_d3, r.dose_d7, r.dose_d14, r.dose_d21, r.dose_d28_30, r.remarks AS registry_remarks
      FROM animal_bite_cases c
      INNER JOIN patients p ON p.patient_id = c.patient_id
@@ -159,7 +159,12 @@ foreach ($cases as $case) {
     ] + $doses + [
         'Contact No.' => (string)($case['contact_number'] ?? ''),
         // Shared rule: a one-time / Not Anti-Rabies case is Completed once its products are recorded.
-        'Status' => (string)$case['treatment_status'],
+        // Verified (locked) registry entries are marked; changes go through Request correction.
+        'Status' => (string)$case['treatment_status'] . match ((string)($case['registry_status'] ?? '')) {
+            'Registered' => ' · Verified (locked)',
+            'For Re-verification' => ' · For re-verification',
+            default => '',
+        },
         'Remarks' => $remarks,
     ];
 }
@@ -170,19 +175,30 @@ $columns = $rows ? array_keys($rows[0]) : array_merge(
     ['Contact No.', 'Status', 'Remarks']
 );
 
-if (($_GET['export'] ?? '') === 'csv') {
-    workflowAudit($conn, $userId, $branchId, 'Exported registry logbook ' . $from . ' to ' . $to . ' (' . count($rows) . ' cases)', 'Registry');
-    header('Content-Type: text/csv; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="registry_logbook_' . $branchId . '_' . $from . '_to_' . $to . '.csv"');
-    $output = fopen('php://output', 'w');
-    fwrite($output, "\xEF\xBB\xBF"); // UTF-8 BOM so Excel shows the check marks.
-    fputcsv($output, $columns);
-    foreach ($rows as $row) {
-        // Guard against spreadsheet formulas in typed text.
-        fputcsv($output, array_map(static fn($value) => preg_match('/\A[=+\-@]/', (string)$value) ? "'" . $value : $value, array_values($row)));
-    }
-    fclose($output);
-    exit;
+$exportFormat = (string)($_GET['export'] ?? '');
+if (in_array($exportFormat, ['csv', 'pdf'], true)) {
+    require_once 'sources/report_export.php';
+    workflowAudit($conn, $userId, $branchId, 'Exported registry logbook (' . strtoupper($exportFormat) . ') ' . $from . ' to ' . $to . ' (' . count($rows) . ' cases)', 'Registry');
+    // Widths in mm at 5.5 pt so dates and words fit on one line (A4 landscape, 8 mm margins).
+    $widths = ['Date' => 12, 'Case No.' => 11, 'Patient Name' => 15.5, 'Address' => 15.5, 'Age' => 5.5, 'Gender' => 8.5, 'Date of Bite' => 12,
+        'Site of Bite' => 13, 'Biting Animal' => 9, 'Status of Animal' => 13, 'Category' => 10, 'ERIG (mL)' => 7, 'ATS (mL)' => 7, 'TT' => 4.5,
+        'Active Regimen' => 13, 'D0' => 12, 'D3' => 12, 'D7' => 12, 'D14' => 12, 'D21' => 12, 'D28' => 12,
+        'Contact No.' => 16, 'Status' => 12.5, 'Remarks' => 12];
+    $report = [
+        'title' => 'Registry Logbook', 'orientation' => 'L', 'margin' => 8,
+        'summary' => ['Cases' => (string)count($rows)],
+        'sections' => [[
+            'font' => 5.5,
+            'columns' => array_map(static fn($c) => ['label' => $c, 'width' => $widths[$c] ?? 12,
+                'align' => in_array($c, ['Age', 'ERIG (mL)', 'ATS (mL)'], true) ? 'R' : (in_array($c, ['TT', 'D0', 'D3', 'D7', 'D14', 'D21', 'D28'], true) ? 'C' : 'L')], $columns),
+            'rows' => array_map('array_values', $rows),
+            'empty' => 'No cases were admitted in this date range.',
+        ]],
+        'notes' => ['Dose columns show the date given, or a check mark when only the registry flag is known. ERIG and ATS are in mL.',
+            'Clinical fields use the latest Nurse assessment, with the intake as fallback. "Verified (locked)" entries change only through Request correction.'],
+    ];
+    reportSend($report, reportMeta($conn, $userId, $branchName, reportPeriodText($from, $to)), $exportFormat,
+        'Registry_Logbook_' . $branchId . '_' . $from . '_to_' . $to);
 }
 ?>
 <!DOCTYPE html>
@@ -238,6 +254,7 @@ if (($_GET['export'] ?? '') === 'csv') {
             <li><a class="active" href="AdminStaff_Registry.php"><i class="bi bi-journal-check"></i><span>Registry Queue</span></a></li>
             <li><a href="AdminStaff_PhilhealthWorkflow.php"><i class="bi bi-check2-all"></i><span>PhilHealth Workflow</span></a></li>
             <li><a href="AdminStaff_MedicalDocuments.php"><i class="bi bi-file-earmark-ruled"></i><span>Medical Documents</span></a></li>
+            <li><a href="AdminStaff_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
             <li>
                 <a href="AdminStaff_Notifications.php" class="notification-link">
                     <i class="bi bi-bell-fill"></i><span>Notifications</span>
@@ -279,6 +296,9 @@ if (($_GET['export'] ?? '') === 'csv') {
                     <button type="submit" class="btn btn-outline-primary btn-sm"><i class="bi bi-funnel me-1"></i>Apply</button>
                     <a class="btn-primary-custom btn-sm" href="?<?php echo workflowH(http_build_query(['from' => $from, 'to' => $to, 'export' => 'csv'])); ?>">
                         <i class="bi bi-file-earmark-spreadsheet"></i>Export to Excel (CSV)
+                    </a>
+                    <a class="btn-primary-custom btn-sm" href="?<?php echo workflowH(http_build_query(['from' => $from, 'to' => $to, 'export' => 'pdf'])); ?>">
+                        <i class="bi bi-file-earmark-pdf"></i>Export PDF (landscape)
                     </a>
                     <a class="btn btn-light border btn-sm" href="AdminStaff_Registry.php"><i class="bi bi-arrow-left me-1"></i>Registry Queue</a>
                 </form>

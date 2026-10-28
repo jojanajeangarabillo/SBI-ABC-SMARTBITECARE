@@ -5,6 +5,7 @@ require_once __DIR__ . '/sources/app_config.php';
 require_once __DIR__ . '/sources/mailer.php';
 require_once __DIR__ . '/sources/notification_helper.php';
 require_once __DIR__ . '/sources/user_management_security.php';
+require_once __DIR__ . '/sources/login_security_helpers.php';
 
 // Revalidate the active account, current role, and database branch on every request.
 $managementActor = managementRequireUser($conn, 2, true);
@@ -46,7 +47,7 @@ $managementTransaction = false;
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     managementVerifyPost();
     $managementAction = $_POST['action'] ?? '';
-    if (!in_array($managementAction, ['add_user', 'edit_user', 'toggle_status', 'archive_user'], true)) {
+    if (!in_array($managementAction, ['add_user', 'edit_user', 'toggle_status', 'archive_user', 'unlock_user'], true)) {
         managementDeny(400, 'Select a valid user-management action.');
     }
     if (in_array($managementAction, ['add_user', 'edit_user'], true)) {
@@ -97,7 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     if (empty($errors)) {
-        $temp_password = bin2hex(random_bytes(8));
+        $temp_password = passwordGenerateTemporary(16);
         $hashed_password = password_hash($temp_password, PASSWORD_DEFAULT);
         
         $insertQuery = "INSERT INTO users (branch_id, role_id, username, email, password, status) 
@@ -223,6 +224,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if (empty($new_username)) $errors[] = "Username is required";
     if (empty($email) || !filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = "Valid email is required";
     if (empty($role_id)) $errors[] = "Role is required";
+    if ($new_password !== '' && ($passwordProblem = passwordPolicyProblem($new_password)) !== null) $errors[] = $passwordProblem;
     
     if (empty($errors)) {
         // Check if username or email already exists for other users
@@ -275,6 +277,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     } else {
         $message = implode("<br>", $errors);
         $message_type = "danger";
+    }
+}
+
+// Handle Unlock (account locked after 5 failed logins)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'unlock_user') {
+    try {
+        $message = loginUnlockAccount($conn, (int)$user_id, (int)$managementTarget['user_id']);
+        $message_type = 'success';
+    } catch (RuntimeException $unlockError) {
+        $message = $unlockError->getMessage();
+        $message_type = 'danger';
     }
 }
 
@@ -401,6 +414,7 @@ $stmt = $conn->prepare($usersQuery);
 $stmt->bind_param("siii", $branch_id, $user_id, $limit, $offset);
 $stmt->execute();
 $users = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$lockStates = loginLockStates($conn, $users);
 
 // Get available roles
 $rolesQuery = "SELECT role_id, role_name FROM roles WHERE role_id IN (3, 4, 5)";
@@ -1087,6 +1101,19 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
                                                     <?php echo $user['status']; ?>
                                                 </button>
                                             </form>
+                                            <?php if (isset($lockStates[(int)$user['user_id']])): ?>
+                                                <div class="mt-1 d-flex align-items-center gap-2 flex-wrap">
+                                                    <span class="badge text-bg-danger" title="Locked after <?php echo LOGIN_MAX_FAILED_ATTEMPTS; ?> failed login attempts">
+                                                        <i class="bi bi-lock-fill"></i> Locked until <?php echo htmlspecialchars(date('h:i A', strtotime($lockStates[(int)$user['user_id']]['locked_until'])), ENT_QUOTES, 'UTF-8'); ?>
+                                                    </span>
+                                                    <form method="POST" style="display:inline;" onsubmit="return confirm('Unlock this account now?');">
+                                                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($managementCsrf, ENT_QUOTES, 'UTF-8'); ?>">
+                                                        <input type="hidden" name="action" value="unlock_user">
+                                                        <input type="hidden" name="user_id" value="<?php echo $user['user_id']; ?>">
+                                                        <button type="submit" class="btn btn-sm btn-outline-danger py-0">Unlock</button>
+                                                    </form>
+                                                </div>
+                                            <?php endif; ?>
                                         </td>
                                         <td>
                                             <i class="bi bi-pencil-square action-icon" 
@@ -1225,8 +1252,9 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
                         </div>
                         <div class="mb-3">
                             <label for="new_password" class="form-label">New Password</label>
-                            <input type="password" class="form-control" id="new_password" name="new_password">
-                            <small class="text-muted">Leave blank to keep current password</small>
+                            <input type="password" class="form-control" id="new_password" name="new_password" minlength="8" maxlength="72"
+                                   pattern="(?=.*[A-Za-z])(?=.*[0-9]).{8,}" title="<?php echo htmlspecialchars(PASSWORD_RULE_TEXT, ENT_QUOTES, 'UTF-8'); ?>">
+                            <small class="text-muted">Leave blank to keep current password. <?php echo htmlspecialchars(PASSWORD_RULE_TEXT, ENT_QUOTES, 'UTF-8'); ?></small>
                         </div>
                     </div>
                     <div class="modal-footer">

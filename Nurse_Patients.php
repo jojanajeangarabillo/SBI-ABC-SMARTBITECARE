@@ -11,6 +11,7 @@ require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/patient_display_helper.php';
+require_once 'sources/registry_lock_helpers.php';
 require_once 'sources/fit_to_work_certificate.php';
 
 // Check if user is logged in and is a nurse
@@ -109,6 +110,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'get_patient') {
         $caseRow['regimen_label'] = patientRegimenLabel($clinical['treatment_profile'] ?? null, $clinical['regimen_route'] ?? null);
         $caseRow['case_status'] = $caseRow['shared_case_status'];
         $caseRow['case_number'] = patientDisplayCaseNumber($caseRow['case_number'] ?? null);
+        // Verified registry: read-only, corrections through Request correction.
+        $caseLock = registryLockForCase($conn, (int)$caseRow['case_id']);
+        $caseRow['registry_lock'] = $caseLock ? [
+            'message' => 'Registry ' . ($caseLock['registry_number'] ?? '') . ' was ' . registryLockLabel($caseLock) . '; its clinical and registry fields are read-only.',
+            'correction_url' => registryCorrectionUrl((int)$caseRow['case_id']),
+        ] : null;
     }
     unset($caseRow);
 
@@ -2047,6 +2054,7 @@ function getStatusBadge($status)
             <li><a href="Nurse_DailyInventory.php"><i class="bi bi-clipboard-data-fill"></i><span>Daily Inventory</span></a></li>
             <li><a href="Nurse_MedicalSuppliesManagement.php"><i class="bi bi-calendar-check"></i><span>Medical Supplies Management</span></a></li>
             <li><a href="Nurse_Supplyforecasting.php"><i class="bi bi-graph-up-arrow"></i><span>Supply Forecasting</span></a></li>
+            <li><a href="Nurse_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
             <li><a  href="Nurse_Notification.php" class="notification-link"><i class="bi bi-bell-fill"></i><span>Notifications</span>
                         <?php if ($notification_count > 0): ?>
                             <span class="notification-badge"><?php echo $notification_count; ?></span>
@@ -2480,6 +2488,12 @@ function viewPatient(patientId) {
                     escapeHtml(status) +
                     '</span>' +
                     '</div>' +
+
+                    (c.registry_lock
+                        ? '<div class="col-12 mt-2 small text-info"><i class="bi bi-lock-fill"></i> ' +
+                          escapeHtml(c.registry_lock.message) +
+                          ' <a href="' + escapeHtml(c.registry_lock.correction_url) + '">Request correction</a></div>'
+                        : '') +
 
                     '</div>' +
                     '</div>';

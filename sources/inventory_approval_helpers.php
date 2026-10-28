@@ -13,6 +13,7 @@ require_once __DIR__ . '/return_management_helper.php';
  * Branch Admin of the same branch approves). One table, inventory_approval_requests
  * (sources/migrate_inventory_approvals.php), for every request type:
  *
+ *   stock_in          a delivery (new batch or added quantity); added only on approval
  *   stock_adjustment  Inventory Officer counted a batch; stock changes only on approval
  *   stock_out         Stock Out / pull-out / damaged, contaminated or lost stock
  *   expired_disposal  dispose and archive an expired batch
@@ -34,6 +35,7 @@ require_once __DIR__ . '/return_management_helper.php';
  */
 
 const INVENTORY_APPROVAL_TYPES = [
+    'stock_in' => 'Stock in / delivery',
     'stock_adjustment' => 'Stock adjustment',
     'stock_out' => 'Stock out / pull-out',
     'expired_disposal' => 'Expired stock disposal',
@@ -44,7 +46,16 @@ const INVENTORY_APPROVAL_TYPES = [
 ];
 
 /** Stock Out reasons the Inventory Officer can request. */
-const INVENTORY_STOCK_OUT_REASONS = ['Dispensed to Patient', 'Damaged', 'Contaminated', 'Expired', 'Lost / Wastage', 'Pull-out', 'Other'];
+/*
+ * Inventory Officer Stock Out reasons. "Dispensed to Patient" is NOT one of
+ * them: giving stock to a patient is usage, recorded immediately by the Nurse
+ * in Assessment, Vaccination or Medical Supplies (counted once as Consumed).
+ * A Stock Out is a pull-out, so a dispensed vial recorded here would show as
+ * Pull-out after a delay. Old transactions keep their remarks text and still
+ * display; an old pending request with that reason cannot be approved.
+ */
+const INVENTORY_STOCK_OUT_REASONS = ['Damaged', 'Contaminated', 'Expired', 'Lost / Wastage', 'Pull-out', 'Other'];
+const INVENTORY_PATIENT_USAGE_REASON = 'Dispensed to Patient';
 
 function inventoryApprovalTypeLabel(string $type): string
 {
@@ -228,6 +239,8 @@ function inventoryApprovalList(mysqli $conn, array $filters = []): array
     if (isset($filters['branch_id'])) { $where[] = 'r.branch_id = ?'; $types .= 's'; $params[] = (string)$filters['branch_id']; }
     if (isset($filters['requested_by'])) { $where[] = 'r.requested_by = ?'; $types .= 'i'; $params[] = (int)$filters['requested_by']; }
     if (isset($filters['item_id'])) { $where[] = 'r.item_id = ?'; $types .= 'i'; $params[] = (int)$filters['item_id']; }
+    if (!empty($filters['requested_from'])) { $where[] = 'r.requested_at >= ?'; $types .= 's'; $params[] = $filters['requested_from'] . ' 00:00:00'; }
+    if (!empty($filters['requested_to'])) { $where[] = 'r.requested_at < DATE_ADD(?, INTERVAL 1 DAY)'; $types .= 's'; $params[] = (string)$filters['requested_to']; }
     foreach (['statuses' => 'r.status', 'types' => 'r.request_type'] as $key => $column) {
         if (!empty($filters[$key])) {
             $where[] = $column . ' IN (' . implode(',', array_fill(0, count($filters[$key]), '?')) . ')';
@@ -235,7 +248,7 @@ function inventoryApprovalList(mysqli $conn, array $filters = []): array
             foreach ($filters[$key] as $value) $params[] = (string)$value;
         }
     }
-    $limit = max(1, min(1000, (int)($filters['limit'] ?? 200)));
+    $limit = max(1, min(20000, (int)($filters['limit'] ?? 200)));
     $sql = "SELECT r.*, COALESCE(i.item_name, r.item_name_snapshot) AS item_name,
                    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), un.unit_name, r.unit_snapshot) AS base_unit_label,
                    COALESCE(NULLIF(TRIM(i.display_unit_label), ''), un.unit_name, r.unit_snapshot) AS display_unit_label,
@@ -256,7 +269,15 @@ function inventoryApprovalList(mysqli $conn, array $filters = []): array
     $stmt->execute();
     $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
     $stmt->close();
+    // Branch names are looked up separately: this table can have a different
+    // collation from branches on MySQL 8/9, so a text join could fail.
+    $branchNames = [];
+    if ($rows) {
+        $res = $conn->query('SELECT branch_id, branch_name FROM branches');
+        while ($b = $res->fetch_assoc()) $branchNames[(string)$b['branch_id']] = (string)$b['branch_name'];
+    }
     foreach ($rows as &$row) {
+        $row['branch_name'] = $branchNames[(string)$row['branch_id']] ?? (string)$row['branch_id'];
         $row['payload_data'] = json_decode((string)($row['payload'] ?? ''), true) ?: [];
         $row['summary'] = inventoryApprovalDescribe($row);
     }
@@ -273,6 +294,11 @@ function inventoryApprovalDescribe(array $row): string
     $batch = trim((string)($row['batch_snapshot'] ?? ''));
     $batchText = $batch !== '' ? ' (batch ' . $batch . ')' : '';
     switch ((string)$row['request_type']) {
+        case 'stock_in':
+            return 'receive ' . $qty . ' of ' . $item . $batchText
+                . (!empty($p['expiration_date']) ? ', expires ' . $p['expiration_date'] : '')
+                . (!empty($p['source_label']) ? ', from ' . $p['source_label'] : '')
+                . (!empty($p['restock_request_id']) ? ', for restock request #' . (int)$p['restock_request_id'] : '');
         case 'stock_adjustment':
             return 'adjust ' . $item . $batchText . ' from ' . inventoryApprovalQuantityText($p['system_at_count'] ?? 0, $row)
                 . ' to the counted ' . inventoryApprovalQuantityText($p['counted'] ?? 0, $row);
@@ -349,20 +375,28 @@ function inventoryApprovalSidebarLink(mysqli $conn, int $userId, bool $active = 
 {
     $requests = 0;
     $closings = 0;
+    $deliveries = 0;
     try {
         $user = inventoryApprovalUser($conn, $userId);
         if ($user && (int)$user['role_id'] === 2 && $user['branch_id']) {
             $requests = inventoryApprovalPendingCount($conn, (string)$user['branch_id']);
             $closings = inventoryApprovalClosingsToReview($conn, (string)$user['branch_id']);
+            $deliveries = array_sum(array_column(inventoryApprovalPendingDeliveries($conn, (string)$user['branch_id']), 'count'));
         }
     } catch (Throwable $e) {
-        $requests = $closings = 0;
+        $requests = $closings = $deliveries = 0;
     }
     $count = $requests + $closings;
-    $title = $requests . ' pending request' . ($requests === 1 ? '' : 's') . ', ' . $closings . ' closing'
-        . ($closings === 1 ? '' : 's') . ' to review';
+    $title = $requests . ' pending request' . ($requests === 1 ? '' : 's')
+        . ($deliveries > 0 ? ' (' . $deliveries . ' ' . ($deliveries === 1 ? 'delivery' : 'deliveries') . ' waiting to be received)' : '')
+        . ', ' . $closings . ' closing' . ($closings === 1 ? '' : 's') . ' to review';
+    // Pending deliveries (stock-in requests) also get their own line under the
+    // link, so stock waiting to be received is never missed.
     return '<li><a href="BranchAdmin_Approvals.php" class="notification-link' . ($active ? ' active' : '') . '"'
-        . ($active ? ' aria-current="page"' : '') . '><i class="bi bi-patch-check-fill"></i><span>Pending Approvals</span>'
+        . ($active ? ' aria-current="page"' : '') . ' title="' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '"><i class="bi bi-patch-check-fill"></i><span>Pending Approvals'
+        . ($deliveries > 0 ? '<small class="d-block" style="font-size:11px;color:#ffd54f;font-weight:600;line-height:1.2"><i class="bi bi-truck me-1" style="font-size:11px"></i>'
+            . $deliveries . ' ' . ($deliveries === 1 ? 'delivery' : 'deliveries') . ' to receive</small>' : '')
+        . '</span>'
         . ($count > 0 ? '<span class="notification-badge" title="' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '">' . $count . '</span>' : '')
         . '</a></li>';
 }
@@ -486,13 +520,17 @@ function inventoryApprovalDecide(
         $finalApproved = $result['approved_quantity'] ?? null;
         $transactionId = $result['transaction_id'] ?? null;
         $reference = $result['reference'] ?? null;
+        // The before/after values are kept with the request for the reports.
+        $payloadData = $request['payload_data'];
+        $payloadData['result'] = ['before' => $result['before'] ?? null, 'after' => $result['after'] ?? null];
+        $payloadJson = json_encode($payloadData, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
         $stmt = $conn->prepare("UPDATE inventory_approval_requests
             SET status = ?, decided_by = ?, decided_at = NOW(), decision_remarks = NULLIF(?, ''),
                 approved_quantity = COALESCE(?, approved_quantity), result_transaction_id = ?, result_reference = ?,
-                open_key = IF(?, open_key, NULL)
+                open_key = IF(?, open_key, NULL), payload = ?
             WHERE request_id = ? AND status = 'Pending'");
         $keep = $keepOpen ? 1 : 0;
-        $stmt->bind_param('sissisii', $status, $approverId, $remarks, $finalApproved, $transactionId, $reference, $keep, $requestId);
+        $stmt->bind_param('sissisisi', $status, $approverId, $remarks, $finalApproved, $transactionId, $reference, $keep, $payloadJson, $requestId);
         $stmt->execute();
         if ($stmt->affected_rows !== 1) throw new RuntimeException('The request changed. Refresh and try again.');
         $stmt->close();
@@ -533,6 +571,43 @@ function inventoryApprovalApply(mysqli $conn, array $request, array $actor, arra
     $now = date('Y-m-d H:i:s');
     $requestId = (int)$request['request_id'];
     switch ($request['request_type']) {
+        case 'stock_in':
+            // Validated again: the batch may have expired or been archived since the request.
+            $origin = stockReceiptSourceFromForm($conn, (string)$actor['branch_id'], [
+                'stock_source_type' => (string)($p['stock_source_type'] ?? ''),
+                'stock_source_branch_id' => (string)($p['stock_source_branch_id'] ?? ''),
+                'stock_source_name' => (string)($p['stock_source_name'] ?? ''),
+            ]);
+            $restockId = !empty($p['restock_request_id']) ? (int)$p['restock_request_id'] : null;
+            $quantityScaled = stockQuantityParse((string)$request['quantity']);
+            $done = inventoryStockInApply($conn, $actor, (int)$request['item_id'], $quantityScaled,
+                $p['batch_lot_no'] ?? null, $p['manufacturing_date'] ?? null, $p['expiration_date'] ?? null, $origin,
+                trim((string)($p['remarks'] ?? '') . ' | Received on ' . ($p['received_date'] ?? '') . ' | Approved request #' . $requestId
+                    . ($restockId ? ' | Restock request #' . $restockId : ''), ' |'),
+                $now, $requestId);
+            $restockText = '';
+            if ($restockId !== null) {
+                $restock = inventoryApprovalLoad($conn, $restockId, true);
+                if ($restock && $restock['status'] === 'Approved' && (int)$restock['item_id'] === (int)$request['item_id']
+                    && (string)$restock['branch_id'] === (string)$request['branch_id']) {
+                    $fulfil = inventoryApprovalFulfil($conn, $restockId, (string)$request['branch_id'], (int)$request['item_id'],
+                        $quantityScaled, (int)$done['transaction_id'], (int)$approver['user_id']);
+                    $restockText = ' Restock request #' . $restockId . ($fulfil['complete']
+                        ? ' is now Fulfilled (' . $fulfil['fulfilled_text'] . ' received).'
+                        : ' stays Approved: ' . $fulfil['fulfilled_text'] . ' of ' . $fulfil['approved_text'] . ' received, '
+                            . $fulfil['remaining_text'] . ' remaining.');
+                } else {
+                    // The stock physically arrived; it is received, without the link.
+                    $restockText = ' Restock request #' . $restockId . ' is ' . ($restock['status'] ?? 'missing')
+                        . ', so this delivery was not counted against it.';
+                }
+            }
+            return ['transaction_id' => $done['transaction_id'],
+                'reference' => $restockId ? 'Restock request #' . $restockId : null,
+                'before' => 'usable ' . inventoryQuantityText((float)stockQuantityDecimal($done['before']), $done['item']),
+                'after' => 'usable ' . inventoryQuantityText((float)stockQuantityDecimal($done['after']), $done['item']),
+                'message' => 'Stock In recorded (transaction #' . $done['transaction_id'] . '); it appears as Delivery in today\'s Daily Inventory.'
+                    . $restockText];
         case 'stock_adjustment':
             $done = inventoryStockAdjustmentApply($conn, $actor, (int)$request['item_id'], (int)$request['stock_id'],
                 stockQuantityParse((string)$p['counted'], true), stockQuantityParse((string)$p['system_at_count'], true),
@@ -544,6 +619,9 @@ function inventoryApprovalApply(mysqli $conn, array $request, array $actor, arra
                 'message' => 'Stock of ' . $done['item']['item_name'] . ' is now '
                     . inventoryQuantityText((float)stockQuantityDecimal($done['after']), $done['item']) . ' (transaction #' . $done['transaction_id'] . ').'];
         case 'stock_out':
+            if (($p['reason'] ?? $request['reason']) === INVENTORY_PATIENT_USAGE_REASON) {
+                throw new RuntimeException('"Dispensed to Patient" is patient usage, not a pull-out. Reject this request and ask the Nurse to record the usage in Assessment, Vaccination or Medical Supplies so it counts as Consumed once.');
+            }
             $done = inventoryStockOutApply($conn, $actor, (int)$request['item_id'], stockQuantityParse((string)$request['quantity']),
                 (string)$p['reason'], trim((string)($request['remarks'] ?? '') . ' | Approved request #' . $requestId, ' |'), $now, $requestId);
             $expired = $p['reason'] === 'Expired';
@@ -644,6 +722,19 @@ function inventoryApprovalOpenRestocks(mysqli $conn, string $branchId, ?int $ite
         $fulfilled = stockQuantityParse((string)$row['fulfilled_quantity'], true);
         $row['remaining_scaled'] = max(0, $approved - $fulfilled);
         $row['remaining_text'] = inventoryQuantityText((float)stockQuantityDecimal($row['remaining_scaled']), $row);
+        $row['pending_delivery_scaled'] = 0;
+    }
+    unset($row);
+    // Pending Stock In requests already linked to each restock (not received yet).
+    $pendingIn = inventoryApprovalList($conn, ['branch_id' => $branchId, 'statuses' => ['Pending'], 'types' => ['stock_in'], 'limit' => 500]);
+    foreach ($rows as &$row) {
+        foreach ($pendingIn as $in) {
+            if ((int)($in['payload_data']['restock_request_id'] ?? 0) === (int)$row['request_id']) {
+                $row['pending_delivery_scaled'] += stockQuantityParse((string)$in['quantity'], true);
+            }
+        }
+        $row['pending_delivery_text'] = $row['pending_delivery_scaled'] > 0
+            ? inventoryQuantityText((float)stockQuantityDecimal($row['pending_delivery_scaled']), $row) : '';
     }
     unset($row);
     return $rows;
@@ -894,4 +985,52 @@ function inventoryApprovalHistoryFields(array $row): array
         . ' | Approved by ' . ($fields['approved_by'] ?: '—') . ' ' . $fields['approved_at']
         . ($fields['reason'] !== '' ? ' | Reason: ' . $fields['reason'] : '');
     return $fields;
+}
+
+/**
+ * Pending Stock In requests of a branch grouped by item, for the notes on the
+ * stock views ("1 delivery of Speeda (50 vials) awaiting approval"): pending
+ * stock cannot be used until the Branch Admin approves it.
+ */
+function inventoryApprovalPendingDeliveries(mysqli $conn, string $branchId): array
+{
+    $byItem = [];
+    foreach (inventoryApprovalList($conn, ['branch_id' => $branchId, 'statuses' => ['Pending'], 'types' => ['stock_in'], 'limit' => 500]) as $row) {
+        $key = (int)$row['item_id'];
+        if (!isset($byItem[$key])) {
+            $byItem[$key] = ['item_id' => $key, 'item_name' => (string)$row['item_name'], 'count' => 0, 'scaled' => 0,
+                'unit_row' => $row, 'request_ids' => []];
+        }
+        $byItem[$key]['count']++;
+        $byItem[$key]['scaled'] += stockQuantityParse((string)$row['quantity'], true);
+        $byItem[$key]['request_ids'][] = (int)$row['request_id'];
+    }
+    foreach ($byItem as &$entry) {
+        $entry['quantity_text'] = inventoryQuantityText((float)stockQuantityDecimal($entry['scaled']), $entry['unit_row']);
+        $entry['text'] = $entry['count'] . ' ' . ($entry['count'] === 1 ? 'delivery' : 'deliveries') . ' of '
+            . $entry['item_name'] . ' (' . $entry['quantity_text'] . ') awaiting approval';
+    }
+    unset($entry);
+    return array_values($byItem);
+}
+
+/** HTML note listing pending deliveries (empty string when there are none). */
+function inventoryApprovalPendingDeliveriesNote(mysqli $conn, string $branchId, string $audience = ''): string
+{
+    try {
+        $rows = inventoryApprovalReady($conn) ? inventoryApprovalPendingDeliveries($conn, $branchId) : [];
+    } catch (Throwable $e) {
+        $rows = [];
+    }
+    if (!$rows) return '';
+    $items = '';
+    foreach ($rows as $row) {
+        $items .= '<li>' . htmlspecialchars($row['text'], ENT_QUOTES, 'UTF-8') . ' (request #'
+            . implode(', #', $row['request_ids']) . ')</li>';
+    }
+    return '<div class="alert alert-warning d-flex gap-2 align-items-start mb-3" role="status">'
+        . '<i class="bi bi-hourglass-split mt-1"></i><div><strong>Deliveries awaiting Branch Admin approval</strong>'
+        . '<ul class="mb-0 mt-1 ps-3">' . $items . '</ul>'
+        . '<div class="small mt-1">This stock is not in inventory yet and cannot be used until it is approved.'
+        . ($audience !== '' ? ' ' . htmlspecialchars($audience, ENT_QUOTES, 'UTF-8') : '') . '</div></div></div>';
 }
