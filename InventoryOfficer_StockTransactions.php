@@ -1,5 +1,6 @@
 <?php
 session_start();
+require_once __DIR__ . '/sources/pagination_helper.php';
 require_once __DIR__ . '/sources/db_connect.php';
 require_once __DIR__ . '/sources/notification_helper.php';
 require_once __DIR__ . '/sources/inventory_approval_helpers.php';
@@ -34,21 +35,6 @@ function bindTransactionParams($statement, string $types, array &$parameters): v
     $statement->bind_param($types, ...$references);
 }
 
-function transactionPageUrl(int $page, string $search, string $type): string
-{
-    $parameters = ['page' => max(1, $page)];
-
-    if ($search !== '') {
-        $parameters['search'] = $search;
-    }
-
-    if ($type !== '') {
-        $parameters['type'] = $type;
-    }
-
-    return '?' . http_build_query($parameters);
-}
-
 $userQuery = "SELECT u.branch_id, u.username, b.branch_name 
               FROM users u 
               LEFT JOIN branches b ON u.branch_id = b.branch_id 
@@ -80,8 +66,10 @@ if (!in_array($selectedType, $allowedTypes, true)) {
     $selectedType = '';
 }
 
-$page = max(1, (int)($_GET['page'] ?? 1));
-$perPage = 10;
+// Shared pagination (10/25/50 rows); search and type filters stay on every link.
+$pg = paginationFromRequest('', 10);
+$page = $pg['page'];
+$perPage = $pg['per_page'];
 $totalTransactions = 0;
 $totalPages = 1;
 $offset = 0;
@@ -141,11 +129,10 @@ if ($branch_id) {
         $totalTransactions = (int)($countResult['total'] ?? 0);
         $countStmt->close();
 
-        $totalPages = max(1, (int)ceil($totalTransactions / $perPage));
-        if ($page > $totalPages) {
-            $page = $totalPages;
-        }
-        $offset = ($page - 1) * $perPage;
+        $pg = paginationApply($pg, $totalTransactions);
+        $totalPages = $pg['pages'];
+        $page = $pg['page'];
+        $offset = $pg['offset'];
     } else {
         $transactionError = 'Unable to count stock transactions.';
     }
@@ -235,10 +222,6 @@ if ($branch_id) {
     }
 }
 
-$showingFrom = $totalTransactions > 0 ? $offset + 1 : 0;
-$showingTo = min($offset + $perPage, $totalTransactions);
-$paginationStart = max(1, $page - 2);
-$paginationEnd = min($totalPages, $page + 2);
 
 function trxTypeClass($type) {
     switch ($type) {
@@ -843,52 +826,7 @@ margin-left:90px;
 </table>
 </div>
 
-<div class="table-footer">
-    <p class="transaction-summary">
-        Showing <strong><?php echo $showingFrom; ?></strong>–<strong><?php echo $showingTo; ?></strong>
-        of <strong><?php echo $totalTransactions; ?></strong> transaction<?php echo $totalTransactions === 1 ? '' : 's'; ?>
-    </p>
-
-    <?php if ($totalPages > 1): ?>
-        <nav aria-label="Stock transaction pages">
-            <ul class="pagination">
-                <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
-                    <a class="page-link" href="<?php echo $page <= 1 ? '#' : htmlspecialchars(transactionPageUrl($page - 1, $search, $selectedType), ENT_QUOTES, 'UTF-8'); ?>" aria-label="Previous page">
-                        <i class="bi bi-chevron-left"></i>
-                    </a>
-                </li>
-
-                <?php if ($paginationStart > 1): ?>
-                    <li class="page-item"><a class="page-link" href="<?php echo htmlspecialchars(transactionPageUrl(1, $search, $selectedType), ENT_QUOTES, 'UTF-8'); ?>">1</a></li>
-                    <?php if ($paginationStart > 2): ?>
-                        <li class="page-item disabled"><span class="page-link">…</span></li>
-                    <?php endif; ?>
-                <?php endif; ?>
-
-                <?php for ($pageNumber = $paginationStart; $pageNumber <= $paginationEnd; $pageNumber++): ?>
-                    <li class="page-item <?php echo $pageNumber === $page ? 'active' : ''; ?>">
-                        <a class="page-link" href="<?php echo htmlspecialchars(transactionPageUrl($pageNumber, $search, $selectedType), ENT_QUOTES, 'UTF-8'); ?>">
-                            <?php echo $pageNumber; ?>
-                        </a>
-                    </li>
-                <?php endfor; ?>
-
-                <?php if ($paginationEnd < $totalPages): ?>
-                    <?php if ($paginationEnd < $totalPages - 1): ?>
-                        <li class="page-item disabled"><span class="page-link">…</span></li>
-                    <?php endif; ?>
-                    <li class="page-item"><a class="page-link" href="<?php echo htmlspecialchars(transactionPageUrl($totalPages, $search, $selectedType), ENT_QUOTES, 'UTF-8'); ?>"><?php echo $totalPages; ?></a></li>
-                <?php endif; ?>
-
-                <li class="page-item <?php echo $page >= $totalPages ? 'disabled' : ''; ?>">
-                    <a class="page-link" href="<?php echo $page >= $totalPages ? '#' : htmlspecialchars(transactionPageUrl($page + 1, $search, $selectedType), ENT_QUOTES, 'UTF-8'); ?>" aria-label="Next page">
-                        <i class="bi bi-chevron-right"></i>
-                    </a>
-                </li>
-            </ul>
-        </nav>
-    <?php endif; ?>
-</div>
+<?php echo paginationRender(paginationApply($pg, $totalTransactions), '', $totalTransactions === 1 ? 'transaction' : 'transactions'); ?>
 
 
 </div>

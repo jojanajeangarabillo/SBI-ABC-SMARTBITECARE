@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/report_catalog.php';
 require_once __DIR__ . '/workflow_helpers.php';
+require_once __DIR__ . '/pagination_helper.php';
+require_once __DIR__ . '/confirm_modal.php';
 
 /*
  * REPORT CENTER: the one report form used on every Reports page.
@@ -11,13 +13,14 @@ require_once __DIR__ . '/workflow_helpers.php';
  *           dates (true | false: "as of now" report), horizon (bool),
  *           all_branches (bool: Super Admin may pick "All branches")]
  * The form has the report, branch (Super Admin only), date range and, for the
- * forecast, the horizon, with Preview, PDF and CSV buttons. Preview shows all
- * columns on screen (links included); PDF and CSV are generated from the same
+ * forecast, the horizon, with Preview, Export PDF and Print buttons. Preview
+ * shows all columns on screen (links included); the PDF is generated from the same
  * report array, so they always match. Every export writes an audit entry.
  * Read-only: no report changes data.
  */
 
-const REPORT_CENTER_PREVIEW_ROWS = 300;
+// Preview rows per page (each section has its own pager: s0_page, s1_page, ...).
+const REPORT_CENTER_PREVIEW_ROWS = 25;
 
 /** Entries for the catalog reports a role can open. */
 function reportCenterCatalogEntries(int $roleId, ?array $only = null, array $overrides = []): array
@@ -59,7 +62,8 @@ function reportCenterDateOk($value): bool
 }
 
 /**
- * Read the request, and for format=pdf|csv send the file (and stop).
+ * Read the request, and for format=pdf send the PDF (download, or inline with
+ * inline=1 for the Print button) and stop. Reports are PDF only (no CSV).
  * $ctx: user_id, role_id, branch_id (the user's branch), branches [id => name]
  *       (Super Admin selector), link_base, module (audit), page (form action)
  * Returns the page state: entries, key, from, to, horizon, branch_id, report, meta, error.
@@ -77,7 +81,7 @@ function reportCenterRun(mysqli $conn, array $entries, array $ctx): array
     $entry = $entries[$key];
     $state['key'] = $key;
     $format = strtolower((string)($_GET['format'] ?? 'preview'));
-    $state['format'] = in_array($format, ['pdf', 'csv'], true) ? $format : 'preview';
+    $state['format'] = $format === 'pdf' ? 'pdf' : 'preview';
 
     // Dates: both empty means all dates; otherwise both must be valid.
     $rawFrom = trim((string)($_GET['from'] ?? ''));
@@ -140,7 +144,7 @@ function reportCenterRun(mysqli $conn, array $entries, array $ctx): array
     if ($state['format'] !== 'preview') {
         $auditBranch = $branchId !== '' ? $branchId : (string)($ctx['branch_id'] ?? '');
         workflowAudit($conn, (int)$ctx['user_id'], $auditBranch,
-            'Exported ' . $report['title'] . ' (' . strtoupper($state['format']) . ') - Branch: ' . $meta['branch'] . ' - Period: ' . $period
+            reportExportVerb() . ' ' . $report['title'] . ' (' . strtoupper($state['format']) . ') - Branch: ' . $meta['branch'] . ' - Period: ' . $period
             . ($meta['filters'] !== '' ? ' - ' . $meta['filters'] : ''), (string)($ctx['module'] ?? 'Reports'));
         $suffix = ($branchId !== '' ? $branchId : 'All_branches') . '_' . date('Ymd_His');
         reportSend($report, $meta, $state['format'], $report['title'] . '_' . $suffix);
@@ -194,7 +198,7 @@ function reportCenterRender(array $state, string $heading = 'Generate a report')
 </style>
 <div class="rc-card" id="reportCenter">
   <h5><i class="bi bi-file-earmark-bar-graph me-2"></i><?php echo reportCenterH($heading); ?></h5>
-  <div class="rc-sub">Live data. Preview on screen, or download a PDF or CSV (Excel) with the same columns and all rows. Quantities are in vials, ampules or pieces.</div>
+  <div class="rc-sub">Live data. Preview on screen, export the PDF, or print it directly (the same PDF, all rows). Quantities are in vials, ampules or pieces.</div>
   <?php if ($state['error'] !== ''): ?>
     <div class="alert alert-danger py-2" role="alert"><?php echo reportCenterH($state['error']); ?></div>
   <?php endif; ?>
@@ -240,8 +244,8 @@ function reportCenterRender(array $state, string $heading = 'Generate a report')
     </div>
     <div class="rc-actions d-flex flex-wrap gap-2 mt-3">
       <button type="submit" name="format" value="preview" class="btn btn-outline-primary"><i class="bi bi-eye me-1"></i>Preview</button>
-      <button type="submit" name="format" value="pdf" class="btn btn-primary" style="background:#2B3A8C;border-color:#2B3A8C"><i class="bi bi-file-earmark-pdf me-1"></i>PDF</button>
-      <button type="submit" name="format" value="csv" class="btn btn-success"><i class="bi bi-filetype-csv me-1"></i>CSV (Excel)</button>
+      <button type="submit" name="format" value="pdf" class="btn btn-primary" style="background:#2B3A8C;border-color:#2B3A8C"><i class="bi bi-file-earmark-pdf me-1"></i>Export PDF</button>
+      <button type="button" class="btn btn-outline-primary" data-rc-print><i class="bi bi-printer me-1"></i>Print</button>
       <span class="text-muted small align-self-center" id="rcHint">Leave both dates empty for all dates.</span>
     </div>
   </form>
@@ -259,8 +263,8 @@ function reportCenterRender(array $state, string $heading = 'Generate a report')
           <td class="rc-desc"><?php echo reportCenterH($e['description']); ?></td>
           <td class="text-end text-nowrap">
             <button type="button" class="btn btn-sm btn-outline-primary" data-rc-run="<?php echo reportCenterH($key); ?>" data-rc-format="preview">Preview</button>
-            <button type="button" class="btn btn-sm btn-primary" style="background:#2B3A8C;border-color:#2B3A8C" data-rc-run="<?php echo reportCenterH($key); ?>" data-rc-format="pdf">PDF</button>
-            <button type="button" class="btn btn-sm btn-success" data-rc-run="<?php echo reportCenterH($key); ?>" data-rc-format="csv">CSV</button>
+            <button type="button" class="btn btn-sm btn-primary" style="background:#2B3A8C;border-color:#2B3A8C" data-rc-run="<?php echo reportCenterH($key); ?>" data-rc-format="pdf">Export PDF</button>
+            <button type="button" class="btn btn-sm btn-outline-primary" data-rc-print="<?php echo reportCenterH($key); ?>"><i class="bi bi-printer me-1"></i>Print</button>
           </td>
         </tr>
       <?php endforeach; ?>
@@ -277,8 +281,8 @@ function reportCenterRender(array $state, string $heading = 'Generate a report')
       <div class="rc-meta text-muted">Generated by <?php echo reportCenterH($meta['generated_by']); ?> on <?php echo reportCenterH($meta['generated_at']); ?> (Manila time)</div>
     </div>
     <div class="d-flex gap-2">
-      <button type="button" class="btn btn-sm btn-primary" style="background:#2B3A8C;border-color:#2B3A8C" data-rc-run="<?php echo reportCenterH($state['key']); ?>" data-rc-format="pdf"><i class="bi bi-file-earmark-pdf me-1"></i>PDF</button>
-      <button type="button" class="btn btn-sm btn-success" data-rc-run="<?php echo reportCenterH($state['key']); ?>" data-rc-format="csv"><i class="bi bi-filetype-csv me-1"></i>CSV</button>
+      <button type="button" class="btn btn-sm btn-primary" style="background:#2B3A8C;border-color:#2B3A8C" data-rc-run="<?php echo reportCenterH($state['key']); ?>" data-rc-format="pdf"><i class="bi bi-file-earmark-pdf me-1"></i>Export PDF</button>
+      <button type="button" class="btn btn-sm btn-outline-primary" data-rc-print="<?php echo reportCenterH($state['key']); ?>"><i class="bi bi-printer me-1"></i>Print</button>
     </div>
   </div>
   <?php if (!empty($report['summary'])): ?>
@@ -288,7 +292,10 @@ function reportCenterRender(array $state, string $heading = 'Generate a report')
       <?php endforeach; ?>
     </div>
   <?php endif; ?>
-  <?php foreach ($report['sections'] ?? [] as $section): $count = count($section['rows']); ?>
+  <?php foreach ($report['sections'] ?? [] as $sectionIndex => $section):
+      $count = count($section['rows']);
+      $sectionPage = paginationFromRequest('s' . (int)$sectionIndex . '_', REPORT_CENTER_PREVIEW_ROWS);
+      $sectionRows = paginationSlice($section['rows'], $sectionPage); ?>
     <?php if (!empty($section['title'])): ?><h6 class="mt-3 fw-bold" style="color:#2B3A8C"><?php echo reportCenterH($section['title']); ?> <span class="text-muted fw-normal small">(<?php echo $count; ?> row<?php echo $count === 1 ? '' : 's'; ?>)</span></h6><?php endif; ?>
     <div class="rc-scroll mb-2">
       <table class="table table-sm table-striped mb-0">
@@ -297,7 +304,7 @@ function reportCenterRender(array $state, string $heading = 'Generate a report')
           <?php if (!$section['rows']): ?>
             <tr><td colspan="<?php echo count($section['columns']); ?>" class="text-muted"><?php echo reportCenterH($section['empty'] ?? 'No records match the selected filters.'); ?></td></tr>
           <?php endif; ?>
-          <?php foreach (array_slice($section['rows'], 0, REPORT_CENTER_PREVIEW_ROWS) as $row): ?>
+          <?php foreach ($sectionRows as $row): ?>
             <tr><?php foreach ($section['columns'] as $i => $c): ?><td class="<?php echo ($c['align'] ?? '') === 'R' ? 'text-end' : (($c['align'] ?? '') === 'C' ? 'text-center' : ''); ?>"><?php echo reportCenterCellHtml($row[$i] ?? ''); ?></td><?php endforeach; ?></tr>
           <?php endforeach; ?>
           <?php if (isset($section['totals'])): ?>
@@ -306,7 +313,7 @@ function reportCenterRender(array $state, string $heading = 'Generate a report')
         </tbody>
       </table>
     </div>
-    <?php if ($count > REPORT_CENTER_PREVIEW_ROWS): ?><div class="text-muted small mb-2">Showing the first <?php echo REPORT_CENTER_PREVIEW_ROWS; ?> of <?php echo $count; ?> rows. The PDF and CSV include all rows.</div><?php endif; ?>
+    <?php if ($count > REPORT_CENTER_PREVIEW_ROWS || $sectionPage['per_page'] !== REPORT_CENTER_PREVIEW_ROWS): ?><div class="mb-3 border rounded"><?php echo paginationRender($sectionPage, '#rcPreview', 'rows'); ?></div><?php endif; ?>
   <?php endforeach; ?>
   <?php if (!empty($report['notes'])): ?>
     <div class="small text-muted mt-2"><strong><?php echo reportCenterH($report['notes_title'] ?? 'Notes'); ?>:</strong>
@@ -315,6 +322,7 @@ function reportCenterRender(array $state, string $heading = 'Generate a report')
   <?php endif; ?>
 </div>
 <?php endif; ?>
+<?php echo sbcConfirmModalScript(); ?>
 <script>
 (function () {
   const form = document.getElementById('rcForm');
@@ -342,6 +350,16 @@ function reportCenterRender(array $state, string $heading = 'Generate a report')
     form.submit();
     input.remove();
   }));
+  // Print: the same PDF as Export PDF (same filters, all rows), printed directly.
+  document.querySelectorAll('[data-rc-print]').forEach(btn => btn.addEventListener('click', () => {
+    if (btn.dataset.rcPrint) { select.value = btn.dataset.rcPrint; toggle(); }
+    if (!select.value) { if (window.SbcDialog) SbcDialog.alert('Choose a report first.'); return; }
+    const params = new URLSearchParams(new FormData(form));
+    params.set('report', select.value);
+    params.set('format', 'pdf');
+    const action = form.getAttribute('action') || window.location.pathname;
+    window.SbcPrint.print(action.split('#')[0] + (action.includes('?') ? '&' : '?') + params.toString(), btn);
+  }));
 <?php if ($state['report'] !== null): ?>
   const preview = document.getElementById('rcPreview');
   if (preview) preview.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -353,26 +371,18 @@ function reportCenterRender(array $state, string $heading = 'Generate a report')
 }
 
 /**
- * Supply Forecasting export (PDF or CSV) of the latest SAVED forecast for one
- * horizon. Never runs a forecast. Call it before a page could start one.
+ * Supply Forecasting export (PDF; inline for Print) of the latest SAVED
+ * forecast for one horizon. Never runs a forecast. Call it before a page
+ * could start one.
  */
 function reportForecastExport(mysqli $conn, int $userId, string $branchId, int $horizon, string $format, string $module = 'Forecasting'): void
 {
     $format = strtolower($format);
-    if (!in_array($format, ['pdf', 'csv'], true)) return;
+    if ($format !== 'pdf') return;
     if (!in_array($horizon, [7, 14, 30], true)) $horizon = 30;
     $report = reportBuild($conn, 'forecast', ['branch_id' => $branchId, 'horizon' => $horizon]);
     $meta = reportMeta($conn, $userId, reportBranchName($conn, $branchId), 'Latest saved forecast as of ' . date('M d, Y h:i A'),
         'Horizon: ' . $horizon . ' days');
-    workflowAudit($conn, $userId, $branchId, 'Exported ' . $report['title'] . ' (' . strtoupper($format) . ') - Branch: ' . $meta['branch'], $module);
+    workflowAudit($conn, $userId, $branchId, reportExportVerb() . ' ' . $report['title'] . ' (' . strtoupper($format) . ') - Branch: ' . $meta['branch'], $module);
     reportSend($report, $meta, $format, 'Supply_Forecast_' . $horizon . '_days_' . $branchId . '_' . date('Ymd_His'));
-}
-
-/** PDF and CSV buttons for a page's export URL (format is appended). */
-function reportExportButtons(string $baseUrl, string $class = 'btn btn-sm btn-outline-primary'): string
-{
-    $sep = str_contains($baseUrl, '?') ? '&' : '?';
-    $h = static fn($v) => htmlspecialchars($v, ENT_QUOTES, 'UTF-8');
-    return '<a class="' . $h($class) . '" href="' . $h($baseUrl . $sep . 'export=pdf') . '"><i class="bi bi-file-earmark-pdf me-1"></i>Export PDF</a> '
-        . '<a class="' . $h($class) . '" href="' . $h($baseUrl . $sep . 'export=csv') . '"><i class="bi bi-filetype-csv me-1"></i>Export CSV</a>';
 }

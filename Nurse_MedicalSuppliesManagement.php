@@ -10,6 +10,7 @@ require_once 'sources/forecast_training_helper.php';
 require_once 'sources/daily_inventory_helpers.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/inventory_approval_helpers.php';
+require_once 'sources/pagination_helper.php';
 
 /* ============================================================
  * NURSE - MEDICAL SUPPLY MANAGEMENT
@@ -333,7 +334,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 /* My restock requests (status: Pending, Approved with remaining, Fulfilled, Rejected, Cancelled). */
-$myRestocks = inventoryApprovalList($conn, ['branch_id' => $branchId, 'requested_by' => $userId, 'types' => ['restock'], 'limit' => 50]);
+// Server-side pages (rs_page / rs_per_page); counts use every matching request.
+$myRestocksFilter = ['branch_id' => $branchId, 'requested_by' => $userId, 'types' => ['restock']];
+$myRestocksPage = paginationApply(paginationFromRequest('rs_', 10), inventoryApprovalCount($conn, $myRestocksFilter));
+$myRestocks = inventoryApprovalList($conn, $myRestocksFilter + ['limit' => $myRestocksPage['per_page'], 'offset' => $myRestocksPage['offset']]);
 foreach ($myRestocks as &$restockRow) {
     $approvedScaled = stockQuantityParse((string)($restockRow['approved_quantity'] ?? $restockRow['quantity']), true);
     $receivedScaled = stockQuantityParse((string)$restockRow['fulfilled_quantity'], true);
@@ -922,7 +926,7 @@ $flash = workflowTakeFlash();
                             <td class="small"><?php if ($restock['decided_at']): ?><?= workflowH((string)($restock['decider_name'] ?? '')) ?>, <?= workflowH(date('M d, Y', strtotime((string)$restock['decided_at']))) ?><?php if ($restock['decision_remarks']): ?><div class="text-muted"><?= workflowH((string)$restock['decision_remarks']) ?></div><?php endif; ?><?php else: ?>—<?php endif; ?></td>
                             <td>
                                 <?php if ($restock['status'] === 'Pending'): ?>
-                                    <form method="post" onsubmit="return confirm('Cancel restock request #<?= (int)$restock['request_id'] ?>?');">
+                                    <form method="post" data-confirm="Cancel restock request #<?= (int)$restock['request_id'] ?>? The Branch Admin will no longer see it." data-confirm-title="Cancel restock request" data-confirm-variant="danger" data-confirm-ok="Yes, cancel request" data-confirm-cancel="Keep request">
                                         <input type="hidden" name="csrf_token" value="<?= workflowH($csrf) ?>">
                                         <input type="hidden" name="action" value="cancel_restock">
                                         <input type="hidden" name="request_id" value="<?= (int)$restock['request_id'] ?>">
@@ -935,6 +939,7 @@ $flash = workflowTakeFlash();
                     </tbody>
                 </table>
             </div>
+            <?= paginationRender($myRestocksPage, '#myRestockRequests', 'restock requests') ?>
         </section>
 
         <section class="content-card">
@@ -1068,6 +1073,7 @@ $flash = workflowTakeFlash();
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="sources/sidebar.js"></script>
 <script>
 const restockItem = document.getElementById('restockItem');

@@ -1893,7 +1893,7 @@ body {
                                 <td><span class="badge <?php echo h(inventoryApprovalStatusClass($rr['status'])); ?>"><?php echo h($rr['status'] === 'Pending' ? 'Pending approval' : $rr['status']); ?></span><?php if ($rr['result_reference']): ?><div class="small text-muted"><?php echo h($rr['result_reference']); ?></div><?php endif; ?></td>
                                 <td class="small"><?php if ($rr['decided_at']): ?><?php echo h(($rr['decider_name'] ?? '') . ', ' . date('M d, Y', strtotime($rr['decided_at']))); ?><?php if ($rr['decision_remarks']): ?><div class="text-muted"><?php echo h($rr['decision_remarks']); ?></div><?php endif; ?><?php else: ?>—<?php endif; ?></td>
                                 <td><?php if ($rr['status'] === 'Pending' && (int)$rr['requested_by'] === (int)$user_id): ?>
-                                    <form method="POST" action="InventoryOfficer_ReturnManagement.php" onsubmit="return confirm('Cancel this return request?');">
+                                    <form method="POST" action="InventoryOfficer_ReturnManagement.php" data-confirm="Cancel this return request? It will not be processed." data-confirm-title="Cancel return request" data-confirm-variant="danger" data-confirm-ok="Yes, cancel request" data-confirm-cancel="Keep request">
                                         <input type="hidden" name="csrf_token" value="<?php echo h($returnCsrf); ?>">
                                         <input type="hidden" name="action" value="cancel_return_request">
                                         <input type="hidden" name="request_id" value="<?php echo (int)$rr['request_id']; ?>">
@@ -2355,6 +2355,7 @@ body {
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="sources/sidebar.js"></script>  
 <script>
     

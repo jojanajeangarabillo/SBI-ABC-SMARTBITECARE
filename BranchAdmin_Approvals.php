@@ -4,6 +4,7 @@ require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/inventory_approval_helpers.php';
+require_once 'sources/pagination_helper.php';
 
 /*
  * PENDING APPROVALS (Branch Admin). Requests from the Inventory Officer and
@@ -22,12 +23,17 @@ $csrf = workflowCsrfToken();
 
 $tab = (string)($_GET['tab'] ?? 'pending');
 if (!in_array($tab, ['pending', 'history', 'closings'], true)) $tab = 'pending';
-$closingFilter = ($_GET['closings'] ?? '') === 'all' ? 'all' : 'needs';
+$closingFilter = inventoryApprovalClosingFilter((string)($_GET['closings'] ?? 'needs'));
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = (string)($_POST['action'] ?? '');
-    $back = 'BranchAdmin_Approvals.php?tab=' . urlencode((string)($_POST['tab'] ?? 'pending'))
-        . (($_POST['closings'] ?? '') === 'all' ? '&closings=all' : '');
+    // Back to the same tab, filter and page after a decision.
+    $back = 'BranchAdmin_Approvals.php?' . http_build_query(array_filter([
+        'tab' => (string)($_POST['tab'] ?? 'pending'),
+        'closings' => in_array($_POST['closings'] ?? '', INVENTORY_CLOSING_FILTERS, true) && $_POST['closings'] !== 'needs' ? (string)$_POST['closings'] : '',
+        'page' => (int)($_POST['page'] ?? 0) > 1 ? (int)$_POST['page'] : '',
+        'per_page' => in_array((int)($_POST['per_page'] ?? 0), PAGINATION_SIZES, true) ? (int)$_POST['per_page'] : '',
+    ], static fn($v) => $v !== ''));
     try {
         workflowVerifyCsrf();
         if ($action === 'decide') {
@@ -43,6 +49,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$closingId) throw new RuntimeException('Select a closing.');
             workflowFlash('success', inventoryApprovalReviewClosing($conn, (int)$closingId, $userId,
                 (string)($_POST['decision'] ?? ''), (string)($_POST['review_remarks'] ?? '')));
+        } elseif ($action === 'bulk_review_closings') {
+            // Mark all / Mark selected as Reviewed: one transaction, one audit entry per closing.
+            $ids = array_map('intval', (array)($_POST['closing_ids'] ?? []));
+            $result = inventoryApprovalReviewClosingsBulk($conn, $ids, $userId, (string)($_POST['bulk_remark'] ?? ''));
+            $reasonText = $result['reasons']
+                ? ' (' . implode(', ', array_map(static fn($k, $v) => $v . ' ' . $k, array_keys($result['reasons']), $result['reasons'])) . ')'
+                : '';
+            workflowFlash($result['reviewed'] > 0 ? 'success' : 'danger',
+                $result['reviewed'] . ' reviewed, ' . $result['skipped'] . ' skipped' . $reasonText . '.');
         } else {
             throw new RuntimeException('Unknown action.');
         }
@@ -53,9 +68,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-// Decision History export (PDF or CSV): every decided request of the branch,
+// Decision History export (PDF; &inline=1 for Print): every decided request of the branch,
 // optionally limited to the requested dates, with the Approval report's columns.
-if ($tab === 'history' && in_array($_GET['export'] ?? '', ['pdf', 'csv'], true) && inventoryApprovalReady($conn)) {
+if ($tab === 'history' && ($_GET['export'] ?? '') === 'pdf' && inventoryApprovalReady($conn)) {
     require_once 'sources/report_center.php';
     $exportFrom = reportCenterDate($_GET['from'] ?? '');
     $exportTo = reportCenterDate($_GET['to'] ?? '');
@@ -64,7 +79,7 @@ if ($tab === 'history' && in_array($_GET['export'] ?? '', ['pdf', 'csv'], true) 
     $exportReport['title'] = 'Approval Decision History';
     $exportReport['orientation'] = 'L';
     $exportPeriod = ($exportFrom || $exportTo) ? reportPeriodText($exportFrom ?? $exportTo, $exportTo ?? $exportFrom) : 'All dates';
-    workflowAudit($conn, $userId, $branchId, 'Exported approval decision history (' . strtoupper((string)$_GET['export']) . ') - ' . $exportPeriod, 'Approvals');
+    workflowAudit($conn, $userId, $branchId, reportExportVerb() . ' approval decision history (PDF) - ' . $exportPeriod, 'Approvals');
     reportSend($exportReport, reportMeta($conn, $userId, $branchName, $exportPeriod, 'Status: Approved, Rejected, Cancelled, Fulfilled'),
         (string)$_GET['export'], 'Approval_Decision_History_' . $branchId . '_' . date('Ymd_His'));
 }
@@ -72,14 +87,46 @@ if ($tab === 'history' && in_array($_GET['export'] ?? '', ['pdf', 'csv'], true) 
 $flash = workflowTakeFlash();
 $notification_count = getUnreadNotificationCount($conn, $userId);
 $ready = inventoryApprovalReady($conn);
-$pending = $ready ? inventoryApprovalList($conn, ['branch_id' => $branchId, 'statuses' => ['Pending'], 'limit' => 500]) : [];
-$history = ($ready && $tab === 'history')
-    ? inventoryApprovalList($conn, ['branch_id' => $branchId, 'statuses' => ['Approved', 'Rejected', 'Cancelled', 'Fulfilled'], 'limit' => 300])
-    : [];
-$closingRows = $tab === 'closings' ? inventoryApprovalClosingList($conn, $branchId, $closingFilter === 'all') : [];
+// Server-side pagination (sources/pagination_helper.php): badges and group
+// counts count every matching row; only the table shows one page.
+$pendingFilter = ['branch_id' => $branchId, 'statuses' => ['Pending']];
+$historyFilter = ['branch_id' => $branchId, 'statuses' => ['Approved', 'Rejected', 'Cancelled', 'Fulfilled']];
+$pendingTotal = $ready ? inventoryApprovalCount($conn, $pendingFilter) : 0;
+$pendingByType = $ready ? inventoryApprovalCountByType($conn, $pendingFilter) : [];
+$pg = paginationFromRequest('', $tab === 'pending' ? 10 : 25);
+$pending = [];
+$history = [];
+$closingRows = [];
+if ($ready && $tab === 'pending') {
+    $pg = paginationApply($pg, $pendingTotal);
+    $pending = inventoryApprovalList($conn, $pendingFilter + ['order' => 'type', 'limit' => $pg['per_page'], 'offset' => $pg['offset']]);
+} elseif ($ready && $tab === 'history') {
+    $pg = paginationApply($pg, inventoryApprovalCount($conn, $historyFilter));
+    $history = inventoryApprovalList($conn, $historyFilter + ['limit' => $pg['per_page'], 'offset' => $pg['offset']]);
+} elseif ($tab === 'closings') {
+    $pg = paginationApply($pg, inventoryApprovalClosingCount($conn, $branchId, $closingFilter));
+    $closingRows = inventoryApprovalClosingList($conn, $branchId, $closingFilter, 60, $pg['per_page'], $pg['offset']);
+}
+// Every Submitted closing in the filter, on all pages (Mark all / Mark selected).
+$bulkCandidates = [];
+if ($tab === 'closings') {
+    foreach (inventoryApprovalClosingsSubmittedInFilter($conn, $branchId, $closingFilter) as $candidate) {
+        $bulkCandidates[(int)$candidate['closing_id']] = [
+            'id' => (int)$candidate['closing_id'],
+            'date' => date('m/d/Y', strtotime((string)$candidate['inventory_date'])),
+            'item' => (string)$candidate['item_name'],
+            'variance' => (float)$candidate['variance'] != 0 ? inventoryQuantityText((float)$candidate['variance'], $candidate) : '0',
+            'wastage' => (float)$candidate['wastage'] > 0 ? inventoryQuantityText((float)$candidate['wastage'], $candidate) : '—',
+            'flagged' => (bool)(int)$candidate['flagged'],
+            'own' => (int)$candidate['submitted_by'] === $userId,
+        ];
+    }
+}
+$bulkReviewable = array_filter($bulkCandidates, static fn($c) => !$c['own']);
+$bulkFlagged = count(array_filter($bulkReviewable, static fn($c) => $c['flagged']));
 $closingsToReview = inventoryApprovalClosingsToReview($conn, $branchId);
 
-// Pending requests grouped by type, in the order of INVENTORY_APPROVAL_TYPES.
+// Pending requests of this page grouped by type, in the order of INVENTORY_APPROVAL_TYPES.
 $grouped = [];
 foreach (array_keys(INVENTORY_APPROVAL_TYPES) as $type) $grouped[$type] = [];
 foreach ($pending as $row) $grouped[$row['request_type']][] = $row;
@@ -449,7 +496,7 @@ function approvalsDate(?string $value): string
             <div class="tab-row" role="tablist">
                 <a class="tab-link <?php echo $tab === 'pending' ? 'active' : ''; ?>" href="BranchAdmin_Approvals.php?tab=pending">
                     <i class="bi bi-hourglass-split"></i> Pending Requests
-                    <?php if ($pending): ?><span class="badge rounded-pill text-bg-danger"><?php echo count($pending); ?></span><?php endif; ?>
+                    <?php if ($pendingTotal): ?><span class="badge rounded-pill text-bg-danger"><?php echo (int)$pendingTotal; ?></span><?php endif; ?>
                 </a>
                 <a class="tab-link <?php echo $tab === 'closings' ? 'active' : ''; ?>" href="BranchAdmin_Approvals.php?tab=closings">
                     <i class="bi bi-clipboard-check"></i> Closing Review
@@ -470,7 +517,8 @@ function approvalsDate(?string $value): string
                 <?php foreach ($grouped as $type => $rows): ?>
                     <section class="content-card">
                         <div class="content-card-header">
-                            <div><h5><?php echo workflowH(inventoryApprovalTypeLabel($type)); ?> <span class="badge rounded-pill text-bg-warning"><?php echo count($rows); ?></span></h5></div>
+                            <div><h5><?php echo workflowH(inventoryApprovalTypeLabel($type)); ?> <span class="badge rounded-pill text-bg-warning" title="Pending requests of this type (all pages)"><?php echo (int)($pendingByType[$type] ?? count($rows)); ?></span></h5>
+                                <?php if (($pendingByType[$type] ?? 0) > count($rows)): ?><p class="muted mb-0"><?php echo count($rows); ?> on this page</p><?php endif; ?></div>
                         </div>
                         <div class="table-responsive">
                             <table class="table approval-table">
@@ -508,6 +556,8 @@ function approvalsDate(?string $value): string
                                                     <input type="hidden" name="csrf_token" value="<?php echo workflowH($csrf); ?>">
                                                     <input type="hidden" name="action" value="decide">
                                                     <input type="hidden" name="tab" value="pending">
+                                                    <input type="hidden" name="page" value="<?php echo (int)$pg['page']; ?>">
+                                                    <input type="hidden" name="per_page" value="<?php echo (int)$pg['per_page']; ?>">
                                                     <input type="hidden" name="request_id" value="<?php echo (int)$row['request_id']; ?>">
                                                     <?php if ($type === 'restock'): ?>
                                                         <label class="muted mb-1" for="aq<?php echo (int)$row['request_id']; ?>">Approved quantity (<?php echo workflowH(inventoryUnitWord(inventoryDisplayUnitLabel($row), 2)); ?>)</label>
@@ -528,6 +578,9 @@ function approvalsDate(?string $value): string
                         </div>
                     </section>
                 <?php endforeach; ?>
+                <?php if ($pendingTotal > 0): ?>
+                    <div class="content-card"><?php echo paginationRender($pg, '', 'pending requests'); ?></div>
+                <?php endif; ?>
 
             <?php elseif ($tab === 'closings'): ?>
                 <div class="info-note"><i class="bi bi-info-circle me-1"></i>
@@ -535,22 +588,44 @@ function approvalsDate(?string $value): string
                 </div>
                 <section class="content-card">
                     <div class="content-card-header">
-                        <div><h5>Daily Closing Review</h5><p><?php echo $closingFilter === 'all' ? 'All closings of the last 60 days.' : 'Closings that need your review, and closings returned for a recount.'; ?></p></div>
-                        <div class="btn-group btn-group-sm" role="group">
+                        <div><h5>Daily Closing Review</h5><p><?php echo $closingFilter === 'all' ? 'All closings of the last 60 days.' : ($closingFilter === 'submitted' ? 'Every submitted closing that is not reviewed yet.' : 'Closings that need your review, and closings returned for a recount.'); ?></p></div>
+                        <div class="btn-group btn-group-sm" role="group" aria-label="Closing filter">
                             <a class="btn <?php echo $closingFilter === 'needs' ? 'btn-primary' : 'btn-outline-primary'; ?>" href="BranchAdmin_Approvals.php?tab=closings">Needs review</a>
-                            <a class="btn <?php echo $closingFilter === 'all' ? 'btn-primary' : 'btn-outline-primary'; ?>" href="BranchAdmin_Approvals.php?tab=closings&amp;closings=all">Show all</a>
+                            <a class="btn <?php echo $closingFilter === 'submitted' ? 'btn-primary' : 'btn-outline-primary'; ?>" href="BranchAdmin_Approvals.php?tab=closings&amp;closings=submitted">All submitted</a>
+                            <a class="btn <?php echo $closingFilter === 'all' ? 'btn-primary' : 'btn-outline-primary'; ?>" href="BranchAdmin_Approvals.php?tab=closings&amp;closings=all">Show all (60 days)</a>
                         </div>
                     </div>
+                    <?php if ($bulkCandidates): ?>
+                        <div class="bulk-bar d-flex flex-wrap align-items-center gap-2 px-4 py-3 border-bottom" style="background:#f8f9fc">
+                            <div class="me-auto small text-muted">
+                                <strong class="text-dark"><?php echo count($bulkReviewable); ?></strong> submitted closing<?php echo count($bulkReviewable) === 1 ? '' : 's'; ?> to review in this filter (all pages)<?php if ($bulkFlagged): ?>, <strong class="text-danger"><?php echo $bulkFlagged; ?></strong> with a variance or wastage<?php endif; ?>.
+                                <?php if (count($bulkCandidates) > count($bulkReviewable)): ?><br><?php echo count($bulkCandidates) - count($bulkReviewable); ?> submitted by you cannot be reviewed by you.<?php endif; ?>
+                            </div>
+                            <button type="button" class="btn btn-sm btn-outline-primary" id="markSelectedBtn" disabled><i class="bi bi-check2-square me-1"></i>Mark selected as Reviewed <span id="selectedCount"></span></button>
+                            <button type="button" class="btn btn-sm btn-success" id="markAllBtn"<?php echo $bulkReviewable ? '' : ' disabled'; ?>><i class="bi bi-check2-all me-1"></i>Mark all as Reviewed (<?php echo count($bulkReviewable); ?>)</button>
+                            <form method="POST" action="BranchAdmin_Approvals.php" id="bulkReviewForm" class="d-none">
+                                <input type="hidden" name="csrf_token" value="<?php echo workflowH($csrf); ?>">
+                                <input type="hidden" name="action" value="bulk_review_closings">
+                                <input type="hidden" name="tab" value="closings">
+                                <input type="hidden" name="closings" value="<?php echo workflowH($closingFilter); ?>">
+                                <input type="hidden" name="page" value="<?php echo (int)$pg['page']; ?>">
+                                <input type="hidden" name="per_page" value="<?php echo (int)$pg['per_page']; ?>">
+                                <input type="hidden" name="bulk_remark" value="">
+                            </form>
+                        </div>
+                        <script type="application/json" id="bulkClosingData"><?php echo json_encode(array_values($bulkCandidates), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?></script>
+                    <?php endif; ?>
                     <div class="table-responsive">
                         <table class="table approval-table">
-                            <thead><tr><th>Date</th><th>Item</th><th>Beginning</th><th>Delivery</th><th>Consumed</th><th>Pull-out</th><th>Computed</th><th>Actual</th><th>Variance</th><th>Wastage</th><th>Nurse</th><th>Status</th><th>Review</th></tr></thead>
+                            <thead><tr><th style="width:34px"><input type="checkbox" class="form-check-input" id="selectAllPage" title="Select all on this page" aria-label="Select all on this page"<?php echo array_filter($closingRows, static fn($c) => isset($bulkReviewable[(int)$c['closing_id']])) ? '' : ' disabled'; ?>></th><th>Date</th><th>Item</th><th>Beginning</th><th>Delivery</th><th>Consumed</th><th>Pull-out</th><th>Computed</th><th>Actual</th><th>Variance</th><th>Wastage</th><th>Nurse</th><th>Status</th><th>Review</th></tr></thead>
                             <tbody>
                             <?php if (!$closingRows): ?>
-                                <tr><td colspan="13"><div class="empty-state"><i class="bi bi-clipboard-check"></i>No closings to review.</div></td></tr>
+                                <tr><td colspan="14"><div class="empty-state"><i class="bi bi-clipboard-check"></i>No closings to review.</div></td></tr>
                             <?php endif; ?>
                             <?php foreach ($closingRows as $c): ?>
                                 <?php $q = static fn($v): string => inventoryQuantityText((float)$v, $c); ?>
                                 <tr class="<?php echo (int)$c['flagged'] && $c['status'] === 'Submitted' ? 'table-warning' : ''; ?>">
+                                    <td><?php if (isset($bulkReviewable[(int)$c['closing_id']])): ?><input type="checkbox" class="form-check-input closing-select" value="<?php echo (int)$c['closing_id']; ?>" aria-label="Select this closing"><?php elseif (isset($bulkCandidates[(int)$c['closing_id']])): ?><input type="checkbox" class="form-check-input" disabled title="You submitted this closing; another Branch Admin must review it."><?php endif; ?></td>
                                     <td><?php echo workflowH(date('m/d/Y', strtotime($c['inventory_date']))); ?></td>
                                     <td><?php echo workflowH($c['item_name']); ?>
                                         <?php if (trim((string)($c['remarks'] ?? '')) !== ''): ?><div class="muted"><?php echo workflowH((string)$c['remarks']); ?></div><?php endif; ?></td>
@@ -576,6 +651,8 @@ function approvalsDate(?string $value): string
                                                 <input type="hidden" name="action" value="review_closing">
                                                 <input type="hidden" name="tab" value="closings">
                                                 <input type="hidden" name="closings" value="<?php echo workflowH($closingFilter); ?>">
+                                                <input type="hidden" name="page" value="<?php echo (int)$pg['page']; ?>">
+                                                <input type="hidden" name="per_page" value="<?php echo (int)$pg['per_page']; ?>">
                                                 <input type="hidden" name="closing_id" value="<?php echo (int)$c['closing_id']; ?>">
                                                 <textarea name="review_remarks" class="form-control form-control-sm mb-2" rows="2" maxlength="1000" placeholder="Remark (required to return)"></textarea>
                                                 <div class="d-flex gap-2">
@@ -592,14 +669,15 @@ function approvalsDate(?string $value): string
                             </tbody>
                         </table>
                     </div>
+                    <?php echo paginationRender($pg, '', 'closings'); ?>
                 </section>
 
             <?php else: ?>
                 <section class="content-card">
-                    <div class="content-card-header"><div><h5>Decision History</h5><p>Approved, rejected, cancelled and fulfilled requests of the branch (latest 300 on screen; the exports have every request).</p></div>
+                    <div class="content-card-header"><div><h5>Decision History</h5><p>Approved, rejected, cancelled and fulfilled requests of the branch, newest first (the PDF has every request).</p></div>
                         <div class="d-flex gap-2 flex-wrap">
                             <a class="btn btn-sm btn-outline-primary" href="BranchAdmin_Approvals.php?tab=history&amp;export=pdf"><i class="bi bi-file-earmark-pdf me-1"></i>Export PDF</a>
-                            <a class="btn btn-sm btn-outline-success" href="BranchAdmin_Approvals.php?tab=history&amp;export=csv"><i class="bi bi-filetype-csv me-1"></i>Export CSV</a>
+                            <button type="button" class="btn btn-sm btn-outline-primary" data-print-pdf="BranchAdmin_Approvals.php?tab=history&amp;export=pdf"><i class="bi bi-printer me-1"></i>Print</button>
                         </div></div>
                     <div class="table-responsive">
                         <table class="table approval-table">
@@ -632,6 +710,7 @@ function approvalsDate(?string $value): string
                             </tbody>
                         </table>
                     </div>
+                    <?php echo paginationRender($pg, '', 'decided requests'); ?>
                 </section>
             <?php endif; ?>
         </div>
@@ -681,35 +760,111 @@ function approvalsDate(?string $value): string
 </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
     <script src="sources/sidebar.js"></script>
     <script>
-        // Reject / Return need a remark; Approve asks for confirmation; one submit only (no double click).
+        // Reject / Return need a remark; every decision asks for confirmation in the
+        // styled dialog (sources/confirm_modal.js); one submit only (no double click).
+        var decisionTexts = {
+            approve: ['Approve request', 'Approve this request? The change is applied immediately.', 'primary', 'Approve'],
+            reject: ['Reject request', 'Reject this request? Nothing will be changed.', 'danger', 'Reject'],
+            'return': ['Return for recount', 'Return this closing to the Nurse for a recount?', 'danger', 'Return for recount'],
+            reviewed: ['Mark as Reviewed', 'Mark this closing as Reviewed?', 'primary', 'Mark as Reviewed']
+        };
         document.querySelectorAll('.decision-form').forEach(function (form) {
             form.addEventListener('submit', function (event) {
+                event.preventDefault();
+                if (form.dataset.sent === '1') return;
                 var button = event.submitter;
                 var value = button ? button.value : '';
                 var remark = form.querySelector('textarea');
                 if ((value === 'reject' || value === 'return') && remark && remark.value.trim() === '') {
-                    event.preventDefault();
                     remark.classList.add('is-invalid');
                     remark.focus();
                     return;
                 }
-                var text = value === 'approve' ? 'Approve this request? The change is applied immediately.'
-                    : value === 'reject' ? 'Reject this request? Nothing will be changed.'
-                    : value === 'return' ? 'Return this closing to the Nurse for a recount?'
-                    : 'Mark this closing as Reviewed?';
-                if (!window.confirm(text)) { event.preventDefault(); return; }
-                if (form.dataset.sent === '1') { event.preventDefault(); return; }
-                form.dataset.sent = '1';
-                if (button) {
-                    var hidden = document.createElement('input');
-                    hidden.type = 'hidden'; hidden.name = button.name; hidden.value = button.value;
-                    form.appendChild(hidden);
-                }
-                form.querySelectorAll('button[type="submit"]').forEach(function (b) { b.disabled = true; });
+                var t = decisionTexts[value] || decisionTexts.reviewed;
+                SbcDialog.confirm({ title: t[0], message: t[1], variant: t[2], confirmText: t[3] }).then(function (ok) {
+                    if (!ok || form.dataset.sent === '1') return;
+                    form.dataset.sent = '1';
+                    if (button && button.name) {
+                        var hidden = document.createElement('input');
+                        hidden.type = 'hidden'; hidden.name = button.name; hidden.value = button.value;
+                        form.appendChild(hidden);
+                    }
+                    form.querySelectorAll('button[type="submit"]').forEach(function (b) { b.disabled = true; });
+                    form.submit();
+                });
             });
         });
+
+        // Bulk closing review: "Mark all as Reviewed" (every submitted closing in
+        // the filter, all pages) and "Mark selected as Reviewed" (checked rows).
+        (function () {
+            var dataEl = document.getElementById('bulkClosingData');
+            var form = document.getElementById('bulkReviewForm');
+            if (!dataEl || !form) return;
+            var all = JSON.parse(dataEl.textContent || '[]');
+            var byId = {};
+            all.forEach(function (c) { byId[c.id] = c; });
+            var boxes = Array.prototype.slice.call(document.querySelectorAll('.closing-select'));
+            var selectAll = document.getElementById('selectAllPage');
+            var markSelected = document.getElementById('markSelectedBtn');
+            var markAll = document.getElementById('markAllBtn');
+            var countEl = document.getElementById('selectedCount');
+
+            function selectedIds() {
+                return boxes.filter(function (b) { return b.checked; }).map(function (b) { return parseInt(b.value, 10); });
+            }
+            function refresh() {
+                var n = selectedIds().length;
+                markSelected.disabled = n === 0;
+                countEl.textContent = n ? '(' + n + ')' : '';
+                if (selectAll) {
+                    selectAll.checked = boxes.length > 0 && n === boxes.length;
+                    selectAll.indeterminate = n > 0 && n < boxes.length;
+                }
+            }
+            boxes.forEach(function (b) { b.addEventListener('change', refresh); });
+            if (selectAll) selectAll.addEventListener('change', function () {
+                boxes.forEach(function (b) { b.checked = selectAll.checked; });
+                refresh();
+            });
+
+            function review(ids, scope) {
+                var rows = ids.map(function (id) { return byId[id]; }).filter(function (c) { return c && !c.own; });
+                if (!rows.length || form.dataset.sent === '1') return;
+                var flagged = rows.filter(function (c) { return c.flagged; });
+                var message = 'Mark ' + rows.length + ' closing' + (rows.length === 1 ? '' : 's') + ' as Reviewed?'
+                    + (scope === 'all' ? ' This includes the closings on every page of this filter.' : '')
+                    + (flagged.length ? ' ' + flagged.length + ' of them ' + (flagged.length === 1 ? 'has' : 'have') + ' a variance or wastage, listed below; a shared remark is required.' : ' None of them has a variance or wastage.');
+                SbcDialog.confirmRemark({
+                    title: scope === 'all' ? 'Mark all as Reviewed' : 'Mark selected as Reviewed',
+                    message: message,
+                    confirmText: 'Mark ' + rows.length + ' as Reviewed',
+                    variant: flagged.length ? 'warning' : 'primary',
+                    details: flagged.length ? { columns: ['Date', 'Item', 'Variance', 'Wastage'], rows: flagged.map(function (c) { return [c.date, c.item, c.variance, c.wastage]; }) } : null,
+                    remark: flagged.length
+                        ? { required: true, minLength: 5, label: 'Shared remark (required)', placeholder: 'Variances checked with the Nurse.', requiredMessage: 'Enter a short remark (at least 5 characters) for the closings with a variance or wastage.' }
+                        : { required: false, label: 'Shared remark (optional)', placeholder: 'Optional remark saved with each closing' }
+                }).then(function (remark) {
+                    if (remark === null || form.dataset.sent === '1') return;
+                    form.dataset.sent = '1';
+                    form.querySelectorAll('input[name="closing_ids[]"]').forEach(function (i) { i.remove(); });
+                    rows.forEach(function (c) {
+                        var input = document.createElement('input');
+                        input.type = 'hidden'; input.name = 'closing_ids[]'; input.value = c.id;
+                        form.appendChild(input);
+                    });
+                    form.querySelector('input[name="bulk_remark"]').value = remark;
+                    markAll.disabled = true; markSelected.disabled = true;
+                    form.submit();
+                });
+            }
+            markAll.addEventListener('click', function () { review(all.filter(function (c) { return !c.own; }).map(function (c) { return c.id; }), 'all'); });
+            markSelected.addEventListener('click', function () { review(selectedIds(), 'selected'); });
+            refresh();
+        })();
     </script>
 </body>
 </html>

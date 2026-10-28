@@ -50,9 +50,9 @@ function dailyInventoryStartAutoEvaluation(mysqli $conn, string $branchId): void
     }
 }
 
-// Export (PDF or CSV, shared builders): one day (?date=) or the closing
+// Export PDF (shared builders; &inline=1 for Print): one day (?date=) or the closing
 // history range shown on the page (?range=today|7|30|all).
-if (in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
+if (($_GET['export'] ?? '') === 'pdf') {
     require_once 'sources/report_catalog.php';
     $exportFormat = (string)$_GET['export'];
     $exportDate = trim((string)($_GET['date'] ?? ''));
@@ -74,7 +74,7 @@ if (in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
     }
     $exportReport = reportBuild($conn, 'daily_closing', ['branch_id' => $branchId, 'from' => $exportFrom, 'to' => $exportTo]);
     $exportPeriod = $exportFrom === '2000-01-01' ? 'All closing history' : reportPeriodText($exportFrom, $exportTo);
-    workflowAudit($conn, $userId, $branchId, 'Exported daily inventory closing (' . strtoupper($exportFormat) . ') for ' . $exportPeriod, 'Daily Inventory');
+    workflowAudit($conn, $userId, $branchId, reportExportVerb() . ' daily inventory closing (PDF) for ' . $exportPeriod, 'Daily Inventory');
     reportSend($exportReport, reportMeta($conn, $userId, (string)($user['branch_name'] ?? $branchId), $exportPeriod), $exportFormat,
         'Daily_Inventory_' . $branchId . '_' . ($exportFrom === $exportTo ? $exportFrom : str_replace('2000-01-01', 'all', $exportFrom) . '_to_' . $exportTo));
 }
@@ -1148,6 +1148,11 @@ $flash = workflowTakeFlash();
         .qty-group .form-control { min-height: 34px; width: 74px; padding: 4px 6px; font-size: 13px; }
         .qty-group .q-unit { color: #64708b; font-size: 11px; white-space: nowrap; }
         .day-remarks { min-width: 170px; }
+        .qty-hint { display: block; min-height: 1em; margin-top: 3px; color: #2B3A8C; font-size: 12px; font-weight: 600; }
+        .qty-hint.qty-hint-warn { color: #b54708; }
+        .actual-split .form-control { min-width: 60px; }
+        tr.row-large-variance td { background: #fff4e5 !important; }
+        .large-variance-cell { display: block; margin-top: 3px; color: #b54708; font-size: 11.5px; font-weight: 600; white-space: normal; }
         .day-table .computed { font-weight: 700; color: #25324b; white-space: nowrap; }
         .day-divider td { background: #f3f5fa; color: #64708b; font-size: 12px; font-weight: 600; }
         .row-saved { background: #f3fbf5; }
@@ -1717,6 +1722,13 @@ $flash = workflowTakeFlash();
                                     data-step="<?= workflowH(
                                         (string)$item['input_step']
                                     ) ?>"
+                                    data-meta="<?= workflowH(json_encode([
+                                        'conv' => inventoryHasDisplayUnit($item) ? inventoryConversionToBase($item) : 1,
+                                        'display' => inventoryConversionToBase($item) === 1.0 ? inventoryDisplayUnitLabel($item) : inventoryBaseUnitLabel($item),
+                                        'big' => inventoryDisplayUnitLabel($item),
+                                        'base' => inventoryBaseUnitLabel($item),
+                                        'split' => inventoryHasDisplayUnit($item),
+                                    ])) ?>"
                                 >
                                     <?= workflowH(
                                         $item['item_name'] .
@@ -1771,6 +1783,7 @@ $flash = workflowTakeFlash();
                             name="beginning_stock"
                             required
                         >
+                        <small class="qty-hint" data-hint-for="beginning_stock" aria-live="polite"></small>
                     </div>
 
                     <div class="col-xl-2 col-md-6">
@@ -1788,6 +1801,7 @@ $flash = workflowTakeFlash();
                             id="delivery"
                             name="delivery"
                         >
+                        <small class="qty-hint" data-hint-for="delivery" aria-live="polite"></small>
                     </div>
 
                     <div class="col-xl-4 col-md-6">
@@ -1885,6 +1899,7 @@ $flash = workflowTakeFlash();
                             id="pull_out"
                             name="pull_out"
                         >
+                        <small class="qty-hint" data-hint-for="pull_out" aria-live="polite"></small>
                     </div>
 
                     <div class="col-lg-3 col-md-6">
@@ -1917,7 +1932,18 @@ $flash = workflowTakeFlash();
                             </button>
                         </div>
 
-                        <small class="text-muted">
+                        <!-- Whole vials and loose sites, so a vial count is never typed as sites. -->
+                        <div class="actual-split mt-1" id="actualSplit" style="display:none">
+                            <div class="input-group input-group-sm">
+                                <input type="number" min="0" step="1" inputmode="numeric" class="form-control" id="actualVials" aria-label="Actual: whole vials">
+                                <span class="input-group-text" id="actualVialsUnit">vials</span>
+                                <span class="input-group-text px-1">+</span>
+                                <input type="number" min="0" step="1" inputmode="numeric" class="form-control" id="actualSites" aria-label="Actual: loose sites">
+                                <span class="input-group-text" id="actualSitesUnit">sites</span>
+                            </div>
+                        </div>
+                        <small class="qty-hint" data-hint-for="actual_count" aria-live="polite"></small>
+                        <small class="text-muted d-block">
                             Actual should come from the physical count.
                             Use Computed only when the tally matches.
                         </small>
@@ -1998,6 +2024,9 @@ $flash = workflowTakeFlash();
                                     Enter actual count
                                 </span>
                             </div>
+                        </div>
+                        <div id="largeVarianceNote" class="alert alert-warning d-flex gap-2 align-items-start py-2 px-3 mt-2 mb-0" role="alert" style="display:none !important">
+                            <i class="bi bi-exclamation-triangle-fill mt-1"></i><div id="largeVarianceText"></div>
                         </div>
                     </div>
 
@@ -2117,11 +2146,11 @@ $flash = workflowTakeFlash();
                     </a>
 
                     <a class="btn btn-outline-danger" href="Nurse_DailyInventory.php?export=pdf&amp;<?= workflowH($historyDate !== '' ? 'date=' . $historyDate : 'range=' . $historyRange) ?>">
-                        <i class="bi bi-file-earmark-pdf-fill me-1"></i>History PDF
+                        <i class="bi bi-file-earmark-pdf-fill me-1"></i>Export PDF
                     </a>
-                    <a class="btn btn-outline-success" href="Nurse_DailyInventory.php?export=csv&amp;<?= workflowH($historyDate !== '' ? 'date=' . $historyDate : 'range=' . $historyRange) ?>">
-                        <i class="bi bi-filetype-csv me-1"></i>History CSV
-                    </a>
+                    <button type="button" class="btn btn-outline-danger" data-print-pdf="Nurse_DailyInventory.php?export=pdf&amp;<?= workflowH($historyDate !== '' ? 'date=' . $historyDate : 'range=' . $historyRange) ?>">
+                        <i class="bi bi-printer me-1"></i>Print
+                    </button>
                 </form>
             </div>
 
@@ -2230,13 +2259,14 @@ $flash = workflowTakeFlash();
                                 ></i>
                                 Export PDF
                             </a>
-                            <a
-                                class="btn btn-sm btn-outline-success"
-                                href="Nurse_DailyInventory.php?export=csv&amp;date=<?= workflowH($closingDate) ?>"
+                            <button
+                                type="button"
+                                class="btn btn-sm btn-outline-danger"
+                                data-print-pdf="Nurse_DailyInventory.php?export=pdf&amp;date=<?= workflowH($closingDate) ?>"
                             >
-                                <i class="bi bi-filetype-csv me-1"></i>
-                                Export CSV
-                            </a>
+                                <i class="bi bi-printer me-1"></i>
+                                Print
+                            </button>
                         </div>
                     </div>
 
@@ -2504,6 +2534,7 @@ $flash = workflowTakeFlash();
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="sources/sidebar.js"></script>
 
 <script>
@@ -2542,6 +2573,37 @@ function qtyText(scaled, meta) {
     if (rem > 0) parts.push(plainNumber(rem) + ' ' + unitWord(meta.base, rem));
     return sign + parts.join(' + ');
 }
+// LARGE VARIANCE: the Actual differs from the computed ending by so much that
+// a unit or counting mistake is likely (for example a vial count typed as
+// sites). Thresholds, per counting unit:
+//  - vial/ampule items: 2 vials or more, or 1 vial or more that is also over
+//    10% of the computed ending (a whole-vial gap is not normal site drift);
+//  - other items (pieces, boxes, packs): 2 units or more AND over 10% of the
+//    computed ending (a few pieces off a large stock is ordinary).
+// Returns null, or {variance, text}. Quantities are integer ten-thousandths.
+function largeVarianceInfo(computed, actual, meta) {
+    if (computed === null || actual === null || computed < 0 || !meta) return null;
+    const variance = actual - computed;
+    if (variance === 0) return null;
+    const conv = Number(meta.conv) || 1;
+    const split = !!meta.split && conv > 1;
+    const unit = Math.round((split ? conv : 1) * 10000);
+    const abs = Math.abs(variance);
+    const overPercent = abs > Math.abs(computed) * 0.10;
+    const large = split ? (abs >= 2 * unit || (abs >= unit && overPercent)) : (abs >= 2 * unit && (computed === 0 || overPercent));
+    if (!large) return null;
+    let text = 'Actual is ' + qtyText(abs, meta) + (variance < 0 ? ' less' : ' more') + ' than computed (computed '
+        + qtyText(computed, meta) + ', actual ' + qtyText(actual, meta) + '). Check the unit'
+        + (split ? ' (' + unitWord(meta.big, 2) + ' vs ' + unitWord(meta.base, 2) + ')' : '') + ' and the count.';
+    // The number entered in base units would match the computed ending as whole vials.
+    if (split && actual > 0 && Math.abs(Math.round(actual * conv) - computed) <= Math.max(unit, Math.abs(computed) * 0.10)) {
+        const n = plainNumber(actual / 10000);
+        text += ' It looks like ' + n + ' ' + unitWord(meta.big, actual / 10000) + ' may have been entered as '
+            + n + ' ' + unitWord(meta.base, actual / 10000) + '.';
+    }
+    return { variance, text };
+}
+
 // Vials + sites boxes -> base-unit hidden value (blank stays blank).
 function qtyCompose(group) {
     const main = group.querySelector('.q-main').value.trim();
@@ -2601,16 +2663,27 @@ function dayRefreshRow(row) {
         ? `incl. adjustment +${qtyText(extra, meta)} (${row.querySelector('.w-reason').value === 'Other' ? 'Other: ' + row.querySelector('.w-other').value : row.querySelector('.w-reason').value})`
         : '';
     if (beginningBlank || [beginning, delivery, pullOut, consumed, extra].includes(null)) {
-        endCell.textContent = '-'; varianceCell.textContent = '-'; row.dataset.end = ''; return;
+        endCell.textContent = '-'; varianceCell.textContent = '-'; row.dataset.end = '';
+        row.dataset.largeVariance = ''; row.classList.remove('row-large-variance'); return;
     }
     const end = beginning + delivery - consumed - extra - pullOut;
     row.dataset.end = String(end);
     endCell.textContent = qtyText(end, meta);
     if (end < 0) endCell.classList.add('variance-bad'); else endCell.classList.remove('variance-bad');
-    if (actualBlank || actual === null) { varianceCell.textContent = '-'; return; }
+    if (actualBlank || actual === null) { varianceCell.textContent = '-'; row.dataset.largeVariance = ''; row.classList.remove('row-large-variance'); return; }
     const variance = actual - end;
     varianceCell.textContent = variance === 0 ? '0 (tallied)' : (variance > 0 ? '+' : '') + qtyText(variance, meta);
     varianceCell.className = variance === 0 ? 'variance-ok' : 'variance-bad';
+    const large = largeVarianceInfo(end, actual, meta);
+    row.dataset.largeVariance = large ? large.text : '';
+    row.classList.toggle('row-large-variance', !!large);
+    if (large) {
+        const note = document.createElement('span');
+        note.className = 'large-variance-cell';
+        note.title = large.text;
+        note.textContent = 'Large variance: check the unit' + (meta.split ? ' (' + unitWord(meta.big, 2) + ' vs ' + unitWord(meta.base, 2) + ')' : '') + ' and the count';
+        varianceCell.appendChild(note);
+    }
 }
 
 const dayClosing = document.getElementById('dayClosing');
@@ -2770,11 +2843,47 @@ document.getElementById('dayClosingForm')?.addEventListener('submit', event => {
             }
         });
     });
+    // Large variances: each needs a remark (the server also requires one for
+    // any variance) and the Nurse confirms them in a styled dialog first.
+    const form = event.target;
+    const largeRows = [...document.querySelectorAll('.day-row')].filter(row => !skipRows.includes(row)
+        && (row.dataset.largeVariance || '') !== '' && dayGroupEntered(row.querySelector('.qty-group[data-field="actual_count"]')));
+    largeRows.forEach(row => {
+        const remark = row.querySelector('.day-remarks');
+        if (remark && remark.value.trim().length < 5) {
+            remark.classList.add('is-invalid');
+            problems.push({ row, input: remark, text: (row.dataset.itemName || 'Item') + ': large variance. ' + row.dataset.largeVariance
+                + ' Write a remark explaining it (at least 5 characters).' });
+        }
+    });
     if (problems.length) {
         event.preventDefault();
         dayShowProblems(problems);
         return;
     }
+    if (largeRows.length && form.dataset.largeConfirmed !== '1') {
+        event.preventDefault();
+        SbcDialog.confirm({
+            title: 'Large variance',
+            variant: 'warning',
+            message: largeRows.length + ' item' + (largeRows.length === 1 ? ' has' : 's have')
+                + ' a large difference between the Actual count and the computed ending. Check the unit (vials vs sites) and the count before saving.',
+            details: { columns: ['Item', 'Computed', 'Actual', 'Variance'], rows: largeRows.map(row => {
+                const meta = JSON.parse(row.dataset.unit);
+                const actual = qtyCompose(row.querySelector('.qty-group[data-field="actual_count"]'));
+                const end = Number(row.dataset.end);
+                return [row.dataset.itemName || 'Item', qtyText(end, meta), qtyText(actual, meta), (actual - end > 0 ? '+' : '') + qtyText(actual - end, meta)];
+            }) },
+            confirmText: 'Counts checked, save closing',
+            cancelText: 'Check again'
+        }).then(ok => {
+            if (!ok) return;
+            form.dataset.largeConfirmed = '1';
+            form.requestSubmit(document.getElementById('saveDayBtn'));
+        });
+        return;
+    }
+    delete form.dataset.largeConfirmed;
     daySaving = true;
     // Not sent: rows with nothing to save (re-enabled if the page is shown again from history).
     skipRows.forEach(row => row.querySelectorAll('input[name], select[name], textarea[name]').forEach(input => { input.disabled = true; }));
@@ -2859,8 +2968,61 @@ function refreshFinalConsumed() {
         document.getElementById('wastage_reason').value === 'Other' ? '' : 'none';
 }
 
+// Unit facts of the selected item (vials/sites) for hints and the warning.
+function selectedMeta() {
+    const select = document.getElementById('item_id');
+    try { return JSON.parse(select?.options[select.selectedIndex]?.dataset.meta || 'null'); } catch (e) { return null; }
+}
+// "= 83 vials + 5 sites" under each base-unit field; vials + sites boxes for Actual.
+function refreshQtyHints() {
+    const meta = selectedMeta();
+    document.querySelectorAll('.qty-hint[data-hint-for]').forEach(hint => {
+        const value = document.getElementById(hint.dataset.hintFor)?.value ?? '';
+        const scaled = value === '' ? null : dailyScaled(value);
+        hint.textContent = meta && meta.split && scaled !== null && dailyContextReady ? '= ' + qtyText(scaled, meta) : '';
+    });
+    const split = document.getElementById('actualSplit');
+    const show = !!(meta && meta.split && Number(meta.conv) > 1);
+    split.style.display = show ? '' : 'none';
+    if (!show) return;
+    document.getElementById('actualVialsUnit').textContent = unitWord(meta.big, 2);
+    document.getElementById('actualSitesUnit').textContent = unitWord(meta.base, 2);
+    const vials = document.getElementById('actualVials');
+    const sites = document.getElementById('actualSites');
+    vials.disabled = sites.disabled = document.getElementById('actual_count').disabled;
+    if (split.contains(document.activeElement)) return; // the Nurse is typing in the boxes
+    const actual = dailyScaled(document.getElementById('actual_count').value);
+    if (actual === null) { vials.value = ''; sites.value = ''; return; }
+    const convScaled = Math.round(Number(meta.conv) * 10000);
+    const full = Math.floor(actual / convScaled);
+    vials.value = String(full);
+    sites.value = plainValue(actual - full * convScaled) || '0';
+}
+for (const id of ['actualVials', 'actualSites']) {
+    document.getElementById(id).addEventListener('input', () => {
+        const meta = selectedMeta();
+        if (!meta) return;
+        const vials = document.getElementById('actualVials').value.trim();
+        const sites = document.getElementById('actualSites').value.trim();
+        const actualInput = document.getElementById('actual_count');
+        if (vials === '' && sites === '') { actualInput.value = ''; refreshClosingPreview(); return; }
+        const v = qtyScaled(vials), r = qtyScaled(sites);
+        if (v === null || r === null || !/^[0-9]*$/.test(vials)) { refreshClosingPreview(); return; }
+        actualInput.value = plainValue(Math.round(v * Number(meta.conv)) + r) || '0';
+        refreshClosingPreview();
+    });
+}
+function refreshLargeVarianceNote(computed, actual) {
+    const info = dailyContextReady && computed !== null && computed >= 0 ? largeVarianceInfo(computed, actual, selectedMeta()) : null;
+    const note = document.getElementById('largeVarianceNote');
+    note.style.setProperty('display', info ? 'flex' : 'none', 'important');
+    document.getElementById('largeVarianceText').textContent = info ? info.text + ' Saving asks you to confirm and write a remark.' : '';
+    return info;
+}
+
 function refreshClosingPreview() {
     refreshFinalConsumed();
+    refreshQtyHints();
     const computed = dailyContextReady ? dailyComputed() : null;
     const actual = dailyScaled(document.getElementById('actual_count')?.value ?? '');
     const unit = selectedBaseUnit();
@@ -2885,10 +3047,13 @@ function refreshClosingPreview() {
         varianceEl.textContent = 'Enter actual physical count';
     } else {
         const variance = actual - computed;
-        varianceEl.textContent = variance === 0 ? 'Tallied - actual matches computed' : `Variance: ${formatClosingNumber(variance)} ${unit}`;
+        const meta = selectedMeta();
+        varianceEl.textContent = variance === 0 ? 'Tallied - actual matches computed'
+            : `Variance: ${formatClosingNumber(variance)} ${unit}` + (meta && meta.split ? ` (${(variance > 0 ? '+' : '') + qtyText(variance, meta)})` : '');
         varianceBox.classList.add(variance === 0 ? 'match' : 'difference');
         actualBox.classList.add(variance === 0 ? 'match' : 'difference');
     }
+    refreshLargeVarianceNote(computed, actual);
 }
 
 function resetDailyFields() {
@@ -3030,10 +3195,37 @@ document.getElementById('useComputedBtn').addEventListener('click', () => {
     refreshClosingPreview();
 });
 document.getElementById('dailyClosingForm').addEventListener('submit', event => {
+    const form = event.currentTarget;
     if (!dailyContextReady || document.getElementById('submitClosingBtn').disabled) {
         event.preventDefault();
         document.getElementById('openingBalanceHelp').textContent = 'Load the selected item and date, then verify the counts before submitting.';
+        return;
     }
+    // Large variance: confirm in the styled dialog and write a remark first.
+    const computed = dailyComputed();
+    const actual = dailyScaled(document.getElementById('actual_count').value);
+    const info = largeVarianceInfo(computed, actual, selectedMeta());
+    if (info && form.dataset.largeConfirmed !== '1') {
+        event.preventDefault();
+        const remarks = document.getElementById('remarks');
+        SbcDialog.confirmRemark({
+            title: 'Large variance',
+            variant: 'warning',
+            message: info.text + ' Save only after checking the physical count again.',
+            confirmText: 'Counts checked, save closing',
+            cancelText: 'Check again',
+            remark: { required: true, minLength: 5, value: remarks.value, label: 'Remark (required)',
+                placeholder: 'Example: Recounted; 2 vials were sent to the satellite clinic.',
+                requiredMessage: 'Explain the variance in a short remark (at least 5 characters).' }
+        }).then(remark => {
+            if (remark === null) return;
+            remarks.value = remark;
+            form.dataset.largeConfirmed = '1';
+            form.requestSubmit(document.getElementById('submitClosingBtn'));
+        });
+        return;
+    }
+    delete form.dataset.largeConfirmed;
 });
 document.getElementById('item_id').value = initialDailyForm.item_id || '';
 document.getElementById('inventory_date').value = initialDailyForm.inventory_date;

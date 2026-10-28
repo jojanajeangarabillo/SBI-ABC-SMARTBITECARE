@@ -2,6 +2,7 @@
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/pagination_helper.php';
 
 // ============================================
 // CHECK USER PERMISSIONS
@@ -19,10 +20,10 @@ if (
 $user_id = (int)$_SESSION['user_id'];
 $notification_count = getUnreadNotificationCount($conn, $user_id);
 // ============================================
-// EXPORT (PDF or CSV) of the filtered logs, all rows, shared builders
-// (sources/report_standard.php). ?generate_pdf=1 / ?export_csv=1.
+// EXPORT PDF of the filtered logs, all rows, shared builders
+// (sources/report_standard.php). ?generate_pdf=1 (&inline=1 for Print).
 // ============================================
-if ((($_GET['generate_pdf'] ?? '') === '1') || (($_GET['export_csv'] ?? '') === '1')) {
+if (($_GET['generate_pdf'] ?? '') === '1') {
     require_once 'sources/report_standard.php';
     $exportUserId = (int)($_GET['user_id'] ?? 0);
     $exportUserName = '';
@@ -46,7 +47,7 @@ if ((($_GET['generate_pdf'] ?? '') === '1') || (($_GET['export_csv'] ?? '') === 
         'user_id' => $exportUserId, 'user_name' => $exportUserName,
         'date_from' => trim((string)($_GET['date_from'] ?? '')),
         'date_to' => trim((string)($_GET['date_to'] ?? '')),
-    ], ($_GET['export_csv'] ?? '') === '1' ? 'csv' : 'pdf');
+    ], 'pdf');
 }
 
 // ============================================
@@ -154,8 +155,15 @@ if (!empty($params) && $types) {
 }
 $stmt->execute();
 $count_result = $stmt->get_result();
-$total_rows = $count_result->fetch_assoc()['total'];
-$total_pages = ceil($total_rows / $per_page);
+$total_rows = (int)$count_result->fetch_assoc()['total'];
+// Shared pagination (10/25/50 rows, 25 by default); the LIMIT/OFFSET of the data query follow it.
+$pg = paginationApply(paginationFromRequest('', 25), $total_rows);
+$page = $pg['page'];
+$per_page = $pg['per_page'];
+$offset = $pg['offset'];
+$total_pages = $pg['pages'];
+$params[count($params) - 2] = $per_page;
+$params[count($params) - 1] = $offset;
 
 // Get data
 $stmt = $conn->prepare($base_sql);
@@ -216,7 +224,6 @@ if ($action_type) $filter_params['action_type'] = $action_type;
 if ($date_from) $filter_params['date_from'] = $date_from;
 if ($date_to) $filter_params['date_to'] = $date_to;
 $pdf_url = '?' . http_build_query($filter_params + ['generate_pdf' => '1']);
-$csv_url = '?' . http_build_query($filter_params + ['export_csv' => '1']);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1334,9 +1341,9 @@ $csv_url = '?' . http_build_query($filter_params + ['export_csv' => '1']);
             <a href="<?php echo htmlspecialchars($pdf_url, ENT_QUOTES, 'UTF-8'); ?>" class="btn-filter-outline">
                 <i class="bi bi-file-earmark-pdf"></i> Export PDF
             </a>
-            <a href="<?php echo htmlspecialchars($csv_url, ENT_QUOTES, 'UTF-8'); ?>" class="btn-filter-outline">
-                <i class="bi bi-filetype-csv"></i> Export CSV
-            </a>
+            <button type="button" data-print-pdf="<?php echo htmlspecialchars($pdf_url, ENT_QUOTES, 'UTF-8'); ?>" class="btn-filter-outline">
+                <i class="bi bi-printer"></i> Print
+            </button>
             <span style="font-size:12px;color:#8a96b8;">
                 <i class="bi bi-info-circle"></i> 
                 <?php if ($search || $module_filter || $user_filter > 0 || $branch_filter || $action_type || $date_from || $date_to): ?>
@@ -1414,123 +1421,8 @@ $csv_url = '?' . http_build_query($filter_params + ['export_csv' => '1']);
             </table>
         </div>
 
-        <!-- Pagination -->
-<?php if ($total_pages > 1): ?>
-    <div class="pagination-wrap">
-
-        <!-- Pagination buttons FIRST -->
-        <nav aria-label="Audit logs pagination">
-            <ul class="pagination">
-
-                <?php if ($page > 1): ?>
-                    <li class="page-item">
-                        <a class="page-link"
-                           href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page - 1])); ?>">
-                            <i class="bi bi-chevron-left"></i>
-                        </a>
-                    </li>
-                <?php else: ?>
-                    <li class="page-item disabled">
-                        <span class="page-link">
-                            <i class="bi bi-chevron-left"></i>
-                        </span>
-                    </li>
-                <?php endif; ?>
-
-
-                <?php
-                $start_page = max(1, $page - 2);
-                $end_page = min($total_pages, $page + 2);
-
-                if ($start_page > 1):
-                ?>
-                    <li class="page-item">
-                        <a class="page-link"
-                           href="?<?php echo http_build_query(array_merge($_GET, ['page' => 1])); ?>">
-                            1
-                        </a>
-                    </li>
-
-                    <?php if ($start_page > 2): ?>
-                        <li class="page-item disabled">
-                            <span class="page-link">…</span>
-                        </li>
-                    <?php endif; ?>
-
-                <?php endif; ?>
-
-
-                <?php for ($i = $start_page; $i <= $end_page; $i++): ?>
-                    <li class="page-item <?php echo $i == $page ? 'active' : ''; ?>">
-                        <a class="page-link"
-                           href="?<?php echo http_build_query(array_merge($_GET, ['page' => $i])); ?>">
-                            <?php echo $i; ?>
-                        </a>
-                    </li>
-                <?php endfor; ?>
-
-
-                <?php if ($end_page < $total_pages): ?>
-
-                    <?php if ($end_page < $total_pages - 1): ?>
-                        <li class="page-item disabled">
-                            <span class="page-link">…</span>
-                        </li>
-                    <?php endif; ?>
-
-                    <li class="page-item">
-                        <a class="page-link"
-                           href="?<?php echo http_build_query(array_merge($_GET, ['page' => $total_pages])); ?>">
-                            <?php echo $total_pages; ?>
-                        </a>
-                    </li>
-
-                <?php endif; ?>
-
-
-                <?php if ($page < $total_pages): ?>
-                    <li class="page-item">
-                        <a class="page-link"
-                           href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page + 1])); ?>">
-                            <i class="bi bi-chevron-right"></i>
-                        </a>
-                    </li>
-                <?php else: ?>
-                    <li class="page-item disabled">
-                        <span class="page-link">
-                            <i class="bi bi-chevron-right"></i>
-                        </span>
-                    </li>
-                <?php endif; ?>
-
-            </ul>
-        </nav>
-
-
-        <!-- Showing entries BELOW -->
-        <div class="pagination-info">
-            Showing <strong><?php echo ($offset + 1); ?></strong> to
-            <strong><?php echo min($offset + $per_page, $total_rows); ?></strong>
-            of <strong><?php echo number_format($total_rows); ?></strong> entries
-        </div>
-
-    </div>
-
-<?php else: ?>
-
-    <?php if ($total_rows > 0): ?>
-        <div class="pagination-wrap">
-
-            <div class="pagination-info">
-                Showing <strong>1</strong> to
-                <strong><?php echo $total_rows; ?></strong>
-                of <strong><?php echo number_format($total_rows); ?></strong> entries
-            </div>
-
-        </div>
-    <?php endif; ?>
-
-<?php endif; ?>
+        <!-- Pagination (sources/pagination_helper.php): filters are kept on every link -->
+        <?php echo paginationRender($pg, '', 'entries'); ?>
 
   <div class="modal fade confirm-modal" id="logoutConfirmModal" tabindex="-1"
      aria-labelledby="logoutConfirmModalLabel" aria-hidden="true">
@@ -1620,6 +1512,7 @@ $csv_url = '?' . http_build_query($filter_params + ['export_csv' => '1']);
 
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="sources/sidebar.js"></script>
 <script>
 document.querySelectorAll('.filter-group select, .filter-group input[type="date"]').forEach(function(element) {

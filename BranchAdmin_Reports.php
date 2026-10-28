@@ -49,7 +49,7 @@ if (!$branch_id) {
 // REPORTS: the shared report center (sources/report_center.php).
 // The four existing reports use the shared builders in
 // sources/report_standard.php; the control reports come from the catalog.
-// Each report gives a preview, a PDF and a CSV from the same data.
+// Each report gives a preview, a PDF and a Print of that PDF from the same data.
 // ============================================
 require_once 'sources/report_standard.php';
 require_once 'sources/report_center.php';

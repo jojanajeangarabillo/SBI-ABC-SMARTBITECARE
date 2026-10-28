@@ -3393,6 +3393,7 @@ function getStatusBadge($status)
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="sources/sidebar.js"></script>  
 <script>
 let availableVaccines = [];
@@ -4483,21 +4484,24 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     document.getElementById('lateRestartBtn').addEventListener('click', function () {
         if (!pendingLateDose) return;
-        if (!confirm('Re-assess this patient and restart the vaccination cycle from Day 0? The old records will be archived (not deleted) when you save the re-assessment.')) return;
-        const fd = new FormData();
-        fd.append('late_dose_restart', '1');
-        fd.append('csrf_token', csrfToken);
-        fd.append('patient_id', pendingLateDose.patient_id);
-        fd.append('case_id', pendingLateDose.case_id);
-        fd.append('dose_number', pendingLateDose.dose_number);
-        fd.append('late_remark', document.getElementById('lateDoseRemark').value.trim());
-        fetch('Nurse_Vaccination.php', { method: 'POST', body: fd })
-            .then(r => r.json()).then(data => {
-                lateDoseModal.hide();
-                if (!data.success) { showAlert(data.message || 'Unable to record the restart choice.', 'danger'); return; }
-                showAlert(data.message, 'info');
-                setTimeout(() => { window.location.href = data.redirect; }, 1200);
-            }).catch(() => showAlert('Unable to record the restart choice. Please try again.', 'danger'));
+        SbcDialog.confirm({ title: 'Restart vaccination cycle', variant: 'danger', confirmText: 'Re-assess and restart',
+            message: 'Re-assess this patient and restart the vaccination cycle from Day 0? The old records will be archived (not deleted) when you save the re-assessment.' }).then(function (ok) {
+            if (!ok) return;
+            const fd = new FormData();
+            fd.append('late_dose_restart', '1');
+            fd.append('csrf_token', csrfToken);
+            fd.append('patient_id', pendingLateDose.patient_id);
+            fd.append('case_id', pendingLateDose.case_id);
+            fd.append('dose_number', pendingLateDose.dose_number);
+            fd.append('late_remark', document.getElementById('lateDoseRemark').value.trim());
+            fetch('Nurse_Vaccination.php', { method: 'POST', body: fd })
+                .then(r => r.json()).then(data => {
+                    lateDoseModal.hide();
+                    if (!data.success) { showAlert(data.message || 'Unable to record the restart choice.', 'danger'); return; }
+                    showAlert(data.message, 'info');
+                    setTimeout(() => { window.location.href = data.redirect; }, 1200);
+                }).catch(() => showAlert('Unable to record the restart choice. Please try again.', 'danger'));
+        });
     });
 });
 

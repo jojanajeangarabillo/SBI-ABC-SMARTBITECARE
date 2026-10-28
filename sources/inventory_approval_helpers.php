@@ -225,13 +225,9 @@ function inventoryApprovalLoad(mysqli $conn, int $requestId, bool $lock = false)
     return $rows[0] ?? null;
 }
 
-/**
- * Requests with display fields. $filters: request_id, branch_id, statuses (list),
- * requested_by, types (list), item_id, limit (default 200).
- */
-function inventoryApprovalList(mysqli $conn, array $filters = []): array
+/** WHERE parts of a request list or count (see inventoryApprovalList). */
+function inventoryApprovalListWhere(array $filters): array
 {
-    if (!inventoryApprovalReady($conn)) return [];
     $where = [];
     $types = '';
     $params = [];
@@ -248,7 +244,52 @@ function inventoryApprovalList(mysqli $conn, array $filters = []): array
             foreach ($filters[$key] as $value) $params[] = (string)$value;
         }
     }
+    return [$where, $types, $params];
+}
+
+/** Number of requests matching the filters (for badges and pagination). */
+function inventoryApprovalCount(mysqli $conn, array $filters = []): int
+{
+    if (!inventoryApprovalReady($conn)) return 0;
+    [$where, $types, $params] = inventoryApprovalListWhere($filters);
+    $stmt = $conn->prepare('SELECT COUNT(*) AS total FROM inventory_approval_requests r' . ($where ? ' WHERE ' . implode(' AND ', $where) : ''));
+    if ($types !== '') $stmt->bind_param($types, ...$params);
+    $stmt->execute();
+    $total = (int)$stmt->get_result()->fetch_assoc()['total'];
+    $stmt->close();
+    return $total;
+}
+
+/** Number of matching requests per request_type. */
+function inventoryApprovalCountByType(mysqli $conn, array $filters = []): array
+{
+    if (!inventoryApprovalReady($conn)) return [];
+    [$where, $types, $params] = inventoryApprovalListWhere($filters);
+    $stmt = $conn->prepare('SELECT r.request_type, COUNT(*) AS total FROM inventory_approval_requests r'
+        . ($where ? ' WHERE ' . implode(' AND ', $where) : '') . ' GROUP BY r.request_type');
+    if ($types !== '') $stmt->bind_param($types, ...$params);
+    $stmt->execute();
+    $counts = array_map('intval', array_column($stmt->get_result()->fetch_all(MYSQLI_ASSOC), 'total', 'request_type'));
+    $stmt->close();
+    return $counts;
+}
+
+/**
+ * Requests with display fields matching $filters (request_id, branch_id,
+ * requested_by, item_id, statuses, types, requested_from/to), newest first,
+ * limit 200 by default; 'order' => 'type'
+ * keeps each request type together (Pending Approvals groups); 'limit' and
+ * 'offset' give one page.
+ */
+function inventoryApprovalList(mysqli $conn, array $filters = []): array
+{
+    if (!inventoryApprovalReady($conn)) return [];
+    [$where, $types, $params] = inventoryApprovalListWhere($filters);
     $limit = max(1, min(20000, (int)($filters['limit'] ?? 200)));
+    $offset = max(0, (int)($filters['offset'] ?? 0));
+    $order = ($filters['order'] ?? '') === 'type'
+        ? "FIELD(r.request_type, '" . implode("','", array_map(static fn($t) => str_replace("'", '', (string)$t), array_keys(INVENTORY_APPROVAL_TYPES))) . "'), "
+        : '';
     $sql = "SELECT r.*, COALESCE(i.item_name, r.item_name_snapshot) AS item_name,
                    COALESCE(NULLIF(TRIM(i.base_unit_label), ''), un.unit_name, r.unit_snapshot) AS base_unit_label,
                    COALESCE(NULLIF(TRIM(i.display_unit_label), ''), un.unit_name, r.unit_snapshot) AS display_unit_label,
@@ -263,7 +304,7 @@ function inventoryApprovalList(mysqli $conn, array $filters = []): array
             LEFT JOIN roles rr ON rr.role_id = req.role_id
             LEFT JOIN users dcd ON dcd.user_id = r.decided_by"
         . ($where ? ' WHERE ' . implode(' AND ', $where) : '')
-        . " ORDER BY r.requested_at DESC, r.request_id DESC LIMIT $limit";
+        . " ORDER BY {$order}r.requested_at DESC, r.request_id DESC LIMIT $limit OFFSET $offset";
     $stmt = $conn->prepare($sql);
     if ($types !== '') $stmt->bind_param($types, ...$params);
     $stmt->execute();
@@ -835,24 +876,33 @@ function inventoryApprovalReorderFromForecast(mysqli $conn, int $adminId, string
  * ---------------------------------------------------------------- */
 
 /**
- * Closings of a branch for review. $all = false: closings that need the
- * Branch Admin (Submitted with a variance or wastage) and Returned ones;
- * true: every closing of the last $days days. Flagged closings come first.
+ * CLOSING REVIEW LIST. $filter:
+ *   'needs'     submitted closings with a variance or wastage, plus closings
+ *               returned for a recount (default, the badge count);
+ *   'submitted' every submitted closing (reviewed or not yet flagged);
+ *   'all'       every closing of the last $days days.
+ * Count, page (limit/offset) and the full list of submitted closings in the
+ * filter (for "Mark all as Reviewed") use the same conditions.
  */
-function inventoryApprovalClosingList(mysqli $conn, string $branchId, bool $all = false, int $days = 60): array
+const INVENTORY_CLOSING_FILTERS = ['needs', 'submitted', 'all'];
+
+function inventoryApprovalClosingFilter($filter): string
 {
-    $hasRemarks = workflowColumnExists($conn, 'daily_inventory_closings', 'review_remarks');
+    if ($filter === true) return 'all';
+    return in_array($filter, INVENTORY_CLOSING_FILTERS, true) ? (string)$filter : 'needs';
+}
+
+/** FROM/WHERE of the closing review queries; binds branch_id twice. */
+function inventoryApprovalClosingFrom(string $filter, int $days): string
+{
     $days = max(1, min(366, $days));
-    $sql = "SELECT d.closing_id, d.branch_id, d.item_id, d.inventory_date, d.beginning_stock, d.delivery, d.consumed,
-                   d.pull_out, d.computed_ending, d.actual_count, d.variance, d.remarks, d.status, d.submitted_by,
-                   d.submitted_at, d.reviewed_by, d.reviewed_at, " . ($hasRemarks ? 'd.review_remarks' : 'NULL AS review_remarks') . ",
-                   i.item_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), un.unit_name) AS base_unit_label,
-                   COALESCE(NULLIF(TRIM(i.display_unit_label), ''), un.unit_name) AS display_unit_label,
-                   COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base, un.unit_name,
-                   sub.username AS submitter_name, rev.username AS reviewer_name,
-                   COALESCE(w.wastage, 0) AS wastage,
-                   (d.variance <> 0 OR COALESCE(w.wastage, 0) > 0) AS flagged
-            FROM daily_inventory_closings d
+    $flagged = "(d.variance <> 0 OR COALESCE(w.wastage, 0) > 0)";
+    $condition = match ($filter) {
+        'submitted' => "d.status = 'Submitted'",
+        'all' => "d.inventory_date >= DATE_SUB(CURDATE(), INTERVAL $days DAY)",
+        default => "((d.status = 'Submitted' AND $flagged) OR d.status = 'Returned')",
+    };
+    return "FROM daily_inventory_closings d
             JOIN inventory_items i ON i.item_id = d.item_id
             JOIN units un ON un.unit_id = i.unit_id
             LEFT JOIN users sub ON sub.user_id = d.submitted_by
@@ -862,19 +912,158 @@ function inventoryApprovalClosingList(mysqli $conn, string $branchId, bool $all 
                        WHERE h.branch_id = ? AND h.usage_type = 'Wastage'
                        GROUP BY h.item_id, h.usage_date) w
                    ON w.item_id = d.item_id AND w.usage_date = d.inventory_date
-            WHERE d.branch_id = ?"
-        . ($all
-            ? " AND d.inventory_date >= DATE_SUB(CURDATE(), INTERVAL $days DAY)"
-            : " AND ((d.status = 'Submitted' AND (d.variance <> 0 OR COALESCE(w.wastage, 0) > 0)) OR d.status = 'Returned')")
-        . " ORDER BY (d.status = 'Submitted' AND (d.variance <> 0 OR COALESCE(w.wastage, 0) > 0)) DESC,
-                     (d.status = 'Returned') DESC, d.inventory_date DESC, i.item_name ASC
-            LIMIT 500";
+            WHERE d.branch_id = ? AND $condition";
+}
+
+/** One page of the closing review list ($limit null = up to 500 rows, as before). */
+function inventoryApprovalClosingList(mysqli $conn, string $branchId, $filter = 'needs', int $days = 60, ?int $limit = null, int $offset = 0): array
+{
+    $filter = inventoryApprovalClosingFilter($filter);
+    $hasRemarks = workflowColumnExists($conn, 'daily_inventory_closings', 'review_remarks');
+    $limit = $limit === null ? 500 : max(1, min(500, $limit));
+    $offset = max(0, $offset);
+    $sql = "SELECT d.closing_id, d.branch_id, d.item_id, d.inventory_date, d.beginning_stock, d.delivery, d.consumed,
+                   d.pull_out, d.computed_ending, d.actual_count, d.variance, d.remarks, d.status, d.submitted_by,
+                   d.submitted_at, d.reviewed_by, d.reviewed_at, " . ($hasRemarks ? 'd.review_remarks' : 'NULL AS review_remarks') . ",
+                   i.item_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), un.unit_name) AS base_unit_label,
+                   COALESCE(NULLIF(TRIM(i.display_unit_label), ''), un.unit_name) AS display_unit_label,
+                   COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base, un.unit_name,
+                   sub.username AS submitter_name, rev.username AS reviewer_name,
+                   COALESCE(w.wastage, 0) AS wastage,
+                   (d.variance <> 0 OR COALESCE(w.wastage, 0) > 0) AS flagged
+            " . inventoryApprovalClosingFrom($filter, $days) . "
+            ORDER BY (d.status = 'Submitted' AND (d.variance <> 0 OR COALESCE(w.wastage, 0) > 0)) DESC,
+                     (d.status = 'Returned') DESC, d.inventory_date DESC, i.item_name ASC, d.closing_id ASC
+            LIMIT $limit OFFSET $offset";
     $stmt = $conn->prepare($sql);
     $stmt->bind_param('ss', $branchId, $branchId);
     $stmt->execute();
     $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
     $stmt->close();
     return $rows;
+}
+
+/** Number of closings in the review filter (all pages). */
+function inventoryApprovalClosingCount(mysqli $conn, string $branchId, $filter = 'needs', int $days = 60): int
+{
+    $stmt = $conn->prepare('SELECT COUNT(*) AS total ' . inventoryApprovalClosingFrom(inventoryApprovalClosingFilter($filter), $days));
+    $stmt->bind_param('ss', $branchId, $branchId);
+    $stmt->execute();
+    $total = (int)$stmt->get_result()->fetch_assoc()['total'];
+    $stmt->close();
+    return $total;
+}
+
+/** Every Submitted closing in the filter, on all pages (for "Mark all as Reviewed"). */
+function inventoryApprovalClosingsSubmittedInFilter(mysqli $conn, string $branchId, $filter = 'needs', int $days = 60): array
+{
+    $stmt = $conn->prepare("SELECT d.closing_id, d.inventory_date, d.variance, d.submitted_by, i.item_name,
+                COALESCE(NULLIF(TRIM(i.base_unit_label), ''), un.unit_name) AS base_unit_label,
+                COALESCE(NULLIF(TRIM(i.display_unit_label), ''), un.unit_name) AS display_unit_label,
+                COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base, un.unit_name,
+                COALESCE(w.wastage, 0) AS wastage, (d.variance <> 0 OR COALESCE(w.wastage, 0) > 0) AS flagged
+            " . inventoryApprovalClosingFrom(inventoryApprovalClosingFilter($filter), $days) . " AND d.status = 'Submitted'
+            ORDER BY d.inventory_date DESC, i.item_name ASC, d.closing_id ASC");
+    $stmt->bind_param('ss', $branchId, $branchId);
+    $stmt->execute();
+    $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+    return $rows;
+}
+
+/**
+ * BULK CLOSING REVIEW ("Mark all as Reviewed" / "Mark selected as Reviewed").
+ * One transaction with row locks and the same checks as the single review:
+ * an active Branch Admin of the closing's branch, never the person
+ * who submitted it, only closings still Submitted (others are
+ * skipped, not failed). A shared remark is required when any closing to
+ * review has a variance or wastage. One audit entry per closing.
+ * Returns ['reviewed' => n, 'skipped' => n, 'reasons' => [reason => n], 'flagged' => n].
+ */
+function inventoryApprovalReviewClosingsBulk(mysqli $conn, array $closingIds, int $adminId, string $remark): array
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $closingIds), static fn($id) => $id > 0)));
+    if (!$ids) throw new RuntimeException('Select at least one closing to review.');
+    if (count($ids) > 1000) throw new RuntimeException('Review at most 1,000 closings at a time.');
+    $remark = trim($remark);
+    if (mb_strlen($remark) > 1000) throw new RuntimeException('Keep the review remark within 1,000 characters.');
+    if (!workflowColumnExists($conn, 'daily_inventory_closings', 'review_remarks')) inventoryApprovalAssertReady($conn);
+    $admin = inventoryApprovalUser($conn, $adminId);
+    if (!$admin || (int)$admin['role_id'] !== 2 || $admin['status'] !== 'Active') {
+        throw new RuntimeException('Only an active Branch Admin can review daily closings.');
+    }
+    $branchId = (string)$admin['branch_id'];
+    $conn->begin_transaction();
+    try {
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $conn->prepare("SELECT d.closing_id, d.branch_id, d.item_id, d.inventory_date, d.status, d.variance, d.submitted_by,
+                i.item_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), un.unit_name) AS base_unit_label,
+                COALESCE(NULLIF(TRIM(i.display_unit_label), ''), un.unit_name) AS display_unit_label,
+                COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base
+            FROM daily_inventory_closings d JOIN inventory_items i ON i.item_id = d.item_id JOIN units un ON un.unit_id = i.unit_id
+            WHERE d.closing_id IN ($placeholders) ORDER BY d.closing_id FOR UPDATE");
+        $stmt->bind_param(str_repeat('i', count($ids)), ...$ids);
+        $stmt->execute();
+        $locked = [];
+        foreach ($stmt->get_result()->fetch_all(MYSQLI_ASSOC) as $row) $locked[(int)$row['closing_id']] = $row;
+        $stmt->close();
+
+        $reasons = [];
+        $skip = static function (string $reason) use (&$reasons): void { $reasons[$reason] = ($reasons[$reason] ?? 0) + 1; };
+        $toReview = [];
+        foreach ($ids as $id) {
+            $c = $locked[$id] ?? null;
+            if (!$c) { $skip('not found'); continue; }
+            if ((string)$c['branch_id'] !== $branchId) { $skip('another branch'); continue; }
+            if ((int)$c['submitted_by'] === $adminId) { $skip('submitted by you'); continue; }
+            if ($c['status'] !== 'Submitted') { $skip('already ' . strtolower($c['status'] === 'Returned' ? 'returned for recount' : (string)$c['status'])); continue; }
+            $toReview[] = $c;
+        }
+
+        // Wastage of each closing's day (read after the locks; a plain read).
+        $flagged = 0;
+        $wastageStmt = $conn->prepare("SELECT COALESCE(SUM(quantity_used), 0) AS wastage FROM inventory_usage_history
+            WHERE branch_id = ? AND item_id = ? AND usage_date = ? AND usage_type = 'Wastage'");
+        foreach ($toReview as &$c) {
+            $itemId = (int)$c['item_id'];
+            $wastageStmt->bind_param('sis', $branchId, $itemId, $c['inventory_date']);
+            $wastageStmt->execute();
+            $c['wastage'] = (float)$wastageStmt->get_result()->fetch_assoc()['wastage'];
+            $c['flagged'] = (float)$c['variance'] != 0.0 || $c['wastage'] > 0;
+            if ($c['flagged']) $flagged++;
+        }
+        unset($c);
+        $wastageStmt->close();
+        if ($flagged > 0 && $remark === '') {
+            throw new RuntimeException('Enter a shared remark: ' . $flagged . ' of the closings to review ' . ($flagged === 1 ? 'has' : 'have')
+                . ' a variance or wastage (for example "Variances checked with the Nurse.").');
+        }
+
+        $reviewed = 0;
+        $update = $conn->prepare("UPDATE daily_inventory_closings
+            SET status = 'Reviewed', reviewed_by = ?, reviewed_at = NOW(), review_remarks = NULLIF(?, '')
+            WHERE closing_id = ? AND status = 'Submitted'");
+        $total = count($toReview);
+        foreach ($toReview as $c) {
+            $closingId = (int)$c['closing_id'];
+            $update->bind_param('isi', $adminId, $remark, $closingId);
+            $update->execute();
+            if ($update->affected_rows !== 1) { $skip('changed meanwhile'); continue; }
+            $reviewed++;
+            workflowAudit($conn, $adminId, $branchId,
+                'Reviewed daily closing #' . $closingId . ': ' . $c['item_name'] . ' on ' . $c['inventory_date']
+                . ' | Variance: ' . inventoryQuantityText((float)$c['variance'], $c)
+                . ($c['wastage'] > 0 ? ' | Wastage: ' . inventoryQuantityText((float)$c['wastage'], $c) : '')
+                . ' | Bulk review of ' . $total . ' closing' . ($total === 1 ? '' : 's')
+                . ($remark !== '' ? ' | Remark: ' . $remark : ''), 'Daily Inventory Review');
+        }
+        $update->close();
+        $conn->commit();
+        return ['reviewed' => $reviewed, 'skipped' => array_sum($reasons), 'reasons' => $reasons, 'flagged' => $flagged];
+    } catch (Throwable $e) {
+        $conn->rollback();
+        throw $e;
+    }
 }
 
 /** Mark a submitted closing Reviewed, or return it to the Nurse for a recount. */

@@ -1,1349 +1,289 @@
 <?php
 session_start();
 require_once 'sources/db_connect.php';
+require_once 'sources/workflow_helpers.php';
+require_once 'sources/notification_helper.php';
+require_once 'sources/philhealth_requirements_helper.php';
+require_once 'sources/pagination_helper.php';
+require_once 'sources/report_page_layout.php';
 
-// Check if user is logged in and is an admin staff
-if (
-    !isset($_SESSION['user_id']) ||
-    !isset($_SESSION['role_id']) ||
-    $_SESSION['role_id'] != 4 // role_id 4 is for Admin Staff
-) {
-    header("Location: login.php");
-    exit();
+/*
+ * ADMIN STAFF - PHILHEALTH PATIENT STATUS (read-only overview).
+ * Same look as the Branch Admin PhilHealth Processing page: summary cards
+ * by status, filters, a paginated queue with status badges, and exports of
+ * every row of the filters. Statuses are only changed on the PhilHealth
+ * Workflow page (history + audit there); this page never changes them.
+ * Archived cases, patients and PhilHealth records are not listed.
+ */
+$user = workflowRequireUser($conn, 4);
+$userId = (int)$user['user_id'];
+$branchId = (string)$user['branch_id'];
+$branchName = (string)($user['branch_name'] ?? $branchId);
+$h = static fn($v): string => htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8');
+
+// Every PhilHealth status, in workflow order (the philhealth_records.status values).
+const PHILHEALTH_STATUS_ORDER = ['For Writing', 'For Screening', 'Returned for Correction', 'Ready for Main Branch',
+    'Sent to Main Branch', 'Submitted to PhilHealth', 'Denied', 'Reimbursed', 'Completed'];
+
+function philhealthStatusBadgeClass(string $status): string
+{
+    return [
+        'For Writing' => 'status-warning', 'For Screening' => 'status-info', 'Returned for Correction' => 'status-danger',
+        'Ready for Main Branch' => 'status-primary', 'Sent to Main Branch' => 'status-info',
+        'Submitted to PhilHealth' => 'status-warning', 'Denied' => 'status-danger',
+        'Reimbursed' => 'status-success', 'Completed' => 'status-success',
+    ][$status] ?? 'status-secondary';
 }
 
-$user_id = $_SESSION['user_id'];
-$branch_id = null;
-$branch_name = '';
-$username = '';
-$role_name = 'Admin Staff';
-
-// Get user's branch info
-$userQuery = "SELECT u.branch_id, u.username, b.branch_name, r.role_name
-              FROM users u 
-              LEFT JOIN branches b ON u.branch_id = b.branch_id
-              LEFT JOIN roles r ON u.role_id = r.role_id
-              WHERE u.user_id = ?";
-$stmt = $conn->prepare($userQuery);
-$stmt->bind_param("i", $user_id);
-$stmt->execute();
-$userResult = $stmt->get_result();
-
-if ($userResult->num_rows > 0) {
-    $userData = $userResult->fetch_assoc();
-    $branch_id = $userData['branch_id'];
-    $branch_name = $userData['branch_name'] ?? 'Unknown Branch';
-    $username = $userData['username'] ?? 'Admin Staff';
-    $role_name = $userData['role_name'] ?? 'Admin Staff';
+function philhealthDateText(?string $value): string
+{
+    return $value && !str_starts_with($value, '0000') ? date('M d, Y', strtotime($value)) : '';
 }
 
-// If no branch assigned
-if (!$branch_id) {
-    $branch_name = 'No Branch Assigned';
+// ---------------------------------------------------------------- filters
+$search = trim((string)($_GET['q'] ?? ''));
+if (strlen($search) > 100) $search = substr($search, 0, 100);
+$statusFilter = (string)($_GET['status'] ?? '');
+if ($statusFilter !== 'none' && !in_array($statusFilter, PHILHEALTH_STATUS_ORDER, true)) $statusFilter = '';
+$coverage = ($_GET['coverage'] ?? 'members') === 'all' ? 'all' : 'members';
+$validDate = static function (string $v): string {
+    $d = DateTime::createFromFormat('!Y-m-d', $v);
+    return $d && $d->format('Y-m-d') === $v ? $v : '';
+};
+$dateFrom = $validDate(trim((string)($_GET['from'] ?? '')));
+$dateTo = $validDate(trim((string)($_GET['to'] ?? '')));
+if ($dateFrom !== '' && $dateTo !== '' && $dateFrom > $dateTo) [$dateFrom, $dateTo] = [$dateTo, $dateFrom];
+
+$baseFrom = "FROM philhealth_records ph
+    INNER JOIN animal_bite_cases c ON c.case_id = ph.case_id
+    INNER JOIN patients p ON p.patient_id = c.patient_id";
+$where = ['c.branch_id = ?', 'ph.is_archived = 0', 'c.is_archived = 0', 'p.is_archived = 0'];
+$types = 's';
+$params = [$branchId];
+if ($coverage === 'members') $where[] = "ph.has_philhealth = 'Yes'";
+if ($search !== '') {
+    $like = '%' . $search . '%';
+    $where[] = "(p.full_name LIKE ? OR c.case_number LIKE ? OR EXISTS (SELECT 1 FROM registry_records rs WHERE rs.case_id = c.case_id AND rs.is_archived = 0 AND rs.registry_number LIKE ?))";
+    $types .= 'sss';
+    array_push($params, $like, $like, $like);
 }
-
-// ----------------------------------------------------------------------
-// FETCH PHILHEALTH STATUS STATISTICS
-// ----------------------------------------------------------------------
-
-// Get PhilHealth status breakdown
-$statusQuery = "
-    SELECT 
-        ph.status,
-        COUNT(*) as count
-    FROM animal_bite_cases c
-    INNER JOIN philhealth_records ph ON c.case_id = ph.case_id
-    WHERE c.branch_id = ?
-    GROUP BY ph.status
-";
-$stmt = $conn->prepare($statusQuery);
-$stmt->bind_param("s", $branch_id);
-$stmt->execute();
-$statusResult = $stmt->get_result();
-
-$philhealthStatus = [
-    'For Writing' => 0,
-    'For Screening' => 0,
-    'For Signing/Transmittal' => 0,
-    'Completed' => 0
-];
-
-while ($row = $statusResult->fetch_assoc()) {
-    $status = $row['status'] ?? 'For Writing';
-    if ($status == 'For Signing/Transmittal' || $status == 'For Transmittal') {
-        $philhealthStatus['For Signing/Transmittal'] += (int)$row['count'];
-    } else {
-        $philhealthStatus[$status] = (int)$row['count'];
-    }
-}
-
-// ----------------------------------------------------------------------
-// FETCH PHILHEALTH PATIENT RECORDS WITH PAGINATION
-// ----------------------------------------------------------------------
-
-// Get current page
-$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
-$limit = 10;
-$offset = ($page - 1) * $limit;
-
-// Get search and filter parameters
-$search = isset($_GET['search']) ? trim($_GET['search']) : '';
-$statusFilter = isset($_GET['status']) ? trim($_GET['status']) : '';
-$dateFrom = isset($_GET['date_from']) ? trim($_GET['date_from']) : '';
-$dateTo = isset($_GET['date_to']) ? trim($_GET['date_to']) : '';
-
-// Build WHERE clause
-$whereClauses = ["c.branch_id = ?"];
-$params = [$branch_id];
-$types = "s";
-
-if (!empty($search)) {
-    $whereClauses[] = "(p.full_name LIKE ? OR r.registry_number LIKE ?)";
-    $searchParam = "%$search%";
-    $params[] = $searchParam;
-    $params[] = $searchParam;
-    $types .= "ss";
-}
-
-if (!empty($statusFilter)) {
-    $whereClauses[] = "ph.status = ?";
+if ($statusFilter === 'none') {
+    $where[] = "(ph.status IS NULL OR ph.status = '')";
+} elseif ($statusFilter !== '') {
+    $where[] = 'ph.status = ?';
+    $types .= 's';
     $params[] = $statusFilter;
-    $types .= "s";
 }
+if ($dateFrom !== '') { $where[] = 'c.created_at >= ?'; $types .= 's'; $params[] = $dateFrom . ' 00:00:00'; }
+if ($dateTo !== '') { $where[] = 'c.created_at < DATE_ADD(?, INTERVAL 1 DAY)'; $types .= 's'; $params[] = $dateTo; }
+$whereSql = implode(' AND ', $where);
 
-if (!empty($dateFrom)) {
-    $whereClauses[] = "DATE(COALESCE(c.date_of_bite, c.created_at)) >= ?";
-    $params[] = $dateFrom;
-    $types .= "s";
-}
+$selectSql = "SELECT ph.philhealth_record_id, ph.has_philhealth, ph.philhealth_membership, ph.status, ph.remarks, ph.updated_at,
+        ph.date_sent_to_main, ph.date_submitted_philhealth, ph.date_resolved, ph.eligible_again_on,
+        " . (philhealthRequirementsReady($conn) ? implode(', ', array_map(static fn($f) => 'ph.' . $f, array_keys(philhealthRequirementFields()))) . ',' : '') . "
+        p.full_name, p.contact_number, DATE(c.created_at) AS confinement_date,
+        COALESCE(NULLIF(TRIM(c.case_number), ''), (SELECT MAX(rr.registry_number) FROM registry_records rr WHERE rr.case_id = c.case_id AND rr.is_archived = 0)) AS case_no,
+        (SELECT MAX(v.date_administered) FROM vaccination_records v WHERE v.case_id = c.case_id AND v.branch_id = c.branch_id
+            AND v.is_archived = 0 AND v.vaccination_status = 'Completed') AS discharge_date
+    $baseFrom WHERE $whereSql";
+$orderSql = ' ORDER BY c.created_at DESC, c.case_id DESC';
 
-if (!empty($dateTo)) {
-    $whereClauses[] = "DATE(COALESCE(c.date_of_bite, c.created_at)) <= ?";
-    $params[] = $dateTo;
-    $types .= "s";
-}
+$fetch = static function (string $sql, string $t, array $p) use ($conn): array {
+    $stmt = $conn->prepare($sql);
+    if ($t !== '') $stmt->bind_param($t, ...$p);
+    $stmt->execute();
+    $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+    return $rows;
+};
 
-$whereSQL = implode(" AND ", $whereClauses);
-
-// Get total count for pagination
-$countQuery = "
-    SELECT COUNT(*) as total
-    FROM animal_bite_cases c
-    INNER JOIN philhealth_records ph ON c.case_id = ph.case_id
-    INNER JOIN patients p ON c.patient_id = p.patient_id
-    LEFT JOIN registry_records r ON c.case_id = r.case_id
-    WHERE $whereSQL
-";
-$stmt = $conn->prepare($countQuery);
-$stmt->bind_param($types, ...$params);
-$stmt->execute();
-$countResult = $stmt->get_result();
-$totalRecords = $countResult->fetch_assoc()['total'] ?? 0;
-$totalPages = ceil($totalRecords / $limit);
-
-// Get records for current page with discharge date from vaccination schedule
-$recordsQuery = "
-    SELECT 
-        c.case_id,
-        c.patient_id,
-        p.full_name as patient_name,
-        p.contact_number,
-        DATE(COALESCE(c.date_of_bite, c.created_at)) as admission_date,
-        DATE(c.created_at) as date_of_confinement,
-        c.case_status,
-        c.remarks as case_remarks,
-        COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
-        r.remarks as registry_remarks,
-        ph.philhealth_record_id,
-        ph.has_philhealth,
-        ph.philhealth_membership,
-        ph.status as philhealth_status,
-        ph.remarks as philhealth_remarks,
-        ph.updated_at,
-        (
-            SELECT MAX(date_administered) 
-            FROM vaccination_records v 
-            WHERE v.case_id = c.case_id 
-            AND v.branch_id = c.branch_id
-            AND v.vaccination_status = 'Completed'
-        ) as discharge_date
-    FROM animal_bite_cases c
-    INNER JOIN philhealth_records ph ON c.case_id = ph.case_id
-    INNER JOIN patients p ON c.patient_id = p.patient_id
-    LEFT JOIN registry_records r ON c.case_id = r.case_id
-    WHERE $whereSQL
-    ORDER BY c.created_at DESC
-    LIMIT ? OFFSET ?
-";
-
-$stmt = $conn->prepare($recordsQuery);
-$params[] = $limit;
-$params[] = $offset;
-$types .= "ii";
-$stmt->bind_param($types, ...$params);
-$stmt->execute();
-$recordsResult = $stmt->get_result();
-
-$philhealthRecords = [];
-while ($row = $recordsResult->fetch_assoc()) {
-    $philhealthRecords[] = $row;
-}
-
-// ----------------------------------------------------------------------
-// EXPORT (?export=pdf|csv): every PhilHealth record of the branch, shared
-// builders. Archived cases, patients and records are left out.
-// ----------------------------------------------------------------------
-if ($branch_id && in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
+// ---------------------------------------------------------------- export (every row of the filters)
+if (($_GET['export'] ?? '') === 'pdf') {
     require_once __DIR__ . '/sources/report_export.php';
-    require_once __DIR__ . '/sources/workflow_helpers.php';
-    $stmt = $conn->prepare("SELECT p.full_name AS patient_name,
-            COALESCE(NULLIF(TRIM(c.case_number), ''), (SELECT MAX(rr.registry_number) FROM registry_records rr WHERE rr.case_id = c.case_id AND rr.is_archived = 0)) AS case_no,
-            DATE(c.created_at) AS admission_date, ph.status AS philhealth_status, ph.remarks AS philhealth_remarks, ph.philhealth_membership,
-            (SELECT MAX(v.date_administered) FROM vaccination_records v WHERE v.case_id = c.case_id AND v.branch_id = c.branch_id
-                AND v.is_archived = 0 AND v.vaccination_status = 'Completed') AS discharge_date
+    $exportFormat = (string)$_GET['export'];
+    $rows = $fetch($selectSql . $orderSql, $types, $params);
+    $exportRows = array_map(static fn(array $r): array => [
+        (string)$r['full_name'], (string)($r['case_no'] ?? ''), philhealthDateText($r['confinement_date']), philhealthDateText($r['discharge_date']),
+        $r['has_philhealth'] === 'Yes' ? ((string)$r['philhealth_membership'] ?: 'Member') : 'Not a member',
+        (string)($r['status'] ?: 'No status yet'), (string)($r['remarks'] ?? ''),
+    ], $rows);
+    $filters = array_filter([
+        $coverage === 'members' ? 'PhilHealth members' : 'All patients',
+        $statusFilter !== '' ? 'Status: ' . ($statusFilter === 'none' ? 'No status yet' : $statusFilter) : '',
+        $search !== '' ? 'Search: ' . $search : '',
+    ]);
+    $exportReport = [
+        'title' => 'PhilHealth Patient Status', 'orientation' => 'L',
+        'summary' => ['Records' => (string)count($exportRows)] + array_map('strval', array_count_values(array_column($exportRows, 5))),
+        'sections' => [[
+            'columns' => [['label' => 'Patient Name', 'width' => 2.2], ['label' => 'Case No.', 'width' => 1.1], ['label' => 'Confinement', 'width' => 1.2],
+                ['label' => 'Discharge', 'width' => 1.2], ['label' => 'PhilHealth', 'width' => 1.3], ['label' => 'Status', 'width' => 1.6], ['label' => 'Remarks', 'width' => 3]],
+            'rows' => $exportRows,
+            'empty' => 'No PhilHealth records match the filters.',
+        ]],
+        'notes' => ['Discharge is the date of the last completed dose. Statuses are changed on the PhilHealth Workflow page.'],
+    ];
+    $period = ($dateFrom || $dateTo) ? reportPeriodText($dateFrom ?: $dateTo, $dateTo ?: $dateFrom) : 'All dates';
+    workflowAudit($conn, $userId, $branchId, reportExportVerb() . ' PhilHealth patient status (PDF) - ' . $period . ' (' . count($exportRows) . ' records)', 'PhilHealth');
+    reportSend($exportReport, reportMeta($conn, $userId, $branchName, $period, implode(' · ', $filters)), $exportFormat,
+        'PhilHealth_Status_' . $branchId . '_' . date('Ymd_His'));
+}
+
+// ---------------------------------------------------------------- summary cards (branch members, not the filters)
+// Grouped over a derived column (ONLY_FULL_GROUP_BY on MariaDB and MySQL).
+$cardRows = $fetch("SELECT s.status, COUNT(*) AS total FROM (
+        SELECT COALESCE(NULLIF(ph.status, ''), 'none') AS status
         FROM philhealth_records ph
         INNER JOIN animal_bite_cases c ON c.case_id = ph.case_id
         INNER JOIN patients p ON p.patient_id = c.patient_id
-        WHERE c.branch_id = ? AND ph.is_archived = 0 AND c.is_archived = 0 AND p.is_archived = 0
-        ORDER BY c.created_at DESC, c.case_id DESC");
-    $stmt->bind_param('s', $branch_id);
-    $stmt->execute();
-    $exportRows = [];
-    foreach ($stmt->get_result()->fetch_all(MYSQLI_ASSOC) as $row) {
-        $exportRows[] = [(string)$row['patient_name'], (string)($row['case_no'] ?? ''), (string)($row['admission_date'] ?? ''),
-            (string)($row['discharge_date'] ?? ''), (string)($row['philhealth_status'] ?? ''), (string)($row['philhealth_remarks'] ?? ''),
-            (string)($row['philhealth_membership'] ?? '')];
-    }
-    $stmt->close();
-    $exportReport = [
-        'title' => 'PhilHealth Records', 'orientation' => 'L',
-        'summary' => ['Records' => (string)count($exportRows)] + array_map('strval', array_count_values(array_map(static fn($r) => $r[4] ?: 'No status', $exportRows))),
-        'sections' => [[
-            'columns' => [['label' => 'Patient Name', 'width' => 2.2], ['label' => 'Case No.', 'width' => 1.1], ['label' => 'Admission Date', 'width' => 1.2],
-                ['label' => 'Discharge Date', 'width' => 1.2], ['label' => 'Status', 'width' => 1.4], ['label' => 'Remarks', 'width' => 3], ['label' => 'PhilHealth Type', 'width' => 1.4]],
-            'rows' => $exportRows,
-            'empty' => 'No PhilHealth records.',
-        ]],
-        'notes' => ['Discharge Date is the date of the last completed dose.'],
-    ];
-    $exportFormat = (string)$_GET['export'];
-    workflowAudit($conn, (int)$user_id, (string)$branch_id, 'Exported PhilHealth records (' . strtoupper($exportFormat) . ') (' . count($exportRows) . ' records)', 'PhilHealth');
-    reportSend($exportReport, reportMeta($conn, (int)$user_id, reportBranchName($conn, (string)$branch_id), 'All dates'), $exportFormat,
-        'PhilHealth_Records_' . $branch_id . '_' . date('Ymd_His'));
-}
+        WHERE c.branch_id = ? AND ph.has_philhealth = 'Yes' AND ph.is_archived = 0 AND c.is_archived = 0 AND p.is_archived = 0
+    ) s GROUP BY s.status", 's', [$branchId]);
+$byStatus = array_column($cardRows, 'total', 'status');
+$sum = static fn(array $keys): int => array_sum(array_map(static fn($k) => (int)($byStatus[$k] ?? 0), $keys));
+$cards = [
+    ['', 'bi-people-fill', 'PhilHealth members', array_sum(array_map('intval', $byStatus)), 'Active cases with PhilHealth', ''],
+    ['warning', 'bi-pencil-square', 'Action required', $sum(['none', 'For Writing', 'For Screening', 'Returned for Correction']), 'No status, writing, screening or returned', ''],
+    ['info', 'bi-send-fill', 'At the main branch', $sum(['Ready for Main Branch', 'Sent to Main Branch']), 'Ready for or sent to the main branch', ''],
+    ['danger', 'bi-arrow-counterclockwise', 'Returned / denied', $sum(['Returned for Correction', 'Denied']), 'Needs correction or was denied', ''],
+    ['success', 'bi-check2-circle', 'Submitted / resolved', $sum(['Submitted to PhilHealth', 'Reimbursed', 'Completed']), 'Submitted, reimbursed or completed', ''],
+];
 
-// ----------------------------------------------------------------------
-// HANDLE AJAX REQUESTS (for real-time updates)
-// ----------------------------------------------------------------------
-if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
-    header('Content-Type: application/json');
-    
-    
-    // Get updated stats
-    $statusQuery = "
-        SELECT 
-            ph.status,
-            COUNT(*) as count
-        FROM animal_bite_cases c
-        INNER JOIN philhealth_records ph ON c.case_id = ph.case_id
-        WHERE c.branch_id = ?
-        GROUP BY ph.status
-    ";
-    $stmt = $conn->prepare($statusQuery);
-    $stmt->bind_param("s", $branch_id);
-    $stmt->execute();
-    $statusResult = $stmt->get_result();
-    
-    $updatedStatus = [
-        'For Writing' => 0,
-        'For Screening' => 0,
-        'For Signing/Transmittal' => 0,
-        'Completed' => 0
-    ];
-    
-    while ($row = $statusResult->fetch_assoc()) {
-        $status = $row['status'] ?? 'For Writing';
-        if ($status == 'For Signing/Transmittal' || $status == 'For Transmittal') {
-            $updatedStatus['For Signing/Transmittal'] += (int)$row['count'];
-        } else {
-            $updatedStatus[$status] = (int)$row['count'];
-        }
-    }
-    
-    // Get updated records with discharge date
-    $recordsQuery = "
-        SELECT 
-            c.case_id,
-            p.full_name as patient_name,
-            DATE(COALESCE(c.date_of_bite, c.created_at)) as admission_date,
-            DATE(c.created_at) as date_of_confinement,
-            COALESCE(NULLIF(TRIM(c.case_number), ''), r.registry_number) as case_no, r.registry_number AS registry_no,
-            ph.status as philhealth_status,
-            ph.remarks as philhealth_remarks,
-            (
-                SELECT MAX(date_administered) 
-                FROM vaccination_records v 
-                WHERE v.case_id = c.case_id 
-                AND v.branch_id = c.branch_id
-                AND v.vaccination_status = 'Completed'
-            ) as discharge_date
-        FROM animal_bite_cases c
-        INNER JOIN philhealth_records ph ON c.case_id = ph.case_id
-        INNER JOIN patients p ON c.patient_id = p.patient_id
-        LEFT JOIN registry_records r ON c.case_id = r.case_id
-        WHERE c.branch_id = ?
-        ORDER BY c.created_at DESC
-        LIMIT 10
-    ";
-    $stmt = $conn->prepare($recordsQuery);
-    $stmt->bind_param("s", $branch_id);
-    $stmt->execute();
-    $recordsResult = $stmt->get_result();
-    $records = [];
-    while ($row = $recordsResult->fetch_assoc()) {
-        $records[] = $row;
-    }
-    
-    echo json_encode([
-        'success' => true,
-        'status' => $updatedStatus,
-        'records' => $records
-    ]);
-    exit();
-}
+// ---------------------------------------------------------------- queue (one page)
+$total = (int)($fetch("SELECT COUNT(*) AS total $baseFrom WHERE $whereSql", $types, $params)[0]['total'] ?? 0);
+$pg = paginationApply(paginationFromRequest('', 10), $total);
+$records = $fetch($selectSql . $orderSql . ' LIMIT ' . (int)$pg['per_page'] . ' OFFSET ' . (int)$pg['offset'], $types, $params);
+$statusCountsInFilter = $fetch("SELECT s.status, COUNT(*) AS total FROM (
+        SELECT COALESCE(NULLIF(ph.status, ''), 'No status yet') AS status $baseFrom WHERE $whereSql
+    ) s GROUP BY s.status ORDER BY total DESC, s.status", $types, $params);
+
+$exportQuery = http_build_query(array_filter(['q' => $search, 'status' => $statusFilter, 'coverage' => $coverage, 'from' => $dateFrom, 'to' => $dateTo],
+    static fn($v) => $v !== ''));
+$requirementsReady = philhealthRequirementsReady($conn);
+$requirementTotal = count(philhealthRequirementFields());
+
+ob_start();
 ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>PhilHealth Patient Status - SmartBiteCare</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
-    <link rel="stylesheet" href="sidebar.css">
-    <link rel="stylesheet" href="notif-num.css">
-
-    <style>
-        :root {
-            --primary: #2B3A8C;
-            --accent: #F21D2F;
-            --bg: #F2F2F2;
-            --success: #28a745;
-            --warning: #ffc107;
-            --danger: #dc3545;
-            --info: #17a2b8;
-            --gray-100: #f8f9fc;
-            --gray-200: #f1f3f5;
-            --gray-500: #adb5bd;
-            --gray-600: #6c757d;
-            --gray-700: #495057;
-            --gray-900: #212529;
-            --shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-            --radius: 12px;
-            --transition: all 0.25s ease;
-        }
-
-        body {
-            background: #f0f2f5;
-            font-family: 'Segoe UI', sans-serif;
-        }
-
-        .main {
-            margin-left: 260px;
-            min-height: 100vh;
-            background: #f0f2f5;
-        }
-
-        .topbar {
-            background: white;
-            height: 80px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 35px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, .08);
-            margin-bottom: 0;
-        }
-
-        .topbar h3 {
-            font-size: 28px;
-            font-weight: 700;
-            color: var(--primary);
-            margin: 0;
-        }
-
-        .profile {
-            font-weight: 600;
-            color: var(--primary);
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        @media (max-width: 991px) {
-            .main {
-                margin-left: 90px;
-            }
-        }
-
-        /* Content */
-        .content {
-            padding: 30px;
-        }
-
-        /* Statistics */
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-
-        .stat-box {
-            background: #fff;
-            border-radius: 18px;
-            padding: 22px 28px;
-            min-height: 125px;
-            box-shadow: var(--shadow);
-            position: relative;
-            overflow: hidden;
-            transition: var(--transition);
-        }
-
-        .stat-box:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 8px 25px rgba(0,0,0,.12);
-        }
-
-        .stat-box::before {
-            content: "";
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 6px;
-            height: 100%;
-            background: var(--primary);
-        }
-
-        .stat-box.writing::before {
-            background: #4E79A7;
-        }
-        .stat-box.screening::before {
-            background: #F28E2B;
-        }
-        .stat-box.signing::before {
-            background: #E15759;
-        }
-        .stat-box.completed::before {
-            background: #76B7B2;
-        }
-
-        .stat-box h1 {
-            margin: 0;
-            font-size: 48px;
-            font-weight: 700;
-            line-height: 1;
-            color: var(--primary);
-        }
-
-        .stat-box.writing h1 {
-            color: #4E79A7;
-        }
-        .stat-box.screening h1 {
-            color: #F28E2B;
-        }
-        .stat-box.signing h1 {
-            color: #E15759;
-        }
-        .stat-box.completed h1 {
-            color: #76B7B2;
-        }
-
-        .stat-box h6 {
-            margin: 8px 0 4px;
-            font-size: 20px;
-            font-weight: 600;
-            text-transform: uppercase;
-            color: #4f6482;
-        }
-
-        .stat-box p {
-            margin: 0;
-            color: #9aa6b2;
-            font-size: 14px;
-        }
-
-        /* Toolbar */
-        .toolbar {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
-
-        .left-tools {
-            display: flex;
-            gap: 15px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-
-       .search-box {
-    position: relative;
-    width: 400px;
-    max-width: 100%;
-}
-
-.search-box form {
-    width: 100%;
-}
-
-.search-box > i {
-    position: absolute;
-    left: 16px;
-    top: 50%;
-    transform: translateY(-50%);
-
-    color: #7180a8;
-    font-size: 18px;
-
-    z-index: 2;
-    pointer-events: none;
-}
-
-.search-box input {
-    width: 100%;
-    height: 48px;
-
-    padding: 0 18px 0 45px;
-
-    background: #ffffff;
-
-    border: 1px solid #d0d7e8;
-    border-radius: 10px;
-
-    font-size: 14px;
-    color: #1f2a4a;
-
-    outline: none;
-
-    box-sizing: border-box;
-
-    transition: 0.2s ease;
-}
-
-.search-box input::placeholder {
-    color: #7a85a8;
-}
-
-.search-box input:focus {
-    border-color: var(--primary);
-
-    box-shadow:
-        0 0 0 3px rgba(43, 58, 140, 0.10);
-}
-
-        .toolbar-btn {
-            background: var(--primary);
-            color: #fff;
-            border: none;
-            border-radius: 8px;
-            padding: 10px 22px;
-            font-size: 14px;
-            font-weight: 600;
-            transition: var(--transition);
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .toolbar-btn:hover {
-            background: #1f2d6b;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(43,58,140,0.25);
-        }
-
-        .toolbar-btn i {
-            margin-right: 4px;
-        }
-
-        .date-box {
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            padding: 8px 15px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            background: #fff;
-        }
-
-        .date-box input {
-            border: none;
-            outline: none;
-            font-size: 13px;
-            background: transparent;
-        }
-
-        /* Status Filters */
-        .status-filters {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-
-        .status-filter-btn {
-            padding: 6px 16px;
-            border-radius: 20px;
-            border: 2px solid #e0e0e0;
-            background: transparent;
-            font-size: 12px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: var(--transition);
-            color: var(--gray-600);
-        }
-
-        .status-filter-btn:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-
-        .status-filter-btn.active {
-            border-color: var(--primary);
-            background: var(--primary);
-            color: white;
-        }
-
-        .status-filter-btn.writing.active {
-            border-color: #4E79A7;
-            background: #4E79A7;
-            color: white;
-        }
-        .status-filter-btn.screening.active {
-            border-color: #F28E2B;
-            background: #F28E2B;
-            color: white;
-        }
-        .status-filter-btn.signing.active {
-            border-color: #E15759;
-            background: #E15759;
-            color: white;
-        }
-        .status-filter-btn.completed.active {
-            border-color: #76B7B2;
-            background: #76B7B2;
-            color: white;
-        }
-
-        /* Table */
-        .table-wrapper {
-            background: #fff;
-            border-radius: 20px;
-            overflow: hidden;
-            border: 1px solid #e9ecef;
-            box-shadow: var(--shadow);
-        }
-
-        .table {
-            width: 100%;
-            margin-bottom: 0;
-            border-collapse: collapse;
-        }
-
-        .table thead tr {
-            background: var(--primary);
-        }
-
-        .table thead th {
-            background: var(--primary) !important;
-            color: #fff !important;
-            border: none !important;
-            padding: 16px;
-            text-align: center;
-            font-size: 13px;
-            font-weight: 600;
-            white-space: nowrap;
-        }
-
-        .table tbody td {
-            text-align: center;
-            vertical-align: middle;
-            padding: 14px;
-            border-top: 1px solid #e9ecef;
-            font-size: 14px;
-        }
-
-        .table tbody tr:hover {
-            background: var(--gray-100);
-        }
-
-        .no-records {
-            text-align: center;
-            padding: 40px 20px;
-            color: var(--gray-500);
-        }
-
-        .no-records i {
-            font-size: 48px;
-            display: block;
-            margin-bottom: 12px;
-            opacity: 0.4;
-        }
-
-        /* Status Badges */
-        .status-badge {
-            display: inline-block;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-        }
-
-        .status-badge.for-writing {
-            background: #cce5ff;
-            color: #004085;
-        }
-
-        .status-badge.for-screening {
-            background: #ffe5cc;
-            color: #853d04;
-        }
-
-        .status-badge.for-signing {
-            background: #f8d7da;
-            color: #721c24;
-        }
-
-        .status-badge.for-transmittal {
-            background: #d1ecf1;
-            color: #0c5460;
-        }
-
-        .status-badge.completed {
-            background: #d4edda;
-            color: #155724;
-        }
-
-        .status-badge.ongoing {
-            background: #fff3cd;
-            color: #856404;
-        }
-
-        .discharge-date {
-            font-size: 13px;
-            color: var(--gray-600);
-        }
-
-        .discharge-date.pending {
-            color: #856404;
-            font-style: italic;
-        }
-
-        /* Pagination */
-        .pagination-area {
-            margin-top: 30px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-
-        .pagination-area .page-item {
-            width: 36px;
-            height: 36px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 600;
-            transition: var(--transition);
-            border: 1px solid transparent;
-            font-size: 14px;
-            color: var(--gray-700);
-            text-decoration: none;
-        }
-
-        .pagination-area .page-item:hover {
-            background: var(--gray-100);
-            border-color: #ddd;
-        }
-
-        .pagination-area .page-item.active {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
-
-        .pagination-area .page-item.disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .pagination-area .page-item .bi {
-            font-size: 16px;
-        }
-
-        /* Loading Spinner */
-        .loading-overlay {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(255,255,255,0.8);
-            z-index: 9999;
-            justify-content: center;
-            align-items: center;
-        }
-
-        .loading-overlay.show {
-            display: flex;
-        }
-
-        .spinner {
-            width: 50px;
-            height: 50px;
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid var(--primary);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        /* Toast Notifications */
-        .toast-container-custom {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            z-index: 9999;
-            max-width: 380px;
-        }
-
-        .toast-custom {
-            background: white;
-            border-radius: 12px;
-            padding: 16px 20px;
-            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
-            border-left: 5px solid var(--success);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            transform: translateX(120%);
-            transition: transform 0.4s cubic-bezier(0.34,1.56,0.64,1);
-            margin-bottom: 10px;
-        }
-
-        .toast-custom.show {
-            transform: translateX(0);
-        }
-
-        .toast-custom.error {
-            border-left-color: var(--danger);
-        }
-
-        .toast-custom .toast-icon {
-            font-size: 24px;
-            color: var(--success);
-        }
-
-        .toast-custom.error .toast-icon {
-            color: var(--danger);
-        }
-
-        /* Responsive */
-        @media (max-width: 1200px) {
-            .stats {
-                grid-template-columns: repeat(2, 1fr);
-            }
-        }
-
-        @media (max-width: 768px) {
-            .stats {
-                grid-template-columns: 1fr;
-            }
-
-            .toolbar {
-                flex-direction: column;
-                align-items: stretch;
-            }
-
-            .left-tools {
-                flex-direction: column;
-                align-items: stretch;
-            }
-
-            .search-box {
-                width: 100%;
-            }
-
-            .status-filters {
-                justify-content: center;
-            }
-
-            .content {
-                padding: 16px;
-            }
-
-            .table-wrapper {
-                overflow-x: auto;
-            }
-
-            .table {
-                font-size: 12px;
-            }
-
-            .table thead th,
-            .table tbody td {
-                padding: 8px 10px;
-                font-size: 11px;
-            }
-
-            .topbar {
-                padding: 0 16px;
-                height: 64px;
-            }
-
-            .topbar h3 {
-                font-size: 20px;
-            }
-        }
-
-        @media (max-width: 400px) {
-            .stat-box h1 {
-                font-size: 36px;
-            }
-            .stat-box h6 {
-                font-size: 16px;
-            }
-        }
-
-        .admin-profile {
-            font-weight: 700;
-            color: var(--primary);
-            cursor: default;
-            font-size: 15px;
-            letter-spacing: 0.3px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .admin-profile i {
-            font-size: 12px;
-            opacity: 0.7;
-        }
-
-        .branch-indicator {
-            font-size: 13px;
-            color: var(--gray-600);
-            background: var(--gray-100);
-            padding: 4px 12px;
-            border-radius: 20px;
-            display: inline-block;
-        }
-    </style>
-</head>
-
-<body>
- <!-- ========== SIDEBAR ========== -->
-<div class="sidebar" id="sidebar">
-
-    <button type="button"
-            class="sidebar-toggle"
-            id="sidebarToggle"
-            aria-label="Toggle sidebar"
-            aria-expanded="true">
-        <i class="bi bi-chevron-left"></i>
-    </button>
-
-    <div class="logo-area">
-        <div class="logo-frame">
-            <img src="logo.png" alt="Smart Bite Care Logo" class="logo" />
+<style>
+    .ph-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:20px;margin-bottom:25px}
+    .ph-stat{position:relative;display:flex;align-items:center;gap:18px;min-height:120px;overflow:hidden;padding:22px 24px;background:#fff;border-radius:16px;box-shadow:0 5px 15px rgba(0,0,0,.06)}
+    .ph-stat::before{position:absolute;top:0;bottom:0;left:0;width:5px;background:#2B3A8C;content:''}
+    .ph-stat.info::before{background:#12a8c0}.ph-stat.warning::before{background:#ffb800}.ph-stat.danger::before{background:#dc3545}.ph-stat.success::before{background:#28a745}
+    .ph-stat .ph-stat-icon{display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;color:#2B3A8C;font-size:30px;flex-shrink:0}
+    .ph-stat.info .ph-stat-icon{color:#12a8c0}.ph-stat.warning .ph-stat-icon{color:#d89b00}.ph-stat.danger .ph-stat-icon{color:#dc3545}.ph-stat.success .ph-stat-icon{color:#28a745}
+    .ph-stat-label{margin-bottom:3px;color:#71809d;font-size:12px;font-weight:700;letter-spacing:.25px;text-transform:uppercase}
+    .ph-stat-number{color:#111827;font-size:32px;font-weight:700;line-height:1.1}
+    .ph-stat-desc{margin-top:5px;color:#8a94a6;font-size:11px}
+    .ph-notice{display:flex;align-items:flex-start;gap:12px;margin-bottom:25px;padding:16px 18px;color:#34526f;background:#eaf6fb;border:1px solid #cceaf4;border-radius:12px}
+    .ph-notice>i{color:#12a8c0;font-size:21px}.ph-notice strong{display:block;margin-bottom:3px;color:#234664}.ph-notice p{margin:0;font-size:13px;line-height:1.5}
+    .ph-card{overflow:hidden;background:#fff;border-radius:18px;box-shadow:0 3px 8px rgba(0,0,0,.08)}
+    .ph-card-header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:22px 24px;border-bottom:1px solid #edf0f5;flex-wrap:wrap}
+    .ph-card-header h5{display:flex;align-items:center;gap:10px;margin:0;color:#2B3A8C;font-size:19px;font-weight:700}
+    .ph-card-header p{margin:6px 0 0;color:#8b95a7;font-size:13px}
+    .ph-section-icon{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;color:#fff;background:#2B3A8C;border-radius:10px;font-size:17px}
+    .ph-filters{display:grid;grid-template-columns:2fr 1.4fr 1.2fr 1fr 1fr auto;gap:12px;align-items:end;padding:18px 24px;background:#f8f9fc;border-bottom:1px solid #edf0f5}
+    .ph-filters label{display:block;margin-bottom:5px;color:#596579;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.25px}
+    .ph-filters .form-control,.ph-filters .form-select{min-height:38px;border-color:#dfe3eb;border-radius:9px;font-size:13px}
+    .ph-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:38px;padding:7px 14px;border-radius:9px;font-size:13px;font-weight:700;text-decoration:none;border:1px solid #2B3A8C}
+    .ph-btn.primary{color:#fff;background:#2B3A8C}.ph-btn.primary:hover{background:#202d70}
+    .ph-btn.outline{color:#2B3A8C;background:#fff}.ph-btn.outline:hover{color:#fff;background:#2B3A8C}
+    .ph-table{min-width:1000px;margin:0}
+    .ph-table thead th{padding:14px 18px;color:#667085;background:#f8f9fc;border-bottom:1px solid #e6eaf0;font-size:12px;font-weight:700;letter-spacing:.25px;text-transform:uppercase;white-space:nowrap}
+    .ph-table tbody td{padding:16px 18px;color:#4c566a;border-color:#edf0f4;font-size:13px;vertical-align:top}
+    .ph-table tbody tr:hover{background:#fbfcff}
+    .ph-name{color:#25324b;font-size:14px;font-weight:700}.ph-case{display:inline-block;margin-top:4px;color:#2B3A8C;font-size:12px;font-weight:600}
+    .ph-muted{color:#98a2b3;font-size:12px}
+    .badge-status{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap}
+    .status-warning{color:#8a6300;background:#fff3cd}.status-info{color:#0c6876;background:#d7f3f7}.status-primary{color:#26377f;background:#e4e8fb}
+    .status-success{color:#1f7a35;background:#ddf3e3}.status-danger{color:#a22632;background:#fde2e5}.status-secondary{color:#5e6878;background:#edf0f4}
+    .ph-remarks{max-width:240px;margin-top:8px;color:#7d8798;font-size:12px;line-height:1.4}
+    .ph-chips{display:flex;flex-wrap:wrap;gap:6px;padding:12px 24px;border-bottom:1px solid #edf0f5}
+    .ph-chip{padding:4px 10px;border-radius:999px;background:#eef1fb;color:#2B3A8C;font-size:12px;font-weight:600}
+    .ph-empty{padding:52px 20px!important;color:#98a2b3!important;text-align:center}.ph-empty i{display:block;margin-bottom:8px;font-size:36px}
+    @media(max-width:1199px){.ph-filters{grid-template-columns:1fr 1fr 1fr}}
+    @media(max-width:767px){.ph-filters{grid-template-columns:1fr}}
+</style>
+
+<div class="ph-stats">
+    <?php foreach ($cards as [$tone, $icon, $label, $value, $desc]): ?>
+        <div class="ph-stat <?= $h($tone) ?>">
+            <div class="ph-stat-icon"><i class="bi <?= $h($icon) ?>"></i></div>
+            <div><div class="ph-stat-label"><?= $h($label) ?></div><div class="ph-stat-number"><?= (int)$value ?></div><div class="ph-stat-desc"><?= $h($desc) ?></div></div>
         </div>
+    <?php endforeach; ?>
+</div>
 
-        <div class="system-name">
-            Smart Bite Care
+<div class="ph-notice">
+    <i class="bi bi-info-circle-fill"></i>
+    <div>
+        <strong>Read-only status overview</strong>
+        <p>Change a status on the <a href="AdminStaff_PhilhealthWorkflow.php">PhilHealth Workflow</a> page, where every change is saved in the status history and the audit log. The cards count all PhilHealth members of the branch; the table follows the filters.</p>
+    </div>
+</div>
+
+<section class="ph-card" id="queue">
+    <div class="ph-card-header">
+        <div>
+            <h5><span class="ph-section-icon"><i class="bi bi-list-check"></i></span>PhilHealth Patient Queue</h5>
+            <p><?= $coverage === 'members' ? 'PhilHealth members' : 'All patients, PhilHealth members and non-members' ?> · <?= number_format($total) ?> matching record<?= $total === 1 ? '' : 's' ?></p>
+        </div>
+        <div class="d-flex gap-2 flex-wrap" id="phExportButtons">
+            <a class="ph-btn outline" href="AdminStaff_PhilhealthStatus.php?<?= $h($exportQuery . ($exportQuery !== '' ? '&' : '') . 'export=pdf') ?>"><i class="bi bi-file-earmark-pdf"></i>Export PDF</a>
+            <button type="button" class="ph-btn outline" data-print-pdf="AdminStaff_PhilhealthStatus.php?<?= $h($exportQuery . ($exportQuery !== '' ? '&' : '') . 'export=pdf') ?>"><i class="bi bi-printer"></i>Print</button>
         </div>
     </div>
-
-        <nav class="nav-menu">
-            <ul>
-                <li><a href="AdminStaff_Dashboard.php"><i class="bi bi-grid-fill"></i><span>Dashboard</span></a></li>
-                <li><a href="AdminStaff_Calendar.php"><i class="bi bi-calendar-fill"></i><span>Calendar</span></a></li>
-                <li><a href="AdminStaff_PatientRecord.php"><i class="bi bi-people-fill"></i><span>Patient Record Management</span></a></li>
-                <li><a class="active" href="AdminStaff_PhilhealthStatus.php"><i class="bi bi-check2-all"></i><span>PhilHealth Patient Status</span></a></li>
-                <li><a href="AdminStaff_MedicalDocuments.php"><i class="bi bi-file-earmark-ruled"></i><span>Medical Documents</span></a></li>
-                <li><a href="AdminStaff_Reports.php"><i class="bi bi-file-earmark-bar-graph-fill"></i><span>Reports</span></a></li>
-                <li><a href="AdminStaff_Notifications.php"><i class="bi bi-bell-fill"></i><span>Notifications</span></a></li>
-            </ul>
-        </nav>
-
-        <div class="logout">
-            <a href="logout.php"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
+    <form method="get" class="ph-filters" action="AdminStaff_PhilhealthStatus.php#queue">
+        <div><label for="phSearch">Search</label><input type="search" class="form-control" id="phSearch" name="q" maxlength="100" value="<?= $h($search) ?>" placeholder="Patient name or case no."></div>
+        <div><label for="phStatus">Status</label>
+            <select class="form-select" id="phStatus" name="status">
+                <option value="">All statuses</option>
+                <option value="none"<?= $statusFilter === 'none' ? ' selected' : '' ?>>No status yet</option>
+                <?php foreach (PHILHEALTH_STATUS_ORDER as $status): ?><option value="<?= $h($status) ?>"<?= $statusFilter === $status ? ' selected' : '' ?>><?= $h($status) ?></option><?php endforeach; ?>
+            </select>
         </div>
-    </div>
-
-    <!-- MAIN CONTENT -->
-    <div class="main">
-        <!-- Top Header -->
-        <div class="topbar">
-            <h3>PhilHealth Patient Status <span style="font-size:16px; color:#6c757d; font-weight:400; margin-left:8px;"> <?php echo htmlspecialchars($branch_name); ?> </span> </h3>
-           <div class="dropdown">
-                <button class="profile dropdown-toggle border-0 bg-transparent px-3 py-2 rounded-3"
-                        type="button" id="adminStaffProfileMenu"
-                        data-bs-toggle="dropdown" aria-expanded="false">
-                    <i class="bi bi-person-circle"></i>
-                    <span><?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?></span>
-                    <span style="font-size:12px; color:#adb5bd; font-weight:400; margin-left:4px;">| Admin Staff</span>
-                </button>
-                <ul class="dropdown-menu dropdown-menu-end border-0 shadow p-2 mt-2"
-                    aria-labelledby="adminStaffProfileMenu">
-                    <li><h6 class="dropdown-header">Account options</h6></li>
-                    <li>
-                        <a class="dropdown-item rounded-2 py-2" href="Account_ChangePassword.php">
-                            <i class="bi bi-key-fill me-2"></i>Change Password
-                        </a>
-                    </li>
-                    <li><hr class="dropdown-divider"></li>
-                    <li>
-                        <a class="dropdown-item rounded-2 py-2 text-danger" href="logout.php">
-                            <i class="bi bi-box-arrow-right me-2"></i>Logout
-                        </a>
-                    </li>
-                </ul>
-            </div>
+        <div><label for="phCoverage">Patients</label>
+            <select class="form-select" id="phCoverage" name="coverage">
+                <option value="members"<?= $coverage === 'members' ? ' selected' : '' ?>>PhilHealth members</option>
+                <option value="all"<?= $coverage === 'all' ? ' selected' : '' ?>>All patients</option>
+            </select>
         </div>
-
-        <div class="content">
-            <!-- Statistics -->
-            <div class="stats">
-                <div class="stat-box writing">
-                    <h1 id="writingCount"><?php echo $philhealthStatus['For Writing']; ?></h1>
-                    <h6>For Writing</h6>
-                    <p>Waiting to be processed</p>
-                </div>
-
-                <div class="stat-box screening">
-                    <h1 id="screeningCount"><?php echo $philhealthStatus['For Screening']; ?></h1>
-                    <h6>For Screening</h6>
-                    <p>Under verification</p>
-                </div>
-
-                <div class="stat-box signing">
-                    <h1 id="signingCount"><?php echo $philhealthStatus['For Signing/Transmittal']; ?></h1>
-                    <h6>For Signing/Transmittal</h6>
-                    <p>Ready for approval</p>
-                </div>
-
-                <div class="stat-box completed">
-                    <h1 id="completedCount"><?php echo $philhealthStatus['Completed']; ?></h1>
-                    <h6>Completed</h6>
-                    <p>Successfully processed</p>
-                </div>
-            </div>
-
-            <!-- Controls -->
-            <div class="toolbar">
-                <div class="left-tools">
-                    <div class="search-box">
-                        <i class="bi bi-search"></i>
-                        <input type="text" id="searchInput" placeholder="Search Patient, Case No., Status, etc..." value="<?php echo htmlspecialchars($search); ?>">
-                    </div>
-
-                    <button class="toolbar-btn" id="clearFiltersBtn">
-                        <i class="bi bi-eraser"></i> Clear
-                    </button>
-
-                    <button class="toolbar-btn" id="exportPdfBtn" type="button">
-                        <i class="bi bi-file-earmark-pdf"></i> PDF
-                    </button>
-                    <button class="toolbar-btn" id="exportBtn" type="button">
-                        <i class="bi bi-filetype-csv"></i> CSV
-                    </button>
-                </div>
-
-                <div class="status-filters">
-                    <button class="status-filter-btn <?php echo empty($statusFilter) ? 'active' : ''; ?>" data-status="">All</button>
-                    <button class="status-filter-btn writing <?php echo $statusFilter == 'For Writing' ? 'active' : ''; ?>" data-status="For Writing">Writing</button>
-                    <button class="status-filter-btn screening <?php echo $statusFilter == 'For Screening' ? 'active' : ''; ?>" data-status="For Screening">Screening</button>
-                    <button class="status-filter-btn signing <?php echo $statusFilter == 'For Signing/Transmittal' ? 'active' : ''; ?>" data-status="For Signing/Transmittal">Signing</button>
-                    <button class="status-filter-btn completed <?php echo $statusFilter == 'Completed' ? 'active' : ''; ?>" data-status="Completed">Completed</button>
-                </div>
-            </div>
-
-            <!-- Table -->
-            <div class="table-wrapper">
-                <table class="table mb-0">
-                    <thead>
-                        <tr>
-                            <th>Case No.</th>
-                            <th>Patient Name</th>
-                            <th>Date of Confinement</th>
-                            <th>Date of Discharge</th>
-                            <th>Status</th>
-                            <th>Remarks</th>
-                        </tr>
-                    </thead>
-                    <tbody id="recordsBody">
-                        <?php if (empty($philhealthRecords)): ?>
-                        <tr>
-                            <td colspan="6">
-                                <div class="no-records">
-                                    <i class="bi bi-inbox"></i>
-                                    <p>No PhilHealth records found.</p>
-                                    <small class="text-muted">Patient records with PhilHealth coverage will appear here.</small>
-                                </div>
-                            </td>
-                        </tr>
-                        <?php else: ?>
-                        <?php foreach ($philhealthRecords as $record): ?>
-                        <?php 
-                            // Format discharge date
-                            $dischargeDate = !empty($record['discharge_date']) ? date('Y-m-d', strtotime($record['discharge_date'])) : '';
-                            $dischargeDisplay = !empty($dischargeDate) ? $dischargeDate : '<span class="discharge-date pending">Pending</span>';
-                        ?>
-                        <tr>
-                            <td><strong><?php echo htmlspecialchars($record['case_no'] ?? 'N/A'); ?></strong></td>
-                            <td><?php echo htmlspecialchars($record['patient_name']); ?></td>
-                            <td><?php echo htmlspecialchars($record['date_of_confinement'] ?? ''); ?></td>
-                            <td class="discharge-date"><?php echo $dischargeDisplay; ?></td>
-                            <td>
-                                <span class="status-badge <?php echo strtolower(str_replace(' ', '-', $record['philhealth_status'] ?? 'for-writing')); ?>">
-                                    <?php echo htmlspecialchars($record['philhealth_status'] ?? 'N/A'); ?>
-                                </span>
-                            </td>
-                            <td><?php echo htmlspecialchars($record['philhealth_remarks'] ?? $record['case_remarks'] ?? 'N/A'); ?></td>
-                        </tr>
-                        <?php endforeach; ?>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-
-            <!-- Pagination -->
-            <div class="pagination-area" id="paginationArea">
-                <?php if ($totalPages > 1): ?>
-                <a href="#" class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>" data-page="<?php echo $page - 1; ?>" id="prevPage">
-                    <i class="bi bi-chevron-left"></i>
-                </a>
-
-                <?php for ($i = 1; $i <= $totalPages; $i++): ?>
-                <a href="#" class="page-item <?php echo $i == $page ? 'active' : ''; ?>" data-page="<?php echo $i; ?>">
-                    <?php echo $i; ?>
-                </a>
-                <?php endfor; ?>
-
-                <a href="#" class="page-item <?php echo $page >= $totalPages ? 'disabled' : ''; ?>" data-page="<?php echo $page + 1; ?>" id="nextPage">
-                    <i class="bi bi-chevron-right"></i>
-                </a>
-                <?php endif; ?>
-            </div>
-
-            <!-- Record count info -->
-            <div class="text-center mt-3">
-                <small class="text-muted">
-                    Showing <?php echo count($philhealthRecords); ?> of <?php echo $totalRecords; ?> records
-                    <?php if (!empty($branch_name)): ?>
-                    • Branch: <?php echo htmlspecialchars($branch_name); ?>
-                    <?php endif; ?>
-                </small>
-            </div>
+        <div><label for="phFrom">Confined from</label><input type="date" class="form-control" id="phFrom" name="from" value="<?= $h($dateFrom) ?>"></div>
+        <div><label for="phTo">Confined to</label><input type="date" class="form-control" id="phTo" name="to" value="<?= $h($dateTo) ?>"></div>
+        <div class="d-flex gap-2">
+            <input type="hidden" name="per_page" value="<?= (int)$pg['per_page'] ?>">
+            <button type="submit" class="ph-btn primary"><i class="bi bi-funnel"></i>Apply</button>
+            <a class="ph-btn outline" href="AdminStaff_PhilhealthStatus.php#queue" title="Clear filters"><i class="bi bi-eraser"></i></a>
         </div>
+    </form>
+    <?php if ($statusCountsInFilter): ?>
+        <div class="ph-chips">
+            <?php foreach ($statusCountsInFilter as $row): ?><span class="ph-chip"><?= $h($row['status']) ?>: <?= (int)$row['total'] ?></span><?php endforeach; ?>
+        </div>
+    <?php endif; ?>
+    <div class="table-responsive">
+        <table class="table ph-table align-middle">
+            <thead><tr><th>Patient / Case</th><th>PhilHealth</th><th>Confinement</th><th>Discharge</th><th>Status</th><th>Requirements</th><th>Last Updated</th></tr></thead>
+            <tbody>
+            <?php if (!$records): ?>
+                <tr><td colspan="7" class="ph-empty"><i class="bi bi-inbox"></i>No PhilHealth records match the filters.</td></tr>
+            <?php endif; ?>
+            <?php foreach ($records as $r): $status = (string)($r['status'] ?? ''); ?>
+                <tr>
+                    <td><div class="ph-name"><?= $h($r['full_name']) ?></div><span class="ph-case"><?= $h($r['case_no'] ?: 'No case no.') ?></span><?php if (!empty($r['contact_number'])): ?><div class="ph-muted"><?= $h($r['contact_number']) ?></div><?php endif; ?></td>
+                    <td><?= $r['has_philhealth'] === 'Yes' ? $h($r['philhealth_membership'] ?: 'Member') : '<span class="ph-muted">Not a member</span>' ?></td>
+                    <td><?= $h(philhealthDateText($r['confinement_date'])) ?></td>
+                    <td><?= $r['discharge_date'] ? $h(philhealthDateText($r['discharge_date'])) : '<span class="badge-status status-secondary">Ongoing</span>' ?></td>
+                    <td><span class="badge-status <?= $h(philhealthStatusBadgeClass($status)) ?>"><?= $h($status !== '' ? $status : 'No status yet') ?></span>
+                        <?php if (trim((string)($r['remarks'] ?? '')) !== ''): ?><div class="ph-remarks"><?= $h($r['remarks']) ?></div><?php endif; ?></td>
+                    <td><?php if ($requirementsReady): $received = philhealthRequirementsReceived($r); ?><?= count($received) ?> of <?= $requirementTotal ?><?php if ($received): ?><div class="ph-muted"><?= $h(implode(', ', $received)) ?></div><?php endif; ?><?php else: ?><span class="ph-muted">—</span><?php endif; ?></td>
+                    <td><?= $h($r['updated_at'] ? date('M d, Y h:i A', strtotime($r['updated_at'])) : '—') ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
     </div>
-
-    <!-- Loading Overlay -->
-    <div class="loading-overlay" id="loadingOverlay">
-        <div class="spinner"></div>
-    </div>
-
-    <!-- Toast Container -->
-    <div class="toast-container-custom" id="toastContainer"></div>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src= "sources/sidebar.js"></script>
-
-    <script>
-        // ----------------------------------------------------------------
-        // TOAST NOTIFICATIONS
-        // ----------------------------------------------------------------
-        function showToast(msg, sub = '', isError = false) {
-            const container = document.getElementById('toastContainer');
-            const toast = document.createElement('div');
-            toast.className = 'toast-custom' + (isError ? ' error' : '');
-            const icon = isError ? 'bi-exclamation-circle-fill' : 'bi-check-circle-fill';
-            toast.innerHTML = `
-                <span class="toast-icon"><i class="bi ${icon}"></i></span>
-                <div class="toast-msg">${msg} ${sub ? '<small>' + sub + '</small>' : ''}</div>
-            `;
-            container.appendChild(toast);
-            requestAnimationFrame(() => toast.classList.add('show'));
-            setTimeout(() => {
-                toast.classList.remove('show');
-                setTimeout(() => toast.remove(), 400);
-            }, 3500);
-        }
-
-        // ----------------------------------------------------------------
-        // LOADING OVERLAY
-        // ----------------------------------------------------------------
-        function showLoading() {
-            document.getElementById('loadingOverlay').classList.add('show');
-        }
-
-        function hideLoading() {
-            document.getElementById('loadingOverlay').classList.remove('show');
-        }
-
-        // ----------------------------------------------------------------
-        // SEARCH AND FILTER
-        // ----------------------------------------------------------------
-        let searchTimeout = null;
-
-        function applyFilters() {
-            const search = document.getElementById('searchInput').value.trim();
-            const status = document.querySelector('.status-filter-btn.active')?.dataset.status || '';
-            
-            let url = window.location.pathname + '?';
-            if (search) url += 'search=' + encodeURIComponent(search) + '&';
-            if (status) url += 'status=' + encodeURIComponent(status) + '&';
-            url += 'page=1';
-            
-            window.location.href = url;
-        }
-
-        document.getElementById('searchInput').addEventListener('input', function() {
-            clearTimeout(searchTimeout);
-            searchTimeout = setTimeout(applyFilters, 500);
-        });
-
-        document.getElementById('searchInput').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                clearTimeout(searchTimeout);
-                applyFilters();
-            }
-        });
-
-        document.querySelectorAll('.status-filter-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                document.querySelectorAll('.status-filter-btn').forEach(b => b.classList.remove('active'));
-                this.classList.add('active');
-                applyFilters();
-            });
-        });
-
-        document.getElementById('clearFiltersBtn').addEventListener('click', function() {
-            document.getElementById('searchInput').value = '';
-            document.querySelectorAll('.status-filter-btn').forEach(b => b.classList.remove('active'));
-            document.querySelector('.status-filter-btn[data-status=""]').classList.add('active');
-            window.location.href = window.location.pathname;
-        });
-
-        // ----------------------------------------------------------------
-        // PAGINATION
-        // ----------------------------------------------------------------
-        document.querySelectorAll('.page-item:not(.disabled)').forEach(item => {
-            item.addEventListener('click', function(e) {
-                e.preventDefault();
-                const page = this.dataset.page;
-                if (page) {
-                    const url = new URL(window.location.href);
-                    url.searchParams.set('page', page);
-                    window.location.href = url.toString();
-                }
-            });
-        });
-
-        // ----------------------------------------------------------------
-        // EXPORT
-        // ----------------------------------------------------------------
-        document.getElementById('exportBtn').addEventListener('click', () => { window.location.href = window.location.pathname + '?export=csv'; });
-        document.getElementById('exportPdfBtn').addEventListener('click', () => { window.location.href = window.location.pathname + '?export=pdf'; });
-
-        // ----------------------------------------------------------------
-        // AUTO-REFRESH (every 30 seconds)
-        // ----------------------------------------------------------------
-        function refreshData() {
-            if (document.hidden) return;
-
-            fetch(window.location.href, {
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    if (data.status) {
-                        document.getElementById('writingCount').textContent = data.status['For Writing'] || 0;
-                        document.getElementById('screeningCount').textContent = data.status['For Screening'] || 0;
-                        document.getElementById('signingCount').textContent = data.status['For Signing/Transmittal'] || 0;
-                        document.getElementById('completedCount').textContent = data.status['Completed'] || 0;
-                    }
-
-                    if (data.records && !document.getElementById('searchInput').value.trim()) {
-                        const tbody = document.getElementById('recordsBody');
-                        let html = '';
-                        if (data.records.length === 0) {
-                            html = `
-                                <tr>
-                                    <td colspan="6">
-                                        <div class="no-records">
-                                            <i class="bi bi-inbox"></i>
-                                            <p>No PhilHealth records found.</p>
-                                        </div>
-                                    </td>
-                                </tr>
-                            `;
-                        } else {
-                            data.records.forEach(record => {
-                                const statusClass = (record.philhealth_status || 'for-writing').toLowerCase().replace(/\s+/g, '-');
-                                const dischargeDate = record.discharge_date || '';
-                                const dischargeDisplay = dischargeDate ? dischargeDate : '<span class="discharge-date pending">Pending</span>';
-                                html += `
-                                    <tr>
-                                        <td><strong>${record.case_no || 'N/A'}</strong></td>
-                                        <td>${record.patient_name}</td>
-                                        <td>${record.date_of_confinement || ''}</td>
-                                        <td class="discharge-date">${dischargeDisplay}</td>
-                                        <td>
-                                            <span class="status-badge ${statusClass}">
-                                                ${record.philhealth_status || 'N/A'}
-                                            </span>
-                                        </td>
-                                        <td>${record.philhealth_remarks || 'N/A'}</td>
-                                    </tr>
-                                `;
-                            });
-                        }
-                        tbody.innerHTML = html;
-                    }
-                }
-            })
-            .catch(error => console.error('Refresh error:', error));
-        }
-
-        setInterval(refreshData, 30000);
-
-        document.addEventListener('visibilitychange', function() {
-            if (!document.hidden) {
-                refreshData();
-            }
-        });
-
-        console.log('PhilHealth Patient Status page loaded successfully');
-        console.log('Branch: <?php echo htmlspecialchars($branch_name); ?>');
-        console.log('Total records: <?php echo $totalRecords; ?>');
-    </script>
-</body>
-</html>
+    <?= paginationRender($pg, '#queue', 'records') ?>
+</section>
+<?php
+$content = (string)ob_get_clean();
+echo reportPageRender(['role_id' => 4] + $user, 'PhilHealth Patient Status', $content,
+    (int)getAdminStaffNotificationCount($conn, $branchId, $userId), 'AdminStaff_PhilhealthWorkflow.php');

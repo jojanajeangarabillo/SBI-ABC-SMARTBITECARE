@@ -7,7 +7,7 @@ require_once 'sources/report_page_layout.php';
 
 /*
  * NURSE REPORTS: Daily Inventory / Closing and the latest saved Supply Forecast,
- * on the shared report center (preview, PDF, CSV). Read-only.
+ * on the shared report center (preview, Export PDF, Print). Read-only.
  */
 $user = workflowRequireUser($conn, 3);
 $reportCenter = reportCenterRun($conn, reportCenterCatalogEntries(3), [

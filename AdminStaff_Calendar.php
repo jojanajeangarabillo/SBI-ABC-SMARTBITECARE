@@ -423,7 +423,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
     $stmt->execute();
     $exportResult = $stmt->get_result();
     
-    // PDF or CSV (?format=pdf|csv, CSV by default) with every row (shared builders).
+    // PDF with every row (shared builders); &inline=1 is the Print button.
     require_once __DIR__ . '/sources/report_export.php';
     $exportRows = [];
     while ($row = $exportResult->fetch_assoc()) {
@@ -450,9 +450,9 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
             'empty' => 'No scheduled doses match the filters.',
         ]],
     ];
-    $exportFormat = ($_GET['format'] ?? 'csv') === 'pdf' ? 'pdf' : 'csv';
+    $exportFormat = 'pdf';
     $exportPeriod = !empty($exportDate) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$exportDate) ? reportPeriodText((string)$exportDate, (string)$exportDate) : 'All dates';
-    workflowAudit($conn, (int)$_SESSION['user_id'], (string)$branch_id, 'Exported follow-up schedule (' . strtoupper($exportFormat) . ') - ' . $exportPeriod . ' (' . count($exportRows) . ' doses)', 'Calendar');
+    workflowAudit($conn, (int)$_SESSION['user_id'], (string)$branch_id, reportExportVerb() . ' follow-up schedule (PDF) - ' . $exportPeriod . ' (' . count($exportRows) . ' doses)', 'Calendar');
     reportSend($exportReport, reportMeta($conn, (int)$_SESSION['user_id'], reportBranchName($conn, (string)$branch_id), $exportPeriod,
         $exportStatus !== 'all' ? 'Status: ' . ucfirst((string)$exportStatus) : ''), $exportFormat,
         'Follow_ups_' . $branch_id . (!empty($exportDate) ? '_' . $exportDate : '') . '_' . date('Ymd_His'));
@@ -2732,10 +2732,10 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
 
                         <span class="d-inline-flex gap-2">
                         <button class="export-btn" id="exportPdfBtn" type="button">
-                            <i class="bi bi-file-earmark-pdf"></i> PDF
+                            <i class="bi bi-file-earmark-pdf"></i> Export PDF
                         </button>
-                        <button class="export-btn" id="exportBtn" type="button">
-                            <i class="bi bi-filetype-csv"></i> CSV
+                        <button class="export-btn" id="printPdfBtn" type="button">
+                            <i class="bi bi-printer"></i> Print
                         </button>
                         </span>
                     </div>
@@ -2826,6 +2826,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
 </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
     <script src="sources/sidebar.js"></script>
 
     <script>
@@ -3739,16 +3740,17 @@ document.getElementById('clearFiltersBtn').addEventListener('click', function() 
 
     });
 
-    function exportFollowUps(format) {
+    // The follow-up PDF of the current date and status filter (every row).
+    function followUpPdfUrl() {
         const date = document.getElementById('filterDate').value;
         const status = currentStatus;
-        const params = ['export=true', 'format=' + format];
+        const params = ['export=true', 'format=pdf'];
         if (date) params.push('date=' + encodeURIComponent(date));
         if (status && status != 'all') params.push('status=' + encodeURIComponent(status));
-        window.location.href = window.location.pathname + '?' + params.join('&');
+        return window.location.pathname + '?' + params.join('&');
     }
-    document.getElementById('exportBtn').addEventListener('click', () => exportFollowUps('csv'));
-    document.getElementById('exportPdfBtn').addEventListener('click', () => exportFollowUps('pdf'));
+    document.getElementById('exportPdfBtn').addEventListener('click', () => { window.location.href = followUpPdfUrl(); });
+    document.getElementById('printPdfBtn').addEventListener('click', (event) => SbcPrint.print(followUpPdfUrl(), event.currentTarget));
 
     // Press Enter to apply filters
     document.getElementById('filterSearch').addEventListener('keypress', function(e) {

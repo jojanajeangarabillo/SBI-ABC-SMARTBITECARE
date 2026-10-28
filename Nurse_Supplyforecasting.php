@@ -86,8 +86,8 @@ if (!in_array($forecastDays, $allowedForecastDays, true)) {
     $forecastDays = 30;
 }
 
-// Read-only export of the latest saved forecast (PDF/CSV); no forecast is run.
-if (in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
+// Read-only export of the latest saved forecast (PDF; &inline=1 for Print); no forecast is run.
+if (($_GET['export'] ?? '') === 'pdf') {
     require_once 'sources/report_center.php';
     reportForecastExport($conn, (int)$user['user_id'], $branchId, $forecastDays, (string)$_GET['export']);
 }
@@ -1153,8 +1153,8 @@ $chartRiskValues = array_map(
                     View the latest 7-day, 14-day, or 30-day forecast for your branch.
                 </small>
                 <div class="mt-2 d-flex gap-2 flex-wrap">
-                    <a class="btn btn-sm btn-outline-primary" href="Nurse_Supplyforecasting.php?days=<?= (int)$forecastDays ?>&amp;export=pdf"><i class="bi bi-file-earmark-pdf me-1"></i>Export <?= (int)$forecastDays ?>-day PDF</a>
-                    <a class="btn btn-sm btn-outline-primary" href="Nurse_Supplyforecasting.php?days=<?= (int)$forecastDays ?>&amp;export=csv"><i class="bi bi-filetype-csv me-1"></i>Export <?= (int)$forecastDays ?>-day CSV</a>
+                    <a class="btn btn-sm btn-outline-primary" href="Nurse_Supplyforecasting.php?days=<?= (int)$forecastDays ?>&amp;export=pdf" title="Latest saved <?= (int)$forecastDays ?>-day forecast"><i class="bi bi-file-earmark-pdf me-1"></i>Export PDF</a>
+                    <button type="button" class="btn btn-sm btn-outline-primary" data-print-pdf="Nurse_Supplyforecasting.php?days=<?= (int)$forecastDays ?>&amp;export=pdf"><i class="bi bi-printer me-1"></i>Print</button>
                 </div>
             </div>
 
@@ -1647,6 +1647,7 @@ $chartRiskValues = array_map(
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="sources/sidebar.js"></script>   
 
