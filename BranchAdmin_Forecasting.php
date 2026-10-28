@@ -1574,7 +1574,7 @@ while ($row = $items_result->fetch_assoc()) {
                                                     </div>
                                                 <?php else: ?>
                                                     <form method="POST" action="BranchAdmin_Forecasting.php" class="mt-1"
-                                                          onsubmit="return confirm(<?php echo htmlspecialchars(json_encode('Request a reorder of ' . inventoryReorderText($reorderBase, $forecast) . ' of ' . $forecast['item_name'] . '? The request is approved and sent to the Inventory Officer.'), ENT_QUOTES); ?>);">
+                                                          data-confirm="<?php echo htmlspecialchars('Request a reorder of ' . inventoryReorderText($reorderBase, $forecast) . ' of ' . $forecast['item_name'] . '? The request is approved and sent to the Inventory Officer.', ENT_QUOTES); ?>" data-confirm-title="Request reorder" data-confirm-ok="Request reorder">
                                                         <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($reorder_csrf); ?>">
                                                         <input type="hidden" name="action" value="request_reorder">
                                                         <input type="hidden" name="item_id" value="<?php echo (int)$forecast['item_id']; ?>">
@@ -1711,6 +1711,7 @@ while ($row = $items_result->fetch_assoc()) {
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="sources/sidebar.js"></script>
 <script>

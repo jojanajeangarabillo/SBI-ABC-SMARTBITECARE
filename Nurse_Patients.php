@@ -2322,6 +2322,7 @@ function getStatusBadge($status)
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="sources/sidebar.js"></script>
 <script>
 function escapeHtml(value) {
@@ -2602,12 +2603,12 @@ function openDocumentModal(patientId) {
     .then(response => response.json())
     .then(data => {
         if (!data.success) {
-            alert(data.message || 'Unable to load patient case.');
+            SbcDialog.alert(data.message || 'Unable to load patient case.', { variant: 'danger', title: 'Unable to load' });
             return;
         }
 
         if (!data.case_id) {
-            alert('This patient does not have a case available for document generation.');
+            SbcDialog.alert('This patient does not have a case available for document generation.');
             return;
         }
 
@@ -2637,7 +2638,7 @@ function openDocumentModal(patientId) {
         modal.show();
     })
     .catch(error => {
-        alert('Error loading patient data. Please try again.');
+        SbcDialog.alert('Error loading patient data. Please try again.', { variant: 'danger', title: 'Unable to load' });
         console.error(error);
     });
 }
@@ -2669,7 +2670,7 @@ document.addEventListener('DOMContentLoaded', function() {
             var originalButtonHtml = button.innerHTML;
 
             if (!patientId || !caseId || !documentType) {
-                alert('Select a patient case and document type first.');
+                SbcDialog.alert('Select a patient case and document type first.');
                 return;
             }
 
@@ -2742,7 +2743,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 window.location.href = data.download_url;
             })
             .catch(function(error) {
-                alert(error.message || 'Unable to generate the patient PDF.');
+                SbcDialog.alert(error.message || 'Unable to generate the patient PDF.', { variant: 'danger', title: 'Unable to generate' });
             })
             .finally(function() {
                 button.disabled = false;

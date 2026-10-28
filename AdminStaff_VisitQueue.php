@@ -1138,7 +1138,7 @@ $statusClasses = [
                                     </td>
                                     <td>
                                         <?php if (in_array($visitStatus, ['Checked In', 'Waiting for Nurse'], true)): ?>
-                                            <form method="post" class="d-inline" onsubmit="return confirm('Cancel this visit?');">
+                                            <form method="post" class="d-inline" data-confirm="Cancel this visit? The patient will need to check in again." data-confirm-title="Cancel visit" data-confirm-variant="danger" data-confirm-ok="Yes, cancel visit" data-confirm-cancel="Keep visit">
                                                 <input type="hidden" name="csrf_token" value="<?php echo workflowH($csrf); ?>">
                                                 <input type="hidden" name="action" value="cancel">
                                                 <input type="hidden" name="visit_id" value="<?php echo (int)$visit['visit_id']; ?>">
@@ -1221,6 +1221,7 @@ $statusClasses = [
 </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
     <script src= "sources/sidebar.js"></script>
     <script>
         // "Show completed" (off by default) reloads the page with completed cases and visits.

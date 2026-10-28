@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/workflow_helpers.php';
+require_once __DIR__ . '/confirm_modal.php';
 
 /*
  * Page frame (sidebar, top bar, logout dialog) for the Nurse and Admin Staff
@@ -35,11 +36,11 @@ const REPORT_PAGE_MENUS = [
 ];
 
 /** The whole page with $content in the main area. */
-function reportPageRender(array $user, string $title, string $content, int $notificationCount): string
+function reportPageRender(array $user, string $title, string $content, int $notificationCount, ?string $activeHref = null): string
 {
     $roleId = (int)$user['role_id'];
     $roleLabel = $roleId === 3 ? 'Nurse' : 'Admin Staff';
-    $current = basename((string)($_SERVER['PHP_SELF'] ?? ''));
+    $current = $activeHref ?? basename((string)($_SERVER['PHP_SELF'] ?? ''));
     $h = static fn($v): string => htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8');
     ob_start();
     ?>
@@ -117,6 +118,7 @@ function reportPageRender(array $user, string $title, string $content, int $noti
 </div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="sources/sidebar.js"></script>
+<?= sbcConfirmModalScript() ?>
 </body>
 </html>
     <?php

@@ -1887,6 +1887,7 @@ No usage data for the selected date range.
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="sources/sidebar.js"></script>
 
 
@@ -1900,7 +1901,7 @@ document.addEventListener('DOMContentLoaded', function () {
         form.addEventListener('submit', function (event) {
             if (from.value && to.value && from.value > to.value) {
                 event.preventDefault();
-                alert('Date From cannot be later than Date To.');
+                SbcDialog.alert('Date From cannot be later than Date To.');
             }
         });
     }

@@ -383,7 +383,7 @@ $flash=workflowTakeFlash();
                                                 <div class="row g-2">
                                                     <div class="col-md-5"><label class="form-label" for="status-<?php echo (int)$r['philhealth_record_id']; ?>">Processing Status</label><select class="form-select form-select-sm" id="status-<?php echo (int)$r['philhealth_record_id']; ?>" name="status" required><?php foreach($caintaStatuses as $status):?><option value="<?php echo workflowH($status); ?>" <?php echo $currentStatus===$status?'selected':''; ?>><?php echo workflowH($status); ?></option><?php endforeach;?></select></div>
                                                     <div class="col-md-5"><label class="form-label" for="remarks-<?php echo (int)$r['philhealth_record_id']; ?>">Remarks / Document Handoff</label><input class="form-control form-control-sm" id="remarks-<?php echo (int)$r['philhealth_record_id']; ?>" name="remarks" maxlength="1000" value="<?php echo workflowH($r['remarks']??''); ?>" placeholder="Add processing remarks"></div>
-                                                    <div class="col-md-2 d-flex align-items-end"><button type="submit" class="btn-save w-100" onclick="return confirm('Save this PhilHealth processing update?');"><i class="bi bi-check2-circle"></i>Save</button></div>
+                                                    <div class="col-md-2 d-flex align-items-end"><button type="submit" class="btn-save w-100" data-confirm="Save this PhilHealth processing update? The new status is recorded in the history." data-confirm-title="Save PhilHealth update" data-confirm-ok="Save update"><i class="bi bi-check2-circle"></i>Save</button></div>
                                                 </div>
                                             </form>
                                         <?php else:?>
@@ -442,6 +442,7 @@ $flash=workflowTakeFlash();
     </div>
 </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
     <script src="sources/sidebar.js"></script>
 </body>
 </html>

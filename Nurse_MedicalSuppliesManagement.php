@@ -922,7 +922,7 @@ $flash = workflowTakeFlash();
                             <td class="small"><?php if ($restock['decided_at']): ?><?= workflowH((string)($restock['decider_name'] ?? '')) ?>, <?= workflowH(date('M d, Y', strtotime((string)$restock['decided_at']))) ?><?php if ($restock['decision_remarks']): ?><div class="text-muted"><?= workflowH((string)$restock['decision_remarks']) ?></div><?php endif; ?><?php else: ?>—<?php endif; ?></td>
                             <td>
                                 <?php if ($restock['status'] === 'Pending'): ?>
-                                    <form method="post" onsubmit="return confirm('Cancel restock request #<?= (int)$restock['request_id'] ?>?');">
+                                    <form method="post" data-confirm="Cancel restock request #<?= (int)$restock['request_id'] ?>? The Branch Admin will no longer see it." data-confirm-title="Cancel restock request" data-confirm-variant="danger" data-confirm-ok="Yes, cancel request" data-confirm-cancel="Keep request">
                                         <input type="hidden" name="csrf_token" value="<?= workflowH($csrf) ?>">
                                         <input type="hidden" name="action" value="cancel_restock">
                                         <input type="hidden" name="request_id" value="<?= (int)$restock['request_id'] ?>">
@@ -1068,6 +1068,7 @@ $flash = workflowTakeFlash();
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="sources/sidebar.js"></script>
 <script>
 const restockItem = document.getElementById('restockItem');

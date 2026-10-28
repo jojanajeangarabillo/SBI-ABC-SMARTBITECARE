@@ -1890,6 +1890,7 @@ body{
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="sources/sidebar.js"></script>
 <script>
 /* REUSABLE CONFIRMATION MODAL */
@@ -2050,23 +2051,23 @@ function updateStockSource() {
 
 function validateStockInForm() {
     const source=document.getElementById('stockSourceType').value;
-    if (!source || (source==='Branch' && !document.getElementById('stockSourceBranch').value)) { alert('Select the stock source and sending branch.'); return false; }
+    if (!source || (source==='Branch' && !document.getElementById('stockSourceBranch').value)) { SbcDialog.alert('Select the stock source and sending branch.'); return false; }
     var select = document.getElementById('stockInItem');
     var quantity = document.getElementById('stockInQuantity');
     var date = document.getElementById('stockInDate');
 
     if (!select.value) {
-        alert('Please select an item.');
+        SbcDialog.alert('Please select an item.');
         return false;
     }
 
     if (!quantity.value || Number(quantity.value) <= 0) {
-        alert('Please enter a valid quantity.');
+        SbcDialog.alert('Please enter a valid quantity.');
         return false;
     }
 
     if (!date.value) {
-        alert('Please enter the Stock In date.');
+        SbcDialog.alert('Please enter the Stock In date.');
         return false;
     }
 
@@ -2079,29 +2080,29 @@ function validateStockInForm() {
         var exp = document.getElementById('stockInExpiry').value;
 
         if (!batch) {
-            alert('Please enter the Batch/Lot No.');
+            SbcDialog.alert('Please enter the Batch/Lot No.');
             return false;
         }
 
         if (!mfg) {
-            alert('Please enter the Manufacturing Date.');
+            SbcDialog.alert('Please enter the Manufacturing Date.');
             return false;
         }
 
         if (!exp) {
-            alert('Please enter the Expiration Date.');
+            SbcDialog.alert('Please enter the Expiration Date.');
             return false;
         }
 
         if (exp <= mfg) {
-            alert('Expiration Date must be later than Manufacturing Date.');
+            SbcDialog.alert('Expiration Date must be later than Manufacturing Date.');
             return false;
         }
 
 
         var today = sbcManilaToday();
         if (exp < today) {
-            alert('Expired stock cannot be received. Please enter a non-expired batch.');
+            SbcDialog.alert('Expired stock cannot be received. Please enter a non-expired batch.');
             return false;
         }
     }

@@ -966,7 +966,7 @@ $flash = workflowTakeFlash();
                                                     <input class="form-control form-control-sm" id="remarks-<?php echo (int)$row['philhealth_record_id']; ?>" name="remarks" maxlength="500" value="<?php echo workflowH($row['remarks'] ?? ''); ?>" placeholder="Add processing remarks">
                                                 </div>
                                                 <div class="col-lg-2 d-flex align-items-end">
-                                                    <button type="submit" class="btn-save w-100" onclick="return confirm('Save this branch PhilHealth update?');"><i class="bi bi-check2-circle"></i>Save</button>
+                                                    <button type="submit" class="btn-save w-100" data-confirm="Save this branch PhilHealth update? The new status is recorded in the history and Admin Staff are notified." data-confirm-title="Save PhilHealth update" data-confirm-ok="Save update"><i class="bi bi-check2-circle"></i>Save</button>
                                                 </div>
                                             </div>
                                         </form>
@@ -1025,6 +1025,7 @@ $flash = workflowTakeFlash();
 
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
     <script src= "sources/sidebar.js"></script>
 </body>
 </html>

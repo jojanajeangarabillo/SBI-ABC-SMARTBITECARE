@@ -681,33 +681,41 @@ function approvalsDate(?string $value): string
 </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
     <script src="sources/sidebar.js"></script>
     <script>
-        // Reject / Return need a remark; Approve asks for confirmation; one submit only (no double click).
+        // Reject / Return need a remark; every decision asks for confirmation in the
+        // styled dialog (sources/confirm_modal.js); one submit only (no double click).
+        var decisionTexts = {
+            approve: ['Approve request', 'Approve this request? The change is applied immediately.', 'primary', 'Approve'],
+            reject: ['Reject request', 'Reject this request? Nothing will be changed.', 'danger', 'Reject'],
+            'return': ['Return for recount', 'Return this closing to the Nurse for a recount?', 'danger', 'Return for recount'],
+            reviewed: ['Mark as Reviewed', 'Mark this closing as Reviewed?', 'primary', 'Mark as Reviewed']
+        };
         document.querySelectorAll('.decision-form').forEach(function (form) {
             form.addEventListener('submit', function (event) {
+                event.preventDefault();
+                if (form.dataset.sent === '1') return;
                 var button = event.submitter;
                 var value = button ? button.value : '';
                 var remark = form.querySelector('textarea');
                 if ((value === 'reject' || value === 'return') && remark && remark.value.trim() === '') {
-                    event.preventDefault();
                     remark.classList.add('is-invalid');
                     remark.focus();
                     return;
                 }
-                var text = value === 'approve' ? 'Approve this request? The change is applied immediately.'
-                    : value === 'reject' ? 'Reject this request? Nothing will be changed.'
-                    : value === 'return' ? 'Return this closing to the Nurse for a recount?'
-                    : 'Mark this closing as Reviewed?';
-                if (!window.confirm(text)) { event.preventDefault(); return; }
-                if (form.dataset.sent === '1') { event.preventDefault(); return; }
-                form.dataset.sent = '1';
-                if (button) {
-                    var hidden = document.createElement('input');
-                    hidden.type = 'hidden'; hidden.name = button.name; hidden.value = button.value;
-                    form.appendChild(hidden);
-                }
-                form.querySelectorAll('button[type="submit"]').forEach(function (b) { b.disabled = true; });
+                var t = decisionTexts[value] || decisionTexts.reviewed;
+                SbcDialog.confirm({ title: t[0], message: t[1], variant: t[2], confirmText: t[3] }).then(function (ok) {
+                    if (!ok || form.dataset.sent === '1') return;
+                    form.dataset.sent = '1';
+                    if (button && button.name) {
+                        var hidden = document.createElement('input');
+                        hidden.type = 'hidden'; hidden.name = button.name; hidden.value = button.value;
+                        form.appendChild(hidden);
+                    }
+                    form.querySelectorAll('button[type="submit"]').forEach(function (b) { b.disabled = true; });
+                    form.submit();
+                });
             });
         });
     </script>

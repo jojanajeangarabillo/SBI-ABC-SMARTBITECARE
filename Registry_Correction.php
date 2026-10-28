@@ -207,13 +207,21 @@ $groups = ['patient' => 'Patient', 'case' => 'Bite case', 'registry' => 'Registr
     });
     var form = document.getElementById('correctionForm');
     if (form) form.addEventListener('submit', function (event) {
+        event.preventDefault();
+        if (form.dataset.sent === '1') return;
         if (!document.querySelector('.correction-input.changed')) {
-            event.preventDefault();
-            alert('Change at least one field before requesting a correction.');
+            SbcDialog.alert('Change at least one field before requesting a correction.');
             return;
         }
-        if (!confirm('Save this correction? The record goes back to Admin Staff for re-verification.')) event.preventDefault();
+        SbcDialog.confirm({ title: 'Request correction', confirmText: 'Save correction',
+            message: 'Save this correction? The record goes back to Admin Staff for re-verification.' }).then(function (ok) {
+            if (!ok || form.dataset.sent === '1') return;
+            form.dataset.sent = '1';
+            form.querySelectorAll('button[type="submit"]').forEach(function (b) { b.disabled = true; });
+            form.submit();
+        });
     });
 </script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 </body>
 </html>

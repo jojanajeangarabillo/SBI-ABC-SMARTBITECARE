@@ -918,7 +918,7 @@ foreach ($pendingCorrections as $correction) $correctionsByRegistry[(int)$correc
                                     <?php endforeach; endforeach; ?>
                                 </td>
                                 <td style="min-width:220px;">
-                                    <form method="post" onsubmit="return confirm('Verify this corrected record again? It will be locked.');">
+                                    <form method="post" data-confirm="Verify this corrected record again? It will be locked." data-confirm-title="Verify corrected record" data-confirm-ok="Verify and lock">
                                         <input type="hidden" name="csrf_token" value="<?php echo workflowH($csrf); ?>">
                                         <input type="hidden" name="action" value="reverify">
                                         <input type="hidden" name="registry_id" value="<?php echo (int)$registryId; ?>">
@@ -1208,6 +1208,7 @@ foreach ($pendingCorrections as $correction) $correctionsByRegistry[(int)$correc
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
     <script src="sources/sidebar.js"></script>
     <script>
     // Scroll to the registry entry opened from a notification.
