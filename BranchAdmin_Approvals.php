@@ -49,6 +49,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$closingId) throw new RuntimeException('Select a closing.');
             workflowFlash('success', inventoryApprovalReviewClosing($conn, (int)$closingId, $userId,
                 (string)($_POST['decision'] ?? ''), (string)($_POST['review_remarks'] ?? '')));
+        } elseif ($action === 'bulk_review_closings') {
+            // Mark all / Mark selected as Reviewed: one transaction, one audit entry per closing.
+            $ids = array_map('intval', (array)($_POST['closing_ids'] ?? []));
+            $result = inventoryApprovalReviewClosingsBulk($conn, $ids, $userId, (string)($_POST['bulk_remark'] ?? ''));
+            $reasonText = $result['reasons']
+                ? ' (' . implode(', ', array_map(static fn($k, $v) => $v . ' ' . $k, array_keys($result['reasons']), $result['reasons'])) . ')'
+                : '';
+            workflowFlash($result['reviewed'] > 0 ? 'success' : 'danger',
+                $result['reviewed'] . ' reviewed, ' . $result['skipped'] . ' skipped' . $reasonText . '.');
         } else {
             throw new RuntimeException('Unknown action.');
         }
@@ -98,6 +107,23 @@ if ($ready && $tab === 'pending') {
     $pg = paginationApply($pg, inventoryApprovalClosingCount($conn, $branchId, $closingFilter));
     $closingRows = inventoryApprovalClosingList($conn, $branchId, $closingFilter, 60, $pg['per_page'], $pg['offset']);
 }
+// Every Submitted closing in the filter, on all pages (Mark all / Mark selected).
+$bulkCandidates = [];
+if ($tab === 'closings') {
+    foreach (inventoryApprovalClosingsSubmittedInFilter($conn, $branchId, $closingFilter) as $candidate) {
+        $bulkCandidates[(int)$candidate['closing_id']] = [
+            'id' => (int)$candidate['closing_id'],
+            'date' => date('m/d/Y', strtotime((string)$candidate['inventory_date'])),
+            'item' => (string)$candidate['item_name'],
+            'variance' => (float)$candidate['variance'] != 0 ? inventoryQuantityText((float)$candidate['variance'], $candidate) : '0',
+            'wastage' => (float)$candidate['wastage'] > 0 ? inventoryQuantityText((float)$candidate['wastage'], $candidate) : '—',
+            'flagged' => (bool)(int)$candidate['flagged'],
+            'own' => (int)$candidate['submitted_by'] === $userId,
+        ];
+    }
+}
+$bulkReviewable = array_filter($bulkCandidates, static fn($c) => !$c['own']);
+$bulkFlagged = count(array_filter($bulkReviewable, static fn($c) => $c['flagged']));
 $closingsToReview = inventoryApprovalClosingsToReview($conn, $branchId);
 
 // Pending requests of this page grouped by type, in the order of INVENTORY_APPROVAL_TYPES.
@@ -562,22 +588,44 @@ function approvalsDate(?string $value): string
                 </div>
                 <section class="content-card">
                     <div class="content-card-header">
-                        <div><h5>Daily Closing Review</h5><p><?php echo $closingFilter === 'all' ? 'All closings of the last 60 days.' : 'Closings that need your review, and closings returned for a recount.'; ?></p></div>
-                        <div class="btn-group btn-group-sm" role="group">
+                        <div><h5>Daily Closing Review</h5><p><?php echo $closingFilter === 'all' ? 'All closings of the last 60 days.' : ($closingFilter === 'submitted' ? 'Every submitted closing that is not reviewed yet.' : 'Closings that need your review, and closings returned for a recount.'); ?></p></div>
+                        <div class="btn-group btn-group-sm" role="group" aria-label="Closing filter">
                             <a class="btn <?php echo $closingFilter === 'needs' ? 'btn-primary' : 'btn-outline-primary'; ?>" href="BranchAdmin_Approvals.php?tab=closings">Needs review</a>
-                            <a class="btn <?php echo $closingFilter === 'all' ? 'btn-primary' : 'btn-outline-primary'; ?>" href="BranchAdmin_Approvals.php?tab=closings&amp;closings=all">Show all</a>
+                            <a class="btn <?php echo $closingFilter === 'submitted' ? 'btn-primary' : 'btn-outline-primary'; ?>" href="BranchAdmin_Approvals.php?tab=closings&amp;closings=submitted">All submitted</a>
+                            <a class="btn <?php echo $closingFilter === 'all' ? 'btn-primary' : 'btn-outline-primary'; ?>" href="BranchAdmin_Approvals.php?tab=closings&amp;closings=all">Show all (60 days)</a>
                         </div>
                     </div>
+                    <?php if ($bulkCandidates): ?>
+                        <div class="bulk-bar d-flex flex-wrap align-items-center gap-2 px-4 py-3 border-bottom" style="background:#f8f9fc">
+                            <div class="me-auto small text-muted">
+                                <strong class="text-dark"><?php echo count($bulkReviewable); ?></strong> submitted closing<?php echo count($bulkReviewable) === 1 ? '' : 's'; ?> to review in this filter (all pages)<?php if ($bulkFlagged): ?>, <strong class="text-danger"><?php echo $bulkFlagged; ?></strong> with a variance or wastage<?php endif; ?>.
+                                <?php if (count($bulkCandidates) > count($bulkReviewable)): ?><br><?php echo count($bulkCandidates) - count($bulkReviewable); ?> submitted by you cannot be reviewed by you.<?php endif; ?>
+                            </div>
+                            <button type="button" class="btn btn-sm btn-outline-primary" id="markSelectedBtn" disabled><i class="bi bi-check2-square me-1"></i>Mark selected as Reviewed <span id="selectedCount"></span></button>
+                            <button type="button" class="btn btn-sm btn-success" id="markAllBtn"<?php echo $bulkReviewable ? '' : ' disabled'; ?>><i class="bi bi-check2-all me-1"></i>Mark all as Reviewed (<?php echo count($bulkReviewable); ?>)</button>
+                            <form method="POST" action="BranchAdmin_Approvals.php" id="bulkReviewForm" class="d-none">
+                                <input type="hidden" name="csrf_token" value="<?php echo workflowH($csrf); ?>">
+                                <input type="hidden" name="action" value="bulk_review_closings">
+                                <input type="hidden" name="tab" value="closings">
+                                <input type="hidden" name="closings" value="<?php echo workflowH($closingFilter); ?>">
+                                <input type="hidden" name="page" value="<?php echo (int)$pg['page']; ?>">
+                                <input type="hidden" name="per_page" value="<?php echo (int)$pg['per_page']; ?>">
+                                <input type="hidden" name="bulk_remark" value="">
+                            </form>
+                        </div>
+                        <script type="application/json" id="bulkClosingData"><?php echo json_encode(array_values($bulkCandidates), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?></script>
+                    <?php endif; ?>
                     <div class="table-responsive">
                         <table class="table approval-table">
-                            <thead><tr><th>Date</th><th>Item</th><th>Beginning</th><th>Delivery</th><th>Consumed</th><th>Pull-out</th><th>Computed</th><th>Actual</th><th>Variance</th><th>Wastage</th><th>Nurse</th><th>Status</th><th>Review</th></tr></thead>
+                            <thead><tr><th style="width:34px"><input type="checkbox" class="form-check-input" id="selectAllPage" title="Select all on this page" aria-label="Select all on this page"<?php echo array_filter($closingRows, static fn($c) => isset($bulkReviewable[(int)$c['closing_id']])) ? '' : ' disabled'; ?>></th><th>Date</th><th>Item</th><th>Beginning</th><th>Delivery</th><th>Consumed</th><th>Pull-out</th><th>Computed</th><th>Actual</th><th>Variance</th><th>Wastage</th><th>Nurse</th><th>Status</th><th>Review</th></tr></thead>
                             <tbody>
                             <?php if (!$closingRows): ?>
-                                <tr><td colspan="13"><div class="empty-state"><i class="bi bi-clipboard-check"></i>No closings to review.</div></td></tr>
+                                <tr><td colspan="14"><div class="empty-state"><i class="bi bi-clipboard-check"></i>No closings to review.</div></td></tr>
                             <?php endif; ?>
                             <?php foreach ($closingRows as $c): ?>
                                 <?php $q = static fn($v): string => inventoryQuantityText((float)$v, $c); ?>
                                 <tr class="<?php echo (int)$c['flagged'] && $c['status'] === 'Submitted' ? 'table-warning' : ''; ?>">
+                                    <td><?php if (isset($bulkReviewable[(int)$c['closing_id']])): ?><input type="checkbox" class="form-check-input closing-select" value="<?php echo (int)$c['closing_id']; ?>" aria-label="Select this closing"><?php elseif (isset($bulkCandidates[(int)$c['closing_id']])): ?><input type="checkbox" class="form-check-input" disabled title="You submitted this closing; another Branch Admin must review it."><?php endif; ?></td>
                                     <td><?php echo workflowH(date('m/d/Y', strtotime($c['inventory_date']))); ?></td>
                                     <td><?php echo workflowH($c['item_name']); ?>
                                         <?php if (trim((string)($c['remarks'] ?? '')) !== ''): ?><div class="muted"><?php echo workflowH((string)$c['remarks']); ?></div><?php endif; ?></td>
@@ -749,6 +797,74 @@ function approvalsDate(?string $value): string
                 });
             });
         });
+
+        // Bulk closing review: "Mark all as Reviewed" (every submitted closing in
+        // the filter, all pages) and "Mark selected as Reviewed" (checked rows).
+        (function () {
+            var dataEl = document.getElementById('bulkClosingData');
+            var form = document.getElementById('bulkReviewForm');
+            if (!dataEl || !form) return;
+            var all = JSON.parse(dataEl.textContent || '[]');
+            var byId = {};
+            all.forEach(function (c) { byId[c.id] = c; });
+            var boxes = Array.prototype.slice.call(document.querySelectorAll('.closing-select'));
+            var selectAll = document.getElementById('selectAllPage');
+            var markSelected = document.getElementById('markSelectedBtn');
+            var markAll = document.getElementById('markAllBtn');
+            var countEl = document.getElementById('selectedCount');
+
+            function selectedIds() {
+                return boxes.filter(function (b) { return b.checked; }).map(function (b) { return parseInt(b.value, 10); });
+            }
+            function refresh() {
+                var n = selectedIds().length;
+                markSelected.disabled = n === 0;
+                countEl.textContent = n ? '(' + n + ')' : '';
+                if (selectAll) {
+                    selectAll.checked = boxes.length > 0 && n === boxes.length;
+                    selectAll.indeterminate = n > 0 && n < boxes.length;
+                }
+            }
+            boxes.forEach(function (b) { b.addEventListener('change', refresh); });
+            if (selectAll) selectAll.addEventListener('change', function () {
+                boxes.forEach(function (b) { b.checked = selectAll.checked; });
+                refresh();
+            });
+
+            function review(ids, scope) {
+                var rows = ids.map(function (id) { return byId[id]; }).filter(function (c) { return c && !c.own; });
+                if (!rows.length || form.dataset.sent === '1') return;
+                var flagged = rows.filter(function (c) { return c.flagged; });
+                var message = 'Mark ' + rows.length + ' closing' + (rows.length === 1 ? '' : 's') + ' as Reviewed?'
+                    + (scope === 'all' ? ' This includes the closings on every page of this filter.' : '')
+                    + (flagged.length ? ' ' + flagged.length + ' of them ' + (flagged.length === 1 ? 'has' : 'have') + ' a variance or wastage, listed below; a shared remark is required.' : ' None of them has a variance or wastage.');
+                SbcDialog.confirmRemark({
+                    title: scope === 'all' ? 'Mark all as Reviewed' : 'Mark selected as Reviewed',
+                    message: message,
+                    confirmText: 'Mark ' + rows.length + ' as Reviewed',
+                    variant: flagged.length ? 'warning' : 'primary',
+                    details: flagged.length ? { columns: ['Date', 'Item', 'Variance', 'Wastage'], rows: flagged.map(function (c) { return [c.date, c.item, c.variance, c.wastage]; }) } : null,
+                    remark: flagged.length
+                        ? { required: true, minLength: 5, label: 'Shared remark (required)', placeholder: 'Variances checked with the Nurse.', requiredMessage: 'Enter a short remark (at least 5 characters) for the closings with a variance or wastage.' }
+                        : { required: false, label: 'Shared remark (optional)', placeholder: 'Optional remark saved with each closing' }
+                }).then(function (remark) {
+                    if (remark === null || form.dataset.sent === '1') return;
+                    form.dataset.sent = '1';
+                    form.querySelectorAll('input[name="closing_ids[]"]').forEach(function (i) { i.remove(); });
+                    rows.forEach(function (c) {
+                        var input = document.createElement('input');
+                        input.type = 'hidden'; input.name = 'closing_ids[]'; input.value = c.id;
+                        form.appendChild(input);
+                    });
+                    form.querySelector('input[name="bulk_remark"]').value = remark;
+                    markAll.disabled = true; markSelected.disabled = true;
+                    form.submit();
+                });
+            }
+            markAll.addEventListener('click', function () { review(all.filter(function (c) { return !c.own; }).map(function (c) { return c.id; }), 'all'); });
+            markSelected.addEventListener('click', function () { review(selectedIds(), 'selected'); });
+            refresh();
+        })();
     </script>
 </body>
 </html>

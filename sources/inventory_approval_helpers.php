@@ -971,6 +971,101 @@ function inventoryApprovalClosingsSubmittedInFilter(mysqli $conn, string $branch
     return $rows;
 }
 
+/**
+ * BULK CLOSING REVIEW ("Mark all as Reviewed" / "Mark selected as Reviewed").
+ * One transaction with row locks and the same checks as the single review:
+ * an active Branch Admin of the closing's branch, never the person
+ * who submitted it, only closings still Submitted (others are
+ * skipped, not failed). A shared remark is required when any closing to
+ * review has a variance or wastage. One audit entry per closing.
+ * Returns ['reviewed' => n, 'skipped' => n, 'reasons' => [reason => n], 'flagged' => n].
+ */
+function inventoryApprovalReviewClosingsBulk(mysqli $conn, array $closingIds, int $adminId, string $remark): array
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $closingIds), static fn($id) => $id > 0)));
+    if (!$ids) throw new RuntimeException('Select at least one closing to review.');
+    if (count($ids) > 1000) throw new RuntimeException('Review at most 1,000 closings at a time.');
+    $remark = trim($remark);
+    if (mb_strlen($remark) > 1000) throw new RuntimeException('Keep the review remark within 1,000 characters.');
+    if (!workflowColumnExists($conn, 'daily_inventory_closings', 'review_remarks')) inventoryApprovalAssertReady($conn);
+    $admin = inventoryApprovalUser($conn, $adminId);
+    if (!$admin || (int)$admin['role_id'] !== 2 || $admin['status'] !== 'Active') {
+        throw new RuntimeException('Only an active Branch Admin can review daily closings.');
+    }
+    $branchId = (string)$admin['branch_id'];
+    $conn->begin_transaction();
+    try {
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $conn->prepare("SELECT d.closing_id, d.branch_id, d.item_id, d.inventory_date, d.status, d.variance, d.submitted_by,
+                i.item_name, COALESCE(NULLIF(TRIM(i.base_unit_label), ''), un.unit_name) AS base_unit_label,
+                COALESCE(NULLIF(TRIM(i.display_unit_label), ''), un.unit_name) AS display_unit_label,
+                COALESCE(NULLIF(i.conversion_to_base, 0), 1) AS conversion_to_base
+            FROM daily_inventory_closings d JOIN inventory_items i ON i.item_id = d.item_id JOIN units un ON un.unit_id = i.unit_id
+            WHERE d.closing_id IN ($placeholders) ORDER BY d.closing_id FOR UPDATE");
+        $stmt->bind_param(str_repeat('i', count($ids)), ...$ids);
+        $stmt->execute();
+        $locked = [];
+        foreach ($stmt->get_result()->fetch_all(MYSQLI_ASSOC) as $row) $locked[(int)$row['closing_id']] = $row;
+        $stmt->close();
+
+        $reasons = [];
+        $skip = static function (string $reason) use (&$reasons): void { $reasons[$reason] = ($reasons[$reason] ?? 0) + 1; };
+        $toReview = [];
+        foreach ($ids as $id) {
+            $c = $locked[$id] ?? null;
+            if (!$c) { $skip('not found'); continue; }
+            if ((string)$c['branch_id'] !== $branchId) { $skip('another branch'); continue; }
+            if ((int)$c['submitted_by'] === $adminId) { $skip('submitted by you'); continue; }
+            if ($c['status'] !== 'Submitted') { $skip('already ' . strtolower($c['status'] === 'Returned' ? 'returned for recount' : (string)$c['status'])); continue; }
+            $toReview[] = $c;
+        }
+
+        // Wastage of each closing's day (read after the locks; a plain read).
+        $flagged = 0;
+        $wastageStmt = $conn->prepare("SELECT COALESCE(SUM(quantity_used), 0) AS wastage FROM inventory_usage_history
+            WHERE branch_id = ? AND item_id = ? AND usage_date = ? AND usage_type = 'Wastage'");
+        foreach ($toReview as &$c) {
+            $itemId = (int)$c['item_id'];
+            $wastageStmt->bind_param('sis', $branchId, $itemId, $c['inventory_date']);
+            $wastageStmt->execute();
+            $c['wastage'] = (float)$wastageStmt->get_result()->fetch_assoc()['wastage'];
+            $c['flagged'] = (float)$c['variance'] != 0.0 || $c['wastage'] > 0;
+            if ($c['flagged']) $flagged++;
+        }
+        unset($c);
+        $wastageStmt->close();
+        if ($flagged > 0 && $remark === '') {
+            throw new RuntimeException('Enter a shared remark: ' . $flagged . ' of the closings to review ' . ($flagged === 1 ? 'has' : 'have')
+                . ' a variance or wastage (for example "Variances checked with the Nurse.").');
+        }
+
+        $reviewed = 0;
+        $update = $conn->prepare("UPDATE daily_inventory_closings
+            SET status = 'Reviewed', reviewed_by = ?, reviewed_at = NOW(), review_remarks = NULLIF(?, '')
+            WHERE closing_id = ? AND status = 'Submitted'");
+        $total = count($toReview);
+        foreach ($toReview as $c) {
+            $closingId = (int)$c['closing_id'];
+            $update->bind_param('isi', $adminId, $remark, $closingId);
+            $update->execute();
+            if ($update->affected_rows !== 1) { $skip('changed meanwhile'); continue; }
+            $reviewed++;
+            workflowAudit($conn, $adminId, $branchId,
+                'Reviewed daily closing #' . $closingId . ': ' . $c['item_name'] . ' on ' . $c['inventory_date']
+                . ' | Variance: ' . inventoryQuantityText((float)$c['variance'], $c)
+                . ($c['wastage'] > 0 ? ' | Wastage: ' . inventoryQuantityText((float)$c['wastage'], $c) : '')
+                . ' | Bulk review of ' . $total . ' closing' . ($total === 1 ? '' : 's')
+                . ($remark !== '' ? ' | Remark: ' . $remark : ''), 'Daily Inventory Review');
+        }
+        $update->close();
+        $conn->commit();
+        return ['reviewed' => $reviewed, 'skipped' => array_sum($reasons), 'reasons' => $reasons, 'flagged' => $flagged];
+    } catch (Throwable $e) {
+        $conn->rollback();
+        throw $e;
+    }
+}
+
 /** Mark a submitted closing Reviewed, or return it to the Nurse for a recount. */
 function inventoryApprovalReviewClosing(mysqli $conn, int $closingId, int $adminId, string $decision, string $remarks): string
 {
