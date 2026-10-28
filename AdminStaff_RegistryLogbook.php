@@ -1,5 +1,6 @@
 <?php
 session_start();
+require_once 'sources/pagination_helper.php';
 require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
@@ -200,6 +201,9 @@ if (in_array($exportFormat, ['csv', 'pdf'], true)) {
     reportSend($report, reportMeta($conn, $userId, $branchName, reportPeriodText($from, $to)), $exportFormat,
         'Registry_Logbook_' . $branchId . '_' . $from . '_to_' . $to);
 }
+// The screen shows one page (10/25/50); the exports above always use every row.
+$logbookPage = paginationFromRequest('', 25);
+$logbookPageRows = paginationSlice($rows, $logbookPage);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -316,7 +320,7 @@ if (in_array($exportFormat, ['csv', 'pdf'], true)) {
                         <?php if (!$rows): ?>
                             <tr><td colspan="<?php echo count($columns); ?>" class="text-center text-muted py-5">No cases were admitted in this date range.</td></tr>
                         <?php endif; ?>
-                        <?php foreach ($rows as $row): ?>
+                        <?php foreach ($logbookPageRows as $row): ?>
                             <tr>
                                 <?php foreach ($row as $column => $value): ?>
                                     <td class="<?php echo isset($doseColumns[$column]) || $column === 'TT' ? 'dose-cell' : ''; ?>"><?php echo workflowH((string)$value); ?></td>
@@ -326,6 +330,7 @@ if (in_array($exportFormat, ['csv', 'pdf'], true)) {
                     </tbody>
                 </table>
             </div>
+            <?php echo paginationRender($logbookPage, '', 'cases'); ?>
         </section>
     </div>
 </div>

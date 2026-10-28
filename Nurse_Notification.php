@@ -4,6 +4,7 @@ require_once 'sources/db_connect.php';
 require_once 'sources/inventory_stock_helpers.php';
 $stockTotalsSql = inventoryStockTotalsSql();
 require_once 'sources/notification_helper.php';
+require_once 'sources/pagination_helper.php';
 
 // Get logged-in Nurse
 $user_id = (int)$_SESSION['user_id'];
@@ -166,7 +167,14 @@ if ($filterType != 'all') {
     }
 }
 
-$notifQuery .= " ORDER BY n.created_at DESC";
+// Server-side pages (10/25/50): the count uses the same filters.
+$countStmt = $conn->prepare('SELECT COUNT(*) AS total FROM (' . $notifQuery . ') counted');
+$countStmt->bind_param($types, ...$params);
+$countStmt->execute();
+$notifPage = paginationApply(paginationFromRequest('', 10), (int)$countStmt->get_result()->fetch_assoc()['total']);
+$countStmt->close();
+
+$notifQuery .= " ORDER BY n.created_at DESC, n.notification_id DESC LIMIT " . (int)$notifPage['per_page'] . " OFFSET " . (int)$notifPage['offset'];
 
 $stmt = $conn->prepare($notifQuery);
 $stmt->bind_param($types, ...$params);
@@ -1638,6 +1646,7 @@ if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQU
             <?php endforeach; ?>
             <?php endforeach; ?>
             <?php endif; ?>
+            <?php if ($notifPage['total'] > 0) echo paginationRender($notifPage, '', 'notifications'); ?>
         </div>
 
         <!-- ========== QUICK STATS FOOTER ========== -->

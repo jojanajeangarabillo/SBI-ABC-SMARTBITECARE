@@ -4,6 +4,7 @@ require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/philhealth_requirements_helper.php';
+require_once 'sources/pagination_helper.php';
 
 $user=workflowRequireUser($conn,4);$userId=(int)$user['user_id'];$branchId=(string)$user['branch_id'];$notification_count = getAdminStaffNotificationCount($conn, $branchId);$csrf=workflowCsrfToken();
 $branchName=(string)($user['branch_name']??$branchId);$username=(string)($user['username']??'Administrative Staff');
@@ -27,7 +28,9 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
         $history->bind_param('isssi',$recordId,$oldStatus,$newStatus,$remarks,$userId);$history->execute();$history->close();
         workflowAudit($conn,$userId,$branchId,'Changed PhilHealth status for '.$record['full_name'].' to '.$newStatus,'PhilHealth');$conn->commit();workflowFlash('success','PhilHealth status updated and recorded in history.');
     }catch(Throwable $e){try{$conn->rollback();}catch(Throwable $ignored){}workflowFlash('danger',$e->getMessage());}
-    header('Location: AdminStaff_PhilhealthWorkflow.php');exit;
+    // Back to the same page of the queue.
+    $back=array_filter(['page'=>(int)($_POST['page']??0)>1?(int)$_POST['page']:'','per_page'=>in_array((int)($_POST['per_page']??0),PAGINATION_SIZES,true)?(int)$_POST['per_page']:''],static fn($v)=>$v!=='');
+    header('Location: AdminStaff_PhilhealthWorkflow.php'.($back?'?'.http_build_query($back):''));exit;
 }
 
 $stmt=$conn->prepare("SELECT ph.*,p.full_name,p.contact_number,c.case_number FROM philhealth_records ph INNER JOIN animal_bite_cases c ON c.case_id=ph.case_id INNER JOIN patients p ON p.patient_id=c.patient_id WHERE c.branch_id=? AND ph.has_philhealth='Yes' AND ph.is_archived=0 ORDER BY FIELD(ph.status,'Returned for Correction','For Writing','For Screening','Ready for Main Branch','Sent to Main Branch'),ph.updated_at DESC");
@@ -51,6 +54,9 @@ function philhealthStatusClass(string $status):string{
     return $classes[$status]??'status-secondary';
 }
 
+// Cards count every record; the table shows one page (server-side).
+$pg=paginationFromRequest('',10);
+$pageRecords=paginationSlice($records,$pg);
 $flash=workflowTakeFlash();
 ?>
 <!DOCTYPE html>
@@ -342,7 +348,7 @@ $flash=workflowTakeFlash();
                         <thead><tr><th>Patient and Case</th><th>Current Status</th><th>Eligibility</th><th>Update Processing Step</th></tr></thead>
                         <tbody>
                             <?php if(!$records):?><tr><td colspan="4" class="empty-state"><i class="bi bi-inbox"></i>No active PhilHealth records were found for this branch.</td></tr><?php endif;?>
-                            <?php foreach($records as $r):?>
+                            <?php foreach($pageRecords as $r):?>
                                 <?php
                                 $currentStatus=(string)($r['status']??'For Writing');
                                 $canEdit=in_array($currentStatus,$caintaStatuses,true);
@@ -379,6 +385,7 @@ $flash=workflowTakeFlash();
                                         <?php if($canEdit):?>
                                             <form method="post" class="workflow-form">
                                                 <input type="hidden" name="csrf_token" value="<?php echo workflowH($csrf); ?>">
+                                                <input type="hidden" name="page" value="<?php echo (int)$pg['page']; ?>"><input type="hidden" name="per_page" value="<?php echo (int)$pg['per_page']; ?>">
                                                 <input type="hidden" name="record_id" value="<?php echo (int)$r['philhealth_record_id']; ?>">
                                                 <div class="row g-2">
                                                     <div class="col-md-5"><label class="form-label" for="status-<?php echo (int)$r['philhealth_record_id']; ?>">Processing Status</label><select class="form-select form-select-sm" id="status-<?php echo (int)$r['philhealth_record_id']; ?>" name="status" required><?php foreach($caintaStatuses as $status):?><option value="<?php echo workflowH($status); ?>" <?php echo $currentStatus===$status?'selected':''; ?>><?php echo workflowH($status); ?></option><?php endforeach;?></select></div>
@@ -395,6 +402,7 @@ $flash=workflowTakeFlash();
                         </tbody>
                     </table>
                 </div>
+                <?php echo paginationRender($pg,'','records'); ?>
             </section>
         </div>
     </div>

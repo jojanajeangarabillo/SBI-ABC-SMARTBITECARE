@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/report_catalog.php';
 require_once __DIR__ . '/workflow_helpers.php';
+require_once __DIR__ . '/pagination_helper.php';
 
 /*
  * REPORT CENTER: the one report form used on every Reports page.
@@ -17,7 +18,8 @@ require_once __DIR__ . '/workflow_helpers.php';
  * Read-only: no report changes data.
  */
 
-const REPORT_CENTER_PREVIEW_ROWS = 300;
+// Preview rows per page (each section has its own pager: s0_page, s1_page, ...).
+const REPORT_CENTER_PREVIEW_ROWS = 25;
 
 /** Entries for the catalog reports a role can open. */
 function reportCenterCatalogEntries(int $roleId, ?array $only = null, array $overrides = []): array
@@ -288,7 +290,10 @@ function reportCenterRender(array $state, string $heading = 'Generate a report')
       <?php endforeach; ?>
     </div>
   <?php endif; ?>
-  <?php foreach ($report['sections'] ?? [] as $section): $count = count($section['rows']); ?>
+  <?php foreach ($report['sections'] ?? [] as $sectionIndex => $section):
+      $count = count($section['rows']);
+      $sectionPage = paginationFromRequest('s' . (int)$sectionIndex . '_', REPORT_CENTER_PREVIEW_ROWS);
+      $sectionRows = paginationSlice($section['rows'], $sectionPage); ?>
     <?php if (!empty($section['title'])): ?><h6 class="mt-3 fw-bold" style="color:#2B3A8C"><?php echo reportCenterH($section['title']); ?> <span class="text-muted fw-normal small">(<?php echo $count; ?> row<?php echo $count === 1 ? '' : 's'; ?>)</span></h6><?php endif; ?>
     <div class="rc-scroll mb-2">
       <table class="table table-sm table-striped mb-0">
@@ -297,7 +302,7 @@ function reportCenterRender(array $state, string $heading = 'Generate a report')
           <?php if (!$section['rows']): ?>
             <tr><td colspan="<?php echo count($section['columns']); ?>" class="text-muted"><?php echo reportCenterH($section['empty'] ?? 'No records match the selected filters.'); ?></td></tr>
           <?php endif; ?>
-          <?php foreach (array_slice($section['rows'], 0, REPORT_CENTER_PREVIEW_ROWS) as $row): ?>
+          <?php foreach ($sectionRows as $row): ?>
             <tr><?php foreach ($section['columns'] as $i => $c): ?><td class="<?php echo ($c['align'] ?? '') === 'R' ? 'text-end' : (($c['align'] ?? '') === 'C' ? 'text-center' : ''); ?>"><?php echo reportCenterCellHtml($row[$i] ?? ''); ?></td><?php endforeach; ?></tr>
           <?php endforeach; ?>
           <?php if (isset($section['totals'])): ?>
@@ -306,7 +311,7 @@ function reportCenterRender(array $state, string $heading = 'Generate a report')
         </tbody>
       </table>
     </div>
-    <?php if ($count > REPORT_CENTER_PREVIEW_ROWS): ?><div class="text-muted small mb-2">Showing the first <?php echo REPORT_CENTER_PREVIEW_ROWS; ?> of <?php echo $count; ?> rows. The PDF and CSV include all rows.</div><?php endif; ?>
+    <?php if ($count > REPORT_CENTER_PREVIEW_ROWS || $sectionPage['per_page'] !== REPORT_CENTER_PREVIEW_ROWS): ?><div class="mb-3 border rounded"><?php echo paginationRender($sectionPage, '#rcPreview', 'rows'); ?></div><?php endif; ?>
   <?php endforeach; ?>
   <?php if (!empty($report['notes'])): ?>
     <div class="small text-muted mt-2"><strong><?php echo reportCenterH($report['notes_title'] ?? 'Notes'); ?>:</strong>

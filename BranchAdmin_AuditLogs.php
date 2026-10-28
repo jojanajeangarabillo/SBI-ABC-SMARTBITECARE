@@ -2,6 +2,7 @@
 session_start();
 require_once 'sources/db_connect.php';
 require_once 'sources/notification_helper.php';
+require_once 'sources/pagination_helper.php';
 
 // Check if user is logged in and is branch admin
 if (
@@ -122,8 +123,13 @@ if (!empty($params)) {
 }
 $stmt->execute();
 $countResult = $stmt->get_result();
-$total_records = $countResult->fetch_assoc()['total'] ?? 0;
-$total_pages = ceil($total_records / $per_page);
+$total_records = (int)($countResult->fetch_assoc()['total'] ?? 0);
+// Shared pagination (10/25/50 rows); a page past the end shows the last page.
+$pg = paginationApply(paginationFromRequest('', 10), $total_records);
+$page = $pg['page'];
+$per_page = $pg['per_page'];
+$offset = $pg['offset'];
+$total_pages = $pg['pages'];
 
 // Fetch audit logs for current page with branch filtering
 $query = "SELECT a.*, u.username 
@@ -1360,58 +1366,8 @@ $actionTypes = ['Create', 'Update', 'Delete', 'Login', 'Logout', 'View', 'Export
                 </div>
             </div>
 
-            <!-- Pagination -->
-            <div class="pagination-wrap">
-                <div class="info-text">
-                    Showing <?php echo $offset + 1; ?> - 
-                    <?php echo min($offset + $per_page, $total_records); ?> 
-                    of <?php echo number_format($total_records); ?> entries
-                </div>
-                
-                <nav aria-label="Audit log pagination">
-                    <ul class="pagination">
-                        <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
-                            <a class="page-link" href="?page=<?php echo $page - 1; ?>&search=<?php echo urlencode($search); ?>&module=<?php echo urlencode($filter_module); ?>&action=<?php echo urlencode($filter_action); ?>&date_from=<?php echo urlencode($filter_date_from); ?>&date_to=<?php echo urlencode($filter_date_to); ?>" aria-label="Previous">
-                                <i class="bi bi-chevron-left"></i>
-                            </a>
-                        </li>
-                        
-                        <?php 
-                        $start_page = max(1, $page - 2);
-                        $end_page = min($total_pages, $page + 2);
-                        
-                        if ($start_page > 1): ?>
-                            <li class="page-item">
-                                <a class="page-link" href="?page=1&search=<?php echo urlencode($search); ?>&module=<?php echo urlencode($filter_module); ?>&action=<?php echo urlencode($filter_action); ?>&date_from=<?php echo urlencode($filter_date_from); ?>&date_to=<?php echo urlencode($filter_date_to); ?>">1</a>
-                            </li>
-                            <?php if ($start_page > 2): ?>
-                                <li class="page-item disabled"><span class="page-link">…</span></li>
-                            <?php endif; ?>
-                        <?php endif; ?>
-                        
-                        <?php for ($i = $start_page; $i <= $end_page; $i++): ?>
-                            <li class="page-item <?php echo $i == $page ? 'active' : ''; ?>">
-                                <a class="page-link" href="?page=<?php echo $i; ?>&search=<?php echo urlencode($search); ?>&module=<?php echo urlencode($filter_module); ?>&action=<?php echo urlencode($filter_action); ?>&date_from=<?php echo urlencode($filter_date_from); ?>&date_to=<?php echo urlencode($filter_date_to); ?>"><?php echo $i; ?></a>
-                            </li>
-                        <?php endfor; ?>
-                        
-                        <?php if ($end_page < $total_pages): ?>
-                            <?php if ($end_page < $total_pages - 1): ?>
-                                <li class="page-item disabled"><span class="page-link">…</span></li>
-                            <?php endif; ?>
-                            <li class="page-item">
-                                <a class="page-link" href="?page=<?php echo $total_pages; ?>&search=<?php echo urlencode($search); ?>&module=<?php echo urlencode($filter_module); ?>&action=<?php echo urlencode($filter_action); ?>&date_from=<?php echo urlencode($filter_date_from); ?>&date_to=<?php echo urlencode($filter_date_to); ?>"><?php echo $total_pages; ?></a>
-                            </li>
-                        <?php endif; ?>
-                        
-                        <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
-                            <a class="page-link" href="?page=<?php echo $page + 1; ?>&search=<?php echo urlencode($search); ?>&module=<?php echo urlencode($filter_module); ?>&action=<?php echo urlencode($filter_action); ?>&date_from=<?php echo urlencode($filter_date_from); ?>&date_to=<?php echo urlencode($filter_date_to); ?>" aria-label="Next">
-                                <i class="bi bi-chevron-right"></i>
-                            </a>
-                        </li>
-                    </ul>
-                </nav>
-            </div>
+            <!-- Pagination (sources/pagination_helper.php): filters are kept on every link -->
+            <div class="table-card mt-0"><?php echo paginationRender($pg, '', 'entries'); ?></div>
         </div>
     </div>
 

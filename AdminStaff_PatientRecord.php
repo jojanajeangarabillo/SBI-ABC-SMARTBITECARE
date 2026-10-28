@@ -963,6 +963,15 @@ if ($action) {
                     reportSend($listReport, reportMeta($conn, (int)$_SESSION['user_id'], reportBranchName($conn, (string)$logged_branch_id), $listPeriod,
                         implode(' · ', $listFilters)), (string)$_GET['export'], 'Patient_Records_' . $logged_branch_id . '_' . date('Ymd_His'));
                 }
+                // ?page=N: one page of the same list (server-side pagination);
+                // the total counts every matching patient.
+                if (isset($_GET['page'])) {
+                    require_once __DIR__ . '/sources/pagination_helper.php';
+                    $listPage = paginationFromRequest('', 10);
+                    $pageRows = paginationSlice($resultArray, $listPage);
+                    jsonResponse(['rows' => $pageRows, 'total' => $listPage['total'], 'page' => $listPage['page'],
+                        'pages' => $listPage['pages'], 'per_page' => $listPage['per_page'], 'from' => $listPage['from'], 'to' => $listPage['to']]);
+                }
                 jsonResponse($resultArray);
             } catch (Exception $e) {
                 jsonResponse(['error' => 'Failed to fetch patients: ' . $e->getMessage()], 500);
@@ -2822,8 +2831,15 @@ body.sidebar-collapsed .main {
         .pagination {
             display: flex;
             justify-content: center;
+            align-items: center;
+            flex-wrap: wrap;
             gap: 6px;
             padding: 16px 0 12px;
+        }
+
+        .page.disabled {
+            opacity: .4;
+            cursor: not-allowed;
         }
 
         .page {
@@ -4416,7 +4432,8 @@ body.sidebar-collapsed .main {
     let currentAdmissionDate = '';
 
     let currentPage = 1;
-    const pageSize = 8;
+    let pageSize = 10;
+    let listTotal = 0;
     let searchTerm = '';
     let archiveTargetCaseId = null;
     // Server status of the case being edited (shared rule); used when the case
@@ -4881,8 +4898,9 @@ body.sidebar-collapsed .main {
         if (dateApi) url += `&date=${encodeURIComponent(dateApi)}`;
         if (search) url += `&search=${encodeURIComponent(search)}`;
         url += `&filter=${encodeURIComponent(currentFilter)}`;
-        lastFetchUrl = url;
-        const res = await fetch(url);
+        lastFetchUrl = url; // exports use every row of these filters
+        // The server returns one page and the total (server-side pagination).
+        const res = await fetch(url + `&page=${currentPage}&per_page=${pageSize}`);
         if (!res.ok) {
             const data = await res.json();
             throw new Error(data.error || 'Fetch failed');
@@ -4899,18 +4917,13 @@ body.sidebar-collapsed .main {
 
             const result = await fetchPatients(dateApi, searchTerm.trim());
 
-            // Guard: keep previous data if the response isn't an array
-            if (Array.isArray(result)) {
-                allPatients = result;
-            } else {
-                allPatients = [];
-            }
-
-            const total = allPatients.length;
-            const totalPages = Math.ceil(total / pageSize) || 1;
-            if (currentPage > totalPages) currentPage = totalPages;
-            const start = (currentPage - 1) * pageSize;
-            const items = allPatients.slice(start, start + pageSize);
+            // One page of rows plus the total of every matching patient.
+            allPatients = result && Array.isArray(result.rows) ? result.rows : [];
+            const total = result && Number.isFinite(result.total) ? result.total : allPatients.length;
+            listTotal = total;
+            const totalPages = result && result.pages ? result.pages : 1;
+            currentPage = result && result.page ? result.page : 1;
+            const items = allPatients;
 
             document.getElementById('dateCountBadge').textContent = total + ' patient' + (total !== 1 ? 's' : '');
             document.getElementById('patientCountBadge').textContent = total;
@@ -5004,18 +5017,35 @@ body.sidebar-collapsed .main {
                 });
             }
 
-            let pagHtml = '';
+            // Pager: "Showing 1-10 of N", page buttons and rows per page.
+            const from = total ? (result.from || 1) : 0;
+            const to = total ? (result.to || items.length) : 0;
+            let pagHtml = `<span class="text-muted small me-2">${total ? `Showing ${from}–${to} of ${total} patient${total === 1 ? '' : 's'}` : 'No patients'}</span>`;
             if (totalPages > 1) {
-                for (let i = 1; i <= totalPages; i++) {
-                    pagHtml += `<div class="page ${i === currentPage ? 'active' : ''}" data-page="${i}">${i}</div>`;
-                }
+                const pages = [...new Set([1, currentPage - 1, currentPage, currentPage + 1, totalPages])].filter(n => n >= 1 && n <= totalPages).sort((a, b) => a - b);
+                pagHtml += `<div class="page ${currentPage <= 1 ? 'disabled' : ''}" data-page="${Math.max(1, currentPage - 1)}" aria-label="Previous page">&lsaquo;</div>`;
+                let previous = 0;
+                pages.forEach(n => {
+                    if (previous && n > previous + 1) pagHtml += '<span class="px-1 text-muted">…</span>';
+                    pagHtml += `<div class="page ${n === currentPage ? 'active' : ''}" data-page="${n}">${n}</div>`;
+                    previous = n;
+                });
+                pagHtml += `<div class="page ${currentPage >= totalPages ? 'disabled' : ''}" data-page="${Math.min(totalPages, currentPage + 1)}" aria-label="Next page">&rsaquo;</div>`;
             }
+            pagHtml += `<label class="small text-muted ms-2">Rows <select id="patientRowsPerPage" class="form-select form-select-sm d-inline-block w-auto">${[10, 25, 50].map(n => `<option value="${n}"${n === pageSize ? ' selected' : ''}>${n}</option>`).join('')}</select></label>`;
             document.getElementById('paginationControls').innerHTML = pagHtml;
-            document.querySelectorAll('.page').forEach(el => {
+            document.querySelectorAll('#paginationControls .page').forEach(el => {
                 el.addEventListener('click', function() {
+                    if (this.classList.contains('disabled') || this.classList.contains('active')) return;
                     currentPage = parseInt(this.dataset.page);
                     renderTable();
                 });
+            });
+            const rowsSelect = document.getElementById('patientRowsPerPage');
+            if (rowsSelect) rowsSelect.addEventListener('change', function () {
+                pageSize = parseInt(this.value, 10) || 10;
+                currentPage = 1;
+                renderTable();
             });
         } catch (err) {
             console.error(err);

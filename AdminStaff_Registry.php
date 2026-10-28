@@ -1,5 +1,6 @@
 <?php
 session_start();
+require_once 'sources/pagination_helper.php';
 require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
@@ -173,6 +174,17 @@ $queueStmt->bind_param('s', $branchId);
 $queueStmt->execute();
 $records = $queueStmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $queueStmt->close();
+// Server-side pages of the queue (10/25/50). A link to one visit opens the page that holds it.
+$registryPage = paginationFromRequest('', 10);
+if ($highlightVisitId > 0 && !isset($_GET['page'])) {
+    foreach ($records as $index => $queueRow) {
+        if ((int)$queueRow['visit_id'] === $highlightVisitId) {
+            $registryPage['page'] = intdiv($index, $registryPage['per_page']) + 1;
+            break;
+        }
+    }
+}
+$queueRecords = paginationSlice($records, $registryPage);
 
 $forRegistryCount = 0;
 $registeredCount = 0;
@@ -970,7 +982,7 @@ foreach ($pendingCorrections as $correction) $correctionsByRegistry[(int)$correc
                                 </tr>
                             <?php endif; ?>
 
-                            <?php foreach ($records as $row): ?>
+                            <?php foreach ($queueRecords as $row): ?>
                                 <tr class="registry-queue-row<?= (int)$row['visit_id'] === $highlightVisitId ? ' table-warning' : '' ?>" id="registry-visit-<?= (int)$row['visit_id'] ?>">
                                     <td>
                                         <div class="patient-name"><?php echo workflowH($row['full_name']); ?></div>
@@ -1133,23 +1145,7 @@ foreach ($pendingCorrections as $correction) $correctionsByRegistry[(int)$correc
                     </table>
                 </div>
 
-                <?php if ($records): ?>
-                    <div class="table-pagination-bar">
-                        <div class="table-pagination-summary" id="registryPaginationSummary">Showing registry records</div>
-                        <div class="table-pagination-actions">
-                            <label class="rows-per-page-control" for="registryRowsPerPage">
-                                Rows
-                                <select id="registryRowsPerPage">
-                                    <option value="10" selected>10</option>
-                                    <option value="25">25</option>
-                                    <option value="50">50</option>
-                                    <option value="100">100</option>
-                                </select>
-                            </label>
-                            <div class="table-page-buttons" id="registryPageButtons" aria-label="Registry queue pages"></div>
-                        </div>
-                    </div>
-                <?php endif; ?>
+                <?php echo paginationRender($registryPage, '', 'records'); ?>
             </section>
         </div>
     </div>
@@ -1223,76 +1219,6 @@ foreach ($pendingCorrections as $correction) $correctionsByRegistry[(int)$correc
             const caseOutput = document.getElementById('confirmCaseNumber');
             const registryOutput = document.getElementById('confirmRegistryNumber');
             let pendingForm = null;
-            const registryRows = Array.from(document.querySelectorAll('.registry-queue-row'));
-            const registryRowsPerPage = document.getElementById('registryRowsPerPage');
-            const registryPageButtons = document.getElementById('registryPageButtons');
-            const registryPaginationSummary = document.getElementById('registryPaginationSummary');
-            let registryCurrentPage = 1;
-
-            function renderRegistryPageButtons(totalPages) {
-                if (!registryPageButtons) return;
-                registryPageButtons.innerHTML = '';
-
-                if (totalPages <= 1) return;
-
-                const addButton = (label, page, disabled = false, active = false) => {
-                    const button = document.createElement('button');
-                    button.type = 'button';
-                    button.className = 'table-page-btn' + (active ? ' active' : '');
-                    button.innerHTML = label;
-                    button.disabled = disabled;
-
-                    if (!disabled && !active) {
-                        button.addEventListener('click', function () {
-                            registryCurrentPage = page;
-                            renderRegistryPage(false);
-                        });
-                    }
-
-                    registryPageButtons.appendChild(button);
-                };
-
-                addButton('<i class="bi bi-chevron-left"></i>', registryCurrentPage - 1, registryCurrentPage === 1);
-
-                let startPage = Math.max(1, registryCurrentPage - 2);
-                let endPage = Math.min(totalPages, startPage + 4);
-                startPage = Math.max(1, endPage - 4);
-
-                for (let page = startPage; page <= endPage; page++) {
-                    addButton(String(page), page, false, page === registryCurrentPage);
-                }
-
-                addButton('<i class="bi bi-chevron-right"></i>', registryCurrentPage + 1, registryCurrentPage === totalPages);
-            }
-
-            function renderRegistryPage(resetPage = true) {
-                if (!registryRows.length || !registryRowsPerPage || !registryPaginationSummary) return;
-
-                if (resetPage) registryCurrentPage = 1;
-
-                const rowsPerPage = Math.max(1, parseInt(registryRowsPerPage.value, 10) || 10);
-                const totalPages = Math.max(1, Math.ceil(registryRows.length / rowsPerPage));
-
-                if (registryCurrentPage > totalPages) registryCurrentPage = totalPages;
-
-                registryRows.forEach(row => row.style.display = 'none');
-
-                const startIndex = (registryCurrentPage - 1) * rowsPerPage;
-                const endIndex = Math.min(startIndex + rowsPerPage, registryRows.length);
-
-                registryRows.slice(startIndex, endIndex).forEach(row => row.style.display = '');
-
-                registryPaginationSummary.textContent =
-                    `Showing ${startIndex + 1}–${endIndex} of ${registryRows.length} record${registryRows.length === 1 ? '' : 's'}`;
-
-                renderRegistryPageButtons(totalPages);
-            }
-
-            if (registryRowsPerPage) {
-                registryRowsPerPage.addEventListener('change', () => renderRegistryPage(true));
-                renderRegistryPage(true);
-            }
-
 
             document.querySelectorAll('.registry-form').forEach(function (form) {
                 form.addEventListener('submit', function (event) {
