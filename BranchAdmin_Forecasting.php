@@ -168,9 +168,9 @@ if (!in_array($forecast_days, $allowed_forecast_days, true)) {
     $forecast_days = 30;
 }
 
-// Export the latest SAVED forecast (PDF/CSV) before anything below could
+// Export the latest SAVED forecast (PDF; &inline=1 for Print) before anything below could
 // start a forecast run: exporting never runs a new forecast.
-if (in_array($_GET['export'] ?? '', ['pdf', 'csv'], true)) {
+if (($_GET['export'] ?? '') === 'pdf') {
     require_once 'sources/report_center.php';
     reportForecastExport($conn, $user_id, $branch_id, $forecast_days, (string)$_GET['export']);
 }
@@ -1282,8 +1282,8 @@ while ($row = $items_result->fetch_assoc()) {
                 <h6><i class="bi bi-calendar-range me-2"></i>Forecast Horizon</h6>
                 <p>Select how far ahead the system should forecast. Each horizon is saved separately.</p>
                 <a href="ForecastAccuracy.php" class="btn btn-sm btn-outline-primary mt-2"><i class="bi bi-clipboard-data me-1"></i>View Forecast Accuracy</a>
-                <a href="BranchAdmin_Forecasting.php?days=<?php echo (int)$forecast_days; ?>&amp;export=pdf" class="btn btn-sm btn-outline-primary mt-2"><i class="bi bi-file-earmark-pdf me-1"></i>Export <?php echo (int)$forecast_days; ?>-day PDF</a>
-                <a href="BranchAdmin_Forecasting.php?days=<?php echo (int)$forecast_days; ?>&amp;export=csv" class="btn btn-sm btn-outline-primary mt-2"><i class="bi bi-filetype-csv me-1"></i>Export <?php echo (int)$forecast_days; ?>-day CSV</a>
+                <a href="BranchAdmin_Forecasting.php?days=<?php echo (int)$forecast_days; ?>&amp;export=pdf" class="btn btn-sm btn-outline-primary mt-2" title="Latest saved <?php echo (int)$forecast_days; ?>-day forecast"><i class="bi bi-file-earmark-pdf me-1"></i>Export PDF</a>
+                <button type="button" data-print-pdf="BranchAdmin_Forecasting.php?days=<?php echo (int)$forecast_days; ?>&amp;export=pdf" class="btn btn-sm btn-outline-primary mt-2"><i class="bi bi-printer me-1"></i>Print</button>
             </div>
             <div class="forecast-horizon-options" role="group" aria-label="Forecast horizon">
                 <?php foreach ($allowed_forecast_days as $days_option): ?>
@@ -1574,7 +1574,7 @@ while ($row = $items_result->fetch_assoc()) {
                                                     </div>
                                                 <?php else: ?>
                                                     <form method="POST" action="BranchAdmin_Forecasting.php" class="mt-1"
-                                                          onsubmit="return confirm(<?php echo htmlspecialchars(json_encode('Request a reorder of ' . inventoryReorderText($reorderBase, $forecast) . ' of ' . $forecast['item_name'] . '? The request is approved and sent to the Inventory Officer.'), ENT_QUOTES); ?>);">
+                                                          data-confirm="<?php echo htmlspecialchars('Request a reorder of ' . inventoryReorderText($reorderBase, $forecast) . ' of ' . $forecast['item_name'] . '? The request is approved and sent to the Inventory Officer.', ENT_QUOTES); ?>" data-confirm-title="Request reorder" data-confirm-ok="Request reorder">
                                                         <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($reorder_csrf); ?>">
                                                         <input type="hidden" name="action" value="request_reorder">
                                                         <input type="hidden" name="item_id" value="<?php echo (int)$forecast['item_id']; ?>">
@@ -1711,6 +1711,7 @@ while ($row = $items_result->fetch_assoc()) {
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="sources/sidebar.js"></script>
 <script>

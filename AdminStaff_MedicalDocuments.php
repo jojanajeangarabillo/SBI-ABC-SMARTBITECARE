@@ -4694,6 +4694,7 @@ if ($branch_id) {
 
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="sources/sidebar.js"></script>
 
 
@@ -5870,6 +5871,11 @@ async function downloadDocument(id) {
 
 async function printDocument(id) {
 
+    // The clicked Print button (it shows "Preparing..." while the PDF loads).
+    const clicked = window.event && window.event.target && window.event.target.closest
+        ? window.event.target.closest('button, a')
+        : null;
+
     try {
 
         showLoading();
@@ -5879,41 +5885,32 @@ async function printDocument(id) {
 
         hideLoading();
 
+        const url =
+            'download_document.php?id=' + encodeURIComponent(d.document_id);
+
         /*
         |--------------------------------------------------------------------------
-        | Open printable document in a new browser tab.
+        | PDF and images: print the stored file directly (hidden frame, the
+        | browser print dialog; it opens in a new tab if printing is blocked).
+        | Other files (Word, Excel) cannot be printed by the browser.
         |--------------------------------------------------------------------------
         */
 
-        const printWindow =
-            window.open(
-                'download_document.php?id=' + encodeURIComponent(d.document_id),
-                '_blank'
-            );
+        const extension =
+            String(d.file_name || '').split('.').pop().toLowerCase();
 
-        if (!printWindow) {
+        if (!['pdf', 'jpg', 'jpeg', 'png'].includes(extension)) {
 
             showToast(
-                'Print blocked',
-                'Please allow pop-ups for this site.',
+                'Cannot print this file here',
+                'Download it and print it from its own program.',
                 true
             );
 
             return;
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | PDF / browser-supported files
-        |
-        | The browser's native viewer handles printing.
-        |--------------------------------------------------------------------------
-        */
-
-        showToast(
-            'Document opened',
-            'Use the browser print option to print the form.'
-        );
+        SbcPrint.print(url, clicked);
 
     } catch (error) {
 

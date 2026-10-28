@@ -4,6 +4,7 @@ require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
 require_once 'sources/philhealth_requirements_helper.php';
+require_once 'sources/pagination_helper.php';
 
 $user = workflowRequireUser($conn, 2);
 $userId = (int)$user['user_id'];
@@ -144,7 +145,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         workflowFlash('danger', $e->getMessage());
     }
-    header('Location: BranchAdmin_PhilhealthWorkflow.php');
+    // Back to the same page of the queue.
+    $back = array_filter([
+        'page' => (int)($_POST['page'] ?? 0) > 1 ? (int)$_POST['page'] : '',
+        'per_page' => in_array((int)($_POST['per_page'] ?? 0), PAGINATION_SIZES, true) ? (int)$_POST['per_page'] : '',
+    ], static fn($v) => $v !== '');
+    header('Location: BranchAdmin_PhilhealthWorkflow.php' . ($back ? '?' . http_build_query($back) : ''));
     exit;
 }
 
@@ -201,6 +207,9 @@ function mainPhilhealthStatusClass(string $status): string
     return $classes[$status] ?? 'status-secondary';
 }
 
+// Cards count every record; the table shows one page (server-side).
+$pg = paginationFromRequest('', 10);
+$pageRecords = paginationSlice($records, $pg);
 $flash = workflowTakeFlash();
 ?>
 <!DOCTYPE html>
@@ -914,7 +923,7 @@ $flash = workflowTakeFlash();
                                 </tr>
                             <?php endif; ?>
 
-                            <?php foreach ($records as $row): ?>
+                            <?php foreach ($pageRecords as $row): ?>
                                 <?php
                                 $currentStatus = (string)($row['status'] ?? 'Ready for Main Branch');
                                 $currentIsMainStatus = in_array($currentStatus, $mainStatuses, true);
@@ -950,6 +959,8 @@ $flash = workflowTakeFlash();
                                     <td>
                                         <form method="post" class="workflow-form">
                                             <input type="hidden" name="csrf_token" value="<?php echo workflowH($csrf); ?>">
+                                            <input type="hidden" name="page" value="<?php echo (int)$pg['page']; ?>">
+                                            <input type="hidden" name="per_page" value="<?php echo (int)$pg['per_page']; ?>">
                                             <input type="hidden" name="record_id" value="<?php echo (int)$row['philhealth_record_id']; ?>">
                                             <div class="row g-2">
                                                 <div class="col-lg-5">
@@ -966,7 +977,7 @@ $flash = workflowTakeFlash();
                                                     <input class="form-control form-control-sm" id="remarks-<?php echo (int)$row['philhealth_record_id']; ?>" name="remarks" maxlength="500" value="<?php echo workflowH($row['remarks'] ?? ''); ?>" placeholder="Add processing remarks">
                                                 </div>
                                                 <div class="col-lg-2 d-flex align-items-end">
-                                                    <button type="submit" class="btn-save w-100" onclick="return confirm('Save this branch PhilHealth update?');"><i class="bi bi-check2-circle"></i>Save</button>
+                                                    <button type="submit" class="btn-save w-100" data-confirm="Save this branch PhilHealth update? The new status is recorded in the history and Admin Staff are notified." data-confirm-title="Save PhilHealth update" data-confirm-ok="Save update"><i class="bi bi-check2-circle"></i>Save</button>
                                                 </div>
                                             </div>
                                         </form>
@@ -976,6 +987,7 @@ $flash = workflowTakeFlash();
                         </tbody>
                     </table>
                 </div>
+                <?php echo paginationRender($pg, '', 'records'); ?>
             </section>
         </div>
     </div>
@@ -1025,6 +1037,7 @@ $flash = workflowTakeFlash();
 
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
     <script src= "sources/sidebar.js"></script>
 </body>
 </html>

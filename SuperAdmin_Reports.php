@@ -19,7 +19,7 @@ $notification_count = getUnreadNotificationCount($conn, $user_id);
 // ============================================
 // REPORTS: the shared report center (sources/report_center.php) with the
 // shared builders (sources/report_standard.php). Branch: one or all.
-// Each report gives a preview, a PDF and a CSV from the same data.
+// Each report gives a preview, a PDF and a Print of that PDF from the same data.
 // ============================================
 require_once 'sources/report_standard.php';
 require_once 'sources/report_center.php';

@@ -1,8 +1,9 @@
 <?php
-// Preserve the existing generated-PDF URL and use the protected file endpoint.
+// Preserve the existing generated-PDF URL and use the protected file endpoint
+// (same login, role, branch and owner checks). &inline=1 is the Print button.
 if (isset($_GET['download_generated'])) {
     $_GET['id'] = $_GET['download_generated'];
-    $_GET['download'] = '1';
+    $_GET['download'] = ($_GET['inline'] ?? '') === '1' ? '0' : '1';
     require __DIR__ . '/download_document.php';
     exit;
 }
@@ -2322,6 +2323,7 @@ function getStatusBadge($status)
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="sources/sidebar.js"></script>
 <script>
 function escapeHtml(value) {
@@ -2602,12 +2604,12 @@ function openDocumentModal(patientId) {
     .then(response => response.json())
     .then(data => {
         if (!data.success) {
-            alert(data.message || 'Unable to load patient case.');
+            SbcDialog.alert(data.message || 'Unable to load patient case.', { variant: 'danger', title: 'Unable to load' });
             return;
         }
 
         if (!data.case_id) {
-            alert('This patient does not have a case available for document generation.');
+            SbcDialog.alert('This patient does not have a case available for document generation.');
             return;
         }
 
@@ -2637,7 +2639,7 @@ function openDocumentModal(patientId) {
         modal.show();
     })
     .catch(error => {
-        alert('Error loading patient data. Please try again.');
+        SbcDialog.alert('Error loading patient data. Please try again.', { variant: 'danger', title: 'Unable to load' });
         console.error(error);
     });
 }
@@ -2669,7 +2671,7 @@ document.addEventListener('DOMContentLoaded', function() {
             var originalButtonHtml = button.innerHTML;
 
             if (!patientId || !caseId || !documentType) {
-                alert('Select a patient case and document type first.');
+                SbcDialog.alert('Select a patient case and document type first.');
                 return;
             }
 
@@ -2716,9 +2718,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 var notice = document.createElement('div');
                 notice.className = 'alert-toast alert alert-success alert-dismissible fade show';
                 notice.setAttribute('role', 'alert');
+                if (!data.download_url) {
+                    throw new Error('The PDF was generated, but no download URL was returned.');
+                }
+
+                // The message offers Print for the generated PDF (same file, inline).
                 notice.innerHTML =
                     '<i class="bi bi-check-circle-fill me-2"></i>' +
                     escapeHtml(data.message || 'PDF generated successfully.') +
+                    ' <button type="button" class="btn btn-sm btn-outline-success ms-2" data-print-pdf="' + escapeHtml(data.download_url) + '">' +
+                    '<i class="bi bi-printer me-1"></i>Print</button>' +
                     '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
                 document.body.appendChild(notice);
 
@@ -2726,23 +2735,20 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (notice && notice.parentNode) {
                         bootstrap.Alert.getOrCreateInstance(notice).close();
                     }
-                }, 8000);
-
-                if (!data.download_url) {
-                    throw new Error('The PDF was generated, but no download URL was returned.');
-                }
+                }, 20000);
 
                 /*
                  * IMPORTANT:
                  * This URL points to a PHP endpoint that sends
-                 * Content-Disposition: attachment and Content-Type: application/pdf.
+                 * Content-Disposition: attachment and Content-Type: application/pdf
+                 * (Print in the message above asks for the same file inline).
                  * That forces a real PDF download and does not depend on the browser
                  * honoring a scripted <a download> click.
                  */
                 window.location.href = data.download_url;
             })
             .catch(function(error) {
-                alert(error.message || 'Unable to generate the patient PDF.');
+                SbcDialog.alert(error.message || 'Unable to generate the patient PDF.', { variant: 'danger', title: 'Unable to generate' });
             })
             .finally(function() {
                 button.disabled = false;

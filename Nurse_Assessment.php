@@ -5220,7 +5220,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     if (!nonArvCheckbox.checked) {
                         event.preventDefault();
 
-                        window.alert(
+                        SbcDialog.alert(
                             'Check "Not Anti-Rabies Vaccine" before using Administer.'
                         );
 
@@ -5245,21 +5245,21 @@ document.addEventListener('DOMContentLoaded', function () {
 
                         if (itemId === '') {
                             event.preventDefault();
-                            window.alert('Select a product for every administration row.');
+                            SbcDialog.alert('Select a product for every administration row.');
                             select?.focus();
                             return;
                         }
 
                         if (quantityValue <= 0) {
                             event.preventDefault();
-                            window.alert('Enter the actual quantity used for every selected product.');
+                            SbcDialog.alert('Enter the actual quantity used for every selected product.');
                             quantity?.focus();
                             return;
                         }
 
                         if (selectedProducts.has(itemId)) {
                             event.preventDefault();
-                            window.alert('The same product is listed more than once. Use one row and enter the total actual quantity.');
+                            SbcDialog.alert('The same product is listed more than once. Use one row and enter the total actual quantity.');
                             select?.focus();
                             return;
                         }
@@ -5270,7 +5270,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
                     if (validEntries === 0) {
                         event.preventDefault();
-                        window.alert('Add at least one product to administer.');
+                        SbcDialog.alert('Add at least one product to administer.');
                         return;
                     }
 
@@ -5553,5 +5553,6 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 </body>
 </html>

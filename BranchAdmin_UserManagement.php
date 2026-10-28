@@ -1106,7 +1106,7 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
                                                     <span class="badge text-bg-danger" title="Locked after <?php echo LOGIN_MAX_FAILED_ATTEMPTS; ?> failed login attempts">
                                                         <i class="bi bi-lock-fill"></i> Locked until <?php echo htmlspecialchars(date('h:i A', strtotime($lockStates[(int)$user['user_id']]['locked_until'])), ENT_QUOTES, 'UTF-8'); ?>
                                                     </span>
-                                                    <form method="POST" style="display:inline;" onsubmit="return confirm('Unlock this account now?');">
+                                                    <form method="POST" style="display:inline;" data-confirm="Unlock this account now? The user can sign in again immediately." data-confirm-title="Unlock account" data-confirm-ok="Unlock">
                                                         <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($managementCsrf, ENT_QUOTES, 'UTF-8'); ?>">
                                                         <input type="hidden" name="action" value="unlock_user">
                                                         <input type="hidden" name="user_id" value="<?php echo $user['user_id']; ?>">
@@ -1337,6 +1337,7 @@ $roles = $conn->query($rolesQuery)->fetch_all(MYSQLI_ASSOC);
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
     <script src= "sources/sidebar.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {

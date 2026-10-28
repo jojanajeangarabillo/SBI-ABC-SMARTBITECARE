@@ -1116,6 +1116,7 @@ margin-top:0;
 
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="sources/sidebar.js"></script>
 
 <script>
@@ -1133,7 +1134,7 @@ async function markRead(card){if(card.dataset.isRead==='1')return true;const id=
 async function openCard(card){if(card.dataset.busy==='1')return;card.dataset.busy='1';try{if(!(await markRead(card)))return;fillModal(card);if(modal)modal.show();}finally{card.dataset.busy='0';}}
 document.addEventListener('click',e=>{const card=e.target.closest('.notif-item[data-notification-id]');if(card)openCard(card);});
 document.addEventListener('keydown',e=>{if(e.key!=='Enter'&&e.key!==' ')return;const card=e.target.closest('.notif-item[data-notification-id]');if(!card)return;e.preventDefault();openCard(card);});
-const markAll=document.querySelector('.btn-mark-all');if(markAll){markAll.closest('form').addEventListener('submit',async e=>{e.preventDefault();if(markAll.disabled)return;const body=new URLSearchParams({csrf_token:csrfToken,action:'mark_all_read'});try{const response=await fetch(pageUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','X-Requested-With':'XMLHttpRequest'},body});const data=await response.json();if(!response.ok||!data.success)throw new Error(data.message||'Unable to mark all as read.');document.querySelectorAll('.notif-item[data-notification-id]').forEach(setRead);updateUnreadCount(data.unread_count);}catch(e){console.error(e);window.alert(e.message||'Unable to mark notifications as read.');}});}
+const markAll=document.querySelector('.btn-mark-all');if(markAll){markAll.closest('form').addEventListener('submit',async e=>{e.preventDefault();if(markAll.disabled)return;const body=new URLSearchParams({csrf_token:csrfToken,action:'mark_all_read'});try{const response=await fetch(pageUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','X-Requested-With':'XMLHttpRequest'},body});const data=await response.json();if(!response.ok||!data.success)throw new Error(data.message||'Unable to mark all as read.');document.querySelectorAll('.notif-item[data-notification-id]').forEach(setRead);updateUnreadCount(data.unread_count);}catch(e){console.error(e);SbcDialog.alert(e.message||'Unable to mark notifications as read.',{variant:'danger',title:'Unable to update'});}});}
 })();
 </script>
 

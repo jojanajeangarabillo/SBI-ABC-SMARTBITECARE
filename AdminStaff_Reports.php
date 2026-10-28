@@ -7,7 +7,7 @@ require_once 'sources/report_page_layout.php';
 
 /*
  * ADMIN STAFF REPORTS: PhilHealth Status and Data Quality (links open the record to fix),
- * on the shared report center (preview, PDF, CSV). Read-only.
+ * on the shared report center (preview, Export PDF, Print). Read-only.
  */
 $user = workflowRequireUser($conn, 4);
 $reportCenter = reportCenterRun($conn, reportCenterCatalogEntries(4), [

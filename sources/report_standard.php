@@ -459,7 +459,7 @@ function reportStdAuditLogs(mysqli $conn, array $f): array
     ];
 }
 
-/** Send the audit log report of a page's filters (PDF or CSV) and stop. */
+/** Send the audit log report of a page's filters (PDF, or inline for Print) and stop. */
 function reportStdAuditLogsSend(mysqli $conn, int $userId, string $auditBranch, array $f, string $format): void
 {
     $report = reportStdAuditLogs($conn, $f);
@@ -467,7 +467,7 @@ function reportStdAuditLogsSend(mysqli $conn, int $userId, string $auditBranch, 
     $to = reportCenterDateOk($f['date_to'] ?? '') ? (string)$f['date_to'] : null;
     $meta = reportMeta($conn, $userId, reportBranchName($conn, empty($f['branch_id']) ? null : (string)$f['branch_id']),
         reportPeriodText($from, $to), (string)$report['filters_text']);
-    workflowAudit($conn, $userId, $auditBranch, 'Exported audit logs (' . strtoupper($format) . ') - Branch: ' . $meta['branch']
+    workflowAudit($conn, $userId, $auditBranch, reportExportVerb() . ' audit logs (' . strtoupper($format) . ') - Branch: ' . $meta['branch']
         . ' - Period: ' . $meta['period'] . ' (' . count($report['sections'][0]['rows']) . ' entries)', 'Audit Logs');
     reportSend($report, $meta, $format, 'Audit_Logs_' . ($f['branch_id'] ?: 'All_branches') . '_' . date('Ymd_His'));
 }

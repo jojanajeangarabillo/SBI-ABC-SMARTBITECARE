@@ -1749,7 +1749,7 @@ if (isset($_GET['archive_id'])) {
                         <div class="fw-bold mb-2"><i class="bi bi-lock-fill me-1"></i>Locked accounts (<?php echo count($lockedAccounts); ?>)</div>
                         <div class="small mb-2">Locked for <?php echo LOGIN_LOCK_MINUTES; ?> minutes after <?php echo LOGIN_MAX_FAILED_ATTEMPTS; ?> failed login attempts. Unlock an account early only after confirming it is the account owner.</div>
                         <?php foreach ($lockedAccounts as $account): ?>
-                            <form method="POST" class="d-flex align-items-center gap-2 mb-1" onsubmit="return confirm('Unlock this account now?');">
+                            <form method="POST" class="d-flex align-items-center gap-2 mb-1" data-confirm="Unlock this account now? The user can sign in again immediately." data-confirm-title="Unlock account" data-confirm-ok="Unlock">
                                 <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($managementCsrf, ENT_QUOTES, 'UTF-8'); ?>">
                                 <input type="hidden" name="action" value="unlock_user">
                                 <input type="hidden" name="user_id" value="<?php echo (int)$account['user_id']; ?>">
@@ -2226,6 +2226,7 @@ if (isset($_GET['archive_id'])) {
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
     <script src="sources/sidebar.js"></script>
 
 <script>

@@ -8,6 +8,7 @@ require_once 'sources/inventory_officer_activity_helper.php';
 require_once 'sources/stock_quantity_helpers.php';
 require_once 'sources/stock_receipt_source_helper.php';
 require_once 'sources/inventory_approval_helpers.php';
+require_once 'sources/pagination_helper.php';
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 5) {
     header('Location: login.php');
@@ -653,11 +654,17 @@ if ($branch_id) {
  * ----------------------------------------------------------- */
 $approvalsReady = inventoryApprovalReady($conn);
 $myRequests = [];
+$myPendingCount = 0;
+$myRequestsPage = paginationApply(paginationFromRequest('req_', 10), 0);
 $openRestocks = [];
 $openRestocksByItem = [];
 $pendingByStock = [];
 if ($branch_id && $approvalsReady) {
-    $myRequests = inventoryApprovalList($conn, ['branch_id' => (string)$branch_id, 'requested_by' => $user_id, 'limit' => 100]);
+    // My Requests: server-side pages (req_page / req_per_page); the badge counts all pending.
+    $myRequestsFilter = ['branch_id' => (string)$branch_id, 'requested_by' => $user_id];
+    $myPendingCount = inventoryApprovalCount($conn, $myRequestsFilter + ['statuses' => ['Pending']]);
+    $myRequestsPage = paginationApply(paginationFromRequest('req_', 10), inventoryApprovalCount($conn, $myRequestsFilter));
+    $myRequests = inventoryApprovalList($conn, $myRequestsFilter + ['limit' => $myRequestsPage['per_page'], 'offset' => $myRequestsPage['offset']]);
     $openRestocks = array_merge(
         inventoryApprovalList($conn, ['branch_id' => (string)$branch_id, 'statuses' => ['Pending'], 'types' => ['restock']]),
         inventoryApprovalOpenRestocks($conn, (string)$branch_id)
@@ -1306,7 +1313,6 @@ body{
             <button type="button" class="tab-btn <?php echo $activePanel === 'adjustment' ? 'active' : ''; ?>" onclick="showPanel('adjustment', this)">Adjustment</button>
             <button type="button" class="tab-btn <?php echo $activePanel === 'expiration' ? 'active' : ''; ?>" onclick="showPanel('expiration', this)">Expiration Monitoring</button>
             <button type="button" class="tab-btn <?php echo $activePanel === 'archived' ? 'active' : ''; ?>" onclick="showPanel('archived', this)">Archived Stocks</button>
-            <?php $myPendingCount = count(array_filter($myRequests, static fn($r) => $r['status'] === 'Pending')); ?>
             <button type="button" class="tab-btn <?php echo $activePanel === 'requests' ? 'active' : ''; ?>" onclick="showPanel('requests', this)">My Requests<?php if ($myPendingCount): ?> <span class="badge rounded-pill text-bg-warning"><?php echo $myPendingCount; ?></span><?php endif; ?></button>
         </div>
         <?php if (!$approvalsReady): ?>
@@ -1770,6 +1776,7 @@ body{
                         </tbody>
                     </table>
                 </div>
+                <?php echo paginationRender($myRequestsPage, '', 'requests', ['panel' => 'requests', 'msg' => null, 'type' => null]); ?>
             </div>
         </div>
 
@@ -1890,6 +1897,7 @@ body{
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="sources/sidebar.js"></script>
 <script>
 /* REUSABLE CONFIRMATION MODAL */
@@ -2050,23 +2058,23 @@ function updateStockSource() {
 
 function validateStockInForm() {
     const source=document.getElementById('stockSourceType').value;
-    if (!source || (source==='Branch' && !document.getElementById('stockSourceBranch').value)) { alert('Select the stock source and sending branch.'); return false; }
+    if (!source || (source==='Branch' && !document.getElementById('stockSourceBranch').value)) { SbcDialog.alert('Select the stock source and sending branch.'); return false; }
     var select = document.getElementById('stockInItem');
     var quantity = document.getElementById('stockInQuantity');
     var date = document.getElementById('stockInDate');
 
     if (!select.value) {
-        alert('Please select an item.');
+        SbcDialog.alert('Please select an item.');
         return false;
     }
 
     if (!quantity.value || Number(quantity.value) <= 0) {
-        alert('Please enter a valid quantity.');
+        SbcDialog.alert('Please enter a valid quantity.');
         return false;
     }
 
     if (!date.value) {
-        alert('Please enter the Stock In date.');
+        SbcDialog.alert('Please enter the Stock In date.');
         return false;
     }
 
@@ -2079,29 +2087,29 @@ function validateStockInForm() {
         var exp = document.getElementById('stockInExpiry').value;
 
         if (!batch) {
-            alert('Please enter the Batch/Lot No.');
+            SbcDialog.alert('Please enter the Batch/Lot No.');
             return false;
         }
 
         if (!mfg) {
-            alert('Please enter the Manufacturing Date.');
+            SbcDialog.alert('Please enter the Manufacturing Date.');
             return false;
         }
 
         if (!exp) {
-            alert('Please enter the Expiration Date.');
+            SbcDialog.alert('Please enter the Expiration Date.');
             return false;
         }
 
         if (exp <= mfg) {
-            alert('Expiration Date must be later than Manufacturing Date.');
+            SbcDialog.alert('Expiration Date must be later than Manufacturing Date.');
             return false;
         }
 
 
         var today = sbcManilaToday();
         if (exp < today) {
-            alert('Expired stock cannot be received. Please enter a non-expired batch.');
+            SbcDialog.alert('Expired stock cannot be received. Please enter a non-expired batch.');
             return false;
         }
     }

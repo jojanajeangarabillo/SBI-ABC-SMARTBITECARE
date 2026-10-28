@@ -1,5 +1,6 @@
 <?php
 session_start();
+require_once 'sources/pagination_helper.php';
 require_once 'sources/db_connect.php';
 require_once 'sources/workflow_helpers.php';
 require_once 'sources/notification_helper.php';
@@ -178,7 +179,7 @@ $columns = $rows ? array_keys($rows[0]) : array_merge(
 $exportFormat = (string)($_GET['export'] ?? '');
 if (in_array($exportFormat, ['csv', 'pdf'], true)) {
     require_once 'sources/report_export.php';
-    workflowAudit($conn, $userId, $branchId, 'Exported registry logbook (' . strtoupper($exportFormat) . ') ' . $from . ' to ' . $to . ' (' . count($rows) . ' cases)', 'Registry');
+    workflowAudit($conn, $userId, $branchId, ($exportFormat === 'pdf' ? reportExportVerb() : 'Exported') . ' registry logbook (' . strtoupper($exportFormat) . ') ' . $from . ' to ' . $to . ' (' . count($rows) . ' cases)', 'Registry');
     // Widths in mm at 5.5 pt so dates and words fit on one line (A4 landscape, 8 mm margins).
     $widths = ['Date' => 12, 'Case No.' => 11, 'Patient Name' => 15.5, 'Address' => 15.5, 'Age' => 5.5, 'Gender' => 8.5, 'Date of Bite' => 12,
         'Site of Bite' => 13, 'Biting Animal' => 9, 'Status of Animal' => 13, 'Category' => 10, 'ERIG (mL)' => 7, 'ATS (mL)' => 7, 'TT' => 4.5,
@@ -200,6 +201,9 @@ if (in_array($exportFormat, ['csv', 'pdf'], true)) {
     reportSend($report, reportMeta($conn, $userId, $branchName, reportPeriodText($from, $to)), $exportFormat,
         'Registry_Logbook_' . $branchId . '_' . $from . '_to_' . $to);
 }
+// The screen shows one page (10/25/50); the exports above always use every row.
+$logbookPage = paginationFromRequest('', 25);
+$logbookPageRows = paginationSlice($rows, $logbookPage);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -298,8 +302,11 @@ if (in_array($exportFormat, ['csv', 'pdf'], true)) {
                         <i class="bi bi-file-earmark-spreadsheet"></i>Export to Excel (CSV)
                     </a>
                     <a class="btn-primary-custom btn-sm" href="?<?php echo workflowH(http_build_query(['from' => $from, 'to' => $to, 'export' => 'pdf'])); ?>">
-                        <i class="bi bi-file-earmark-pdf"></i>Export PDF (landscape)
+                        <i class="bi bi-file-earmark-pdf"></i>Export PDF
                     </a>
+                    <button type="button" class="btn-primary-custom btn-sm" data-print-pdf="?<?php echo workflowH(http_build_query(['from' => $from, 'to' => $to, 'export' => 'pdf'])); ?>">
+                        <i class="bi bi-printer"></i>Print
+                    </button>
                     <a class="btn btn-light border btn-sm" href="AdminStaff_Registry.php"><i class="bi bi-arrow-left me-1"></i>Registry Queue</a>
                 </form>
             </div>
@@ -316,7 +323,7 @@ if (in_array($exportFormat, ['csv', 'pdf'], true)) {
                         <?php if (!$rows): ?>
                             <tr><td colspan="<?php echo count($columns); ?>" class="text-center text-muted py-5">No cases were admitted in this date range.</td></tr>
                         <?php endif; ?>
-                        <?php foreach ($rows as $row): ?>
+                        <?php foreach ($logbookPageRows as $row): ?>
                             <tr>
                                 <?php foreach ($row as $column => $value): ?>
                                     <td class="<?php echo isset($doseColumns[$column]) || $column === 'TT' ? 'dose-cell' : ''; ?>"><?php echo workflowH((string)$value); ?></td>
@@ -326,11 +333,13 @@ if (in_array($exportFormat, ['csv', 'pdf'], true)) {
                     </tbody>
                 </table>
             </div>
+            <?php echo paginationRender($logbookPage, '', 'cases'); ?>
         </section>
     </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="sources/sidebar.js"></script>
 </body>
 </html>

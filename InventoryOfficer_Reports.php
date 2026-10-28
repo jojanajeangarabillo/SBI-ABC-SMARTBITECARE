@@ -675,7 +675,7 @@ if ($report_type !== 'returns') {
 }
 
 /* -------------------------------------------------------------
- * PDF / CSV export: one report array (sources/report_export.php) with
+ * PDF export (and Print, the same PDF inline): one report array (sources/report_export.php) with
  * the same columns as the screen table and ALL rows (the screen table
  * is paginated). The branch always comes from the signed-in account.
  * ----------------------------------------------------------- */
@@ -749,7 +749,7 @@ function ioReportArray(string $type, array $rows, array $summary): array
 }
 
 $exportFormat = strtolower((string)($_GET['export'] ?? ''));
-if (in_array($exportFormat, ['pdf', 'csv'], true)) {
+if ($exportFormat === 'pdf') {
     if ($reportError !== '') {
         http_response_code(500);
         die('Unable to export report: ' . h($reportError));
@@ -758,7 +758,7 @@ if (in_array($exportFormat, ['pdf', 'csv'], true)) {
     require_once __DIR__ . '/sources/workflow_helpers.php';
     $period = reportPeriodText($date_from, $date_to);
     $meta = reportMeta($conn, $user_id, (string)$branch_name, $period, $search !== '' ? 'Search: ' . $search : '');
-    workflowAudit($conn, $user_id, (string)$branch_id, 'Exported ' . reportLabel($report_type) . ' (' . strtoupper($exportFormat) . ') - Branch: '
+    workflowAudit($conn, $user_id, (string)$branch_id, reportExportVerb() . ' ' . reportLabel($report_type) . ' (PDF) - Branch: '
         . $branch_name . ' - Period: ' . $period . ($search !== '' ? ' - Search: ' . $search : ''), 'Reports');
     reportSend(ioReportArray($report_type, $reportRows, $summary), $meta, $exportFormat,
         reportLabel($report_type) . '_' . $branch_id . '_' . $date_from . '_to_' . $date_to);
@@ -1583,9 +1583,9 @@ margin-left:90px;
 <a class="btn-outline-custom" href="?export=pdf&amp;<?php echo $exportQuery; ?>">
 <i class="bi bi-file-earmark-pdf me-1"></i> Export PDF
 </a>
-<a class="btn-outline-custom" href="?export=csv&amp;<?php echo $exportQuery; ?>">
-<i class="bi bi-filetype-csv me-1"></i> Export CSV
-</a>
+<button type="button" class="btn-outline-custom" data-print-pdf="?export=pdf&amp;<?php echo $exportQuery; ?>">
+<i class="bi bi-printer me-1"></i> Print
+</button>
 </div>
 </form>
 
@@ -1887,6 +1887,7 @@ No usage data for the selected date range.
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require_once __DIR__ . '/sources/confirm_modal.php'; echo sbcConfirmModalScript(); ?>
 <script src="sources/sidebar.js"></script>
 
 
@@ -1900,7 +1901,7 @@ document.addEventListener('DOMContentLoaded', function () {
         form.addEventListener('submit', function (event) {
             if (from.value && to.value && from.value > to.value) {
                 event.preventDefault();
-                alert('Date From cannot be later than Date To.');
+                SbcDialog.alert('Date From cannot be later than Date To.');
             }
         });
     }
